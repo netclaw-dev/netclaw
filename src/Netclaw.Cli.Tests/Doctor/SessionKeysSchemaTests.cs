@@ -43,7 +43,6 @@ public sealed class SessionKeysSchemaTests : IDisposable
                   "Type": "openai-compatible",
                   "Endpoint": null,
                   "AuthMethod": "ApiKey",
-                  "OAuthTokenExpiry": "2026-01-01T00:00:00Z",
                   "VendorOptions": { "Anything": "goes" }
                 }
               }

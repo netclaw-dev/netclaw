@@ -138,7 +138,7 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
                 Content = "Run the report",
                 Source = ReminderSource(fireKey)
             };
-            switch (flow.PrepareAdmission(command, state, sessionId, 1))
+            switch (flow.PrepareAdmission(command, state, sessionId, 1, childConsentPaused: false))
             {
                 case AdmissionDecision.Duplicate:
                     return "Duplicate";
@@ -431,7 +431,7 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
             string outcome;
             string? admittedRequester = null;
 
-            switch (_flow.PrepareAdmission(command, _state, SessionId, 1))
+            switch (_flow.PrepareAdmission(command, _state, SessionId, 1, childConsentPaused: false))
             {
                 case AdmissionDecision.Duplicate:
                     outcome = "Duplicate";
@@ -486,7 +486,7 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
             };
             _state = _state.Apply(recorded, userAlreadyInHistory: true);
             _flow.TurnCommitted(recorded);
-            Advance("FinishTurn", _flow.AdvanceAfterTurn(restartDrainRequested: false), isFailure: false);
+            Advance("FinishTurn", _flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: false), isFailure: false);
         }
 
         private void FailTurn()
@@ -500,7 +500,7 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
             }
 
             _flow.FailedTurn();
-            Advance("FailTurn", _flow.AdvanceAfterTurn(restartDrainRequested: false), isFailure: true);
+            Advance("FailTurn", _flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: false), isFailure: true);
         }
 
         private void Advance(string operation, AfterTurnResult next, bool isFailure)
@@ -522,7 +522,7 @@ public sealed class SessionInputFlowAccordantTests(ITestOutputHelper output)
             var selected = _flow.SelectedInputs;
             _state = _state.CloseInputs(selected.Ids);
             _flow.ToolBatchCommitted();
-            var advance = _flow.AdvanceAfterToolBatch(new BatchCompletion.Ready(_state, 1), compactionDue: false);
+            var advance = _flow.AdvanceAfterToolBatch(new BatchCompletion.Ready(_state, 1), compactionDue: false, childConsentPaused: false);
             var batch = advance.Batch?.Messages ?? [];
             if (batch.Count > 0)
                 _explored.Add(Explored.ToolBoundaryDrain);

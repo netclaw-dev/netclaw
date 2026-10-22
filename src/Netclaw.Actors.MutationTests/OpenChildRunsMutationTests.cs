@@ -35,41 +35,42 @@ public sealed class OpenChildRunsMutationTests
     }
 
     [Fact]
-    public void Every_lifecycle_before_closed_is_open()
+    public void Every_lifecycle_before_the_report_is_open()
     {
-        // A run is open until the parent records the follow-up turn: not at the terminal result, not at the
-        // prepared result, and not when the session hands the result to the model (Consumed).
-        var terminal = Terminal();
-        var delivery = Delivery(terminal);
+        // A run is open until the parent has its follow-up turn: not at the terminal result, and not while the
+        // result file is written.
         var state = StateOf(
             Run("accepted", 1, new ChildRunLifecycle.Accepted(null)),
             Run("cancelling", 2, new ChildRunLifecycle.Cancelling(null)),
-            Run("terminal", 3, new ChildRunLifecycle.Terminal(terminal)),
-            Run("prepared", 4, new ChildRunLifecycle.Prepared(delivery)),
-            Run("consumed", 5, new ChildRunLifecycle.Consumed(delivery)));
+            Run("terminal", 3, new ChildRunLifecycle.Terminal(Terminal())));
 
-        Assert.Equal(
-            ["accepted", "cancelling", "terminal", "prepared", "consumed"],
-            Ids(state));
+        Assert.Equal(["accepted", "cancelling", "terminal"], Ids(state));
     }
 
     [Fact]
-    public void A_closed_run_is_not_open()
+    public void A_reported_run_stays_open_while_its_notice_input_is_pending()
     {
-        // A run that stays in the list after its follow-up turn makes a headless run wait for ever.
-        var state = StateOf(
-            Run("closed", 1, Closed()),
-            Run("accepted", 2, new ChildRunLifecycle.Accepted(null)));
+        // The notice waits for its own turn. A headless run that stopped here would lose the child result.
+        var notice = new InputId("notice-waiting");
+        var state = WithPending(StateOf(Run("waiting", 1, Reported(notice))), notice);
+
+        Assert.Equal(["waiting"], Ids(state));
+    }
+
+    [Fact]
+    public void A_reported_run_whose_notice_turn_ran_is_not_open()
+    {
+        // A run that stays in the list after its notice turn makes a headless run wait for ever. Another pending
+        // input does not keep the run open.
+        var state = WithPending(
+            StateOf(
+                Run("consumed", 1, Reported(new InputId("notice-consumed"))),
+                Run("legacy", 2, new ChildRunLifecycle.Reported(SubAgentRunOutcome.Completed, null,
+                    new ChildRunReport.LegacyDelivery(new ToolCallId("child-result-call")))),
+                Run("accepted", 3, new ChildRunLifecycle.Accepted(null))),
+            new InputId("person-input"));
 
         Assert.Equal(["accepted"], Ids(state));
-    }
-
-    [Fact]
-    public void A_state_with_only_closed_runs_reports_none()
-    {
-        var state = StateOf(Run("closed-a", 1, Closed()), Run("closed-b", 2, Closed()));
-
-        Assert.Empty(state.GetOpenChildRunIds());
     }
 
     [Fact]
@@ -146,8 +147,20 @@ public sealed class OpenChildRunsMutationTests
             SourceReminderId = null
         };
 
-    private static ChildRunLifecycle.Closed Closed()
-        => new(new ToolCallId("child-result-call"), SubAgentRunOutcome.Completed, null);
+    private static SessionState WithPending(SessionState state, InputId inputId)
+        => state with
+        {
+            PendingInputs = state.PendingInputs.Add(new InputAdmitted
+            {
+                SessionId = Owner,
+                InputId = inputId,
+                UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "input" },
+                TurnContext = new TurnContextRecord { SessionId = Owner, TurnId = "turn-2" }
+            })
+        };
+
+    private static ChildRunLifecycle.Reported Reported(InputId notice)
+        => new(SubAgentRunOutcome.Completed, null, new ChildRunReport.Notice(notice));
 
     private static ChildRunTerminal Terminal()
         => new(
@@ -159,11 +172,4 @@ public sealed class OpenChildRunsMutationTests
             },
             Lost: false,
             EvidenceWarning: null);
-
-    private static ChildPreparedResult Delivery(ChildRunTerminal terminal)
-        => new(
-            terminal,
-            new SerializableChatMessage { Role = ChatRole.Assistant, Content = "call" },
-            new SerializableChatMessage { Role = ChatRole.Tool, Content = "result" },
-            null);
 }

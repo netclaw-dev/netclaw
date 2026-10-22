@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels;
@@ -43,6 +44,7 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
     private readonly Func<ToolInteractionRequest, Task<TPromptId?>> _postApprovalPromptAsync;
     private readonly Func<TPromptId, string> _readPromptIdValue;
     private readonly Func<ToolInteractionRequest, Task> _onApprovalPromptFailedAsync;
+    private readonly Func<TRequest, string, Task> _redrawClosedPromptAsync;
     private readonly Action<PendingApprovalPromptTracked> _persistPromptTracked;
     private readonly Func<SessionOutput, Task> _handleChannelSpecificOutputAsync;
     private readonly Action<string> _advanceCursor;
@@ -92,6 +94,10 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
     /// instead of waiting forever, and the model does not read it as a user
     /// decision.
     /// </param>
+    /// <param name="redrawClosedPromptAsync">
+    /// Redraws a posted prompt that the session closed with no answer: the reason text and no buttons. The engine
+    /// calls it only for a prompt with a locator.
+    /// </param>
     /// <param name="persistPromptTracked">
     /// Journals <c>PendingApprovalPromptTracked</c> for a posted prompt. The
     /// actor owns the persistence call; the engine never touches Akka persistence.
@@ -124,6 +130,7 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
         Func<ToolInteractionRequest, Task<TPromptId?>> postApprovalPromptAsync,
         Func<TPromptId, string> readPromptIdValue,
         Func<ToolInteractionRequest, Task> onApprovalPromptFailedAsync,
+        Func<TRequest, string, Task> redrawClosedPromptAsync,
         Action<PendingApprovalPromptTracked> persistPromptTracked,
         Func<SessionOutput, Task> handleChannelSpecificOutputAsync,
         Action<string> advanceCursor,
@@ -141,6 +148,7 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
         _postApprovalPromptAsync = postApprovalPromptAsync;
         _readPromptIdValue = readPromptIdValue;
         _onApprovalPromptFailedAsync = onApprovalPromptFailedAsync;
+        _redrawClosedPromptAsync = redrawClosedPromptAsync;
         _persistPromptTracked = persistPromptTracked;
         _handleChannelSpecificOutputAsync = handleChannelSpecificOutputAsync;
         _advanceCursor = advanceCursor;
@@ -214,7 +222,7 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
     /// Handles one session output. Returns the
     /// <see cref="PendingApprovalPromptCleared"/> events the caller must
     /// persist; the list is empty for every output except a completed turn that
-    /// still held prompts.
+    /// still held prompts and a closed prompt.
     /// </summary>
     public async Task<IReadOnlyList<PendingApprovalPromptCleared>> HandleOutputAsync(SessionOutput output)
     {
@@ -239,6 +247,9 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
 
             case TurnCompleted completed:
                 return await CompleteTurnAsync(completed);
+
+            case ToolInteractionClosed closed:
+                return await ClosePromptAsync(closed);
 
             default:
                 await _handleChannelSpecificOutputAsync(output);
@@ -277,6 +288,21 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
         await _onApprovalPromptFailedAsync(request);
     }
 
+    // A child prompt closed (design D6): a person answered it on another surface, or the session withdrew it. The binding
+    // redraws it with the reason, so its old buttons are not live, and journals the clear, so a cold-spawned binding does
+    // not restore it.
+    private async Task<IReadOnlyList<PendingApprovalPromptCleared>> ClosePromptAsync(ToolInteractionClosed closed)
+    {
+        var pending = _pendingRequests.FirstOrDefault(request => request.CallId == closed.CallId);
+        if (pending is null)
+            return NoClearedPrompts;
+
+        _pendingRequests.Remove(pending);
+        if (pending.PromptId is not null)
+            await _redrawClosedPromptAsync(pending, ChildApprovalPrompt.CloseText(closed.Reason));
+        return [new PendingApprovalPromptCleared { CallId = pending.CallId.Value }];
+    }
+
     private async Task<IReadOnlyList<PendingApprovalPromptCleared>> CompleteTurnAsync(TurnCompleted completed)
     {
         if (completed.Outcome == TurnOutcome.Completed && PendingCursor is { } pendingCursor)
@@ -291,16 +317,22 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
             // "I didn't manage to produce a reply" would mislead and would
             // double up with the redelivered one. The channel tells the session
             // about the failure, with this turn's number.
+            // A quiet end is a deliberate end with no reply. The fallback is Netclaw text, and the person must see
+            // only text of the model. The end is a normal turn otherwise, so the typing indicator clears.
             if (_postFailedThisTurn)
                 await _onEmptyTurnSuppressedAsync(completed);
-            else
+            else if (!completed.QuietEnd)
                 await _postEmptyTurnFallbackAsync(completed);
         }
 
-        var clearedPrompts = _pendingRequests
+        // A turn end clears only the prompts of the turn. A child prompt stays until an answer or a close (#2523).
+        var turnPrompts = _pendingRequests
+            .Where(static pending => pending.Lifetime == ToolInteractionLifetime.UntilTurnEnd)
+            .ToArray();
+        var clearedPrompts = turnPrompts
             .Select(pending => new PendingApprovalPromptCleared { CallId = pending.CallId.Value })
             .ToArray();
-        _pendingRequests.Clear();
+        _pendingRequests.RemoveAll(pending => turnPrompts.Contains(pending));
         _deliveredThisTurn = false;
         _postFailedThisTurn = false;
         return clearedPrompts;
@@ -314,6 +346,7 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
             RequesterPrincipal = pending.RequesterPrincipal,
             OptionKeys = pending.OptionKeys,
             PromptId = promptId,
+            Lifetime = pending.Lifetime,
             ToolName = pending.ToolName,
             // Preserve null-vs-set semantics on the wire: Truncate returns
             // string.Empty for null input, which would round-trip as

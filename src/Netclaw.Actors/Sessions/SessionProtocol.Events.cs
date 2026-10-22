@@ -35,7 +35,7 @@ public static partial class SessionProtocol
         /// Populated when this turn originated from a reminder firing.
         /// Format is <c>"{reminderId}:{fireTimestampMs}"</c>, matching the value
         /// placed on <see cref="Channels.MessageSource.ReminderId"/> by the
-        /// reminder dispatcher. Null for regular user turns. A child-delivery turn
+        /// reminder dispatcher. Null for regular user turns. A child result notice turn
         /// carries the link that the child run kept from the turn that started it
         /// (<see cref="SubAgents.BackgroundChildRun.SourceReminderId"/>), and a delivery
         /// retry turn carries the link of the turn that it repeats. The session reads it
@@ -53,12 +53,13 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
 
+        /// <summary>Read-only. Deployed journal rows carry it. No writer sets it.</summary>
         public ChildContinuation? ChildContinuation { get; init; }
 
         /// <summary>
         /// True when a sub-agent ran a routed skill and produced this turn's reply, so the main model did not.
         /// Replay needs it to treat the turn as the live session did: a failed post alerts but never retries
-        /// on the main model. It is false for the child-delivery turn that posts the result of a routed-skill child
+        /// on the main model. It is false for the notice turn that posts the result of a routed-skill child
         /// run, because the main model writes that reply, so the turn retries like any ordinary turn. A journal
         /// entry written before this field reads as false (an ordinary turn).
         /// </summary>
@@ -90,6 +91,12 @@ public static partial class SessionProtocol
 
         public required TurnContextRecord TurnContext { get; init; }
 
+        /// <summary>
+        /// Set when the input reports the end of a child run. The kind is durable, so a rebuilt waiting input
+        /// keeps it and stays automated input even though its context names a person.
+        /// </summary>
+        public ChildNotice? ChildNotice { get; init; }
+
         public long AdmittedAtMs { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(AdmittedAtMs);
@@ -104,6 +111,7 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> InputIds { get; init; } = [];
 
+        /// <summary>Read-only. Deployed journal rows carry it. No writer sets it.</summary>
         public ChildContinuation? ChildContinuation { get; init; }
 
         public BackgroundJobId? SourceBackgroundJobId { get; init; }
@@ -111,6 +119,12 @@ public static partial class SessionProtocol
         public SerializableChatMessage? RejectedJobReport { get; init; }
 
         public long ClosedAtMs { get; init; }
+
+        /// <summary>
+        /// True when the close keeps the open turn and its noticed runs: it closes a waiting input that a newer input
+        /// replaced, or an approval notice that recovery closed. A close that ends a turn leaves it false.
+        /// </summary>
+        public bool KeepsTurn { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(ClosedAtMs);
     }
@@ -133,6 +147,7 @@ public static partial class SessionProtocol
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
 
+        /// <summary>Read-only. Deployed journal rows carry it. No writer sets it.</summary>
         public ChildContinuation? ChildContinuation { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(StartedAtMs);

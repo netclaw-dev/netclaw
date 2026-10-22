@@ -150,6 +150,101 @@ public sealed class SecretsFileWriterTests : IDisposable
         Assert.Equal(0, plaintext);
     }
 
+    private const string Expiry = "2026-06-01T01:00:00.0000000+00:00";
+
+    [Fact]
+    public void Write_keeps_a_provider_token_expiry_unencrypted()
+    {
+        SecretsFileWriter.Write(_secretsPath, $$"""
+            {
+              "Providers": { "copilot": { "OAuthTokenExpiry": "{{Expiry}}", "OAuthRefreshToken": "refresh-1", "OAuthAccessToken": "access-1", "ApiKey": "sk-1", "OAuthAccountId": "acct-1" } },
+              "providers": { "Copilot": { "oauthtokenexpiry": "{{Expiry}}" } },
+              "Other": { "copilot": { "OAuthTokenExpiry": null } }
+            }
+            """, new PrefixProtector());
+
+        var root = JsonNode.Parse(File.ReadAllText(_secretsPath))!.AsObject();
+        var entry = root["Providers"]!["copilot"]!.AsObject();
+        Assert.Equal(Expiry, entry["OAuthTokenExpiry"]!.GetValue<string>());
+        Assert.Equal("ENC:refresh-1", entry["OAuthRefreshToken"]!.GetValue<string>());
+        Assert.Equal("ENC:access-1", entry["OAuthAccessToken"]!.GetValue<string>());
+        Assert.Equal("ENC:acct-1", entry["OAuthAccountId"]!.GetValue<string>());
+        Assert.Equal("ENC:sk-1", entry["ApiKey"]!.GetValue<string>());
+        Assert.Equal(Expiry, root["providers"]!["Copilot"]!["oauthtokenexpiry"]!.GetValue<string>());
+        Assert.Null(root["Other"]!["copilot"]!["OAuthTokenExpiry"]);
+    }
+
+    [Theory]
+    [InlineData("""{"McpOAuthTokens":{"srv":{"ExpiresAt":"X"}}}""", "McpOAuthTokens.srv.ExpiresAt")]
+    [InlineData("""{"OAuthTokenExpiry":"X"}""", "OAuthTokenExpiry")]
+    [InlineData("""{"Providers":{"OAuthTokenExpiry":"X"}}""", "Providers.OAuthTokenExpiry")]
+    [InlineData("""{"Providers":{"copilot":{"VendorOptions":{"OAuthTokenExpiry":"X"}}}}""", "Providers.copilot.VendorOptions.OAuthTokenExpiry")]
+    [InlineData("""{"Channels":{"copilot":{"OAuthTokenExpiry":"X"}}}""", "Channels.copilot.OAuthTokenExpiry")]
+    [InlineData("""{"Providers":{"copilot":{"Tags":["OAuthTokenExpiry"]}}}""", "Providers.copilot.Tags.0")]
+    [InlineData("""{"Providers:copilot:OAuthTokenExpiry":"X"}""", "Providers:copilot:OAuthTokenExpiry")]
+    [InlineData("""{"Providers":{"copilot":{"OAuthRefreshToken":"X"}}}""", "Providers.copilot.OAuthRefreshToken")]
+    public void Write_encrypts_every_other_leaf(string json, string leafPath)
+    {
+        SecretsFileWriter.Write(_secretsPath, json, new PrefixProtector());
+
+        JsonNode? node = JsonNode.Parse(File.ReadAllText(_secretsPath));
+        // A flattened root key is one segment, so it is not split.
+        var segments = leafPath.Contains(':', StringComparison.Ordinal) ? new[] { leafPath } : leafPath.Split('.');
+        foreach (var segment in segments)
+        {
+            node = node is JsonArray array
+                ? array[int.Parse(segment, System.Globalization.CultureInfo.InvariantCulture)]
+                : node![segment];
+        }
+
+        Assert.Equal("ENC:", node!.GetValue<string>()[..4]);
+    }
+
+    [Fact]
+    public void Write_leaves_an_encrypted_token_expiry_as_it_is()
+    {
+        SecretsFileWriter.Write(_secretsPath,
+            """{"Providers":{"copilot":{"OAuthTokenExpiry":"ENC:abc"}}}""", new PrefixProtector());
+
+        var entry = JsonNode.Parse(File.ReadAllText(_secretsPath))!["Providers"]!["copilot"]!;
+        Assert.Equal("ENC:abc", entry["OAuthTokenExpiry"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Update_saves_an_encrypted_token_expiry_from_an_old_write_unencrypted()
+    {
+        File.WriteAllText(_secretsPath,
+            """{"Providers":{"copilot":{"OAuthTokenExpiry":"ENC:2026-06-01T01:00:00.0000000+00:00"}}}""");
+        string? seen = null;
+
+        SecretsFileWriter.Update(_secretsPath, (root, _) =>
+        {
+            seen = root["Providers"]!["copilot"]!["OAuthTokenExpiry"]!.GetValue<string>();
+            return (root, 0);
+        }, new PrefixProtector(), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(Expiry, seen);
+        var entry = JsonNode.Parse(File.ReadAllText(_secretsPath))!["Providers"]!["copilot"]!;
+        Assert.Equal(Expiry, entry["OAuthTokenExpiry"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void CountEncryptionStatus_does_not_count_the_token_expiry_as_plaintext()
+    {
+        var (encrypted, plaintext) = SecretsFileWriter.CountEncryptionStatus(
+            $$$$"""{"Providers":{"copilot":{"OAuthTokenExpiry":"{{{{Expiry}}}}","OAuthRefreshToken":"ENC:x","Other":"plain"}}}""");
+
+        Assert.Equal(1, encrypted);
+        Assert.Equal(1, plaintext);
+    }
+
+    /// <summary>Marks each protected value with the real <c>ENC:</c> prefix. No key, so the tests read the plaintext back.</summary>
+    private sealed class PrefixProtector : ISecretsProtector
+    {
+        public string Protect(string plaintext) => "ENC:" + plaintext;
+        public string Unprotect(string ciphertext) => ciphertext["ENC:".Length..];
+    }
+
     [Fact]
     public void Update_when_file_replacement_fails_propagates_and_keeps_previous_content()
     {

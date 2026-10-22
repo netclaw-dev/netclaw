@@ -278,6 +278,61 @@ The session SHALL create a restart reminder only after an eligible model task st
 - **THEN** the manifest contains no restart reminder for that turn
 - **AND** the daemon reports the blocked session
 
+### Requirement: Graceful drain stops a tool loop
+
+The session SHALL apply the 2-second model grace period to each live model call of a turn. This rule applies also after a tool batch closed the inputs of the turn. After a drain request, the session SHALL start no model call and no tool batch. It SHALL keep the reminder rule of the requirement above. When the drain stops a turn and no restart reminder replays an input of that turn, the session SHALL post one text notice in its channel before it stops. A reminder that only reports a child run, or only runs a waiting input, does not resume the stopped turn. The shutdown alert SHALL name each session whose drain timed out.
+
+#### Scenario: The model call after a tool batch stops after the grace period
+
+- **GIVEN** a tool batch completed
+- **AND** the next model call of the turn streams
+- **WHEN** graceful drain starts
+- **THEN** the session cancels the model call after the grace period
+- **AND** it acknowledges drain without a restart reminder for the closed input
+
+#### Scenario: A tool batch boundary stops the turn
+
+- **GIVEN** a tool batch runs
+- **WHEN** graceful drain starts, and the batch then completes
+- **THEN** the session starts no model call
+- **AND** it records reminder eligibility and acknowledges drain
+
+#### Scenario: Tool calls inside the grace period do not run
+
+- **GIVEN** graceful drain started during a model call
+- **WHEN** the model returns tool calls before the grace period ends
+- **THEN** the session starts no tool batch
+- **AND** it stops the turn as a model stop for restart does
+
+#### Scenario: A waiting input keeps its reminder
+
+- **GIVEN** a tool loop runs
+- **AND** an accepted input waits in the journal
+- **WHEN** graceful drain stops the turn
+- **THEN** the restart manifest stores one reminder for that session
+
+#### Scenario: A stopped turn without a reminder posts a notice
+
+- **GIVEN** graceful drain stops a turn after a tool batch
+- **AND** no restart reminder replays an input of the turn
+- **WHEN** the session passivates
+- **THEN** the session posts one text notice in its channel before it stops
+- **AND** the notice tells the person to send a message to continue
+
+#### Scenario: A resumable turn posts no notice
+
+- **GIVEN** graceful drain stops a model call that has pending admitted input
+- **AND** no tool batch or partial reply exists
+- **WHEN** the session passivates
+- **THEN** the session posts no restart notice
+
+#### Scenario: The shutdown alert names a timed-out session
+
+- **GIVEN** a session does not acknowledge drain before the drain deadline
+- **WHEN** the daemon emits the shutdown alert
+- **THEN** the alert context `timedOutSessionIds` names that session
+- **AND** the drain log line does not claim that the session recovers
+
 ### Requirement: A fresh restart reminder resumes stored work
 
 The reminder manager SHALL deliver a fresh restart reminder through its existing `current_session` path. The session SHALL restore pending input under its recorded authority.
@@ -388,11 +443,13 @@ A client that depends on that support SHALL reject an unsupported daemon before 
 
 The session SHALL treat the restart reminder as a signal to resume stored work. The session SHALL NOT admit it as an input, and its text SHALL NOT reach the model as a user message.
 
-- In `Ready` phase with pending input, the session SHALL resume that input.
-- In every other case, the session SHALL reply `RestartResumeNotNeeded` (a `CommandAck`), make no change, and log `restart_resume_noop`. This includes a redelivery during the resumed turn, a redelivery after the turn ended, and a message that arrives while another turn runs.
-- `RestartResumeNotNeeded` SHALL tell the caller that this message resumes nothing and that no turn will run for it. A caller on the Reminder-origin route (#2491) SHALL then settle its run as success at once and SHALL NOT wait for a terminal turn. An interrupted input can stay pending, for example when another turn runs. That input is outside this message.
-- A reply that resumes work SHALL be an ordinary `CommandAck`, and the caller SHALL wait for the resumed turn.
-- A refusal (`CommandNack`) SHALL remain only for a restart reminder whose stored authority is invalid.
+- In `Ready` phase with pending input and no parked approval, the session SHALL resume that input.
+- In `Processing` or `Compacting` phase, the session SHALL queue each pending input that no turn selected and that the queue does not hold yet. It SHALL log `restart_resume_queued` and reply `RestartResumeNotNeeded`, also when it queued nothing. No turn of this message runs: each queued input runs later under its own recorded source. The normal drain SHALL run those inputs after the running turn. They run in admission order among themselves, after the inputs that the queue holds already. The child consent pause and the parent approval waits still apply.
+- In `Ready` phase with nothing to resume, or in `Ready` phase when a parked approval owns the next turn, the session SHALL reply `RestartResumeNotNeeded` (a `CommandAck`), make no change, and log `restart_resume_noop`. This includes a redelivery after the resumed turn ended.
+- `RestartResumeNotNeeded` SHALL tell the caller that this message resumes nothing and that no turn will run for it. A caller on the Reminder-origin route (#2491) SHALL then settle its run as success at once and SHALL NOT wait for a terminal turn.
+- A reply that resumes a turn in `Ready` phase SHALL be an ordinary `CommandAck`, and the caller SHALL wait for the resumed turn. A reply that only queues work SHALL be `RestartResumeNotNeeded`, and the caller SHALL settle at once.
+- A refusal (`CommandNack`) SHALL remain only for two causes: a pending input whose stored authority is invalid, and a restart reminder that arrives in `Processing`, `Compacting`, or `Passivating` phase while a restart drain is pending.
+- In `Ready` phase, the session SHALL check for a parked approval before it checks the stored authority. In `Processing` or `Compacting` phase, the session does not check for a parked approval. It checks for a pending restart drain, and then it checks the stored authority.
 
 #### Scenario: A redelivered restart message during the resumed turn
 
@@ -408,6 +465,29 @@ The session SHALL treat the restart reminder as a signal to resume stored work. 
 - **THEN** the session replies `RestartResumeNotNeeded`, not `CommandNack`
 - **AND** it stores no input and makes no model call
 - **AND** the resume text never reaches the model
+
+#### Scenario: A restart message during another turn queues the pending input
+
+- **GIVEN** recovery started the turn of an orphan child result notice
+- **AND** Alice's input P stays pending from before the restart
+- **WHEN** the restart reminder arrives while the notice turn runs
+- **THEN** the session queues P and replies `RestartResumeNotNeeded`
+- **AND** a caller on the Reminder-origin route settles its run as success at once
+- **AND** P runs in its own turn after the notice turn ends
+
+#### Scenario: A restart message during another turn with nothing to queue
+
+- **GIVEN** a turn runs, and every pending input is selected by that turn or is in the queue already
+- **WHEN** the restart reminder arrives
+- **THEN** the session replies `RestartResumeNotNeeded`
+- **AND** it queues no input a second time
+
+#### Scenario: A restart message with a damaged pending input during another turn
+
+- **GIVEN** a turn runs, and a pending input from before the restart has a stored authority that does not parse
+- **WHEN** the restart reminder arrives
+- **THEN** the session replies `CommandNack`
+- **AND** it queues no input
 
 #### Scenario: A no-op acknowledgement on the Reminder-origin route ends the run
 

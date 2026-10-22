@@ -185,6 +185,110 @@ public sealed class ChatAdmissionTests : IDisposable
         Assert.DoesNotContain(transport.Invocations, call => call.Method == "RespondToInteraction");
     }
 
+    // Review nit of PR 2 (TUI status). The operator answers the first of two child prompts with Enter. The answered close
+    // of that prompt reaches the TUI before the result of the respond call. The close removes the prompt, so the respond
+    // path finds another current prompt and returns early. The second prompt waits for the operator, so the TUI must not
+    // show "generating".
+    // Planted bug: the respond path sets IsGenerating and clears it only when it removes the prompt itself (today), so
+    // IsGenerating stays true while the second prompt waits.
+    [Fact]
+    public async Task Answered_close_before_the_respond_result_leaves_the_next_prompt_waiting_and_not_generating()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var respondEntered = Gate();
+        var respondRelease = Gate();
+        var transport = new FakeDaemonHubTransport
+        {
+            VoidInvokeHook = (method, _, token) =>
+            {
+                if (method != "RespondToInteraction") return Task.CompletedTask;
+                respondEntered.TrySetResult();
+                return respondRelease.Task.WaitAsync(token);
+            }
+        };
+        await using var client = new DaemonClient("http://localhost", transport, reconnectDelays: [TimeSpan.Zero]);
+        var input = new VirtualInputSource();
+        var terminal = new VirtualTerminal(120, 40);
+        using var chat = new ChatViewModel(client, TimeProvider.System, new ModelCapabilities { ModelId = "test" }, new ChatNavigationState(), Paths);
+        var ready = Gate();
+        var promptsShown = Gate();
+        var closeShown = Gate();
+        var prompts = 0;
+        using var statusSub = chat.StatusMessage.Subscribe(value =>
+        {
+            if (value == "Ready") ready.TrySetResult();
+        });
+        using var outputSub = chat.SessionOutput.Subscribe(output =>
+        {
+            if (output is ToolInteractionRequest && ++prompts == 2) promptsShown.TrySetResult();
+            if (output is ToolInteractionClosed) closeShown.TrySetResult();
+        });
+        await using var provider = CreateHost(chat, input, terminal);
+        var run = provider.GetRequiredService<TerminaApplication>().RunAsync(ct);
+        try
+        {
+            await ready.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            transport.PushOutput(ChildPromptDto("child-run/subagent-approval/1", "echo FIRST"));
+            transport.PushOutput(ChildPromptDto("child-run/subagent-approval/2", "echo SECOND"));
+            await promptsShown.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+            input.EnqueueKey(ConsoleKey.Enter); // approve the first prompt once
+            await respondEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+            // The answered close arrives while the respond call waits for its result.
+            transport.PushOutput(new SessionOutputDto
+            {
+                Type = SessionOutputTypes.ToolInteractionClosed,
+                SessionId = "fake/session",
+                CallId = "child-run/subagent-approval/1",
+                InteractionCloseKind = "answered"
+            });
+            await closeShown.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            respondRelease.TrySetResult();
+
+            var notGenerating = Gate();
+            using var generatingSub = chat.IsGenerating.Subscribe(value =>
+            {
+                if (!value) notGenerating.TrySetResult();
+            });
+            try
+            {
+                await notGenerating.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail($"The TUI shows generating while a prompt waits. Status: \"{chat.StatusMessage.Value}\".");
+            }
+
+            Assert.True(chat.HasPendingInteraction);
+            Assert.Equal("child-run/subagent-approval/2", chat.CurrentInteraction?.CallId.Value);
+            Assert.Equal("Approval required", chat.StatusMessage.Value);
+
+            input.EnqueueKey(ConsoleKey.Q, false, false, true);
+            await run.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            Assert.False(chat.IsGenerating.Value);
+            var respond = Assert.Single(transport.Invocations, call => call.Method == "RespondToInteraction");
+            Assert.Equal("child-run/subagent-approval/1", respond.Args[1]);
+        }
+        finally { respondRelease.TrySetResult(); }
+    }
+
+    private static SessionOutputDto ChildPromptDto(string callId, string displayText) => new()
+    {
+        Type = SessionOutputTypes.ToolInteraction,
+        SessionId = "fake/session",
+        InteractionKind = "approval",
+        CallId = callId,
+        ToolName = "shell_execute",
+        InteractionDisplayText = displayText,
+        InteractionOptions =
+        [
+            new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+            new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+        ],
+        InteractionLifetime = nameof(ToolInteractionLifetime.UntilClosed)
+    };
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

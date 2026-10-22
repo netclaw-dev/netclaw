@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -15,8 +16,8 @@ namespace Netclaw.Configuration;
 /// Centralizes all writes to secrets.json, enforcing owner-only file permissions
 /// on Unix systems (chmod 600). On Windows, relies on user-profile ACLs.
 /// When an <see cref="ISecretsProtector"/> is provided, encrypts all plaintext
-/// string leaf values in the JSON tree (values already prefixed with <c>ENC:</c>
-/// are skipped — idempotent).
+/// string leaf values in the JSON tree except the one that <see cref="IsPlaintextLeaf"/>
+/// names (values already prefixed with <c>ENC:</c> are skipped — idempotent).
 /// </summary>
 public static class SecretsFileWriter
 {
@@ -93,6 +94,31 @@ public static class SecretsFileWriter
         Write(secretsPath, json, protector);
     }
 
+    // <secrets-plaintext-leaf>
+    /// <summary>
+    /// Policy data. The one secrets.json leaf that stays unencrypted is
+    /// <c>Providers.&lt;name&gt;.OAuthTokenExpiry</c>: a JSON path of exactly three segments.
+    /// The daemon binds it to <see cref="ProviderEntry.OAuthTokenExpiry"/> through a plain JSON
+    /// configuration source, and the binder cannot read <c>ENC:</c> ciphertext as a date.
+    /// The value is refresh timing, not a credential. Segments match without case, as the binder does.
+    /// Every other leaf, at any depth or under any other section, is encrypted.
+    /// </summary>
+    public static bool IsPlaintextLeaf(IReadOnlyList<string> path)
+    {
+        // The count has its own statement. Stryker rolls back the whole statement when its
+        // Count() to Sum() mutant does not compile, and the length mutant would go with it.
+        var segmentCount = path.Count;
+        if (segmentCount != 3)
+            return false;
+
+        return string.Equals(path[0], "Providers", StringComparison.OrdinalIgnoreCase)
+               && string.Equals(path[2], "OAuthTokenExpiry", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldEncrypt(string value, IReadOnlyList<string> path)
+        => !ISecretsProtector.IsEncrypted(value) && !IsPlaintextLeaf(path);
+    // </secrets-plaintext-leaf>
+
     /// <summary>
     /// Walk a JSON tree and encrypt all non-<c>ENC:</c> string leaf values.
     /// Already-encrypted values are left untouched (idempotent).
@@ -103,7 +129,7 @@ public static class SecretsFileWriter
         if (node is null)
             return json;
 
-        EncryptNode(node, protector);
+        EncryptNode(node, protector, []);
         return node.ToJsonString(DefaultJsonOptions);
     }
 
@@ -132,42 +158,48 @@ public static class SecretsFileWriter
             return (0, 0);
 
         int encrypted = 0, plaintext = 0;
-        CountNode(node, ref encrypted, ref plaintext);
+        CountNode(node, [], ref encrypted, ref plaintext);
         return (encrypted, plaintext);
     }
 
-    private static void EncryptNode(JsonNode node, ISecretsProtector protector)
+    private static void EncryptNode(JsonNode node, ISecretsProtector protector, List<string> path)
     {
         switch (node)
         {
             case JsonObject obj:
                 foreach (var (key, child) in obj.ToArray())
                 {
+                    path.Add(key);
                     if (child is JsonValue val && val.TryGetValue<string>(out var s))
                     {
-                        if (!ISecretsProtector.IsEncrypted(s))
+                        if (ShouldEncrypt(s, path))
                             obj[key] = protector.Protect(s);
                     }
                     else if (child is not null)
                     {
-                        EncryptNode(child, protector);
+                        EncryptNode(child, protector, path);
                     }
+
+                    path.RemoveAt(path.Count - 1);
                 }
                 break;
 
             case JsonArray arr:
                 for (var i = 0; i < arr.Count; i++)
                 {
+                    path.Add(i.ToString(CultureInfo.InvariantCulture));
                     var item = arr[i];
                     if (item is JsonValue val && val.TryGetValue<string>(out var s))
                     {
-                        if (!ISecretsProtector.IsEncrypted(s))
+                        if (ShouldEncrypt(s, path))
                             arr[i] = protector.Protect(s);
                     }
                     else if (item is not null)
                     {
-                        EncryptNode(item, protector);
+                        EncryptNode(item, protector, path);
                     }
+
+                    path.RemoveAt(path.Count - 1);
                 }
                 break;
         }
@@ -210,41 +242,49 @@ public static class SecretsFileWriter
         }
     }
 
-    private static void CountNode(JsonNode node, ref int encrypted, ref int plaintext)
+    private static void CountNode(JsonNode node, List<string> path, ref int encrypted, ref int plaintext)
     {
         switch (node)
         {
             case JsonObject obj:
-                foreach (var (_, child) in obj)
+                foreach (var (key, child) in obj)
                 {
+                    path.Add(key);
                     if (child is JsonValue val && val.TryGetValue<string>(out var s))
                     {
+                        // The exempt leaf is neither an encrypted secret nor an unencrypted one.
                         if (ISecretsProtector.IsEncrypted(s))
                             encrypted++;
-                        else
+                        else if (!IsPlaintextLeaf(path))
                             plaintext++;
                     }
                     else if (child is not null)
                     {
-                        CountNode(child, ref encrypted, ref plaintext);
+                        CountNode(child, path, ref encrypted, ref plaintext);
                     }
+
+                    path.RemoveAt(path.Count - 1);
                 }
                 break;
 
             case JsonArray arr:
-                foreach (var item in arr)
+                for (var i = 0; i < arr.Count; i++)
                 {
+                    path.Add(i.ToString(CultureInfo.InvariantCulture));
+                    var item = arr[i];
                     if (item is JsonValue val && val.TryGetValue<string>(out var s))
                     {
                         if (ISecretsProtector.IsEncrypted(s))
                             encrypted++;
-                        else
+                        else if (!IsPlaintextLeaf(path))
                             plaintext++;
                     }
                     else if (item is not null)
                     {
-                        CountNode(item, ref encrypted, ref plaintext);
+                        CountNode(item, path, ref encrypted, ref plaintext);
                     }
+
+                    path.RemoveAt(path.Count - 1);
                 }
                 break;
         }

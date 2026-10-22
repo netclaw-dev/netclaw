@@ -545,7 +545,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
 
             // PrepareAdmission is the only decision. A drop and a duplicate both store nothing and acknowledge.
             string outcome;
-            switch (_flow.PrepareAdmission(command, _state, SessionId, 1))
+            switch (_flow.PrepareAdmission(command, _state, SessionId, 1, childConsentPaused: false))
             {
                 case AdmissionDecision.Persist persist:
                     _state = _state.Apply(persist.Event);
@@ -622,7 +622,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
             };
             _state = _state.Apply(recorded, userAlreadyInHistory: true);
             _flow.TurnCommitted(recorded);
-            Advance("FinishTurn", _flow.AdvanceAfterTurn(restartDrainRequested: false));
+            Advance("FinishTurn", _flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: false));
         }
 
         private void FailTurn()
@@ -636,7 +636,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
             }
 
             _flow.FailedTurn();
-            Advance("FailTurn", _flow.AdvanceAfterTurn(restartDrainRequested: false));
+            Advance("FailTurn", _flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: false));
         }
 
         private void Advance(string operation, AfterTurnResult next)
@@ -652,7 +652,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
             var selected = _flow.SelectedInputs;
             _state = _state.CloseInputs(selected.Ids);
             _flow.ToolBatchCommitted();
-            var advance = _flow.AdvanceAfterToolBatch(new BatchCompletion.Ready(_state, 1), compactionDue: false);
+            var advance = _flow.AdvanceAfterToolBatch(new BatchCompletion.Ready(_state, 1), compactionDue: false, childConsentPaused: false);
             Verify("ToolBoundary", Unit.Value, Observe("Continue", advance.Batch?.Messages ?? []));
         }
 
@@ -710,7 +710,7 @@ public sealed class ReminderFireAdmissionAccordantTests(ITestOutputHelper output
         private void AnswerApproval()
         {
             _approval = false;
-            Advance("AnswerApproval", _flow.AdvanceAfterTurn(restartDrainRequested: false));
+            Advance("AnswerApproval", _flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: false));
         }
 
         private AdvanceObservation Observe(string action, IReadOnlyList<SendUserMessage> batch)

@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.6.0"
+  version: "1.6.1"
 ---
 
 # Subagent Authoring
@@ -173,12 +173,13 @@ A repeat after that correction ends the turn. Use a different approach after a c
 Useful work can exceed the former iteration limits. Deadlines, cancellation, and tool policy still apply.
 
 `spawn_agent` and routed skills return a durable accepted run ID before child completion.
-Continue independent parent work. A ready terminal result arrives later as tool output.
-Its fresh tool call ID differs from the accepted start call ID.
-Acceptance does not prove success. The terminal result carries outcome, evidence, and authorized artifact paths.
+Continue independent parent work. When the child ends, a notice arrives as a user message.
+The notice names the run, the outcome, and the path of `result.md`. Read that file with `file_read`.
+The result never arrives as tool output.
+Acceptance does not prove success. `result.md` carries outcome, evidence, and authorized artifact paths.
 Use `check_agent_run` for necessary status or cancellation. Do not poll in a loop.
 The original owner retains authority. An unrelated child approval does not block parent progress.
-A cancellation acknowledgement does not mean completion. Wait for the terminal result.
+A cancellation acknowledgement does not mean completion. Wait for the notice and read `result.md`.
 Recovery reports uncertain child loss without an automatic repeat of external work.
 A failed evidence review cannot adopt the raw child context.
 

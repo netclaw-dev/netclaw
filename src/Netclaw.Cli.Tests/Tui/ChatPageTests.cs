@@ -318,6 +318,160 @@ public sealed class ChatPageTests
         Assert.Equal("Last request failed. Ready to retry.", vm.StatusMessage.Value);
     }
 
+    // PR 2 of child-approval-events-and-parent-pause (design D6, task 4.5): the session closes a withdrawn prompt with
+    // ToolInteractionClosed. The TUI finds the prompt by its call ID and removes it, wherever it is in the queue, and
+    // keeps the other prompts.
+    // Planted bug: the TUI ignores the closed output (today), so the withdrawn prompt stays at the head of the queue and
+    // the next key answers a prompt that the session closed.
+    [Fact]
+    public void ClosedOutput_RemovesItsPromptAndKeepsTheOthers()
+    {
+        var vm = new TestChatViewModel(seed: null);
+        vm.SeedPendingInteractionForTesting(BuildApproval("first body", callId: "run-1/subagent-approval/1"));
+        vm.SeedPendingInteractionForTesting(BuildApproval("second body", callId: "run-1/subagent-approval/2"));
+        vm.SeedPendingInteractionForTesting(BuildApproval("third body", callId: "run-2/subagent-approval/1"));
+
+        vm.ProcessOutputForTesting(Closed("run-1/subagent-approval/2"));
+        vm.ProcessOutputForTesting(Closed("run-1/subagent-approval/1"));
+
+        Assert.Equal("run-2/subagent-approval/1", vm.CurrentInteraction?.CallId.Value);
+        Assert.Equal(new[] { "Once", "This chat", "Deny" }, vm.ApprovalOptions);
+
+        vm.ProcessOutputForTesting(Closed("run-2/subagent-approval/1"));
+
+        Assert.False(vm.HasPendingInteraction);
+        Assert.Empty(vm.ApprovalOptions);
+    }
+
+    // Headless typed-key proof: two child prompts arrive, the session closes the first, and the operator presses
+    // Escape. The key denies the open prompt and never the closed one, and the Input panel shows the open prompt.
+    // Planted bug: the TUI ignores the closed output (today), so Escape answers the withdrawn prompt.
+    [Fact]
+    public async Task ClosedOutput_TypedKeyAnswersTheOpenPromptAndNotTheClosedOne()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(seed: null, out var input, replay:
+        [
+            BuildApproval("echo SENTINEL_CLOSED_PROMPT", callId: "run-1/subagent-approval/1"),
+            BuildApproval("echo SENTINEL_OPEN_PROMPT", callId: "run-1/subagent-approval/2"),
+            Closed("run-1/subagent-approval/1")
+        ]);
+
+        input.EnqueueKey(ConsoleKey.Escape); // deny the open prompt
+        input.EnqueueKey(ConsoleKey.Q, false, false, true); // then quit cleanly
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(new[] { "deny:called", "submit:deny", "shutdown" }, vm.LifecycleEvents);
+        Assert.Equal("run-1/subagent-approval/2", vm.LastSubmittedInteractionCallId);
+        var inputAndStatus = BottomRows(terminal.ToString(), terminalWidth: 120, rowCount: 14);
+        Assert.DoesNotContain("SENTINEL_CLOSED_PROMPT", inputAndStatus, StringComparison.Ordinal);
+    }
+
+    // Review fix S4 of PR 2 (TUI part). A person answered the child prompt on another surface, so the session closes
+    // it with the reason "answered". The TUI removes the prompt and its options, and a typed key does not answer the
+    // closed prompt. The call ran, so no text on the screen says "withdrawn" or "Nothing ran". The TUI shows no close
+    // text for either reason, so this spec does not look for "has an answer".
+    // Planted bug: the TUI removes only withdrawn prompts, so Escape denies a prompt that has an answer; or it prints a
+    // withdrawal text for every close.
+    [Fact]
+    public async Task AnsweredClose_RemovesThePromptAndShowsNoWithdrawalText()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(seed: null, out var input, replay:
+        [
+            ChildApproval("run-1/subagent-approval/1") with { DisplayText = "echo SENTINEL_ANSWERED_PROMPT" },
+            new ToolInteractionClosed(new Netclaw.Tools.ToolCallId("run-1/subagent-approval/1"),
+                new Netclaw.Actors.Sessions.ToolInteractionCloseReason.Answered())
+            {
+                SessionId = new SessionId("test-session")
+            }
+        ]);
+
+        input.EnqueueKey(ConsoleKey.Escape); // no prompt is open, so Escape answers nothing
+        input.EnqueueKey(ConsoleKey.Q, false, false, true); // then quit cleanly
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.False(vm.HasPendingInteraction);
+        Assert.Empty(vm.ApprovalOptions);
+        Assert.Null(vm.LastSubmittedInteractionCallId);
+        Assert.Equal(new[] { "shutdown" }, vm.LifecycleEvents);
+        var screen = terminal.ToString();
+        Assert.DoesNotContain("SENTINEL_ANSWERED_PROMPT", BottomRows(screen, terminalWidth: 120, rowCount: 14),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("withdrawn", screen, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Nothing ran", screen, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ToolInteractionClosed Closed(string callId)
+        => new(new Netclaw.Tools.ToolCallId(callId),
+            new Netclaw.Actors.Sessions.ToolInteractionCloseReason.Withdrawn(Netclaw.Actors.Sessions.WithdrawReason.CancelledByParent))
+        {
+            SessionId = new SessionId("test-session")
+        };
+
+    // child-approval-events-and-parent-pause, PR 1, task 1.10 (TUI part). A child consent prompt has the lifetime
+    // "until closed". The parent turn can end or fail while the child waits. The TUI keeps the child prompt and drops
+    // only the parent prompt, whose lifetime is the turn (#2523).
+    // Planted bug: the view model clears every pending prompt at TurnCompleted and at ErrorOutput, as it does today.
+    [Fact]
+    public void ChildPrompt_SurvivesTurnCompletedAndErrorOutput_ParentPromptDoesNot()
+    {
+        var vm = new TestChatViewModel(seed: null);
+        vm.ProcessOutputForTesting(ChildApproval("r-7f2/subagent-approval/1"));
+        vm.ProcessOutputForTesting(BuildApproval("git push origin main") with
+        {
+            CallId = new Netclaw.Tools.ToolCallId("parent-call"),
+            Lifetime = ToolInteractionLifetime.UntilTurnEnd
+        });
+
+        vm.ProcessOutputForTesting(new TurnCompleted
+        {
+            SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1), OpenChildRunIds = []
+        });
+
+        Assert.True(vm.HasPendingInteraction);
+        Assert.Equal("r-7f2/subagent-approval/1", vm.CurrentInteraction!.CallId.Value);
+        Assert.NotEmpty(vm.ApprovalOptions);
+
+        vm.ProcessOutputForTesting(new ErrorOutput { SessionId = new SessionId("tui/test"), Message = "Provider failed." });
+
+        Assert.True(vm.HasPendingInteraction);
+        Assert.Equal("r-7f2/subagent-approval/1", vm.CurrentInteraction!.CallId.Value);
+        Assert.NotEmpty(vm.ApprovalOptions);
+    }
+
+    // Task 1.11, headless typed-key coverage for #2523. The parent turn completes and then a later parent turn fails
+    // while a child prompt waits. The operator presses Enter on the prompt. The TUI submits "approve once" for the
+    // child call ID, which is the answer that resumes the child.
+    // Planted bug: the TUI drops the child prompt at the turn end, so Enter has no prompt to answer.
+    [Fact]
+    public async Task ChildPrompt_AfterTurnCompletedAndErrorOutput_EnterAnswersTheChild()
+    {
+        var (_, app, vm) = CreateHeadlessApp(null, out var input, replay:
+        [
+            ChildApproval("r-7f2/subagent-approval/1"),
+            new TurnCompleted { SessionId = new SessionId("tui/test"), TurnNumber = new TurnNumber(1), OpenChildRunIds = [] },
+            new ErrorOutput { SessionId = new SessionId("tui/test"), Message = "Provider failed." }
+        ]);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(new[] { $"submit:{ApprovalOptionKeys.ApproveOnce}", "shutdown" }, vm.LifecycleEvents);
+        Assert.Equal("r-7f2/subagent-approval/1", vm.LastSubmittedInteractionCallId);
+    }
+
+    private static ToolInteractionRequest ChildApproval(string callId)
+        => BuildApproval("gh pr view 12") with
+        {
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            Lifetime = ToolInteractionLifetime.UntilClosed
+        };
+
     // What web_fetch hands back for a large page: a multi-line summary whose
     // preview carries converted markdown and, for raw fetches, HTML.
     private const string WebFetchSummary =
@@ -981,7 +1135,7 @@ public sealed class ChatPageTests
                     SessionStoragePaths.CreateLegacy(
                         Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-chat-page-session")),
                         Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-chat-page-logs")),
-                        "test-session")),
+                        "test-session", ManagedTemporaryLayout.InsideSessionStorage.Instance)),
                 Audience = TrustAudience.Personal,
                 InlineOutputBudget = InlineOutputBudget.Default,
                 // A chat can answer the prompt. An unattended run would deny the call (D2).
@@ -1075,14 +1229,15 @@ public sealed class ChatPageTests
         File.WriteAllText(Path.Combine(targetDir, filename), content);
     }
 
-    private static ToolInteractionRequest BuildApproval(string displayText, string toolName = "shell_execute")
+    private static ToolInteractionRequest BuildApproval(
+        string displayText, string toolName = "shell_execute", string callId = "test-call")
     {
         return new ToolInteractionRequest
         {
             SessionId = new SessionId("test-session"),
             TimestampMs = 0,
             Kind = "approval",
-            CallId = new Netclaw.Tools.ToolCallId("test-call"),
+            CallId = new Netclaw.Tools.ToolCallId(callId),
             ToolName = new Netclaw.Tools.ToolName(toolName),
             DisplayText = displayText,
             Patterns = ["cd"],
@@ -1172,6 +1327,9 @@ public sealed class ChatPageTests
         /// </summary>
         public string? LastSubmittedInteractionKey { get; private set; }
 
+        /// <summary>The call ID of the prompt that the submitted key answered.</summary>
+        public string? LastSubmittedInteractionCallId { get; private set; }
+
         private readonly FakeTimeProvider? _clock;
         private readonly TimeSpan _stepPerOutput;
 
@@ -1238,6 +1396,7 @@ public sealed class ChatPageTests
         protected override Task SubmitInteractionSelectionAsync(string selectedKey)
         {
             LastSubmittedInteractionKey = selectedKey;
+            LastSubmittedInteractionCallId = CurrentInteraction?.CallId.Value;
             LifecycleEvents.Add($"submit:{selectedKey}");
             return Task.CompletedTask;
         }

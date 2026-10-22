@@ -77,16 +77,12 @@ internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, string>? ManagedTemporaryDenialDirectories,
     IReadOnlyDictionary<string, AuthorizationAttemptId>? AuthorizationAttemptIds);
 
-internal abstract record PreparedFreshBatch(ToolCycleBatchDecision Decision)
-{
-    internal sealed record Stop(ToolCycleBatchDecision Decision) : PreparedFreshBatch(Decision);
-
-    internal sealed record Ready(
-        List<FunctionCallContent> Calls,
-        PreparedToolCycleBatch Cycle,
-        ToolCycleBatchDecision Decision,
-        SerializableChatMessage AssistantMessage) : PreparedFreshBatch(Decision);
-}
+// A fresh batch always dispatches. A refused call gets a synthetic correction result in the pipeline.
+internal sealed record PreparedFreshBatch(
+    List<FunctionCallContent> Calls,
+    PreparedToolCycleBatch Cycle,
+    ToolCycleBatchDecision Decision,
+    SerializableChatMessage AssistantMessage);
 
 internal abstract record ToolApprovalCallState(PendingToolInteraction Pending);
 
@@ -104,6 +100,8 @@ internal sealed record ResolvedToolApproval(
 internal sealed partial class SessionToolWorkflow
 {
     private readonly Dictionary<string, ToolApprovalCallState> _calls = new(StringComparer.Ordinal);
+    // How each closed child prompt ended (see RememberClosedChildCalls). A late click reads it.
+    private readonly Dictionary<string, ChildApprovalResolution> _closedChildCalls = new(StringComparer.Ordinal);
     private readonly ActiveToolBatchTracker _activeBatch = new();
     private readonly ApprovalChannel _approvalChannel = new();
     private readonly ManagedTemporaryCorrectionState _corrections = new();
@@ -120,8 +118,6 @@ internal sealed partial class SessionToolWorkflow
         registry?.CanonicalizeToolCalls(response, calls);
         var cycle = ToolCycleSignatureFactory.Prepare(calls, executor);
         var decision = turn.EvaluateBeforeDispatch(cycle);
-        if (decision.Kind == ToolCycleDecisionKind.Stop)
-            return new PreparedFreshBatch.Stop(decision);
 
         // Persist the exact arguments that the executor will interpret.
         var assistant = ChatMessageConverter.FromAiMessage(
@@ -131,12 +127,12 @@ internal sealed partial class SessionToolWorkflow
                 var (meta, cleaned) = executor.PrepareToolCall(call);
                 return (meta, cleaned.Arguments);
             });
-        return new PreparedFreshBatch.Ready(calls, cycle, decision, assistant);
+        return new PreparedFreshBatch(calls, cycle, decision, assistant);
     }
 
     public SessionState ApplyBatchStarted(SessionState state, ToolBatchStarted started)
     {
-        state = state.CommitChildContinuation(started.ChildContinuation, close: false);
+        state = state.CloseLegacyContinuation(started.ChildContinuation, close: false);
         if (started.ChildContinuation is null && state.FindLastUserMessage() != started.UserMessage)
             state = state with { History = state.History.Add(started.UserMessage) };
         if (!state.History.Contains(started.AssistantMessage))
@@ -158,6 +154,9 @@ internal sealed partial class SessionToolWorkflow
             cycle = ToolCycleSignatureFactory.Prepare(calls, executor);
         _activeBatch.Start(calls, cycle);
     }
+
+    /// <summary>Add the repeat nudge after the results of the batch that <see cref="StartDispatch"/> started.</summary>
+    public void AddRepeatNudgeAfterBatch(string nudge) => _activeBatch.AddNudgeAfterResults(nudge);
 
     public SessionToolBatch CreateBatch(
         TurnContext turnContext,
@@ -341,15 +340,6 @@ internal sealed partial class SessionToolWorkflow
 
         return true;
     }
-
-    private PendingToolInteraction? FindLatestPending(
-        Func<PendingToolInteraction, bool> predicate)
-        => _calls.Values
-            .OfType<PendingToolApproval>()
-            .Select(static call => call.Pending)
-            .Where(predicate)
-            .OrderBy(static pending => pending.Request.RequestedAtMs)
-            .LastOrDefault();
 
     public void StartTurn() => TurnPhase = ApprovalTurnPhase.Running;
 

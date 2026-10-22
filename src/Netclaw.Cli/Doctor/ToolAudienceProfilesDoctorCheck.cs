@@ -76,6 +76,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         CheckExplicitPersonalShellAuto(toolConfig, warnings);
         CheckMissingToolOutputRead(toolConfig.AudienceProfiles, warnings);
+        CheckWriteWiderThanRead(toolConfig.AudienceProfiles, warnings);
 
         CheckDefaultAllowedToolsCopies(root, warnings);
 
@@ -161,6 +162,60 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 + "When a tool result is too large, Netclaw spills it to a file and tells the model to call "
                 + $"{ToolAudienceProfileToolCatalog.ToolOutputRead}. Add it to the list unless you want to block that.");
         }
+    }
+
+    // Advisory only, with no auto-fix: a narrow read profile can be intentional (issue #2554).
+    // Root containment is lexical, segment by segment, on the configured text. A token such as
+    // {session_dir} compares as text. The runtime reads the same profile through
+    // PathAccessPolicy, which lets Personal reads follow the write profile.
+    private static void CheckWriteWiderThanRead(ToolAudienceProfiles profiles, List<string> warnings)
+    {
+        foreach (var (audience, profile) in (ReadOnlySpan<(TrustAudience, ToolAudienceProfile)>)
+                 [(TrustAudience.Personal, profiles.Personal),
+                  (TrustAudience.Team, profiles.Team),
+                  (TrustAudience.Public, profiles.Public)])
+        {
+            if (!WritesWiderThanReads(profile.ReadFiles, profile.WriteFiles))
+                continue;
+
+            var warning =
+                $"Tools.AudienceProfiles.{audience} can write wider than it can read: "
+                + $"WriteFiles.Mode={profile.WriteFiles.Mode}, ReadFiles.Mode={profile.ReadFiles.Mode}.";
+            if (audience == TrustAudience.Personal)
+                warning += " At run time, Personal file reads already reach the write profile.";
+
+            warnings.Add(warning);
+        }
+    }
+
+    private static bool WritesWiderThanReads(ToolFilesystemAccessProfile read, ToolFilesystemAccessProfile write)
+    {
+        if (write.Mode == ToolFilesystemMode.None || read.Mode == ToolFilesystemMode.All)
+            return false;
+
+        if (write.Mode == ToolFilesystemMode.All || read.Mode == ToolFilesystemMode.None)
+            return true;
+
+        return write.Roots.Any(writeRoot => !read.Roots.Any(readRoot => RootContains(readRoot, writeRoot)));
+    }
+
+    private static bool RootContains(string root, string candidate)
+    {
+        var rootSegments = SplitRoot(root);
+        var candidateSegments = SplitRoot(candidate);
+        if (rootSegments.Length > candidateSegments.Length)
+            return false;
+
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return !rootSegments.Where((segment, index) => !string.Equals(segment, candidateSegments[index], comparison)).Any();
+    }
+
+    // A leading slash is its own segment, so "/srv" does not contain the relative "srv/x".
+    private static string[] SplitRoot(string root)
+    {
+        var text = root.Trim().Replace('\\', '/');
+        var segments = text.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return text.StartsWith('/') ? ["/", .. segments] : segments;
     }
 
     // A stored copy of a shipped default list does not follow later defaults. The daemon maps an

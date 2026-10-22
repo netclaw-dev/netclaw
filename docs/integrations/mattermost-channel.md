@@ -13,7 +13,9 @@ ACL controls, against a self-hosted Mattermost server.
 - Inbound handling: ACL-gated before session dispatch
 - Thread history: root-only bot-message backfill with one-shot hydration
 - Approvals: interactive buttons (when a callback URL is configured) with a
-  deterministic text-reply fallback
+  deterministic text-reply fallback for parent prompts. A child (subagent)
+  consent prompt has buttons only. Without a callback URL, Mattermost refuses
+  every child consent request, and the call does not run.
 - Reminder support: `current_session`, and `channel` delivery to both channels
   and direct messages
 
@@ -111,7 +113,9 @@ daemon exposes `/api/mattermost/actions`:
   Mattermost channel/post before any approval state changes; the endpoint never
   creates a new session.
 - When `CallbackUrl` is not configured the endpoint is not registered and
-  approvals fall back to deterministic A/B/C/D text replies.
+  parent approvals fall back to deterministic A/B/C/D text replies. Child
+  (subagent) consent requests need buttons, so Netclaw refuses each of them,
+  and the call does not run.
 
 ## Reminder targeting
 
@@ -196,7 +200,8 @@ runs nightly and on a pull request that changes the Mattermost channel,
   `CallbackUrl`, is one-time-token-validated and ACL-checked, fails closed on
   invalid, expired, or replayed tokens, and routes only into existing sessions.
   If you do not need interactive approval buttons, leave `CallbackUrl` unset to
-  keep the inbound HTTP surface closed.
+  keep the inbound HTTP surface closed. Without it, Mattermost refuses every
+  child consent request.
 - **Always populate `AllowedUserIds`** on a production Mattermost configuration.
   An empty allow-list means the daemon accepts inbound events and callback
   clicks from *any* Mattermost user the bot can see — the action-token check

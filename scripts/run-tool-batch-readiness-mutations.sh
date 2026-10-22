@@ -8,6 +8,7 @@ inspection_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionModelConte
 history_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionState.cs"
 stop_source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionExecutionLifetime.cs"
 input_source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionInputFlow.cs"
+refused_source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/TurnStateTracker.cs"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
 output_path="${1:-$repo_root/artifacts/stryker/tool-batch-readiness}"
 if [[ "$output_path" != /* ]]; then
@@ -112,6 +113,22 @@ read -r input_span_start input_span_end input_line input_column input_end_column
   ' "$input_source_file"
 )
 
+read -r refused_span_start refused_span_end refused_first_line refused_last_line < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $start_marker = "private RefusedRepeatAction CountRefusedRepeat(bool repeats)";
+    $end_marker = "private void ObserveGroup";
+    $start = index($_, $start_marker);
+    die "The refused repeat count start marker is missing or duplicated.\n"
+      if $start < 0 || index($_, $start_marker, $start + 1) >= 0;
+    $end = index($_, $end_marker, $start);
+    die "The refused repeat count end marker is missing or duplicated.\n"
+      if $end < 0 || index($_, $end_marker, $end + 1) >= 0;
+    $first = 1 + (substr($_, 0, $start) =~ tr/\n//);
+    $last = 1 + (substr($_, 0, $end) =~ tr/\n//);
+    print "$start $end $first $last\n";
+  ' "$refused_source_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
@@ -124,6 +141,7 @@ read -r input_span_start input_span_end input_line input_column input_end_column
     --mutate "Sessions/Handlers/SessionExecutionLifetime.cs{$stop_span_start..$stop_span_end}" \
     --mutate "Sessions/Handlers/SessionExecutionLifetime.cs{$reap_span_start..$reap_span_end}" \
     --mutate "Sessions/Handlers/SessionInputFlow.cs{$input_span_start..$input_span_end}" \
+    --mutate "Sessions/Handlers/TurnStateTracker.cs{$refused_span_start..$refused_span_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -234,10 +252,24 @@ jq -e --arg source "$input_source_file" \
   exit 1
 }
 
-jq -e --argjson count "$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count))" '
+expected_refused_count=11
+jq -e --arg source "$refused_source_file" \
+  --argjson first "$refused_first_line" --argjson last "$refused_last_line" \
+  --argjson count "$expected_refused_count" '
+  [(.files[$source].mutants // [])[]
+    | select(.status != "Ignored")
+    | select(.location.start.line >= $first and .location.start.line < $last)] as $mutants
+  | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
+' "$report" > /dev/null || {
+  echo "Expected $expected_refused_count killed refused repeat count mutants in the selected method." >&2
+  exit 1
+}
+
+total_count=$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count + expected_refused_count))
+jq -e --argjson count "$total_count" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count
 ' "$report" > /dev/null || {
-  echo "Expected exactly $((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count)) tested session reliability mutants." >&2
+  echo "Expected exactly $total_count tested session reliability mutants." >&2
   exit 1
 }

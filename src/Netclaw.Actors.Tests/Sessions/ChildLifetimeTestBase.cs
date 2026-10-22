@@ -76,6 +76,7 @@ public abstract class ChildLifetimeTestBase : ApprovalWaitTestBase
                 [SecondTool] = ToolApprovalMode.Approval
             }
         };
+        ConfigureTools(toolConfig);
         var policy = new ToolAccessPolicy(TestPaths, toolConfig,
             new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
@@ -84,6 +85,8 @@ public abstract class ChildLifetimeTestBase : ApprovalWaitTestBase
         var spawner = new SubAgentSpawner(Clients, registry, policy, null, prompt,
             new PlainSnapshotProvider(), NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
         registry.RegisterCore(new SpawnAgentTool(profiles, spawner, TestPaths));
+        // The runtime refuses a spawn when the requester cannot read the result file.
+        registry.RegisterCore(new FileReadTool(toolConfig, TestPaths, new ToolPathPolicy([])));
         registry.RegisterCore(First);
         registry.RegisterCore(Second);
 
@@ -102,6 +105,9 @@ public abstract class ChildLifetimeTestBase : ApprovalWaitTestBase
         services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(registry, policy, null,
             NullLogger<DispatchingToolExecutor>.Instance));
     }
+
+    // A spec can change the tool policy, for instance to ask for an approval in another audience.
+    protected virtual void ConfigureTools(ToolConfig toolConfig) { }
 
     protected async Task<Akka.TestKit.TestProbe> JoinFullAsync(SessionId sessionId)
     {
@@ -135,24 +141,22 @@ public abstract class ChildLifetimeTestBase : ApprovalWaitTestBase
 
     protected static TaskCompletionSource NewGate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    // A restart makes a "child owner was lost" result with the same tool name. A real result has lost=false and
-    // holds the reply of the child.
+    // A restart makes a "child owner was lost" notice for a run that never answered. A real result is a notice for a
+    // completed run whose result file holds the reply of the child.
     protected static bool HasChildResult(IReadOnlyList<ChatMessage> request)
         => request
-            .SelectMany(message => message.Contents.OfType<FunctionResultContent>())
-            .Where(result => result.CallId.StartsWith("child-result-", StringComparison.Ordinal))
-            .Select(result => result.Result?.ToString())
-            .Any(IsRealChildResult);
+            .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                              && message.Text.StartsWith("Child run ended.", StringComparison.Ordinal))
+            .Select(message => message.Text)
+            .Any(IsRealChildNotice);
 
-    private static bool IsRealChildResult(string? json)
+    private static bool IsRealChildNotice(string notice)
     {
-        if (string.IsNullOrEmpty(json))
+        if (!notice.Contains("outcome=completed", StringComparison.Ordinal)
+            || notice.Contains("reason=actor_stopped", StringComparison.Ordinal))
             return false;
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-        return root.TryGetProperty("lost", out var lost) && lost.ValueKind == JsonValueKind.False &&
-               root.TryGetProperty("output", out var output) &&
-               output.GetString()?.Contains(ChildReplyText, StringComparison.Ordinal) == true;
+        var path = System.Text.RegularExpressions.Regex.Match(notice, @"result_file=(\S+)").Groups[1].Value;
+        return File.Exists(path) && File.ReadAllText(path).Contains(ChildReplyText, StringComparison.Ordinal);
     }
 
     private protected sealed class ChildClients : IChatClientProvider

@@ -33,7 +33,7 @@ internal static class SubAgentTestScope
         var parentStorage = SessionStoragePaths.CreateLegacy(
             sessionDirectory ?? Path.Combine(AppContext.BaseDirectory, "netclaw-test-session-workspace"),
             Path.Combine(AppContext.BaseDirectory, "netclaw-test-session-logs"),
-            "test-session");
+            "test-session", ManagedTemporaryLayout.InsideSessionStorage.Instance);
         ToolSessionScope sessionScope = new ToolSessionScope.Bound(scopeId, parentStorage);
         if (childScopeId.TryGetRunId(out var runId))
         {

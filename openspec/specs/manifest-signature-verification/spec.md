@@ -82,10 +82,20 @@ verification fails. There SHALL be no fallback to unsigned manifest acceptance.
 
 #### Scenario: Missing signature file aborts update
 
-- **WHEN** `manifest.json.sig` cannot be downloaded (404, timeout, network error)
+- **WHEN** `manifest.json.sig` cannot be downloaded because the server returns
+  an HTTP error status (for example 404)
 - **THEN** the manifest is rejected
 - **AND** the update command exits with a non-zero code and an error message
   explaining the signature is missing
+
+#### Scenario: Signature fetch times out or fails to connect
+
+- **WHEN** the download of `manifest.json.sig` times out or fails with a
+  transport error and the server sends no HTTP response
+- **THEN** the manifest is rejected
+- **AND** the update command exits with a non-zero code
+- **AND** the error message names the network problem and does not warn of
+  tampering
 
 #### Scenario: Invalid signature aborts update
 

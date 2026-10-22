@@ -761,19 +761,54 @@ SHALL disable the reminder and keep its definition and history.
 
 A session SHALL keep at most one waiting fire for each reminder. A fire waits
 only while the session's in-memory input queue holds it. A turn that selects a
-fire removes it from the queue. When a newer
-fire of the same reminder arrives while an earlier fire waits, the session SHALL
-acknowledge the newer fire and SHALL NOT store it. The session SHALL log
-`reminder_fire_dropped`. The reminder system SHALL see success.
+fire removes it from the queue. When a newer fire of the same reminder arrives
+while an earlier fire waits, the session SHALL apply one of two rules:
 
-Recovery rebuilds the queue for inputs that wait behind an open approval, so
-the rule holds after a restart or a passivation for those inputs. A stored
-input that nothing will run (a crash, a restart with several requesters, an
-expired restart reminder, or a restart message that found another turn running
-left it pending) is not waiting. It SHALL NOT block a later fire. The session
-SHALL NOT drop a fire while the earlier fire runs. The session SHALL NOT drop a fire because another
-reminder has a waiting fire. A key that is not a reminder fire key
-(`{reminderId}:{fireTimeMs}`) SHALL never be dropped and SHALL never block a fire.
+- While the [child consent pause](../../../docs/spec/GLOSSARY.md#child-consent-pause) applies,
+  the newer fire SHALL replace the earlier fire. The session SHALL close the
+  earlier fire and store the newer fire in one journal write. The session SHALL
+  log `reminder_fire_replaced`. This rule SHALL apply also when a parent
+  approval is open at the same time.
+- In every other case, the session SHALL acknowledge the newer fire and SHALL
+  NOT store it. The session SHALL log `reminder_fire_dropped`. This rule
+  applies to a fire that waits only behind a parent approval.
+
+The reminder system SHALL see success for both rules.
+
+These paths put a stored input back in the queue, so the rule holds after a
+restart or a passivation for those inputs:
+
+- Recovery rebuilds the queue for inputs that wait behind an open parent
+  approval.
+- When the child consent pause held the session at recovery, the session
+  queues the automated inputs that the pause held (`StartHeldInputs`).
+- A restart reminder in `Ready` phase resumes the leading inputs of the first
+  requester and queues the other pending inputs. This rule applies also when
+  the first input is a slash command. When the slash command keeps the session
+  in `Ready` phase, the session starts the next queued input after it closes
+  the slash command input. In this slash resume, the session logs each
+  damaged waiting input after the first input of another requester and keeps
+  it pending. It queues the valid inputs and replies with an ack. Issue #2576
+  owns the rule for a damaged input in the plain resume path.
+- A live slash command that the session rejects in `Ready` phase also starts
+  the next queued input, for example a fire that waited behind a parked
+  approval that the command closed.
+- A restart reminder in `Processing` or `Compacting` phase queues each pending
+  input that no turn selected. It replies `RestartResumeNotNeeded`.
+
+In `Processing` or `Compacting` phase, if one pending input that no turn
+selected has a stored authority that does not parse, the restart reminder
+replies `CommandNack` and queues no input. In `Ready` phase, the same reply
+applies when such an input comes before the first input of another requester,
+or is that input.
+
+A stored input that nothing will run is not waiting. A crash, an expired
+restart reminder, or a stored authority that does not parse can leave such an
+input pending. It SHALL NOT block a later fire. The session SHALL NOT drop or
+replace a fire while the earlier fire runs. The session SHALL NOT drop or
+replace a fire because another reminder has a waiting fire. A key that is not a
+reminder fire key (`{reminderId}:{fireTimeMs}`) SHALL never be dropped or
+replaced and SHALL never block a fire.
 
 The decision SHALL cause no side effect. A dropped or duplicate fire SHALL NOT
 abandon an open tool batch.
@@ -787,12 +822,40 @@ abandon an open tool batch.
 - **AND** the 10:00 fire runs after the turn
 - **AND** the 10:24 fire waits again, and the session admits it
 
-#### Scenario: A fire waits behind an approval, also after a restart
+#### Scenario: A fire waits behind a parent approval, also after a restart
 
-- **GIVEN** the 10:00 fire waits behind an open approval
+- **GIVEN** the 10:00 fire waits behind an open parent approval, and no child consent request is open
 - **AND** the daemon restarted, so recovery rebuilt the waiting fire from the journal into the queue
 - **WHEN** the 10:12 fire arrives
 - **THEN** the session acknowledges it and stores no input
+
+#### Scenario: A newer fire replaces the waiting fire during the child consent pause
+
+- **GIVEN** a child consent request is open, so the child consent pause applies
+- **AND** the 10:00 fire waits for the pause
+- **WHEN** the 10:12 fire arrives
+- **THEN** the session closes the 10:00 fire and stores the 10:12 fire in one journal write
+- **AND** the session logs `reminder_fire_replaced`
+- **AND** after the pause ends, one turn of the reminder runs, for the 10:12 fire
+
+#### Scenario: A busy restart reminder queues a pending fire
+
+- **GIVEN** a graceful restart interrupted the turn of the 10:00 fire, so the fire stayed pending
+- **AND** after the restart, an operator turn runs
+- **AND** no child consent request is open
+- **WHEN** the restart reminder arrives while the operator turn runs
+- **THEN** the session queues the 10:00 fire and replies `RestartResumeNotNeeded`
+- **AND** the 10:00 fire runs once, after the operator turn
+- **AND** a 10:12 fire that arrives before the 10:00 fire runs is dropped
+
+#### Scenario: A rejected slash command does not strand the inputs behind it
+
+- **GIVEN** a graceful restart left three pending inputs: an unknown slash command of Alice, the 10:00 fire, and a later text input of Alice
+- **WHEN** the restart reminder arrives in `Ready` phase
+- **THEN** the session closes the slash command input with a skipped turn
+- **AND** the 10:00 fire runs once, under the authority of the reminder
+- **AND** the text input of Alice runs after the fire, under the authority of Alice
+- **AND** no input stays pending
 
 #### Scenario: A fire that a crash left pending does not block the next fire
 

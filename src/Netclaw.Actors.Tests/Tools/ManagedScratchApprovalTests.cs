@@ -185,9 +185,66 @@ public sealed class ManagedScratchApprovalTests(ShellApprovalMatrixFixture fixtu
         Assert.False(File.Exists(Path.Combine(project, "version.txt")));
     }
 
+    /// <summary>
+    /// PR #2559 review item S6. Issue #2554 moves <c>temp_dir</c> on POSIX to the short layout
+    /// <c>&lt;base&gt;/&lt;key&gt;/p</c>, and the base is below the platform temporary root. The
+    /// #2563 route (a repository grant composed with managed scratch authority) must work
+    /// there too: the own scratch redirect needs no consent and gets no temp-path advice,
+    /// before and after the first launch makes the private folders. The scratch folder of
+    /// another session stays outside the composition.
+    /// </summary>
+    [SlopwatchSuppress("SW001", "The short private layout and scratch composition exist only on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case requires POSIX Bash paths.")]
+    public async Task Repository_grant_composes_with_owned_scratch_in_the_short_private_layout()
+    {
+        using var root = new DisposableTempDir();
+        var project = InitializeRepository(root.Path);
+        FileSystemAuthority.TryResolveLinks(root.Path, out var physicalRoot);
+        var temporaryBase = Path.Combine(physicalRoot, "netclaw-base");
+        var layout = new ManagedTemporaryLayout.PrivateBase(new ManagedTemporaryBase(temporaryBase));
+        await using var harness = await CreateHarnessAsync(
+            root.Path, project, "short", ToolApprovalMode.Auto, ToolApprovalMode.Approval, layout);
+        await using var other = await CreateHarnessAsync(
+            root.Path, project, "short-other", ToolApprovalMode.Auto, ToolApprovalMode.Approval, layout);
+        Assert.StartsWith(temporaryBase + "/", harness.ManagedTemporaryDirectory);
+        FileSystemAuthority.TryResolveLinks(Path.GetTempPath(), out var platformTemporaryRoot);
+        Assert.StartsWith(platformTemporaryRoot.TrimEnd('/') + "/", harness.ManagedTemporaryDirectory);
+
+        // The first call of a session: no launch made the private folders yet.
+        var first = await harness.EvaluateShellAsync("uv export --frozen > \"$TMPDIR/reqs.txt\"", Ct, project);
+        Assert.True(first.Outcome == ApprovalOutcome.Allowed, System.Text.Json.JsonSerializer.Serialize(first));
+        Assert.Null(first.AgentCorrectionTarget);
+        Assert.Contains(first.ApprovalMatches, match => match.Contains("uv export", StringComparison.Ordinal));
+
+        harness.AddStoredShellEntry(TrustAudience.Personal,
+            ApprovalEntry.CreateRepositoryTokenPrefix(ApprovalShell.Bash, ["git"], Path.Combine(project, ".git")));
+        var launch = await harness.RunToolAsync(ShellTool.ToolName, new Dictionary<string, object?>
+        {
+            ["Command"] = "git --version > \"$TMPDIR/version.txt\"",
+            ["WorkingDirectory"] = project
+        }, Ct);
+        Assert.True(launch.Outcome == ApprovalOutcome.Allowed, System.Text.Json.JsonSerializer.Serialize(launch));
+        Assert.StartsWith("git version", await File.ReadAllTextAsync(
+            Path.Combine(harness.ManagedTemporaryDirectory, "version.txt"), Ct));
+        Assert.False(File.Exists(Path.Combine(project, "version.txt")));
+
+        var again = await harness.EvaluateShellAsync("uv export --frozen > \"$TMPDIR/reqs.txt\"", Ct, project);
+        Assert.True(again.Outcome == ApprovalOutcome.Allowed, System.Text.Json.JsonSerializer.Serialize(again));
+        Assert.Null(again.AgentCorrectionTarget);
+
+        var foreign = await harness.EvaluateShellAsync(
+            $"uv export > '{other.ManagedTemporaryDirectory}/reqs.txt'", Ct, project);
+        Assert.NotEqual(ApprovalOutcome.Allowed, foreign.Outcome);
+    }
+
     private Task<ShellApprovalHarness> CreateHarnessAsync(
         string root, string project, string id, ToolApprovalMode fileMode,
         ToolApprovalMode shellMode)
+        => CreateHarnessAsync(root, project, id, fileMode, shellMode, temporaryLayout: null);
+
+    private Task<ShellApprovalHarness> CreateHarnessAsync(
+        string root, string project, string id, ToolApprovalMode fileMode,
+        ToolApprovalMode shellMode, ManagedTemporaryLayout? temporaryLayout)
     {
         FileSystemAuthority.TryResolveLinks(root, out var physicalRoot);
         return ShellApprovalHarness.CreateAsync(id,
@@ -195,7 +252,7 @@ public sealed class ManagedScratchApprovalTests(ShellApprovalMatrixFixture fixtu
             Approvals.PersistentRepository("uv export"), fixture.ActorSystem, Ct,
             scope: new ShellApprovalHarnessScope(project,
                 Directory.CreateDirectory(Path.Combine(physicalRoot, id)).FullName, $"signalr/{id}", [])
-                { RepositoryGrantWorktree = project },
+                { RepositoryGrantWorktree = project, TemporaryLayout = temporaryLayout },
             shellApprovalMode: shellMode,
             policy: new ShellApprovalHarnessPolicy
             {

@@ -102,12 +102,12 @@ recovery state, and only then request daemon shutdown.
 - **THEN** the message is rejected with a restart-in-progress response
 - **AND** no new session actor is created for that message
 
-#### Scenario: Active session finishes current turn during restart drain
+#### Scenario: Active session stops its turn at the next safe point during restart drain
 
 - **GIVEN** a session is already in `Processing` or `Compacting` when restart drain begins
 - **WHEN** the coordinator requests drain for that session
 - **THEN** the session rejects new work
-- **AND** allows the current in-flight turn or compaction to finish
+- **AND** stops the turn at the next safe point: a live model call after the 2-second grace period, the end of a tool batch, or the end of a compaction
 - **AND** only then passivates and acknowledges the drain
 
 #### Scenario: Drain timeout still requests restart
@@ -115,7 +115,7 @@ recovery state, and only then request daemon shutdown.
 - **GIVEN** at least one recorded active session does not drain before the restart timeout
 - **WHEN** the timeout expires
 - **THEN** the coordinator requests daemon shutdown anyway
-- **AND** records that recovery will resume from the last durable checkpoint for the timed-out session
+- **AND** the shutdown alert names each timed-out session
 
 ### Requirement: ConfigWatcherService hosted service
 

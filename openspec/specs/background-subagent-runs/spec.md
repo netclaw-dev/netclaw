@@ -69,6 +69,8 @@ The system SHALL persist cancellation intent before it acknowledges the intent. 
 - **WHEN** the parent owner recovers
 - **THEN** the system does not start the child again automatically
 - **AND** the run reports an explicit non-success or uncertain state
+- **AND** the run reports the reason `owner_restarted`, and it is not a success
+- **AND** the confirmed changes of its last checkpoint still join the parent working context
 
 #### Scenario: Status enforces run ownership
 

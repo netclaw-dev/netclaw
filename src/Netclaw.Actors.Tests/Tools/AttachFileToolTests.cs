@@ -30,6 +30,12 @@ public class AttachFileToolTests : IDisposable
             Mode = ToolFilesystemMode.Roots,
             Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
         };
+        // Issue #2554: a Personal attach reaches the write profile, so bound it too.
+        config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
+        };
         return config;
     }
 

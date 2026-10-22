@@ -190,8 +190,21 @@ offer.
 
 A prompt waits until you answer. No timer denies it. If the daemon restarts or
 the session goes idle, your later answer still resumes the call. A new message
-in the thread abandons the calls that wait. A subagent prompt does not survive a
-restart; Netclaw rejects the old prompt as expired.
+in the thread abandons the calls that wait.
+
+A subagent (child) prompt is different:
+
+- It has buttons only. Answer it with a button, not with a text reply.
+- A text reply such as "A" answers nothing while a child prompt is among two or
+  more prompts that you can answer. Netclaw replies "N approval prompts are
+  open. Use the buttons on the prompt you mean."
+- A cancel, the end of the child, a lost child, a restart, or a channel that
+  cannot show the prompt withdraws it. The prompt then shows the reason, for
+  example "This approval request was withdrawn because the task that asked
+  for it was cancelled. Nothing ran." A later click gets the same text.
+- When you answer it in one client, the prompt in every other client shows
+  "This approval request has an answer."
+- It does not survive a restart. Netclaw withdraws it.
 
 ## What runs without a prompt
 
@@ -447,7 +460,7 @@ built-in list; they do not replace it:
 | --- | --- | --- |
 | Slack | Yes | Block Kit buttons |
 | Discord | Yes | Native buttons |
-| Mattermost | Yes | Interactive buttons, or a text reply when no callback URL is set |
+| Mattermost | Yes | Interactive buttons, or a text reply when no callback URL is set. With no callback URL, Mattermost refuses every child consent request |
 | TUI (`netclaw chat`) | Yes | Inline prompt |
 | SignalR (web client) | Yes | Inline prompt |
 | Headless (`netclaw chat -p`) | No | The call is denied with the headless result text |
@@ -456,7 +469,10 @@ built-in list; they do not replace it:
 
 In a channel without prompts, a saved grant or an output command can still
 cover a call. If a channel cannot post a prompt (for example, the platform
-rejects the message), the channel answers `Deny` for that call.
+rejects the message), the channel answers `prompt_unavailable` for that call,
+and the call does not run. A child prompt has no text-only fallback, so a
+Mattermost binding with no callback URL refuses each child consent request
+this way, and the session withdraws it.
 
 ## Diagnostics
 
@@ -554,7 +570,8 @@ A: Yes. Add the tool to `ToolOverrides`:
 
 **Q: What happens if I do not answer a prompt?**
 A: The call waits. No timer denies it. Your answer still works after a daemon
-restart, except for a subagent prompt.
+restart, except for a subagent prompt. A restart withdraws a subagent prompt,
+and the prompt shows the reason.
 
 **Q: Can I approve common commands in advance?**
 A: Yes. Use `netclaw approvals trust-verb`, or choose a saved-grant option in a

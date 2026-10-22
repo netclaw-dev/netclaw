@@ -242,6 +242,9 @@ static async Task RunDaemonAsync(
     builder.Services.AddSingleton<Netclaw.Actors.Telemetry.ISessionMetrics>(sp => sp.GetRequiredService<DailyStatsPublisher>());
     builder.Services.AddSingleton<DaemonStatsService>();
     builder.Services.AddSingleton<SessionIngressGate>();
+    // The layout is a required dependency of the resolver. On POSIX it is the short per-user base
+    // /tmp/netclaw-<uid> (issue #2554). A host that cannot read its user ID fails at startup.
+    builder.Services.AddSingleton<ManagedTemporaryLayout>(_ => ManagedTemporaryLayout.ForHost());
     builder.Services.AddSingleton<ISessionStorageResolver, SqliteSessionStorageResolver>();
     builder.Services.AddSingleton<RestartManifestStore>();
     builder.Services.AddSingleton<RejectedConfigState>();
@@ -1050,9 +1053,7 @@ static IReadOnlyList<string> ConfigureDaemonServices(
         akkaBuilder = akkaBuilder.WithNetclawActorLogging(daemonLogLevel);
 
         var connectionString = $"Data Source={sqlitePath}";
-        akkaBuilder = akkaBuilder.WithSqlPersistence(
-            connectionString: connectionString,
-            providerName: "SQLite.MS");
+        akkaBuilder = akkaBuilder.WithDaemonSqlPersistence(connectionString);
 
         var reminderStorage = new NetclawAkkaHostingExtensions.ReminderStorageOptions
         {
@@ -1187,7 +1188,7 @@ static IReadOnlyList<string> ConfigureDaemonServices(
 
     // Expired data is cleared by DataRetentionActor, which runs every RetentionJob registered here.
     var retentionWarnings = services.AddRetentionJobs(configuration, paths);
-    return [.. toolConfigWarnings, .. retentionWarnings];
+    return [.. toolConfigWarnings, .. retentionWarnings, .. OAuthTokenExpiryStorage.RetiredKeyWarnings(paths)];
 }
 
 static ISearchBackend? CreateSearchBackend(SearchConfig config)

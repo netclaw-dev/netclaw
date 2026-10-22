@@ -209,10 +209,12 @@ public static class SchemaFixResolver
     }
 
     // IsSecretKey is the output redactor's rule and stays the one source for what a secret key
-    // name is. These are extra names that are unambiguous as config keys, and URL values that
-    // carry a credential. A bare "Key" is left alone: too many ordinary settings are called that.
+    // name is. These are extra names that IsSecretKey does not cover but that are unambiguous as
+    // config keys. IsSecretKey leaves a bare "pwd" alone, because PWD is the shell working
+    // directory, but a config key "Pwd" holds a password. A bare "Key" is left alone: too many
+    // ordinary settings are called that.
     private static readonly HashSet<string> CredentialNames =
-        new(["passphrase", "pwd", "cookie", "bearer", "pat"], StringComparer.OrdinalIgnoreCase);
+        new(["pwd", "bearer", "pat"], StringComparer.OrdinalIgnoreCase);
 
     private static readonly Regex UrlWithPassword = new(@"://[^/\s:@]+:[^/\s@]+@", RegexOptions.Compiled);
     private static readonly Regex UrlWithUserInfo = new(@"://[^/\s@]+@", RegexOptions.Compiled);

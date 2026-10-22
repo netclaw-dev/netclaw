@@ -112,8 +112,76 @@ Current instrumentation emits:
   - events received, dropped, routed
   - messages enqueued
   - replies posted/failed and reply latency histogram
+- log lines, which include one Info line for each tool call (see below)
 
 Export target can be LocalTelemetry (or any OTLP collector).
+
+### Tool call log line
+
+The daemon writes one Info line for each tool call, before the call runs. A
+sub-agent tool call writes the same line. A call that the argument check
+rejects also writes the line. When the log level is above Info, the daemon
+does not write the line and does not read the arguments.
+
+```text
+Invoking tool [{ToolName}] (call={CallId}) args={Args} rationale={Rationale} authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId}
+```
+
+The exporter sends each field as a separate attribute:
+
+- `ToolName`: the tool name.
+- `CallId`: the model's tool call ID.
+- `Args`: the call arguments as compact JSON. Meta keys such as `_rationale`
+  stay in this field.
+- `Rationale`: the `_rationale` text. It is empty for every rejected call and
+  for every unknown tool, also when the arguments hold a `_rationale` key.
+- `AuthorizationAttemptId`: the same ID as the
+  `Tool authorization attempt started` line. Use it to find the authorization
+  decision for the call.
+- `SessionId`: the session ID. For a sub-agent, this is the parent session ID.
+
+These lines leave the host, so `Args` is redacted and limited. The rules apply
+in this order:
+
+1. The daemon examines the arguments at every depth.
+2. A value under a secret key name (for example `api_key`, `Authorization`, or
+   `github_token`) becomes `***REDACTED***`. A `SensitiveString` value also
+   becomes `***REDACTED***`.
+3. The daemon writes only JSON values, strings, booleans, `int` and `long`
+   integers, decimals, finite doubles, dictionaries with string keys, and
+   lists. Any other value becomes `"<TypeName>"`, for example `"<Hashtable>"`,
+   `"<Int16>"` for a `short`, or `"<Double>"` for `NaN`. The daemon does not
+   read the contents of that value.
+4. The secret-pattern redactor runs on each string value and on each key
+   name. It removes known token shapes, such as `ghp_...`, JWTs, and `Bearer`
+   headers, and secret fields in a JSON body inside a string.
+5. A string value longer than 256 characters becomes
+   `<N chars, sha256:XXXXXXXXXXXXXXXX>`. The hex text is the first 16
+   characters of the SHA-256 hash of the original value. If the redactor
+   changed that string, it becomes `<N chars, redacted>` with no hash.
+6. The secret-pattern redactor runs again on the JSON text.
+7. The daemon cuts `Args` at 4,096 characters and adds `...`.
+
+The daemon stops the walk after about 16 KB of JSON text. When the walk stops
+early, `Args` always ends with `...`, also when the final redactor pass makes
+the text shorter than 4,096 characters.
+
+To match a call to a file, compare the hash prefix with the `sha256sum` of the
+file. The hashes match only when the file bytes are the exact UTF-8 bytes of
+the argument: no byte order mark and the same line ends.
+
+Other limits:
+
+- An object or an array deeper than 64 levels becomes `"<nested>"`.
+- When the daemon cannot read the arguments, `Args` is
+  `<arguments unavailable>`. The tool call still runs. Examples are a value
+  that throws when the daemon reads it, and an escaped lone surrogate
+  (`"\ud800"`) in the JSON from the model. A lone surrogate in a .NET string
+  does not give this marker. The daemon writes U+FFFD in its place.
+- `Rationale` gets the secret-pattern redactor and a cut at 500 characters.
+
+The line does not hold the tool result. The local `session.log` file holds the
+result preview.
 
 If exporting to Seq through `otlphttp`, use Seq's OTLP ingest path as the
 exporter endpoint base:

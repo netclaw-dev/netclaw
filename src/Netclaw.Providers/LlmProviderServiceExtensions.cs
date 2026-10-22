@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Http;
 using Netclaw.Providers.Anthropic;
@@ -75,6 +76,7 @@ public static class LlmProviderServiceExtensions
         services.AddSingleton(sp => new ProviderOAuthTokenRefreshService(
             sp.GetRequiredService<NetclawPaths>(),
             sp.GetRequiredService<DeviceFlowServiceFactory>(),
+            sp.GetRequiredService<ILogger<ProviderOAuthTokenRefreshService>>(),
             sp.GetService<IOperationalNotificationSink>(),
             sp.GetService<TimeProvider>()));
         services.AddSingleton<ProviderOAuthRefreshingProbe>();

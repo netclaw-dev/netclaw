@@ -35,14 +35,14 @@ public sealed class SessionExecutionLifetimeStopPolicyTests
         Assert.False(acceptsOldReply);
         Assert.Equal(PassivationWork.NoAction, oldCommitWork);
         Assert.False(owner.IsCurrentFinalStop(SessionPhase.Passivating));
-        Assert.Null(owner.ClaimFinalStop(SessionPhase.Passivating, new SessionId("test/current-reap"), []));
+        Assert.Null(owner.ClaimFinalStop(SessionPhase.Passivating, new SessionId("test/current-reap"), [], []));
 
         // Act: the current reply reaches the owner twice before its journal commit.
         var acceptsCurrentReply = owner.ObserveReapReply(currentEpoch.Value);
         var acceptsDuplicateBeforeCommit = owner.ObserveReapReply(currentEpoch.Value);
         var workBeforeCommit = owner.CompletePassivationWork(SessionPhase.Passivating);
         var finalBeforeCommit = owner.ClaimFinalStop(
-            SessionPhase.Passivating, new SessionId("test/current-reap"), []);
+            SessionPhase.Passivating, new SessionId("test/current-reap"), [], []);
 
         // Assert: an accepted reply still cannot bypass its journal commit.
         Assert.True(acceptsCurrentReply);
@@ -74,7 +74,7 @@ public sealed class SessionExecutionLifetimeStopPolicyTests
         owner.AbortPassivation();
         var persistReap = owner.ObserveReapReply(epoch.Value);
         var laterWork = owner.ReapCommitted(epoch.Value, SessionPhase.Ready);
-        var final = owner.ClaimFinalStop(SessionPhase.Ready, new SessionId("test/aborted-reap"), []);
+        var final = owner.ClaimFinalStop(SessionPhase.Ready, new SessionId("test/aborted-reap"), [], []);
 
         // Assert: the valid reap still commits, but it cannot finish the aborted stop.
         Assert.True(persistReap);
@@ -95,7 +95,7 @@ public sealed class SessionExecutionLifetimeStopPolicyTests
 
         // Act: input aborts passivation before the final claim.
         owner.AbortPassivation();
-        var final = owner.ClaimFinalStop(SessionPhase.Passivating, new SessionId("test/aborted-stop"), []);
+        var final = owner.ClaimFinalStop(SessionPhase.Passivating, new SessionId("test/aborted-stop"), [], []);
 
         // Assert: the old timer cannot claim a stop or suppress abrupt-stop notice.
         Assert.False(owner.IsCurrentFinalStop(SessionPhase.Passivating));
@@ -114,9 +114,9 @@ public sealed class SessionExecutionLifetimeStopPolicyTests
         Assert.False(owner.AfterFinalSnapshotAttempt(SessionPhase.Passivating));
 
         // Act: the session claims final effects and releases model and tool resources.
-        var final = owner.ClaimFinalStop(SessionPhase.Passivating, sessionId, []);
+        var final = owner.ClaimFinalStop(SessionPhase.Passivating, sessionId, [], []);
         owner.ReleaseAll();
-        var duplicate = owner.ClaimFinalStop(SessionPhase.Passivating, sessionId, []);
+        var duplicate = owner.ClaimFinalStop(SessionPhase.Passivating, sessionId, [], []);
 
         // Assert: PostStop must not request a second abrupt-stop notice.
         Assert.NotNull(final);

@@ -38,6 +38,10 @@
         {
           "verb": "python3",
           "directory": null
+        },
+        {
+          "verb": "/home/netclaw/.netclaw/evals/slow_render",
+          "directory": null
         }
       ]
     }

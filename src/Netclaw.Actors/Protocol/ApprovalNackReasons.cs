@@ -45,6 +45,18 @@ public static class ApprovalNackReasons
     public const string OptionUnavailable = "approval_option_unavailable";
 
     /// <summary>
+    /// The session withdrew the prompt with no answer, for example because its child task was cancelled. Nothing ran.
+    /// The session also posts the withdrawal reason. The prompt did not expire.
+    /// </summary>
+    public const string Withdrawn = "approval_withdrawn";
+
+    /// <summary>
+    /// A text answer names no prompt, and the sender can answer two or more open prompts. The session answers none
+    /// and tells the sender to use the buttons.
+    /// </summary>
+    public const string UseButtons = "approval_use_buttons";
+
+    /// <summary>
     /// The approval decision could not be persisted.
     /// </summary>
     public const string PersistFailed = "approval_persist_failed";

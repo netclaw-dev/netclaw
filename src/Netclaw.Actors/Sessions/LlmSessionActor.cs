@@ -220,7 +220,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Recover<ToolCallRecorded>(ApplyToolCallRecorded);
         Recover<ToolApprovalRequested>(ApplyToolApprovalRequested);
         Recover<ToolApprovalResolved>(ApplyToolApprovalResolved);
-        Recover<ToolBatchAbandoned>(ApplyToolBatchAbandoned);
+        Recover<ToolBatchAbandoned>(evt =>
+        {
+            // An abandoned batch ends its turn, so the noticed runs of that turn end too.
+            ApplyToolBatchAbandoned(evt);
+            _input.ClearNoticeRuns();
+        });
         Recover<SnapshotOffer>(offer =>
         {
             if (offer.Snapshot is SessionSnapshot snapshot)
@@ -254,11 +259,21 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             // A child owner never survives a restart. Close the child entries that remain before a stashed command
             // runs, then log the approvals that stay open. Replay itself logs none (see ApplyToolApprovalRequested).
-            _toolWorkflow.ExpireRecoveredChildApprovals();
+            var pausedAtRecovery = WasPausedAtRecovery();
+            // Recovery runs before any subscriber joins, so each new subscriber also gets these closes at its join.
+            // A channel that restored a tracked child prompt from its own journal then redraws and clears it.
+            _restartWithdrawals = _toolWorkflow.WithdrawRecoveredChildApprovals(_state)
+                .Select(closed => new ToolInteractionClosed(closed.CallId,
+                    new ToolInteractionCloseReason.Withdrawn(closed.Reason)) { SessionId = _sessionId })
+                .ToArray();
+            CloseRecoveredConsentNotices();
             foreach (var open in _toolWorkflow.OpenApprovals())
                 LogToolApprovalRequested(open.AuthorizationAttemptId.Value, open.Request.CallId, open.Request.ToolName, recovered: true);
 
             TransitionTo(SessionPhase.Ready);
+            // Only an approval re-drive continues the open journal turn. Any other next turn starts with no noticed run.
+            if (!_toolWorkflow.HasParkedApprovals())
+                _input.ClearNoticeRuns();
             RestoreWaitingInputs();
             Self.Tell(new RecoverChildRuns());
 
@@ -268,6 +283,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             var registry = ActorRegistry.For(Context.System);
             if (registry.TryGet<SessionLogDispatcherActorKey>(out var dispatcher))
                 _logActor = dispatcher;
+            // After the log actor is known, so the session log records the restart closes.
+            foreach (var closed in _restartWithdrawals)
+                EmitOutput(closed);
 
             if (_memoryStore is not null)
             {
@@ -290,6 +308,15 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                         _timeProvider),
                     "memory-observer");
             }
+
+            // Akka.Persistence unstashes the commands that arrived during recovery right after this handler.
+            // The orphan notices must start their turn here, so a message that woke the session buffers behind them
+            // and does not run first.
+            ResumeOrphanNotices(pausedAtRecovery);
+            if (pausedAtRecovery)
+                Self.Tell(new StartHeldInputs(), ActorRefs.NoSender);
+            if (_consentDigest.IsReady)
+                ChildConsentChanged();
         });
     }
 
@@ -360,10 +387,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         Command<ReceiveTimeout>(_ =>
         {
-            if (HasLiveBackgroundJobs || _execution.HasLiveChildren)
+            if (HasLiveBackgroundJobs || HasUnreportedChildren)
             {
                 _log.Info(
-                    "Session idle but active background jobs remain; deferring passivation");
+                    "Session idle but active background jobs or unreported child runs remain; deferring passivation");
                 return;
             }
 
@@ -445,7 +472,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             if (IsRestartResume(cmd))
             {
-                AckRestartResumeNoOp(cmd);
+                QueueRestartResume(cmd);
                 return;
             }
 
@@ -677,11 +704,25 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
+        // An approval notice turn may end with no text. The turn then ends quietly, with no empty-reply retry and no
+        // fallback post: the notice is runtime state, and the model owes the person no reply to it.
+        if (analysis.Kind is LlmResponseKind.ThinkingOnly or LlmResponseKind.Empty
+            && _input.Authority.Context is { IsChildConsentNotice: true })
+        {
+            TurnLog().Info("turn_consent_notice_quiet_end kind={Kind}", analysis.Kind);
+            RecordIntermediateUsage(response.Usage);
+            CloseActiveInputs(FinishTurnWithoutReply);
+            return;
+        }
+
         if (analysis.Kind is LlmResponseKind.ThinkingOnly or LlmResponseKind.Empty)
         {
             var truncated = response.FinishReason == ChatFinishReason.Length;
             switch (_turnState.EvaluateEmptyResponse(analysis.Kind, truncated))
             {
+                case EmptyResponseAction.Retry when RestartDrainRequested:
+                    StopTurnForRestart();
+                    return;
                 case EmptyResponseAction.Retry retry:
                     _log.Warning("LLM produced {Kind} response ({ThinkingChars} chars, truncated={Truncated}) — retrying with nudge",
                         analysis.Kind, analysis.ThinkingChars, truncated);
@@ -868,7 +909,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             if (IsRestartResume(cmd))
             {
-                AckRestartResumeNoOp(cmd);
+                QueueRestartResume(cmd);
                 return;
             }
 
@@ -1065,12 +1106,24 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         _log.Warning("RollBackCurrentTurnIntoBuffer: no User message found in history");
     }
 
+    // Compaction end: a ready approval notice is admitted first, so the drain sees it.
+    // An overflow recovery compaction keeps the turn open: the rolled-back message waits as a replay item.
     private void DrainBufferOrReady()
+        => AdmitConsentNoticeThen(inOpenTurn: _input.ResumesToolLoopAfterCompaction || _input.StartsWithReplay,
+            DrainBufferOrReadyNow);
+
+    private void DrainBufferOrReadyNow()
     {
-        var continuation = _input.AdvanceAfterCompaction(RestartDrainRequested);
+        // Read these facts before AdvanceAfterCompaction resets them. A drain after a tool-loop or replay compaction
+        // stops an open turn. A compaction at a turn end stops no turn, so it posts no notice.
+        var stopsTurn = _input.ResumesToolLoopAfterCompaction || _input.StartsWithReplay;
+        var selected = _input.SelectedCount;
+        var continuation = _input.AdvanceAfterCompaction(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (continuation.Action == InputProgressAction.Restart)
         {
-            RecordRestartReminderEligibility();
+            var eligibility = RecordRestartReminderEligibility();
+            if (stopsTurn)
+                EmitRestartStoppedTurnNotice(eligibility, selected);
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
@@ -1295,7 +1348,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     // aborted passivation.
     private void FinalizePassivation()
     {
-        var final = _execution.ClaimFinalStop(_phase.Current, _sessionId, _state.GetExecutablePendingInputs());
+        var final = _execution.ClaimFinalStop(
+            _phase.Current, _sessionId, _state.GetExecutablePendingInputs(), UnreportedRuns().ToArray());
         if (final is null)
             return;
 
@@ -1375,6 +1429,18 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         List<FunctionCallContent> toolCalls,
         UsageDetails? usage)
     {
+        // The model returned tool calls inside the drain grace period. A restart can interrupt a new tool batch after
+        // its effects start, so the session drops the calls and stops the turn as a model stop for restart does.
+        if (RestartDrainRequested)
+        {
+            TurnLog().Info("turn_restart_drops_tool_calls count={CallCount}", toolCalls.Count);
+            if (_input.EmittedText)
+                CloseActiveInputs(StopTurnForRestart);
+            else
+                StopTurnForRestart();
+            return;
+        }
+
         var toolExecutor = _toolExecutor
             ?? throw new InvalidOperationException("A tool-call response requires a tool executor.");
         var prepared = _toolWorkflow.PrepareFreshBatch(
@@ -1382,25 +1448,18 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (prepared.Decision.Kind != ToolCycleDecisionKind.Execute)
         {
             Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
-                "Tool recurrence decision kind={DecisionKind} refused={RefusedCount}",
-                prepared.Decision.Kind, prepared.Decision.RefusedCallIds.Count);
+                "Tool recurrence decision kind={DecisionKind} refused={RefusedCount} repeated={RepeatedCount}",
+                prepared.Decision.Kind, prepared.Decision.RefusedCallIds.Count, prepared.Decision.RepeatedCallIds.Count);
         }
 
-        if (prepared is PreparedFreshBatch.Stop)
+        if (prepared.Decision.RefusedRepeat == RefusedRepeatAction.EndTurn)
         {
-            // The model repeated a call after the runtime refused it. The turn fails as a model
-            // failure with no further model request, in every parent session: Slack, Discord,
-            // Mattermost, and the TUI show the text as a warning, and a headless caller sees
-            // category=model. The text is for a person, so it is not the model-facing stop text.
-            RecordIntermediateUsage(usage);
-            FailCurrentTurn(
-                ToolCycleMessages.TurnStopped,
-                new InvalidOperationException("The model repeated a tool call that the recurrence guard already refused."),
-                ErrorCategory.ModelBehavior);
+            EndTurnAfterIgnoredEscalation(lastMessage, usage);
             return;
         }
 
-        var ready = (PreparedFreshBatch.Ready)prepared;
+        // A repeat of a refused call does not stop the turn at once (Aaron, 18 Oct 2026). The pipeline refuses
+        // it again, and the batch adds a model-facing nudge after its results. No error reaches the person.
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage
         {
             Role = Protocol.ChatRole.User,
@@ -1411,25 +1470,21 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             SessionId = _sessionId,
             UserMessage = userMsg,
-            AssistantMessage = ready.AssistantMessage,
+            AssistantMessage = prepared.AssistantMessage,
             StartedAtMs = NowMs(),
-            ConsumedInputIds = _input.SelectedInputs.Ids,
-            ChildContinuation = _toolWorkflow.ChildDecision(_execution.CurrentModelCallId)
+            ConsumedInputIds = _input.SelectedInputs.Ids
         };
-        _ = _state.CommitChildContinuation(started.ChildContinuation, close: false);
         Persist(started, evt =>
         {
-            var child = UnconsumedChild(evt.ChildContinuation);
             _state = _state.CloseInputs(evt.ConsumedInputIds);
             _input.ToolBatchCommitted();
             ApplyToolBatchStarted(evt);
-            ReviewConsumedChildFindings(child);
             EmitAndDispatchToolBatch(
                 lastMessage,
-                ready.Calls,
+                prepared.Calls,
                 usage,
-                ready.Cycle,
-                ready.Decision);
+                prepared.Cycle,
+                prepared.Decision);
         });
     }
 
@@ -1480,7 +1535,60 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         RecordIntermediateUsage(usage);
 
-        DispatchToolBatch(toolCalls, preparedCycleBatch: preparedCycleBatch, refusedCallIds: cycleDecision.RefusedCallIds);
+        var repeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: false);
+        DispatchToolBatch(toolCalls, cycleDecision.RefusedCallIds, repeatNudge,
+            preparedCycleBatch: preparedCycleBatch);
+    }
+
+    /// <summary>
+    /// The model sent a refused call again after the escalated nudge (Aaron, 18 Oct 2026). The turn ends with no
+    /// dispatch and no further model request. No call of the response runs, also a new call next to the repeat.
+    /// No error output, error reply, or failed turn reaches the person: the person sees only text of the model.
+    /// </summary>
+    private void EndTurnAfterIgnoredEscalation(AiChatMessage lastMessage, UsageDetails? usage)
+    {
+        var withoutCalls = new AiChatMessage(lastMessage.Role,
+            lastMessage.Contents.Where(static content => content is not FunctionCallContent).ToList());
+        var hasText = withoutCalls.Contents.OfType<TextContent>()
+            .Any(static text => !string.IsNullOrWhiteSpace(text.Text));
+        TurnLog().Warning("turn_refused_repeat_end refusedRepeats={RefusedRepeats} hasText={HasText}",
+            TurnStateTracker.EscalatedRefusedRepeat + 1, hasText);
+
+        if (hasText)
+        {
+            // The normal text path records the text as the reply, sends it, and completes the turn.
+            HandleTextResponse(withoutCalls, usage, streamedText: false, streamedThinking: false);
+            return;
+        }
+
+        // No text. An empty assistant reply is not safe, because some providers reject an empty text block.
+        // So the turn records no reply. The person keeps the text that the model wrote before.
+        RecordIntermediateUsage(usage);
+        CloseActiveInputs(FinishTurnWithoutReply);
+    }
+
+    // The cleanup of a failed turn, without the error reply and the error output. The turn completes.
+    private void FinishTurnWithoutReply()
+    {
+        _input.FailedTurn();
+        _execution.ReleaseAll();
+        _deliveryRetry.Clear();
+        _toolWorkflow.ClearFailedTurn();
+        // A failed turn also counts without a journal event, so the next turn gets a new turn number.
+        _state = _state with { TurnCount = _state.TurnCount + 1 };
+
+        EmitOutput(new TurnCompleted
+        {
+            SessionId = _sessionId,
+            TurnNumber = new TurnNumber(_state.TurnCount),
+            Outcome = TurnOutcome.Completed,
+            SourceReminderId = _input.Authority.Source?.ReminderId,
+            // A channel posts nothing for this turn, not even its empty-turn fallback: that text is Netclaw text.
+            QuietEnd = true,
+            OpenChildRunIds = _state.GetOpenChildRunIds()
+        });
+
+        DrainBufferedMessagesOrBecomeReady();
     }
 
     private void RecordIntermediateUsage(UsageDetails? usage)
@@ -1502,11 +1610,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
         IReadOnlySet<string> refusedCallIds,
+        string? repeatNudge,
         ApprovalRedrivePlan? approvalPlan = null,
         PreparedToolCycleBatch? preparedCycleBatch = null,
         bool recordCompletedCycle = true)
     {
         _toolWorkflow.StartDispatch(toolCalls, preparedCycleBatch, _toolExecutor, recordCompletedCycle);
+        if (repeatNudge is not null)
+            _toolWorkflow.AddRepeatNudgeAfterBatch(repeatNudge);
 
         // The pipeline sends each result before it signals batch completion.
         TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",
@@ -1601,8 +1712,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         }
 
         var selected = _input.SelectedInputs;
-        var continuation = _toolWorkflow.ChildDecision(_execution.CurrentModelCallId);
-        var deliveredChild = continuation is null ? null : _state.ChildRuns[continuation.RunId];
         var turnEvent = new TurnRecorded
         {
             SessionId = _sessionId,
@@ -1613,22 +1722,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             },
             AssistantReply = reply,
             RecordedAtMs = NowMs(),
-            SourceReminderId = RunningTurnReminder(deliveredChild),
+            SourceReminderId = RunningTurnReminder(),
             SourceBackgroundJobId = selected.BackgroundJobId,
-            ConsumedInputIds = selected.Ids,
-            // RoutedSkill stays false. The main model writes the reply of a child-delivery turn, also for a routed
-            // skill, so a retry can fix a rejected reply. Only the routed turn that accepts the child never retries.
-            ChildContinuation = continuation
+            ConsumedInputIds = selected.Ids
         };
 
         _ = _state.Apply(turnEvent, userAlreadyInHistory: true);
         Persist(turnEvent, evt =>
         {
-            var child = UnconsumedChild(evt.ChildContinuation);
             _state = _state.Apply(evt, userAlreadyInHistory: true);
-            ReviewConsumedChildFindings(child);
             _input.TurnCommitted(evt);
-            _toolWorkflow.ChildContinuationClosed();
 
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
 
@@ -1651,14 +1754,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         });
     }
 
+    // Turn end: a ready approval notice is admitted first, so the drain sees it.
     private void DrainBufferedMessagesOrBecomeReady()
+        => AdmitConsentNoticeThen(inOpenTurn: false, DrainBufferedMessagesOrBecomeReadyNow);
+
+    private void DrainBufferedMessagesOrBecomeReadyNow()
     {
-        if (!RestartDrainRequested && HasReadyChildResult)
-        {
-            FireLlmCall();
-            return;
-        }
-        var next = _input.AdvanceAfterTurn(RestartDrainRequested);
+        var next = _input.AdvanceAfterTurn(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (next.Action == InputProgressAction.Restart)
         {
             RecordRestartReminderEligibility();
@@ -1680,7 +1782,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         ClearApprovalTurnState();
         TransitionTo(SessionPhase.Ready);
         CompleteDeferredIdlePassivation();
-        WakeForChild();
     }
 
     private void CompleteDeferredIdlePassivation()
@@ -1691,11 +1792,15 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         // The idle path keeps a session with a live background job or a live child run in memory. Work that the
         // waiting input's turn started must not be reaped here. The re-armed idle timeout decides again, with the
         // same check.
-        if (HasLiveBackgroundJobs || _execution.HasLiveChildren)
+        if (HasLiveBackgroundJobs || HasUnreportedChildren)
             return;
 
         TransitionTo(SessionPhase.Passivating);
     }
+
+    // A live child, or an ended child whose notice is still to come. The notice needs this actor, and a passivated
+    // session would not admit it until the next join.
+    private bool HasUnreportedChildren => _execution.HasLiveChildren || UnreportedRuns().Any(run => run.Lifecycle is ChildRunLifecycle.Terminal);
 
     private void ApplyBufferedBatch(BufferedInputBatch batch)
     {
@@ -1713,6 +1818,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // A replay resumes the same turn. New input starts a fresh guard
             // window only after the prior batch or response completes.
             _turnState.ResetForNewTurn();
+            // The input clears the refusals, so the model can run a refused call again. It starts a new refused
+            // repeat count only for a new turn or for a person. Automation that joins an automation turn keeps
+            // the count: its requester is a fixed system sender, so the fire rate would otherwise set the bound.
+            if (!batch.JoinsAutomationTurn)
+                _turnState.ResetRefusedRepeatCount();
             _modelContext.ResetForNewTurn();
         }
 
@@ -1727,6 +1837,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void PrepareFreshTurnState()
     {
         _turnState.ResetForNewTurn();
+        // A new turn counts from zero, whoever starts it. A mid-loop child result and a wake for a child result
+        // clear the evidence only (they call ResetForNewTurn): they bring no new person input.
+        _turnState.ResetRefusedRepeatCount();
         _discoveredToolCache.PrepareForNewTurn(
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount,
@@ -1734,15 +1847,18 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     }
 
     /// <summary>
-    /// The reminder link of the running turn. A child-delivery turn has no input of its own, so it takes the link
-    /// that the child run kept from the turn that started it. A retry turn keeps the link of the turn that it
-    /// repeats. Any other turn takes the link of its own input. A child that this turn starts keeps the same link,
-    /// so the link also reaches the child result of a child that a child-delivery turn started.
+    /// The reminder link of the running turn. A turn takes the link of its own input first. A child result notice has
+    /// no reminder of its own, so a notice turn takes the link that the child run kept from the turn that started it:
+    /// the first noticed run that has one. A retry turn keeps the link of the turn that it repeats. A child that this
+    /// turn starts keeps the same link, so the link also reaches the result of a child that a notice turn started.
     /// </summary>
-    private ReminderId? RunningTurnReminder(BackgroundChildRun? deliveredChild)
-        => deliveredChild is not null
-            ? deliveredChild.SourceReminderId
-            : _input.SelectedInputs.ReminderId ?? _deliveryRetry.RetriedTurnReminder;
+    private ReminderId? RunningTurnReminder()
+    {
+        var selected = _input.SelectedInputs;
+        return selected.ReminderId
+            ?? selected.NoticeRunIds.Select(runId => _state.ChildRuns[runId].SourceReminderId).FirstOrDefault(link => link is not null)
+            ?? _deliveryRetry.RetriedTurnReminder;
+    }
 
     /// <summary>
     /// Makes the turn that <paramref name="evt"/> recorded the eligible turn and the latest recorded turn.
@@ -1955,10 +2071,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         // Decide admission before any side effect. A duplicate, a dropped fire, or a refusal must leave the
         // session as it was, so it must not abandon an open tool batch.
-        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs());
-        if (decision is not (AdmissionDecision.Existing or AdmissionDecision.Persist))
+        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs(), _toolWorkflow.IsChildConsentPaused);
+        if (decision is not (AdmissionDecision.Existing or AdmissionDecision.Persist or AdmissionDecision.ReplaceWaitingFire))
         {
-            SettleWithoutAdmission(decision);
+            SettleWithoutAdmission(decision, cmd);
             return;
         }
 
@@ -1971,8 +2087,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         // tool_use with no matching tool_result is rejected by the provider
         // API, which would otherwise wedge every subsequent turn.
         // Automated input never abandons an open approval. It waits in the buffer
-        // until the approval closes (see StartWaitingInputAfterApproval).
-        switch (_toolWorkflow.PlanNewInputAbandonment(_state, _sessionId, cmd.Source?.Principal, NowMs()))
+        // until the approval closes (see StartWaitingInputAfterApproval). A child result
+        // notice is automated input by kind, although its requester is a person.
+        switch (_toolWorkflow.PlanNewInputAbandonment(_state, _sessionId, cmd.Source?.Principal, cmd.Notice is not null, NowMs()))
         {
             case NewInputPlan.AbandonThenActivate abandon:
                 Persist(abandon.Event, evt =>
@@ -1994,21 +2111,23 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void AdmitInput(SendUserMessage cmd, InputPlacement placement)
     {
-        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs());
-        if (decision is AdmissionDecision.Existing or AdmissionDecision.Persist)
+        var decision = _input.PrepareAdmission(cmd, _state, _sessionId, NowMs(), _toolWorkflow.IsChildConsentPaused);
+        if (decision is AdmissionDecision.Existing or AdmissionDecision.Persist or AdmissionDecision.ReplaceWaitingFire)
             CommitAdmission(decision, cmd, placement);
         else
-            SettleWithoutAdmission(decision);
+            SettleWithoutAdmission(decision, cmd);
     }
 
     // The session acknowledges a duplicate or a dropped fire, so the reminder system sees success and ends its job.
-    private void SettleWithoutAdmission(AdmissionDecision decision)
+    private void SettleWithoutAdmission(AdmissionDecision decision, SendUserMessage cmd)
     {
         switch (decision)
         {
             case AdmissionDecision.Reject rejected:
-                _log.Error("Rejecting input with invalid durable authority: {Reason}", rejected.Reason);
-                TryReplyNack($"Input authority cannot be stored: {rejected.Reason}");
+                _log.Error("Rejecting {InputKind}: {Reason}", cmd.Notice is null ? "input" : "child notice", rejected.Reason);
+                if (cmd.Notice is { } rejectedNotice)
+                    GiveUpOnChildNotice(rejectedNotice.Notice.RunId, rejected.Reason);
+                TryReplyNack($"The session cannot admit the input: {rejected.Reason}");
                 return;
             case AdmissionDecision.Duplicate:
                 TryReplyAck();
@@ -2035,16 +2154,59 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 CompleteAcceptedInput(cmd, placement);
                 return;
             case AdmissionDecision.Persist persist:
-                Persist(persist.Event, admitted =>
-                {
-                    _state = _state.Apply(admitted);
-                    var accepted = _input.AdmissionCommitted(admitted, cmd, placement);
-                    CompleteAcceptedInput(accepted, placement);
-                });
+                PersistAdmission(persist.Event, cmd, placement);
+                return;
+            case AdmissionDecision.ReplaceWaitingFire replace:
+                // The waiting fire never ran, so the close consumes it with no turn. Then the newer fire waits.
+                PersistAdmission(replace.Event, cmd, placement, replace.Waiting);
                 return;
         }
 
         throw new InvalidOperationException("Unknown input admission decision.");
+    }
+
+    private void PersistAdmission(InputAdmitted evt, SendUserMessage cmd, InputPlacement placement, InputId? replaces = null)
+        => PersistReplacingInput(replaces, evt, "reminder_fire_replaced", admitted =>
+        {
+            // The review reads the ended run, which the notice turns into a reported run.
+            var endedRun = admitted.ChildNotice is { } notice ? _state.ChildRuns[notice.RunId] : null;
+            _state = _state.Apply(admitted);
+            ReviewChildFindings(endedRun);
+            var accepted = _input.AdmissionCommitted(admitted, cmd, placement);
+            CompleteAcceptedInput(accepted, placement);
+        });
+
+    // The replace rule of a waiting input (a reminder fire while paused, an approval notice). One atomic write holds the
+    // close of the waiting input and the admission of the newer input, so a crash keeps both or neither.
+    private void PersistReplacingInput(
+        InputId? waiting, InputAdmitted admitted, string replacedLogEvent, Action<InputAdmitted> onAdmitted)
+    {
+        if (waiting is not { } waitingId)
+        {
+            Persist(admitted, onAdmitted);
+            return;
+        }
+
+        var closed = new InputClosed { SessionId = _sessionId, InputIds = [waitingId], ClosedAtMs = NowMs(), KeepsTurn = true };
+        _ = _state.Apply(closed);
+        PersistAll<ISessionEvent>([closed, admitted], committed =>
+        {
+            if (committed is InputClosed close)
+            {
+                ApplyInputClosed(close);
+                TurnLog().Info("{ReplacedEvent} waiting={Waiting} replacement={Replacement}",
+                    replacedLogEvent, waitingId, admitted.InputId);
+            }
+            else
+                onAdmitted((InputAdmitted)committed);
+        });
+    }
+
+    // Live code keeps the noticed runs at a close. The activation of the next turn clears them.
+    private void ApplyInputClosed(InputClosed closed)
+    {
+        _state = _state.Apply(closed);
+        _input.InputsClosed(closed);
     }
 
     private void CompleteAcceptedInput(SendUserMessage command, InputPlacement placement)
@@ -2057,7 +2219,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         if (placement == InputPlacement.BufferDuringModel)
         {
-            // The retry of a child-delivery turn has no input, so its link comes only from the pending retry.
+            // The retry of a notice turn has no reminder input, so its link comes only from the pending retry.
             // Clear ends that link: the retry turn then records no reminder, and its final failure raises no alert.
             // A person is in the thread, but a buffered reminder fire may have no reader, so the end of the
             // link must be visible.
@@ -2094,6 +2256,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         _state = _state.Apply(evt, userAlreadyInHistory);
         _toolWorkflow.CompleteTurn();
         _input.ClearTurnContext();
+        _input.ClearNoticeRuns();
 
         // A session that recovers without a snapshot has no eligible turn. Mirror the live path so that
         // late delivery feedback for the latest turn finds the turn, the reminder that started it, and
@@ -2104,12 +2267,24 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void RecoverParentBatch(ToolBatchStarted recorded)
     {
         var evt = LegacyCoordinationReplay.TranslateParentDecision(_state, recorded);
+        // The consumed notices name the runs of this turn. RestoreConsumedInputs closes the inputs, so read them first.
+        var pendingById = _state.PendingInputs.ToDictionary(input => input.InputId);
+        _input.RestoreNoticeRuns(evt.ConsumedInputIds
+            .Select(id => pendingById.TryGetValue(id, out var input) ? input.ChildNotice?.RunId : null)
+            .OfType<SubAgentRunId>());
         RestoreConsumedInputs(evt.ConsumedInputIds, evt.UserMessage);
         ApplyToolBatchStarted(evt);
     }
 
+    // A closure ends a failed turn, or a turn with no reply. A close that keeps the turn closes a waiting input, so
+    // the noticed runs of the open turn stay.
     private void RecoverParentClosure(InputClosed recorded)
-        => _state = _state.Apply(LegacyCoordinationReplay.TranslateParentDecision(_state, recorded));
+    {
+        var closed = LegacyCoordinationReplay.TranslateParentDecision(_state, recorded);
+        _state = _state.Apply(closed);
+        if (!closed.KeepsTurn)
+            _input.ClearNoticeRuns();
+    }
 
     private void RestoreConsumedInputs(IReadOnlyList<InputId> inputIds, SerializableChatMessage lastUserMessage)
     {
@@ -2174,15 +2349,42 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         TransitionTo(SessionPhase.Processing);
     }
 
+    // The restart reminder arrives while a turn runs, for example the turn of an orphan notice that recovery started.
+    // The one resume path then queues each pending input that no turn selected, and the normal drain runs them after
+    // the running turn, in admission order. The queue keeps one copy of an input that recovery queued already.
+    // No turn of this message runs: each queued input runs later under its own recorded source. So the reply is
+    // RestartResumeNotNeeded, and a caller on the Reminder-origin route (#2491) settles at once. A pending input whose
+    // recorded authority does not parse gets a nack, as in an idle session.
+    private void QueueRestartResume(SendUserMessage cmd)
+    {
+        var selected = _input.SelectedInputs.Ids;
+        var (pending, damaged) = SessionInputFlow.SplitByAuthority(
+            _state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId)));
+        if (damaged.Count > 0)
+        {
+            _log.Error(
+                "Restart reminder {ReminderId} cannot queue input(s) {InputIds}: the stored authority is invalid. "
+                + "{ValidCount} valid input(s) are not queued by this message.",
+                cmd.Source?.ReminderId, string.Join(",", damaged.Select(static input => input.InputId)), pending.Count);
+            TryReplyNack("The interrupted input authority is invalid.");
+            return;
+        }
+
+        var queued = _input.RestoreWaitingInputs(pending.Select(static pair => pair.Input).ToArray(), _sessionId);
+        if (queued > 0)
+            _execution.ClearRestartReminderEligibility();
+        _log.Info("restart_resume_queued count={QueuedCount} phase={Phase}", queued, _phase.Current);
+        ReplyRestartResumeNotNeeded();
+    }
+
     // The restart reminder is not an input. It only resumes inputs that the journal already holds.
     private static bool IsRestartResume(SendUserMessage cmd)
         => cmd.Source?.ReminderId?.Value is { } reminderId
            && reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
            && string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal);
 
-    // Akka.Reminders can redeliver the restart reminder. This message resumes nothing and no turn runs for it, so the
-    // session acknowledges and the reminder run ends in success. An interrupted input can stay pending (another turn
-    // runs). The session does not resume that input for this message.
+    // Akka.Reminders can redeliver the restart reminder. In an idle session with nothing to resume, this message
+    // resumes nothing and no turn runs for it, so the session acknowledges and the reminder run ends in success.
     private void AckRestartResumeNoOp(SendUserMessage cmd)
     {
         _log.Info(
@@ -2190,10 +2392,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             cmd.Source?.ReminderId,
             _phase.Current,
             _state.PendingInputs.Count);
+        ReplyRestartResumeNotNeeded();
+    }
+
+    // A caller on the Reminder-origin route (#2491) waits for a terminal turn after an ack. No turn of this message runs.
+    private void ReplyRestartResumeNotNeeded()
+    {
         if (Sender.IsNobody() || Equals(Sender, Context.System.DeadLetters))
             return;
-
-        // A caller on the Reminder-origin route (#2491) waits for a terminal turn after an ack. No turn will run here.
         Sender.Tell(new RestartResumeNotNeeded(_sessionId));
     }
 
@@ -2202,6 +2408,15 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (!IsRestartResume(cmd))
             return false;
 
+        // The approval check comes before the resume. An open approval owns the next turn: the answer ends the wait,
+        // and the inputs that wait behind it are queued already (RestoreWaitingInputs). A resume now would start a
+        // model turn while the tool batch is parked. No turn runs for this message.
+        if (_toolWorkflow.HasParkedApprovals())
+        {
+            AckRestartResumeNoOp(cmd);
+            return true;
+        }
+
         var pending = _state.GetExecutablePendingInputs();
         if (pending.Count == 0)
         {
@@ -2209,6 +2424,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return true;
         }
 
+        // One turn serves one requester. The resume takes the leading inputs of the first requester. The other inputs
+        // wait in the queue and run in their own turns, in admission order.
         var restartContext = _execution.ValidateRestartResume(pending);
         if (restartContext.Context is not { } firstContext)
         {
@@ -2221,6 +2438,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return true;
         }
 
+        var waiting = pending.Skip(restartContext.ResumeCount).ToArray();
+        pending = pending.Take(restartContext.ResumeCount).ToArray();
         _execution.ClearRestartReminderEligibility();
         _input.ActivateRecoveredInput(cmd.Source, firstContext, _trustContextDeriver);
         UpdateCrashContext();
@@ -2229,10 +2448,22 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         PrepareFreshTurnState();
 
         if (TryResumeSlashCommand(pending))
+        {
+            // A rejected slash command keeps the session in Ready. The close of its input then starts the queue
+            // (RejectSlashCommand), so the other requesters are queued in each phase (#2587). The validation above
+            // stops at the second requester. RestoreWaitingInputs throws for a damaged record, so the session logs
+            // it and keeps it pending in the journal.
+            var (valid, damaged) = SessionInputFlow.SplitByAuthority(waiting);
+            foreach (var input in damaged)
+                _log.Error("Restart reminder {ReminderId}: pending input {InputId} has a damaged authority",
+                    cmd.Source?.ReminderId, input.InputId);
+            _input.RestoreWaitingInputs(valid.Select(static pair => pair.Input).ToArray(), _sessionId);
             return true;
+        }
 
         foreach (var message in _input.ResumePendingInputs(pending))
             _state = _state with { History = _state.History.Add(message) };
+        _input.RestoreWaitingInputs(waiting, _sessionId);
 
         _modelContext.ResetForNewTurn();
         _input.ResetOverflowRetry();
@@ -2253,7 +2484,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return false;
 
         var handled = TryHandleSlashCommand(executableText, first.UserMessage.MediaReferences);
-        return _input.CompleteSlashResume(handled, pending, _sessionId, _phase.Current);
+        return _input.CompleteSlashResume(handled, pending, _sessionId);
     }
 
     private bool ShouldCompact()
@@ -2272,7 +2503,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         // Every phase accepts a late reap reply. The epoch gate protects a newer stop attempt.
         Command<JobReapResolved>(HandleJobReapResolved);
-        Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
+        Command<PrepareForDaemonRestart>(RequestRestartDrain);
         Command<ToolPipelineStoppedForRestart>(HandleToolPipelineStoppedForRestart);
         Command<RestartModelGraceExpired>(HandleRestartModelGraceExpired);
         Command<ModelStoppedForRestart>(HandleModelStoppedForRestart);
@@ -2285,6 +2516,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         });
         Command<WorkingContextSnapshotFailed>(HandleWorkingContextSnapshotFailed);
         Command<WorkingContextSnapshotFatal>(message => throw message.Cause);
+
+        // A stashed cancel or watchdog message can end the rejected turn first, and the buffer can then start
+        // the next turn in Processing. The turn id tells the two turns apart, so a new healthy turn stays alive.
+        Command<PersistRejectedTurnFailure>(msg =>
+        {
+            if (_phase.Current == SessionPhase.Processing && _input.Telemetry.TurnId == msg.TurnId)
+                FailCurrentTurn(PersistRejectedMessage, msg.Cause, PersistFailureCategory(msg.Cause));
+            else
+                _log.Info("Skipped the persist-rejected turn failure; the rejected turn {TurnId} already ended", msg.TurnId);
+        });
 
         // Title generation result — can arrive in any behavior, always safe to apply
         Command<TitleGenerationCompleted>(msg =>
@@ -2381,6 +2622,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             }
 
             cmd.Subscriber.Tell(joined);
+            foreach (var closed in _restartWithdrawals)
+                cmd.Subscriber.Tell(closed);
 
             // Also reply to Sender so callers can use Ask<SessionJoined> for
             // deterministic confirmation that the join was processed.
@@ -2426,6 +2669,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Command<SaveSnapshotSuccess>(msg =>
         {
             _log.Info("Snapshot saved (seqNr={SequenceNr})", msg.Metadata.SequenceNr);
+            // The snapshot drops the approval events of the closed child prompts, so replay cannot rebuild their closes.
+            // Forget them here too, so a late click gets the same reply before and after a restart.
+            _toolWorkflow.ForgetClosedChildCalls();
+            _restartWithdrawals = [];
 
             DeleteMessages(msg.Metadata.SequenceNr); // delete all messages in journal up until snapshot was taken
             DeleteSnapshots(new SnapshotSelectionCriteria(msg.Metadata.SequenceNr - 1)); // delete all old snapshots
@@ -2462,18 +2709,85 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     protected override void OnPersistFailure(Exception cause, object @event, long sequenceNr)
     {
         if (@event is InputAdmitted)
+        {
             TryReplyNack("The input journal failed. The session did not start a model call.");
+        }
+        else if (TurnIsRunning)
+        {
+            // Base stops the actor, and a stopped actor sends the channel nothing. Tell the channel first.
+            // The failed event can be one of several that a tool batch wrote, so the user must check the actions.
+            EmitFailedTurnOutputs(PersistStoppedMessage, cause, PersistFailureCategory(cause));
+        }
+        else
+        {
+            _log.Warning(cause,
+                "Persist failed for {Event} while no turn was active; the session stops and the next message starts a new one",
+                @event.GetType().Name);
+        }
 
         base.OnPersistFailure(cause, @event, sequenceNr);
     }
 
     protected override void OnPersistRejected(Exception cause, object @event, long sequenceNr)
     {
+        // Base only logs a rejection; the actor keeps running. A turn that nothing ends would hold
+        // the session until the processing watchdog fires, so fail the turn here.
+        // A rejected approval notice stops the session, as a persist failure does: the boundary that admitted it cannot
+        // continue, and a pause with no notice would hold automated input. Recovery withdraws the child requests,
+        // closes the notices, and queues the held input. A close of a waiting input names no selected input: the
+        // waiting input stays pending, and the running turn continues.
+        if (@event is InputAdmitted notice && IsConsentNotice(notice))
+        {
+            _log.Error(cause, "The journal rejected approval notice {InputId}. The session stops.", notice.InputId);
+            // A stopped actor sends the channel nothing. A turn that stays open tells the person first, as a persist
+            // failure does. At the end of a finished turn the session stays quiet.
+            if (_noticeAdmissionInOpenTurn)
+                EmitFailedTurnOutputs(PersistStoppedMessage, cause, PersistFailureCategory(cause));
+            base.OnPersistRejected(cause, @event, sequenceNr);
+            Context.Stop(Self);
+            return;
+        }
+
         if (@event is InputAdmitted)
             TryReplyNack("The input journal rejected the message. The session did not start a model call.");
+        else if (@event is InputClosed waitingClose && !waitingClose.InputIds.Any(_input.SelectedInputs.Ids.Contains))
+            _log.Error(cause, "The journal rejected the close of waiting input(s) {InputIds}", string.Join(",", waitingClose.InputIds));
+        else if (_phase.Current == SessionPhase.Processing)
+        {
+            // A rejected InputClosed cannot close itself: a second close would be rejected the same way.
+            if (@event is InputClosed)
+                FinishFailedTurn(PersistRejectedMessage, cause, PersistFailureCategory(cause));
+            else
+            {
+                // Akka flushes a Persist call only after a command. A Persist call here would not reach the
+                // journal, so the turn failure (which closes the inputs in the journal) runs as a command.
+                // Without the close, a replay would run the failed input again.
+                Self.Tell(new PersistRejectedTurnFailure(cause, _input.Telemetry.TurnId));
+            }
+        }
+        else
+            _log.Warning(cause, "Persist was rejected for {Event} while no turn was active", @event.GetType().Name);
 
         base.OnPersistRejected(cause, @event, sequenceNr);
     }
+
+    private static bool IsConsentNotice(InputAdmitted admitted)
+        => TurnContext.TryFromRecord(admitted.TurnContext, out var context, out _) && context is { IsChildConsentNotice: true };
+
+    private sealed record PersistRejectedTurnFailure(Exception Cause, TurnId? TurnId) : INoSerializationVerificationNeeded;
+
+    private const string PersistStoppedMessage =
+        "The session could not save its progress and stopped. Some actions may already have run. Check them before you send your message again.";
+
+    private const string PersistRejectedMessage =
+        "The session could not save its progress, so this turn failed. Some actions may already have run. Check them before you send your message again.";
+
+    private static ErrorCategory PersistFailureCategory(Exception cause)
+        => cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.Unknown;
+
+    // The first tool batch commit clears the selected inputs, so a selection does not show that a turn runs.
+    // The stop path loses any running turn, whichever event failed, so Processing and Compacting both count.
+    private bool TurnIsRunning => _phase.Current is SessionPhase.Processing or SessionPhase.Compacting;
 
     // ── Helpers ──
 
@@ -2517,25 +2831,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         }
 
         var (callId, modelToken) = _execution.BeginModel();
-        var continuingChild = _toolWorkflow.HasChildContinuation;
-        if (_toolWorkflow.SelectChild(_state, callId,
-                allowSelection: _input.SelectedCount == 0) is { } child)
-        {
-            if (!continuingChild)
-            {
-                _turnState.ResetForNewTurn();
-                _modelContext.ResetForNewTurn();
-                EmitChildResultDelivery(child);
-            }
-            if (!TurnContext.TryFromRecord(child.OriginalContext, out var childContext, out var reason) || childContext is null)
-                throw new InvalidOperationException($"Child continuation authority is invalid: {reason}");
-            _input.ActivateRecoveredInput(null, childContext, _trustContextDeriver);
-        }
 
         var call = _modelContext.StartCall(
             callId,
             _state,
-            _toolWorkflow.ChildDecision(callId),
             _input.Authority.Context,
             _input.Authority.Source,
             _input.Authority.Trust,
@@ -2639,6 +2938,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void ApplyPreparedModelRequest(PreparedModelRequest request)
     {
+        // A drain request arrived while the session prepared the call. The call does not start.
+        if (RestartDrainRequested)
+        {
+            _execution.ReleaseAll();
+            StopTurnForRestart();
+            return;
+        }
+
         _state = request.State;
         if (request.Exposure is { } exposure)
             TurnLog().Info(
@@ -2674,7 +2981,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             "working_context_inspection_failed generation={Generation}",
             message.Generation);
         var request = _modelContext.CompleteInspection(
-            message, _state, _toolWorkflow.ChildDecision(message.Generation), CurrentTurnAudience(), _input.Authority.Trust);
+            message, _state, CurrentTurnAudience(), _input.Authority.Trust);
         if (request is not null)
             ApplyPreparedModelRequest(request);
     }
@@ -2691,7 +2998,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         }
 
         var request = _modelContext.CompleteInspection(
-            message, _state, _toolWorkflow.ChildDecision(message.Generation), CurrentTurnAudience(), _input.Authority.Trust);
+            message, _state, CurrentTurnAudience(), _input.Authority.Trust);
         if (request is not null)
             ApplyPreparedModelRequest(request);
     }
@@ -2824,6 +3131,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 OpenChildRunIds = _state.GetOpenChildRunIds()
             });
             TryReplyAck();
+            // A rejected command ends no turn, so no turn end starts the queue (#2587). Two paths leave queued input
+            // here in Ready: a restart resume queues the inputs behind the slash command, and a live command closes
+            // a parked approval (AbandonThenActivate) while a fire waits behind it. Start the next queued input as a
+            // turn end does, and admit a ready consent notice first.
+            AdmitConsentNoticeThen(inOpenTurn: false, StartWaitingInputAfterApproval);
         }
 
         CloseActiveInputs(Reply);
@@ -2937,12 +3249,22 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         try
         {
             Func<object, string, CancellationToken, Task<object>> spawnChildActor = async (request, name, ct) =>
-                await self.Ask<object>(
-                    request is PreparedChildStart prepared
-                        ? new AcceptChildStart(prepared, startKey, originalContext, $"/{skill.Name}", ct)
-                        : new SpawnChildActorRequest((Props)request, name),
+            {
+                if (request is PreparedChildStart prepared)
+                {
+                    // The task file exists before the owner accepts the start.
+                    await prepared.WriteTaskFileAsync(originalContext, ct);
+                    return await self.Ask<object>(
+                        new AcceptChildStart(prepared, startKey, originalContext, $"/{skill.Name}", ct),
+                        timeout: _config.ToolExecutionTimeout,
+                        cancellationToken: ct);
+                }
+
+                return await self.Ask<object>(
+                    new SpawnChildActorRequest((Props)request, name),
                     timeout: _config.ToolExecutionTimeout,
                     cancellationToken: ct);
+            };
             var outputs = new ToolExecutionOutputs(info =>
             {
                 self.Tell(new RoutedSkillSubAgentActivity(
@@ -3126,7 +3448,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void HandleToolInteractionRequestDispatch(ToolInteractionRequestDispatch dispatch)
     {
-        var msg = dispatch.Request;
+        // A parent prompt ends with its turn. A child prompt lives until an answer or a close, because the child keeps
+        // waiting after the parent turn ends or fails (#2523).
+        var msg = dispatch.SourceChildRunId is null
+            ? dispatch.Request
+            : dispatch.Request with { Lifetime = ToolInteractionLifetime.UntilClosed };
         if (dispatch.SourceChildRunId is { } childRunId &&
             (!_state.ChildRuns.TryGetValue(childRunId, out var childRun) || childRun.Lifecycle is not ChildRunLifecycle.Accepted))
             return;
@@ -3149,6 +3475,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             ApplyToolApprovalRequested(e);
             EmitOutput(msg);
             TryStopDurableApprovalWaits();
+            if (e.SourceChildRunId is { } requestingRun)
+                ChildApprovalRequested(_state.ChildRuns[requestingRun], msg);
         });
     }
 
@@ -3355,6 +3683,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SessionId = _sessionId
         }, OutputFilter.Text);
 
+    private void EmitApprovalNotice(string text)
+        => EmitOutput(new TextOutput(text) { SessionId = _sessionId }, OutputFilter.Text);
+
     private void EmitApprovalRejection(ApprovalResponseResult.Rejected rejection, ToolCallId callId)
     {
         _log.Warning(
@@ -3373,6 +3704,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 break;
             case ApprovalNoticeKind.OptionUnavailable:
                 EmitUnavailableApprovalOptionNotice();
+                break;
+            case ApprovalNoticeKind.Withdrawn:
+                EmitApprovalNotice(ChildApprovalPrompt.WithdrawnText(rejection.Withdrawal
+                    ?? throw new InvalidOperationException("A withdrawn approval rejection has no reason.")));
                 break;
         }
         TryReplyNack(rejection.NackReason);
@@ -3399,6 +3734,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             case ApprovalNackReasons.OptionUnavailable:
                 _log.Warning("Ignoring unparseable text tool interaction response '{Text}'", msg.Text);
                 EmitUnavailableApprovalOptionNotice();
+                break;
+            case ApprovalNackReasons.UseButtons:
+                var openCount = _toolWorkflow.AnswerablePrompts(msg.SenderId).Count;
+                _log.Warning("Ignoring text tool interaction response from {SenderId}: {OpenCount} prompts are open",
+                    msg.SenderId, openCount);
+                EmitApprovalNotice(ChildApprovalPrompt.UseButtonsText(openCount));
                 break;
         }
         return false;
@@ -3453,6 +3794,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                     {
                         _toolWorkflow.ApplyResolvedResponse(evt, durable);
                         TryReplyAck();
+                        if (evt.SourceChildRunId is { } answeredRun)
+                        {
+                            var run = _state.ChildRuns[answeredRun];
+                            IReadOnlyList<AgentEvent.ChildApprovalResolved> closed =
+                                [_toolWorkflow.CreateChildResolution(evt, run, _sessionId, _timeProvider.GetUtcNow())];
+                            EmitClosedPrompts(closed);
+                            ChildApprovalsClosed(closed);
+                        }
                     });
                     return;
                 default:
@@ -3533,11 +3882,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 case RecoveredContinuation.Dispatch dispatch:
                     _log.Info("Re-driving parked tool batch ({Count} call(s)) after approval response for {CallId}",
                         dispatch.Calls.Count, msg.CallId);
-                    _toolWorkflow.RestoreConsumedChild(_state, dispatch.TurnContext, _execution.CurrentModelCallId);
                     _input.RestoreTurnAuthority(dispatch.TurnContext, _trustContextDeriver);
                     UpdateCrashContext();
                     TransitionTo(SessionPhase.Processing);
-                    DispatchToolBatch(dispatch.Calls, new HashSet<string>(), approvalPlan: dispatch.ApprovalPlan,
+                    DispatchToolBatch(dispatch.Calls, new HashSet<string>(), repeatNudge: null, approvalPlan: dispatch.ApprovalPlan,
                         recordCompletedCycle: false);
                     TryReplyAck();
                     return;
@@ -3563,7 +3911,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (_phase.Current != SessionPhase.Ready || _toolWorkflow.HasPendingApprovals())
             return;
 
-        var next = _input.AdvanceAfterTurn(RestartDrainRequested);
+        var next = _input.AdvanceAfterTurn(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (next.Action == InputProgressAction.Restart)
         {
             RecordRestartReminderEligibility();
@@ -3640,7 +3988,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void CloseActiveInputs(Action onClosed)
     {
-        if (_input.SelectedCount == 0 && !_toolWorkflow.HasChildContinuation)
+        if (_input.SelectedCount == 0)
         {
             onClosed();
             return;
@@ -3651,17 +3999,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SessionId = _sessionId,
             InputIds = _input.SelectedInputs.Ids,
             SourceBackgroundJobId = _input.SelectedInputs.BackgroundJobId,
-            ChildContinuation = _toolWorkflow.ChildDecision(_execution.CurrentModelCallId),
             ClosedAtMs = NowMs()
         };
         _ = _state.Apply(closed);
         Persist(closed, evt =>
         {
-            var child = UnconsumedChild(evt.ChildContinuation);
-            _state = _state.Apply(evt);
-            ReviewConsumedChildFindings(child);
-            _toolWorkflow.ChildContinuationClosed();
-            _input.InputsClosed(evt);
+            ApplyInputClosed(evt);
             onClosed();
         });
     }
@@ -3674,6 +4017,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         _toolWorkflow.ClearFailedTurn();
         _state = _state.AddErrorReply(errorMessage);
 
+        EmitFailedTurnOutputs(errorMessage, cause, category);
+
+        DrainBufferedMessagesOrBecomeReady();
+    }
+
+    private void EmitFailedTurnOutputs(string errorMessage, Exception cause, ErrorCategory category)
+    {
         var correlationId = Guid.NewGuid();
 
         TurnLog().Error(cause,
@@ -3698,8 +4048,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SourceReminderId = _input.Authority.Source?.ReminderId,
             OpenChildRunIds = _state.GetOpenChildRunIds()
         });
-
-        DrainBufferedMessagesOrBecomeReady();
     }
 
     private void EmitOutput(SessionOutput output, OutputFilter requiredFlag = OutputFilter.None)
@@ -3834,7 +4182,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var updatedContext = WorkingContextUpdater.AcceptToolResult(
             _state.WorkingContext,
             toolMessage,
-            result.Receipt);
+            WithoutChildRunFiles(result.Receipt));
         if (!ReferenceEquals(updatedContext, _state.WorkingContext))
             _state = _state with { WorkingContext = updatedContext };
 
@@ -3863,6 +4211,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         // ApplyToolCallRecorded recreates the nudge during journal replay.
     }
 
+    // A child result file is the channel of a notice, not work of the user. Listing it in the working context would put
+    // the path of a stale result into every later prompt.
+    private ToolInvocationReceipt? WithoutChildRunFiles(ToolInvocationReceipt? receipt)
+        => receipt is ToolInvocationReceipt.Succeeded success
+           && success.FileActivity.Any(activity => _sessionStorage.IsChildRunFile(activity.CanonicalPath))
+            ? new ToolInvocationReceipt.Succeeded(
+                [.. success.FileActivity.Where(activity => !_sessionStorage.IsChildRunFile(activity.CanonicalPath))],
+                success.DeclaredProjectDirectory)
+            : receipt;
+
     private void TryCompleteStreamedToolBatch()
     {
         if (_toolWorkflow.CompleteIfReady(
@@ -3871,9 +4229,24 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
 
         _state = completion.State;
-        var advance = _toolWorkflow.HasChildContinuation || HasReadyChildResult
-            ? new ToolBatchInputAdvance(null, completion.ChooseNext(ShouldCompact()))
-            : _input.AdvanceAfterToolBatch(completion, ShouldCompact());
+        // Tool-batch end: a ready approval notice is admitted first. It waits for its own turn and never joins this one.
+        AdmitConsentNoticeThen(inOpenTurn: true, () => ContinueAfterToolBatch(completion));
+    }
+
+    private void ContinueAfterToolBatch(BatchCompletion.Ready completion)
+    {
+        // A drain request arrived during the tool batch. The turn stops at this batch boundary and starts no model
+        // call, so that a long tool loop cannot hold the drain until the coordinator deadline (#2601).
+        if (RestartDrainRequested)
+        {
+            _toolWorkflow.ClearNormalBatch();
+            _execution.ClearToolTracking();
+            TurnLog().Info("turn_restart_stop_at_tool_batch iteration={Iteration}", _turnState.ToolIterationCount);
+            StopTurnForRestart();
+            return;
+        }
+
+        var advance = _input.AdvanceAfterToolBatch(completion, ShouldCompact(), _toolWorkflow.IsChildConsentPaused);
         if (advance.Batch is { } batch)
         {
             TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
@@ -3990,16 +4363,21 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         return log;
     }
 
-    private void RequestRestartDrain()
+    private void RequestRestartDrain(PrepareForDaemonRestart request)
     {
         var action = _execution.RequestRestart(
             Sender,
+            request.Reason,
             _phase.Current,
-            _input.SelectedCount > 0 || _toolWorkflow.HasChildContinuation,
             _input.HasBufferedContinuation,
             _toolWorkflow.CanParkForRestart());
         if (action == RestartAction.EnterPassivation)
+        {
+            // A ready session has no turn to resume. A child run can still owe it a result, and only the restart
+            // reminder wakes the session after the restart so that the recovery can report that child.
+            _execution.MarkRestartReminderEligible(0, UnreportedRuns().Count(), false, 0, _timeProvider.GetUtcNow());
             TransitionTo(SessionPhase.Passivating);
+        }
         else if (action == RestartAction.StopToolTask)
             _log.Info("Stopping a tool batch that waits only for durable approvals before restart drain");
     }
@@ -4018,7 +4396,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void HandleRestartModelGraceExpired(RestartModelGraceExpired expired)
     {
-        if (_execution.PlanRestartModelStop(expired, _phase.Current, _input.SelectedCount > 0 || _toolWorkflow.HasChildContinuation) is not { } callId)
+        if (_execution.PlanRestartModelStop(expired, _phase.Current) is not { } callId)
             return;
 
         _modelContext.InvalidateInspection();
@@ -4035,30 +4413,48 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _log.Error(failure, "The model task failed during restart drain");
 
         if (action == ModelStopAction.CloseInputs)
-            CloseActiveInputs(CompleteModelStopForRestart);
+            CloseActiveInputs(StopTurnForRestart);
         else
-            CompleteModelStopForRestart();
+            StopTurnForRestart();
     }
 
-    private void CompleteModelStopForRestart()
+    // The drain stopped the turn before its end. The turn resumes only when a reminder replays its own selected
+    // inputs. A tool batch or a text close clears them, so read the count before the eligibility record (#2601).
+    private void StopTurnForRestart()
     {
-        RecordRestartReminderEligibility();
+        var selected = _input.SelectedCount;
+        EmitRestartStoppedTurnNotice(RecordRestartReminderEligibility(), selected);
         ClearBufferedMessagesForRestartDrain();
         TransitionTo(SessionPhase.Passivating);
     }
 
-    private void RecordRestartReminderEligibility()
+    private void EmitRestartStoppedTurnNotice(ReminderEligibility eligibility, int pendingTurnInputCount)
     {
-        if (_execution.MarkRestartReminderEligible(
-                _state.GetExecutablePendingInputs().Count,
-                _input.EmittedText,
-                _input.SelectedCount,
-                _timeProvider.GetUtcNow()) == ReminderEligibility.EmittedText)
+        if (SessionExecutionLifetime.RestartStoppedTurnNotice(
+                eligibility, pendingTurnInputCount, _execution.RestartDrainReason) is not { } notice)
+            return;
+
+        _log.Info("Restart drain stopped the turn of session {SessionId}, and no restart reminder resumes that turn.",
+            _sessionId.Value);
+        EmitOutput(new TextOutput(notice) { SessionId = _sessionId }, OutputFilter.Text);
+    }
+
+    private ReminderEligibility RecordRestartReminderEligibility()
+    {
+        var eligibility = _execution.MarkRestartReminderEligible(
+            _state.GetExecutablePendingInputs().Count,
+            UnreportedRuns().Count(),
+            _input.EmittedText,
+            _input.SelectedCount,
+            _timeProvider.GetUtcNow());
+        if (eligibility == ReminderEligibility.EmittedText)
         {
             _log.Warning(
                 "Restart drain cannot resume session {SessionId} because the interrupted turn emitted text.",
                 _sessionId.Value);
         }
+
+        return eligibility;
     }
 
     private void HandleToolPipelineStoppedForRestart(ToolPipelineStoppedForRestart stopped)
@@ -4076,6 +4472,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         _execution.ReleaseTool();
         ClearActiveToolBatchTracking();
+        // The parked approval is durable, but a child run can still owe its result, and an input can wait behind the
+        // approval. Only the restart reminder wakes the session after the restart.
+        RecordRestartReminderEligibility();
         TransitionTo(SessionPhase.Passivating);
     }
 

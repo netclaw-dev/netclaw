@@ -34,6 +34,6 @@ internal sealed class TestSessionStorageResolver(
         return SessionStoragePaths.CreateLegacy(
             SessionDirectoryHelper.GetSessionDirectory(sessionId, paths.SessionsDirectory),
             sessionLogsDirectory ?? paths.SessionLogsDirectory,
-            sanitized);
+            sanitized, ManagedTemporaryLayout.InsideSessionStorage.Instance);
     }
 }

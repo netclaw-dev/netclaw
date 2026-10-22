@@ -14,6 +14,7 @@ using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
+using ChildContinuationProto = Netclaw.Actors.Serialization.Proto.ChildContinuationProto;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
@@ -270,6 +271,39 @@ public sealed class SerializationRoundTripTests : TestKit
             ConsumedInputIds = [inputId]
         });
         Assert.Equal(inputId, Assert.Single(toolStarted.ConsumedInputIds));
+    }
+
+    /// <summary>
+    /// Round 4 nit 3. InputClosed.KeepsTurn (proto field 8) round-trips as true and as false. A row from an older binary
+    /// has no field 8, and it reads false.
+    /// </summary>
+    [Fact]
+    public void InputClosed_keeps_turn_round_trips_and_an_old_row_reads_false()
+    {
+        // Arrange
+        var sessionId = new SessionId("slack/C1/1700.2");
+        var inputId = InputId.New();
+        var keeps = new InputClosed { SessionId = sessionId, InputIds = [inputId], ClosedAtMs = 42, KeepsTurn = true };
+        var ends = keeps with { KeepsTurn = false };
+        var oldRow = new Netclaw.Actors.Serialization.Proto.InputClosedProto
+        {
+            SessionId = new Netclaw.Actors.Serialization.Proto.SessionIdProto { Value = sessionId.Value },
+            ClosedAtMs = 42
+        };
+        oldRow.InputIds.Add(inputId.Value);
+
+        // Act
+        var keepsBack = RoundTrip(keeps);
+        var endsBack = RoundTrip(ends);
+        var oldBack = Deserialize(oldRow.ToByteArray(), keeps);
+
+        // Assert
+        Assert.True(keepsBack.KeepsTurn);
+        Assert.Equal(inputId, Assert.Single(keepsBack.InputIds));
+        Assert.False(endsBack.KeepsTurn);
+        Assert.False(oldRow.HasKeepsTurn);
+        Assert.False(oldBack.KeepsTurn);
+        Assert.Equal(inputId, Assert.Single(oldBack.InputIds));
     }
 
     [Fact]
@@ -1178,14 +1212,18 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(probe.SourceReminderId, routed.SourceReminderId);
 
         // Field 8 is the child continuation of the coordination stack. An entry that holds a child continuation
-        // at 8 is not a routed mark, and the routed mark at 10 does not change the continuation.
+        // at 8 is not a routed mark, and the routed mark at 10 does not change the continuation. No writer sets the
+        // continuation any more, so the deployed entry is built by hand.
         var continuation = new ChildContinuation(new SubAgentRunId("run-1"), new ToolCallId("call-1"));
-        var stackEntry = Deserialize(Serialize(probe with { ChildContinuation = continuation }), probe);
+        var deployedEntry = WithField(oldBytes, output =>
+        {
+            output.WriteTag(8, WireFormat.WireType.LengthDelimited);
+            output.WriteBytes(new ChildContinuationProto { RunId = "run-1", DeliveryCallId = "call-1" }.ToByteString());
+        });
+        var stackEntry = Deserialize(deployedEntry, probe);
         Assert.False(stackEntry.RoutedSkill);
         Assert.Equal(continuation, stackEntry.ChildContinuation);
-        var routedStackEntry = Deserialize(
-            WithVarintField(Serialize(probe with { ChildContinuation = continuation }), TurnRecordedRoutedSkillField, true),
-            probe);
+        var routedStackEntry = Deserialize(WithVarintField(deployedEntry, TurnRecordedRoutedSkillField, true), probe);
         Assert.True(routedStackEntry.RoutedSkill);
         Assert.Equal(continuation, routedStackEntry.ChildContinuation);
 

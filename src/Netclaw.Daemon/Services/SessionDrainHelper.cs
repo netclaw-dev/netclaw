@@ -101,7 +101,7 @@ internal static class SessionDrainHelper
         else
         {
             logger.LogWarning(
-                "Drain completed with {DrainedCount} session(s) drained and {TimedOutCount} timed out ({TimedOutSessionIds}); timed-out sessions will recover from the last durable checkpoint.",
+                "Drain completed with {DrainedCount} session(s) drained and {TimedOutCount} timed out ({TimedOutSessionIds}); the restart or stop interrupted the turns of the timed-out sessions, and no restart reminder resumes them.",
                 drained.Length,
                 timedOut.Length,
                 string.Join(", ", timedOut.Select(static id => id.Value)));
@@ -127,13 +127,23 @@ internal static class SessionDrainHelper
     {
         public static readonly DrainResult Empty = new([], [], [], []);
 
-        public Dictionary<string, string> ToNotificationContext() => new()
+        public Dictionary<string, string> ToNotificationContext()
         {
-            ["drainOutcome"] = TimedOutSessionIds.Count == 0 ? "drained" : "timeout",
-            ["activeSessions"] = AllSessionIds.Count.ToString(CultureInfo.InvariantCulture),
-            ["drainedSessions"] = DrainedSessionIds.Count.ToString(CultureInfo.InvariantCulture),
-            ["timedOutSessions"] = TimedOutSessionIds.Count.ToString(CultureInfo.InvariantCulture),
-            ["restartReminders"] = RestartReminders.Count.ToString(CultureInfo.InvariantCulture)
-        };
+            var context = new Dictionary<string, string>
+            {
+                ["drainOutcome"] = TimedOutSessionIds.Count == 0 ? "drained" : "timeout",
+                ["activeSessions"] = AllSessionIds.Count.ToString(CultureInfo.InvariantCulture),
+                ["drainedSessions"] = DrainedSessionIds.Count.ToString(CultureInfo.InvariantCulture),
+                ["timedOutSessions"] = TimedOutSessionIds.Count.ToString(CultureInfo.InvariantCulture),
+                ["restartReminders"] = RestartReminders.Count.ToString(CultureInfo.InvariantCulture)
+            };
+
+            // A session that does not acknowledge gets no restart reminder and posts no channel notice. The alert
+            // names each such session, so that the operator knows which turns the restart stopped (#2601).
+            if (TimedOutSessionIds.Count > 0)
+                context["timedOutSessionIds"] = string.Join(", ", TimedOutSessionIds.Select(static id => id.Value));
+
+            return context;
+        }
     }
 }

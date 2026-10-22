@@ -59,30 +59,66 @@ public sealed class SecretOutputRedactorLinearTimeTests
     // The shapes at a size the old, quadratic patterns can still handle.
     [Theory]
     [MemberData(nameof(ShapeNames))]
-    public void Redact_gives_the_old_output_on_repetitive_shapes(string shape)
+    public void Redact_masks_at_least_what_the_old_redactor_masked_on_repetitive_shapes(string shape)
     {
         var input = RedactorComparisonInputs.Shapes().Single(s => s.Name == shape).Build(24 * 1024);
 
-        AssertSameAsOldRedactor(input);
+        AssertMasksAtLeastWhatTheOldRedactorMasked(input);
     }
 
-    private static void AssertSameAsOldRedactor(string input)
+    // These comparisons first required byte-identical output. Issue #2595 adds shapes that the
+    // old redactor did not mask (URL credentials, option values, headers, name and value pairs),
+    // so the current output can mask more. The rule is now a superset rule: text that the
+    // current redactor keeps, the old redactor also kept.
+    //
+    // The check splits the input into probes at whitespace and at the characters that a
+    // replacement can write itself ('"', ':', '=', ';', '*'). A probe that is not part of the
+    // mask text cannot overlap a mask or a written character. Thus each probe occurrence in the
+    // current output is input text that the current redactor kept. When the old redactor kept
+    // that text too, the occurrence is also in the old output. So the count of each probe in the
+    // current output must not be more than its count in the old output.
+    private static readonly char[] ProbeSeparators = [' ', '\t', '\r', '\n', '"', ':', '=', ';', '*'];
+
+    private static void AssertMasksAtLeastWhatTheOldRedactorMasked(string input)
     {
         var old = PreLinearSecretOutputRedactor.Redact(input);
         var current = SecretOutputRedactor.Redact(input);
-        Assert.True(old == current, $"input [{Shorten(input)}]\nold     [{Shorten(old)}]\ncurrent [{Shorten(current)}]");
+        if (string.Equals(old, current, StringComparison.Ordinal))
+            return;
+
+        foreach (var probe in input.Split(ProbeSeparators, StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.Ordinal))
+        {
+            if (probe.Length < 2 || Mask.Contains(probe, StringComparison.Ordinal))
+                continue;
+
+            var inCurrent = CountOverlapping(current, probe);
+            var inOld = CountOverlapping(old, probe);
+            Assert.True(inCurrent <= inOld,
+                $"probe [{Shorten(probe)}] is in the current output {inCurrent} times but in the old output {inOld} times\n"
+                + $"input [{Shorten(input)}]\nold     [{Shorten(old)}]\ncurrent [{Shorten(current)}]");
+        }
+    }
+
+    private const string Mask = "***REDACTED***";
+
+    private static int CountOverlapping(string text, string probe)
+    {
+        var count = 0;
+        for (var at = text.IndexOf(probe, StringComparison.Ordinal); at >= 0; at = text.IndexOf(probe, at + 1, StringComparison.Ordinal))
+            count++;
+        return count;
     }
 
     private static string Shorten(string s) => (s.Length > 300 ? s[..300] + "..." : s).Replace("\n", "\\n");
 
     [Fact]
-    public void Redact_agrees_with_the_old_redactor_on_generated_inputs()
+    public void Redact_masks_at_least_what_the_old_redactor_masked_on_generated_inputs()
     {
         var checkedInputs = 0;
         var masked = 0;
         foreach (var input in RedactorComparisonInputs.Random(seed: 2401, count: 120_000))
         {
-            AssertSameAsOldRedactor(input);
+            AssertMasksAtLeastWhatTheOldRedactorMasked(input);
             checkedInputs++;
             if (!string.Equals(SecretOutputRedactor.Redact(input), input, StringComparison.Ordinal))
                 masked++;

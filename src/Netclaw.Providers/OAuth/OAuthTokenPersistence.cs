@@ -3,8 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 
@@ -18,8 +18,9 @@ namespace Netclaw.Providers.OAuth;
 public static class OAuthTokenPersistence
 {
     /// <summary>
-    /// Persist OAuth tokens to secrets.json for the given provider name.
-    /// Merges into existing secrets content, preserving other providers' entries.
+    /// Persist OAuth tokens and their expiry to secrets.json for the given provider name,
+    /// in one update. Merges into existing secrets content, preserving other providers' entries.
+    /// This method never touches netclaw.json: a netclaw.json write restarts the daemon.
     /// </summary>
     public static void PersistTokens(
         NetclawPaths paths,
@@ -29,86 +30,36 @@ public static class OAuthTokenPersistence
     {
         paths.EnsureDirectoriesExist();
 
-        // Load existing secrets as a JSON object tree to preserve other entries
-        var existingJson = File.Exists(paths.SecretsPath)
-            ? File.ReadAllText(paths.SecretsPath)
-            : "{}";
-
-        var root = JsonNode.Parse(existingJson)?.AsObject() ?? [];
-        var providers = root["Providers"]?.AsObject() ?? [];
-        root["Providers"] = providers;
-
-        var providerNode = providers[providerName]?.AsObject() ?? [];
-        providers[providerName] = providerNode;
-
-        providerNode.Remove(nameof(ProviderEntry.ApiKey));
-        providerNode["OAuthAccessToken"] = result.AccessToken.Value;
-
-        // Preserve any previously-stored refresh token / account id when the new
-        // result omits them. An OAuth response that doesn't echo refresh_token means
-        // "keep using the existing one" (RFC 6749 §5.1), and a partial refresh that
-        // lacks the ChatGPT account id must not wipe a value the Codex backend still
-        // requires. (OAuthTokenExpiry below is still cleared on null — a stale expiry
-        // is worse than an absent one.)
-        if (result.RefreshToken is not null)
-            providerNode["OAuthRefreshToken"] = result.RefreshToken.Value;
-
-        if (result.AccountId is not null)
-            providerNode["OAuthAccountId"] = result.AccountId.Value;
-
-        // OAuthTokenExpiry is NOT a secret and must NOT go in secrets.json.
-        // SecretsFileWriter encrypts the entire file, and encrypted DateTimeOffset
-        // values break IConfiguration binding (silently drops the provider entry).
-        // Write expiry to netclaw.json instead.
-        var json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-        SecretsFileWriter.Write(paths.SecretsPath, json, protector);
-
-        PersistTokenExpiry(paths, providerName, result.ExpiresAt);
-    }
-
-    private static void PersistTokenExpiry(NetclawPaths paths, string providerName, DateTimeOffset? expiresAt)
-    {
-        // Never CREATE netclaw.json here: an instance configured purely via
-        // NETCLAW_ environment variables has no config file by design, and a
-        // token refresh silently materializing one turns the deployment
-        // stateful (and throws on a read-only home). Expiry is refresh-timing
-        // metadata, not required state — when there is no file to update, skip.
-        if (!File.Exists(paths.NetclawConfigPath))
-            return;
-
-        var configJson = File.ReadAllText(paths.NetclawConfigPath);
-        var configRoot = JsonNode.Parse(configJson)?.AsObject() ?? [];
-        var configProviders = configRoot["Providers"]?.AsObject();
-
-        if (configProviders is null)
+        SecretsFileWriter.Update(paths.SecretsPath, (root, _) =>
         {
-            if (!expiresAt.HasValue)
-                return;
+            var providers = root["Providers"]?.AsObject() ?? [];
+            root["Providers"] = providers;
 
-            configProviders = [];
-            configRoot["Providers"] = configProviders;
-        }
+            var providerNode = providers[providerName]?.AsObject() ?? [];
+            providers[providerName] = providerNode;
 
-        var configProvider = configProviders[providerName]?.AsObject();
-        if (configProvider is null)
-        {
-            if (!expiresAt.HasValue)
-                return;
+            providerNode.Remove(nameof(ProviderEntry.ApiKey));
+            providerNode[nameof(ProviderEntry.OAuthAccessToken)] = result.AccessToken.Value;
 
-            configProvider = [];
-            configProviders[providerName] = configProvider;
-        }
+            // Preserve any previously-stored refresh token / account id when the new
+            // result omits them. An OAuth response that doesn't echo refresh_token means
+            // "keep using the existing one" (RFC 6749 §5.1), and a partial refresh that
+            // lacks the ChatGPT account id must not wipe a value the Codex backend still
+            // requires.
+            if (result.RefreshToken is not null)
+                providerNode[nameof(ProviderEntry.OAuthRefreshToken)] = result.RefreshToken.Value;
 
-        if (expiresAt.HasValue)
-            configProvider["OAuthTokenExpiry"] = expiresAt.Value.ToString("o");
-        else
-            configProvider.Remove("OAuthTokenExpiry");
+            if (result.AccountId is not null)
+                providerNode[nameof(ProviderEntry.OAuthAccountId)] = result.AccountId.Value;
 
-        // Atomic write (temp + rename) so a crash/power-loss between truncate and write cannot leave
-        // netclaw.json empty or partial — IConfiguration silently drops every section on a torn read.
-        // Matches the AtomicFile seam ConfigFileHelper.WriteConfigFile uses for the same file.
-        AtomicFile.WriteAllText(paths.NetclawConfigPath,
-            configRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            // Same write as the tokens, so a reader never sees new tokens with an old expiry.
+            // JSON null, not a removed key: secrets.json layers after netclaw.json, so null hides
+            // a retired netclaw.json value. SecretsFileWriter.IsPlaintextLeaf keeps this leaf readable.
+            providerNode[nameof(ProviderEntry.OAuthTokenExpiry)] =
+                result.ExpiresAt?.ToString("o", CultureInfo.InvariantCulture);
+
+            return (root, 0);
+        }, protector);
     }
 
     /// <summary>
@@ -148,7 +99,7 @@ public static class OAuthTokenPersistence
         if (provider.TryGetProperty("OAuthRefreshToken", out var refreshProp))
         {
             refreshTokenStr = refreshProp.GetString();
-            if (protector is not null && refreshTokenStr is not null && ISecretsProtector.IsEncrypted(refreshTokenStr))
+            if (refreshTokenStr is not null && ISecretsProtector.IsEncrypted(refreshTokenStr))
                 refreshTokenStr = protector.Unprotect(refreshTokenStr);
         }
 
@@ -156,19 +107,23 @@ public static class OAuthTokenPersistence
         if (provider.TryGetProperty("OAuthAccountId", out var accountIdProp))
         {
             accountIdStr = accountIdProp.GetString();
-            if (protector is not null && accountIdStr is not null && ISecretsProtector.IsEncrypted(accountIdStr))
+            if (accountIdStr is not null && ISecretsProtector.IsEncrypted(accountIdStr))
                 accountIdStr = protector.Unprotect(accountIdStr);
         }
 
         DateTimeOffset? expiresAt = null;
         if (provider.TryGetProperty("OAuthTokenExpiry", out var expiryProp))
         {
+            // A bad value fails loudly: the daemon binder rejects the same value at startup.
+            var location = $"secrets.json Providers:{providerName}:OAuthTokenExpiry";
+            if (expiryProp.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                throw new InvalidDataException($"{location} must be a string or null, not {expiryProp.ValueKind}.");
+
             var expiryStr = expiryProp.GetString();
-            if (protector is not null && expiryStr is not null && ISecretsProtector.IsEncrypted(expiryStr))
+            if (expiryStr is not null && ISecretsProtector.IsEncrypted(expiryStr))
                 expiryStr = protector.Unprotect(expiryStr);
 
-            if (expiryStr is not null && DateTimeOffset.TryParse(expiryStr, out var parsed))
-                expiresAt = parsed;
+            expiresAt = OAuthTokenExpiryStorage.Parse(expiryStr, location);
         }
 
         return new OAuthDeviceFlowResult(

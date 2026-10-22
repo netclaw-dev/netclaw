@@ -97,16 +97,16 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
             }
             else if (!result.CheckSucceeded)
             {
-                _logger.LogInformation("Netclaw update check failed: {ErrorDetail}", result.ErrorDetail);
+                _logger.LogWarning("Netclaw update check failed: {ErrorDetail}", result.ErrorDetail);
             }
             else
             {
                 _logger.LogInformation("Netclaw is up to date (v{Version})", _currentVersion);
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            _logger.LogDebug(ex, "Binary update check failed — continuing normally");
+            _logger.LogWarning(ex, "Netclaw update check failed. The daemon keeps running.");
         }
     }
 

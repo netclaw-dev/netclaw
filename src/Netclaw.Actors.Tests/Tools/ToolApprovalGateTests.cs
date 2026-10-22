@@ -1691,7 +1691,7 @@ public sealed class ToolApprovalGateTests
     {
         using var directory = new DisposableTempDir();
         var storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.GetFullPath(directory.Path)));
+            new SessionStorageEnvelopeRoot(Path.GetFullPath(directory.Path)), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         var context = TestToolExecutionContext.CreateBoundWithStorage(
             "signalr/storage-paths",
             storage,

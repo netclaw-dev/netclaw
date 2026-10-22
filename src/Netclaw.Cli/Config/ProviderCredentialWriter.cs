@@ -18,9 +18,11 @@ namespace Netclaw.Cli.Config;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>OAuthTokenExpiry</b> must go in <c>netclaw.json</c> (not <c>secrets.json</c>)
-/// because encrypted <see cref="DateTimeOffset"/> values break <c>IConfiguration</c>
-/// binding — the binder silently drops the entire provider entry.
+/// <b>OAuthTokenExpiry</b> goes to <c>secrets.json</c> with the OAuth tokens, through
+/// <see cref="OAuthTokenPersistence.PersistTokens"/>. A <c>netclaw.json</c> write restarts the
+/// daemon, and a refresh must not do that. <see cref="SecretsFileWriter.IsPlaintextLeaf"/> keeps
+/// that one leaf unencrypted, because the <c>IConfiguration</c> binder cannot read an encrypted
+/// <see cref="DateTimeOffset"/> and fails with a <c>ModelConfigurationException</c>.
 /// </para>
 /// </remarks>
 internal static class ProviderCredentialWriter
@@ -84,10 +86,6 @@ internal static class ProviderCredentialWriter
 
         if (vendorOptions is not null && vendorOptions.Count > 0)
             providerEntry["VendorOptions"] = vendorOptions;
-
-        // OAuthTokenExpiry goes in netclaw.json (NOT secrets) — see class remarks.
-        if (oauthResult?.ExpiresAt is { } expiresAt)
-            providerEntry["OAuthTokenExpiry"] = expiresAt.ToString("o");
 
         providers[providerName] = providerEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);

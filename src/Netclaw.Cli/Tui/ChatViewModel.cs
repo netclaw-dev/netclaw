@@ -430,23 +430,53 @@ public partial class ChatViewModel : ReactiveViewModel
                 IsGenerating.Value = false;
                 StatusMessage.Value = "Approval required";
                 break;
+            case ToolInteractionClosed closed:
+                RemoveClosedInteraction(closed);
+                break;
             case TurnCompleted:
-                _pendingInteractions.Clear();
-                RefreshApprovalOptions();
+                ClearTurnInteractions();
                 IsGenerating.Value = false;
-                StatusMessage.Value = "Ready";
+                StatusMessage.Value = HasPendingInteraction ? "Approval required" : "Ready";
                 break;
             case ErrorOutput:
-                _pendingInteractions.Clear();
-                RefreshApprovalOptions();
+                ClearTurnInteractions();
                 IsGenerating.Value = false;
                 IsInputEnabled.Value = _shutdownTask is null;
-                StatusMessage.Value = "Last request failed. Ready to retry.";
+                StatusMessage.Value = HasPendingInteraction
+                    ? "Last request failed. Approval required."
+                    : "Last request failed. Ready to retry.";
                 break;
         }
 
         _outputSubject.OnNext(output);
         RequestRedraw();
+    }
+
+    // A turn end or a turn error clears only the prompts of the turn. A child prompt stays until the person answers it,
+    // because the child keeps waiting after the parent turn ends or fails (#2523).
+    private void ClearTurnInteractions()
+    {
+        var kept = _pendingInteractions.Where(static interaction => interaction.Lifetime == ToolInteractionLifetime.UntilClosed).ToArray();
+        _pendingInteractions.Clear();
+        foreach (var interaction in kept)
+            _pendingInteractions.Enqueue(interaction);
+        RefreshApprovalOptions();
+    }
+
+    // A child prompt closed (design D6): a person answered it, maybe in this TUI or in another client, or the session
+    // withdrew it. Remove it wherever it is in the queue, so no key answers it. A prompt that still waits means that the
+    // session waits for the operator, so the TUI does not show "generating".
+    private void RemoveClosedInteraction(ToolInteractionClosed closed)
+    {
+        var kept = _pendingInteractions.Where(interaction => interaction.CallId != closed.CallId).ToArray();
+        if (kept.Length == _pendingInteractions.Count)
+            return;
+        _pendingInteractions.Clear();
+        foreach (var interaction in kept)
+            _pendingInteractions.Enqueue(interaction);
+        RefreshApprovalOptions();
+        if (HasPendingInteraction) IsGenerating.Value = false;
+        StatusMessage.Value = HasPendingInteraction ? "Approval required" : IsGenerating.Value ? "Generating..." : "Ready";
     }
 
     internal Task CancelFromInputAsync()
@@ -470,8 +500,18 @@ public partial class ChatViewModel : ReactiveViewModel
             await _daemonClient.RespondToInteractionAsync(pending.CallId.Value, selectedKey);
             await ApplyAsync(() =>
             {
-                // Turn completion can clear the prompt before the RPC response arrives.
-                if (CurrentInteraction != pending) return;
+                // Turn completion or a close can clear the prompt before the RPC response arrives. A prompt that still
+                // waits keeps the TUI out of "generating".
+                if (CurrentInteraction != pending)
+                {
+                    if (HasPendingInteraction)
+                    {
+                        IsGenerating.Value = false;
+                        StatusMessage.Value = "Approval required";
+                        RequestRedraw();
+                    }
+                    return;
+                }
                 _pendingInteractions.Dequeue();
                 RefreshApprovalOptions();
                 if (HasPendingInteraction) IsGenerating.Value = false;

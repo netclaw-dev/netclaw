@@ -464,7 +464,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
                 ["head", "cat"]));
         var shellTool = new ShellTool(config, pathPolicy, commandPolicy);
         var storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.GetFullPath(sessionDirectory)));
+            new SessionStorageEnvelopeRoot(Path.GetFullPath(sessionDirectory)), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         var context = TestToolExecutionContext.CreateBoundWithStorage(
             "signalr/example",
             storage,

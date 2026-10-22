@@ -289,6 +289,8 @@ public class SkillToolTests : IDisposable
         // tool that the child may use. The fake owner accepts the start and runs nothing.
         var toolRegistry = new ToolRegistry();
         toolRegistry.Register(new FakeNetclawTool("inspect_context", "ok"));
+        // The spawner refuses a routed start when the requester cannot read the result file.
+        toolRegistry.Register(new FakeNetclawTool(FileReadTool.ToolName, "ok"));
         var tool = new SkillLoadTool(
             _registry,
             new NoOpSkillContentScanner(),

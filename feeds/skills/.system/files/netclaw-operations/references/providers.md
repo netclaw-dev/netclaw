@@ -64,11 +64,22 @@ credentials, missing provider `Type`, schema-invalid config, or invalid explicit
 startup loudly.
 
 For OpenAI ChatGPT subscription auth, Netclaw persists the OAuth access token,
-refresh token, and ChatGPT account ID returned by the OpenAI ID token. The
-account ID is required by the Codex backend. If OpenAI OAuth validation reports
+refresh token, ChatGPT account ID returned by the OpenAI ID token, and token
+expiry in `secrets.json`. The account ID is required by the Codex backend. If OpenAI OAuth validation reports
 that the account ID is missing, re-authenticate the provider with `netclaw
 provider` or remove and add it again. API-key OpenAI auth does not
 use the Codex backend or this account-ID metadata.
+
+When the token server rejects a refresh token (`invalid_grant`,
+`refresh_token_reused`, `refresh_token_expired`, or
+`refresh_token_invalidated`), only a new sign-in helps. OpenAI sends the code
+as `{"error":{"code":"..."}}`. Other servers send a string. The daemon writes
+an Error log line with the provider name and the code. It sends the
+`provider.auth.expired` alert with the code in its `reason` field. It shows the
+provider as `auth-failed` in `netclaw status` and `/api/health/status`. Run
+`netclaw provider` to sign in again. A transient refresh failure (a network
+error, a timeout, HTTP 5xx, or HTTP 429) gets one retry after 2 seconds. A
+rejected token gets none.
 
 For `openai` OAuth providers, `netclaw model discover <provider>` queries the
 Codex backend model catalog with the OAuth bearer token and

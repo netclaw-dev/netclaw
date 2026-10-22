@@ -604,8 +604,8 @@ public sealed class SubAgentSpawnerTests : TestKit, IAsyncDisposable
         paths.EnsureDirectoriesExist();
         var parentRoot = Path.Combine(paths.SessionsDirectory, "parent");
         var storage = legacy
-            ? SessionStoragePaths.CreateLegacy(parentRoot, paths.SessionLogsDirectory, "parent")
-            : SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(parentRoot));
+            ? SessionStoragePaths.CreateLegacy(parentRoot, paths.SessionLogsDirectory, "parent", ManagedTemporaryLayout.InsideSessionStorage.Instance)
+            : SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(parentRoot), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         Directory.CreateDirectory(storage.SessionDirectory.Value);
         Directory.CreateDirectory(Path.GetDirectoryName(storage.LogPath.Value)!);
         await File.WriteAllTextAsync(storage.LogPath.Value, "parent-marker", TestContext.Current.CancellationToken);

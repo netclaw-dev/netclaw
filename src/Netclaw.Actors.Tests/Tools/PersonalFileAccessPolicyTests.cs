@@ -48,9 +48,16 @@ public sealed class PersonalFileAccessPolicyTests : IDisposable
                 ChannelType = autonomous ? "reminder" : "signalr"
             }).Invocation;
 
+    // Issue #2554: Personal reads reach the write profile. These cases bound
+    // the write profile too, so that the explicit roots alone decide.
     private static ToolConfig BuildPersonalRootsConfig(string root)
     {
         var toolConfig = new ToolConfig();
+        toolConfig.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [root]
+        };
         toolConfig.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
         {
             Mode = ToolFilesystemMode.Roots,
@@ -261,8 +268,10 @@ public sealed class PersonalFileAccessPolicyTests : IDisposable
     public static TheoryData<bool, bool> AttachRootsModeCases => new()
     {
         // interactive, expectedAllow
-        { true, false },
-        { false, false },
+        // Issue #2554: the write profile stays the Personal default (All), so
+        // the attach reach follows it, attended or not (D2).
+        { true, true },
+        { false, true },
     };
 
     [Theory]

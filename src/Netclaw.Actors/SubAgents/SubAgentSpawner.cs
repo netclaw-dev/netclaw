@@ -88,14 +88,47 @@ public sealed class SubAgentSpawner
         return result.ToProtocolResult();
     }
 
+    /// <summary>
+    /// Prepares a child and asks the owning session to accept it. The parent reads the result through
+    /// <c>file_read</c>, so the start is refused when the requester cannot use that tool. The spawner removes the run
+    /// folder when the owner rejects the start, so a rejected start leaves no files.
+    /// </summary>
     internal async Task<ChildRunAcceptance> StartRunAsync(
         SubAgentProfile profile, string task, string? runtimeContext,
         ToolInvocationContext context, CancellationToken ct, string? systemPromptOverlay)
     {
-        var prepared = await PrepareRunAsync(profile, task, runtimeContext, context, ct, systemPromptOverlay);
+        var prepared = await PrepareRunAsync(profile, task, runtimeContext, context, ct, systemPromptOverlay,
+            requireResultReader: true);
         var spawn = context.SpawnChildActor
             ?? throw new InvalidOperationException("A child start requires an owning session.");
-        return (ChildRunAcceptance)await spawn(prepared, prepared.ActorName, ct);
+        ChildRunAcceptance acceptance;
+        try
+        {
+            acceptance = (ChildRunAcceptance)await spawn(prepared, prepared.ActorName, ct);
+        }
+        catch (ChildStartRejectedException)
+        {
+            RemoveRunDirectory(prepared);
+            throw;
+        }
+
+        // The owner knew this start under another run, so this run never started.
+        if (acceptance.RunId != prepared.RunId)
+            RemoveRunDirectory(prepared);
+        return acceptance;
+    }
+
+    private void RemoveRunDirectory(PreparedChildStart prepared)
+    {
+        try
+        {
+            Directory.Delete(prepared.RunDirectory, recursive: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(error, "The rejected child start {RunId} left its run folder {RunDirectory}.",
+                prepared.RunId.Value, prepared.RunDirectory);
+        }
     }
 
     internal async Task<EnrichedChildRunResult> SpawnRunAsync(
@@ -107,7 +140,8 @@ public sealed class SubAgentSpawner
         PreparedChildStart? prepared = null;
         try
         {
-            prepared = await PrepareRunAsync(profile, task, runtimeContext, context, ct, systemPromptOverlay);
+            prepared = await PrepareRunAsync(profile, task, runtimeContext, context, ct, systemPromptOverlay,
+                requireResultReader: false);
             context.Outputs.ReportSubAgentActivity(new SubAgentNotificationInfo
             {
                 RunId = prepared.RunId, AgentName = profile.Name, IsStarted = true, ToolCount = prepared.ToolCount
@@ -171,15 +205,10 @@ public sealed class SubAgentSpawner
         }
     }
 
-    private sealed class ChildStartRejectedException(SubAgentOutcomeReason reason, string message)
-        : InvalidOperationException(message)
-    {
-        public SubAgentOutcomeReason Reason { get; } = reason;
-    }
-
     private async Task<PreparedChildStart> PrepareRunAsync(
         SubAgentProfile profile, string task, string? runtimeContext,
-        ToolInvocationContext context, CancellationToken ct, string? systemPromptOverlay)
+        ToolInvocationContext context, CancellationToken ct, string? systemPromptOverlay,
+        bool requireResultReader)
     {
         SubAgentSpawnBreadcrumbs.SpawnRequested(_logger, context, profile.Name, task.Length);
         if (context.SpawnChildActor is null)
@@ -193,6 +222,13 @@ public sealed class SubAgentSpawner
             SubAgentSpawnBreadcrumbs.NoToolsAvailable(_logger, context, profile.Name);
             throw new ChildStartRejectedException(SubAgentOutcomeReason.NoToolsAvailable,
                 "No child tools are available under the parent audience policy.");
+        }
+        if (requireResultReader && exposure.Tools.All(tool => tool.Name != FileReadTool.ToolName))
+        {
+            SubAgentSpawnBreadcrumbs.NoResultReader(_logger, context, profile.Name);
+            throw new ChildStartRejectedException(SubAgentOutcomeReason.NoResultReader,
+                $"The child was not started. The result of a child run is read with {FileReadTool.ToolName}, "
+                + $"and the policy for this session does not allow {FileReadTool.ToolName}.");
         }
         var definition = new SubAgentDefinition
         {
@@ -287,7 +323,9 @@ public sealed class SubAgentSpawner
         TrustAudience audience,
         CancellationToken cancellationToken)
     {
-        if (!result.Success || result.WorkingContext is not { } childContext)
+        // Only a completed run or a partial run has a delta. A partial run that a restart lost is not a success, but
+        // its result file shows the reviewed delta. The observed changes help the parent judge the uncertain effects.
+        if (result.WorkingContext is not { } childContext)
             return result;
 
         var finalContext = new WorkingContext
@@ -322,7 +360,7 @@ public sealed class SubAgentSpawner
             {
                 ChildRunCompletion.Completed => new ChildRunCompletion.Completed(delta),
                 ChildRunCompletion.Partial partial => new ChildRunCompletion.Partial(partial.PartialReason, delta),
-                _ => throw new InvalidOperationException("Only successful child runs can carry a working-context delta.")
+                _ => throw new InvalidOperationException("Only a completed or a partial child run can carry a working-context delta.")
             }
         };
     }

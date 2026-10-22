@@ -13,8 +13,10 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Channels;
 using Netclaw.Cli.Daemon;
+using Netclaw.Tools;
 using R3;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -70,6 +72,9 @@ public sealed class HeadlessChannel : IChannel
     // The kind of the most recent ErrorOutput in the current turn. The error that precedes a failed
     // TurnCompleted decides the reported kind; an earlier error that the turn survived must not.
     private ErrorCategory? _lastErrorKind;
+
+    // The prompts that this run printed. Only their closes are printed.
+    private readonly HashSet<ToolCallId> _shownPrompts = [];
 
     // Client-side timing
     private long _promptSentTicks;
@@ -469,6 +474,24 @@ public sealed class HeadlessChannel : IChannel
                 EndRun(log, "SESSION_DEACTIVATED");
                 break;
             }
+
+            // Headless output cannot answer a prompt. It prints the prompt and its close, so the reader sees why the run
+            // waits (#2541). The call ID of a child prompt holds the run ID, so no line prints it (design P3).
+            case ToolInteractionRequest msg:
+                _shownPrompts.Add(msg.CallId);
+                if (!_jsonOutput)
+                    Console.WriteLine($"[approval:waiting] {msg.ToolName}: {SingleLine(msg.DisplayText)}");
+                Log(log, $"APPROVAL_WAITING: tool={msg.ToolName}");
+                break;
+
+            // A close of a prompt that this run never showed is not news to the reader. A new subscriber also gets the
+            // restart closes of the session at its join.
+            case ToolInteractionClosed msg when _shownPrompts.Remove(msg.CallId):
+                var closeText = ChildApprovalPrompt.CloseText(msg.Reason);
+                if (!_jsonOutput)
+                    Console.WriteLine($"[approval:closed] {closeText}");
+                Log(log, $"APPROVAL_CLOSED: {closeText}");
+                break;
 
             case FileOutput msg:
                 if (!_jsonOutput)

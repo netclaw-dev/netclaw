@@ -22,7 +22,8 @@ internal enum ApprovalNoticeKind
     Expired,
     AlreadyAnswered,
     WrongRequester,
-    OptionUnavailable
+    OptionUnavailable,
+    Withdrawn
 }
 
 internal abstract record ApprovalResponseResult
@@ -30,7 +31,11 @@ internal abstract record ApprovalResponseResult
     private ApprovalResponseResult() { }
 
     internal sealed record Rejected(string NackReason, ApprovalNoticeKind Notice, string Diagnostic)
-        : ApprovalResponseResult;
+        : ApprovalResponseResult
+    {
+        /// <summary>The reason of a <see cref="ApprovalNoticeKind.Withdrawn"/> notice. Set only for that notice.</summary>
+        public WithdrawReason? Withdrawal { get; init; }
+    }
 
     internal abstract record Accepted(
         PendingToolInteraction Pending,
@@ -136,8 +141,8 @@ internal sealed partial class SessionToolWorkflow
     {
         response = null;
         nackReason = null;
-        var pending = FindLatestPending(candidate => CanApprovePending(candidate, text.SenderId));
-        if (pending is null)
+        var answerable = AnswerablePrompts(text.SenderId);
+        if (answerable.Count == 0)
         {
             nackReason = PendingParentCount > 0
                 ? ApprovalNackReasons.WrongRequester
@@ -147,22 +152,24 @@ internal sealed partial class SessionToolWorkflow
             return false;
         }
 
-        var optionKeys = pending.Request.OptionKeys.Count > 0
-            ? pending.Request.OptionKeys
-            :
-            [
-                ApprovalOptionKeys.ApproveOnce,
-                ApprovalOptionKeys.ApproveSession,
-                ApprovalOptionKeys.ApproveAlways,
-                ApprovalOptionKeys.Deny
-            ];
-        var options = optionKeys
-            .Select(key => new ToolInteractionOption(
-                new ApprovalOptionKey(key),
-                ApprovalOptionKeys.LabelFor(key, new ToolName(pending.Request.ToolName).IsMcp)))
-            .ToArray();
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(text.Text, options, out var selectedKey)
-            || selectedKey is null)
+        // <text-answer-guard>
+        // Security boundary (design D7): a text answer names no prompt. A child prompt does not name the child, so model
+        // text can describe one command while a text answer approves another. When a child prompt is among two or more
+        // prompts that the sender can answer, the text answers none. Text that answers no prompt stays an unparseable
+        // answer, as the channel binding treats it.
+        if (answerable.Count > 1 && answerable.Any(static prompt => prompt.Request.SourceChildRunId is not null))
+        {
+            nackReason = answerable.Any(prompt => TryParseTextAnswer(text.Text, prompt, out _))
+                ? ApprovalNackReasons.UseButtons
+                : ApprovalNackReasons.OptionUnavailable;
+            return false;
+        }
+
+        // Parent prompts only: the latest prompt by durable request time, the session rule from before the guard.
+        var pending = answerable[^1];
+        // </text-answer-guard>
+
+        if (!TryParseTextAnswer(text.Text, pending, out var selectedKey))
         {
             nackReason = ApprovalNackReasons.OptionUnavailable;
             return false;
@@ -177,6 +184,38 @@ internal sealed partial class SessionToolWorkflow
         };
         return true;
     }
+
+    private static bool TryParseTextAnswer(
+        string text,
+        PendingToolInteraction pending,
+        [NotNullWhen(true)] out string? selectedKey)
+    {
+        var optionKeys = pending.Request.OptionKeys.Count > 0
+            ? pending.Request.OptionKeys
+            :
+            [
+                ApprovalOptionKeys.ApproveOnce,
+                ApprovalOptionKeys.ApproveSession,
+                ApprovalOptionKeys.ApproveAlways,
+                ApprovalOptionKeys.Deny
+            ];
+        var options = optionKeys
+            .Select(key => new ToolInteractionOption(
+                new ApprovalOptionKey(key),
+                ApprovalOptionKeys.LabelFor(key, new ToolName(pending.Request.ToolName).IsMcp)))
+            .ToArray();
+        return ToolInteractionResponseParser.TryParseApprovalResponse(text, options, out selectedKey)
+               && selectedKey is not null;
+    }
+
+    /// <summary>The open prompts that <paramref name="senderId"/> can answer, in request order.</summary>
+    public IReadOnlyList<PendingToolInteraction> AnswerablePrompts(SenderId senderId)
+        => _calls.Values
+            .OfType<PendingToolApproval>()
+            .Select(static call => call.Pending)
+            .Where(pending => CanApprovePending(pending, senderId))
+            .OrderBy(static pending => pending.Request.RequestedAtMs)
+            .ToArray();
 
     public ApprovalResponseResult PrepareLiveResponse(
         ToolInteractionResponse response,
@@ -218,14 +257,26 @@ internal sealed partial class SessionToolWorkflow
     // An answer for a call with no open prompt grants nothing and runs nothing. Only the notice differs.
     // A second answer (a double click or a channel retry) gets "already has an answer", because the prompt
     // did not expire. The recorded answer is in the workflow table while the turn is live. After the turn
-    // ends, and after a restart, the call's tool result in history shows the answer. A call that never
-    // existed, a call that recovery removed, or a call that an abandonment closed keeps the expired notice.
+    // ends, and after a restart, the call's tool result in history shows the answer. A child prompt that the
+    // session withdrew gets the withdrawal reason (design D6). A call that never existed, a call that recovery
+    // removed, or a call that an abandonment closed keeps the expired notice.
     private ApprovalResponseResult.Rejected RejectClosedCall(
         string callId,
         IReadOnlyList<SerializableChatMessage> history)
     {
-        if (HasResolved(callId))
-            return AlreadyAnswered("already_resolved");
+        if (TryGetResolved(callId, out var resolved))
+        {
+            return resolved.Pending.Request.SourceChildRunId is not null
+                   && ChildResolution(resolved.Answer) is ChildApprovalResolution.Withdrawn withdrawn
+                ? Withdrawn(withdrawn.Reason)
+                : AlreadyAnswered("already_resolved");
+        }
+        if (_closedChildCalls.TryGetValue(callId, out var closed))
+        {
+            return closed is ChildApprovalResolution.Withdrawn withdrawn
+                ? Withdrawn(withdrawn.Reason)
+                : AlreadyAnswered("already_resolved");
+        }
         if (ParkedToolBatchHistory.HasAnsweredToolResult(history, callId))
             return AlreadyAnswered("already_completed");
         return new ApprovalResponseResult.Rejected(
@@ -233,6 +284,12 @@ internal sealed partial class SessionToolWorkflow
             ApprovalNoticeKind.Expired,
             ClassifyExpiredCall(callId, history));
     }
+
+    private static ApprovalResponseResult.Rejected Withdrawn(WithdrawReason reason)
+        => new(ApprovalNackReasons.Withdrawn, ApprovalNoticeKind.Withdrawn, $"withdrawn_{reason}")
+        {
+            Withdrawal = reason
+        };
 
     private static ApprovalResponseResult.Rejected AlreadyAnswered(string diagnostic)
         => new(ApprovalNackReasons.AlreadyAnswered, ApprovalNoticeKind.AlreadyAnswered, diagnostic);

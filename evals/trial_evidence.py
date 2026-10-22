@@ -9,6 +9,8 @@ a trial. The commands:
   daemon-session    Print the daemon lines that carry a session id token.
   memory-ids        Write the memory snapshot (status and the ids of unseeded memories).
   derive-seed       Derive the seed of one (case, trial) from the run seed.
+  child-results     Print the child results that the parent read, from the CLI session log.
+  parent-stdout     Print the plain-text stdout without the tool result text.
 """
 
 import argparse
@@ -235,6 +237,194 @@ def derive_seed(run_seed, case_name, trial):
     return int.from_bytes(hashlib.sha256(material).digest()[:4], "big")
 
 
+# A CLI session log record starts with "[<ISO time>] KIND: ". The lines after
+# it, up to the next record, belong to the same record.
+# HeadlessChannel.Log writes "[{GetUtcNow():o}] KIND: ". The "o" format of a
+# UTC DateTimeOffset has 7 fraction digits and the offset +00:00. A line in any
+# other format is not a record start.
+CLI_RECORD_START = re.compile(
+    r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}\+00:00)\] ([A-Z_]+): ", re.MULTILINE)
+CLI_TOOL_RECORD = re.compile(r"(\S+) call_id=(\S+) (args|result)=(.*)\Z", re.DOTALL)
+
+# Since #2515 a child result reaches the parent as an admitted notice. The
+# runtime writes the result to <run folder>/result.md (ChildRunDocuments), and
+# the parent model reads that file with a real file_read call. The notice
+# holds no child output, so the file_read result is the only record of the
+# child answer that the parent received.
+CHILD_RESULT_HEADER = "# Child result\n"
+CHILD_RESULT_FILE = re.compile(r"(?:^|/)subagents/([0-9a-f]+)/result\.md\Z")
+# A ranged file_read (StartLine or Limit above 0) puts "{n,6}\t" before each
+# line (FileReadTool.ReadLinesAsync). A whole-file read does not.
+RANGED_LINE_NUMBER = re.compile(r"^\s*\d+\t", re.MULTILINE)
+CHILD_RESULT_FIELD = re.compile(r"^- (agent|run|outcome): (.*)$", re.MULTILINE)
+CHILD_RESULT_OUTPUT = "\n## Output\n"
+CHILD_RESULT_WORKING_CONTEXT = "\n## Working context\n"
+
+
+def cli_records(text):
+    """Split a CLI session log into (kind, body) pairs.
+
+    The logger ends each record with one newline. The body keeps the newlines
+    inside the record and drops that last one.
+
+    A tool result can quote lines of a CLI session log, for example when the
+    agent reads its own log. A quoted line looks like a record start. The
+    logger writes records in time order (UTC, one fixed format), so inside a
+    TOOL_RESULT a line whose time is earlier than the time of that record is
+    part of the body, not a new record. The rule applies only to TOOL_RESULT.
+    If the clock steps back after a tool result, the next record joins that
+    result, the stdout then does not hold the result, and parent-stdout fails
+    loudly.
+    """
+    starts = []
+    for match in CLI_RECORD_START.finditer(text):
+        if starts and starts[-1].group(2) == "TOOL_RESULT" and match.group(1) < starts[-1].group(1):
+            continue
+        starts.append(match)
+    records = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        body = text[start.end():end]
+        if body.endswith("\n"):
+            body = body[:-1]
+        records.append((start.group(2), body))
+    return records
+
+
+def cli_tool_records(text):
+    """Yield (kind, tool, call_id, payload) for each TOOL_CALL and TOOL_RESULT record."""
+    for kind, body in cli_records(text):
+        if kind not in ("TOOL_CALL", "TOOL_RESULT"):
+            continue
+        match = CLI_TOOL_RECORD.match(body)
+        if match:
+            yield kind, match.group(1), match.group(2), match.group(4)
+
+
+def call_arguments(arguments):
+    """Return the arguments of a tool call as a dict. Text that is not a JSON object gives {}."""
+    try:
+        values = json.loads(arguments)
+    except ValueError:
+        return {}
+    return values if isinstance(values, dict) else {}
+
+
+def call_path(arguments):
+    """Return the Path argument of a tool call, or None."""
+    values = call_arguments(arguments)
+    path = values.get("Path", values.get("path"))
+    return path if isinstance(path, str) else None
+
+
+def is_ranged_read(arguments):
+    """True when file_read gets StartLine or Limit above 0, as FileReadTool treats them."""
+    values = call_arguments(arguments)
+    for name in ("StartLine", "Limit"):
+        value = values.get(name, values.get(name[0].lower() + name[1:]))
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return True
+    return False
+
+
+def accepted_spawn_runs(text):
+    """Return the run ids of the spawn_agent results with state "accepted"."""
+    runs = set()
+    for kind, tool, _, payload in cli_tool_records(text):
+        if kind != "TOOL_RESULT" or tool != "spawn_agent":
+            continue
+        try:
+            result = json.loads(payload)
+        except ValueError:
+            continue
+        if isinstance(result, dict) and result.get("state") == "accepted" and isinstance(result.get("run_id"), str):
+            runs.add(result["run_id"])
+    return runs
+
+
+def parse_child_result(body):
+    """Parse the text of a result.md file. Return a dict, or None if the text is not one."""
+    if not body.startswith(CHILD_RESULT_HEADER):
+        return None
+    output_at = body.find(CHILD_RESULT_OUTPUT)
+    if output_at < 0:
+        return None
+    fields = dict(CHILD_RESULT_FIELD.findall(body[:output_at]))
+    if not {"agent", "run", "outcome"} <= fields.keys():
+        return None
+    output = body[output_at + len(CHILD_RESULT_OUTPUT):]
+    # The runtime writes the working context last. It lists folders and
+    # files, not the child answer.
+    context_at = output.rfind(CHILD_RESULT_WORKING_CONTEXT)
+    if context_at >= 0:
+        output = output[:context_at]
+    return {"agent": fields["agent"], "run_id": fields["run"], "outcome": fields["outcome"],
+            "output": output.strip()}
+
+
+def child_results(text):
+    """Return the child results that the parent read, in log order.
+
+    A result counts only when all of these are true:
+      - a spawn_agent result accepted the run;
+      - the parent called file_read on <...>/subagents/<that run>/result.md;
+      - the result of that call is a result.md text for the same run.
+    The spawn_agent result is only "accepted" and holds no answer.
+    """
+    runs = accepted_spawn_runs(text)
+    reads = {}
+    results = []
+    for kind, tool, call_id, payload in cli_tool_records(text):
+        if tool != "file_read":
+            continue
+        if kind == "TOOL_CALL":
+            path = call_path(payload)
+            match = CHILD_RESULT_FILE.search(path) if path else None
+            if match and match.group(1) in runs:
+                reads[call_id] = (match.group(1), path, is_ranged_read(payload))
+            continue
+        if call_id not in reads:
+            continue
+        run_id, path, ranged = reads.pop(call_id)
+        parsed = parse_child_result(RANGED_LINE_NUMBER.sub("", payload) if ranged else payload)
+        if parsed is None or parsed["run_id"] != run_id:
+            continue
+        results.append({**parsed, "call_id": call_id, "path": path})
+    return results
+
+
+class ParentStdoutError(Exception):
+    pass
+
+
+def parent_stdout(stdout, text):
+    """Return the plain-text stdout without the text of each tool result.
+
+    The CLI prints a tool result as "[tool:result] <tool> → <result>". The
+    result can have many lines, and the parent text follows it with no
+    marker, so a line filter cannot find its end. The CLI session log holds
+    the same result text, so this removes that exact text. Every tool result
+    goes, whatever the tool: a child result read, a check_agent_run status, a
+    skill_load or skill_read_resource text, and a file or command output are
+    all text that the parent did not write.
+
+    The blocks are removed in log order, each after the one before it. A
+    block that the stdout does not hold raises an error: its text could then
+    count as parent text.
+    """
+    at = 0
+    for kind, tool, call_id, payload in cli_tool_records(text):
+        if kind != "TOOL_RESULT":
+            continue
+        block = f"[tool:result] {tool} \u2192 {payload}\n"
+        found = stdout.find(block, at)
+        if found < 0:
+            raise ParentStdoutError(f"the stdout does not hold the {tool} result of call {call_id}")
+        stdout = stdout[:found] + stdout[found + len(block):]
+        at = found
+    return stdout
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -265,6 +455,13 @@ def main(argv=None):
     seed.add_argument("--case", required=True)
     seed.add_argument("--trial", type=int, required=True)
 
+    children = commands.add_parser("child-results", help="print the child results that the parent read")
+    children.add_argument("--cli-log", type=Path, required=True)
+
+    parent = commands.add_parser("parent-stdout", help="print the stdout without the tool result text")
+    parent.add_argument("--stdout", type=Path, required=True)
+    parent.add_argument("--cli-log", type=Path, required=True)
+
     args = parser.parse_args(argv)
 
     if args.command == "discover-session":
@@ -290,6 +487,19 @@ def main(argv=None):
         if snapshot["status"] != "ok":
             print(f"WARN: memory snapshot failed: {snapshot['status']}. The trial will be inconclusive.",
                   file=sys.stderr)
+        return 0
+    if args.command == "child-results":
+        for result in child_results(args.cli_log.read_text(encoding="utf-8", errors="replace")):
+            print(json.dumps(result))
+        return 0
+    if args.command == "parent-stdout":
+        try:
+            text = parent_stdout(args.stdout.read_text(encoding="utf-8", errors="replace"),
+                                 args.cli_log.read_text(encoding="utf-8", errors="replace"))
+            sys.stdout.buffer.write(text.encode("utf-8"))
+        except ParentStdoutError as error:
+            print(f"ERROR: parent-stdout: {error}", file=sys.stderr)
+            return 1
         return 0
     print(derive_seed(args.seed, args.case, args.trial))
     return 0

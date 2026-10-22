@@ -240,8 +240,16 @@ public sealed partial class SessionToolWorkflowTests
         GrantScopeKind expected)
         => Assert.Equal(new ConsentAnswer.Grant(expected), ConsentAnswerCodec.FromOptionKey(optionKey));
 
+    // The text answer guard (child-approval-events-and-parent-pause, design D7, as the PR 2 review changed it) applies
+    // only when a child prompt is among the prompts that the sender can answer. With parent prompts only, the session
+    // keeps its rule from before PR 2: a text answer resolves the latest prompt by its durable request time. The
+    // channels resolve the earliest prompt. The coordinator keeps that difference out of the scope of PR 2. The
+    // insertion order here is the reverse of the request order, so the spec also proves that the durable request time
+    // decides.
+    // Planted bug: the guard refuses every set of two or more prompts (PR 2 as reviewed), or the session resolves the
+    // earliest prompt or the last prompt that it got.
     [Fact]
-    public void Latest_pending_request_uses_the_durable_request_time()
+    public void Text_answer_with_two_parent_prompts_resolves_the_latest()
     {
         // Arrange
         var state = new SessionToolWorkflow();
@@ -249,22 +257,53 @@ public sealed partial class SessionToolWorkflowTests
         state.ApplyApprovalRequested(CreateRequest("older", requestedAtMs: 10), durable: true, recovered: true);
 
         // Act
-        var found = state.TryResolveTextResponse(
-            new ToolInteractionTextResponse
-            {
-                SessionId = new SessionId("session-1"),
-                Text = "A",
-                SenderId = new SenderId("user-1")
-            },
-            SessionState.Empty,
-            out var response,
-            out var nackReason);
+        var found = state.TryResolveTextResponse(TextAnswer("A"), SessionState.Empty, out var response, out var nackReason);
 
         // Assert
         Assert.True(found);
         Assert.Null(nackReason);
         Assert.Equal("newer", response?.CallId.Value);
+        Assert.Equal(ApprovalOptionKeys.ApproveOnce, response?.SelectedKey.Value);
     }
+
+    // The guard stays strict for a child prompt. A child prompt does not name the child, so model text can describe one
+    // command while a text answer approves another. With a parent prompt and a child prompt, the text answers neither
+    // and the session tells the sender to use the buttons. The request order does not matter.
+    // Planted bug: the guard checks only parent prompts, or a mixed set resolves the earliest prompt.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Text_answer_with_a_parent_prompt_and_a_child_prompt_resolves_neither(bool childIsEarlier)
+    {
+        // Arrange
+        var state = new SessionToolWorkflow();
+        state.ApplyApprovalRequested(
+            CreateRequest("parent-call", requestedAtMs: childIsEarlier ? 20 : 10), durable: true, recovered: true);
+        state.ApplyApprovalRequested(
+            CreateChildRequest("r-guard", requestedAtMs: childIsEarlier ? 10 : 20), durable: true, recovered: true);
+
+        // Act
+        var found = state.TryResolveTextResponse(TextAnswer("A"), SessionState.Empty, out var response, out var nackReason);
+
+        // Assert
+        Assert.False(found);
+        Assert.Null(response);
+        Assert.Equal(ApprovalNackReasons.UseButtons, nackReason);
+    }
+
+    // A child prompt has a SourceChildRunId and the call ID that the bridge makes from the run ID.
+    private static ToolApprovalRequested CreateChildRequest(string runId, long requestedAtMs)
+        => CreateRequest(ChildApprovalPrompt.CreateCallId(runId, 1).Value, requestedAtMs) with
+        {
+            SourceChildRunId = new SubAgentRunId(runId)
+        };
+
+    private static ToolInteractionTextResponse TextAnswer(string text) => new()
+    {
+        SessionId = new SessionId("session-1"),
+        Text = text,
+        SenderId = new SenderId("user-1")
+    };
 
     [Fact]
     public void Recovered_dispatch_waits_for_siblings_and_retains_each_resolution()

@@ -74,9 +74,10 @@ internal sealed class PendingApprovalRequest : Netclaw.Channels.PendingApprovalR
         PrincipalClassification? requesterPrincipal,
         IReadOnlyList<string> optionKeys,
         DiscordMessageId? promptMessageId,
+        ToolInteractionLifetime lifetime,
         string? toolName = null,
         string? displayText = null)
-        : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptMessageId, toolName, displayText)
+        : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptMessageId, lifetime, toolName, displayText)
     {
     }
 }

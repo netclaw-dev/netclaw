@@ -35,7 +35,7 @@ public sealed class DaemonManagerInstallTests : IDisposable
         Directory.CreateDirectory(home);
         Environment.SetEnvironmentVariable("HOME", home);
 
-        var daemonBinary = Path.Combine(_dir.Path, "netclawd");
+        var daemonBinary = Path.Combine(_dir.Path, "daemon-binary");
         File.WriteAllText(daemonBinary, string.Empty);
         Environment.SetEnvironmentVariable("NETCLAW_DAEMON_PATH", daemonBinary);
 
@@ -126,6 +126,91 @@ public sealed class DaemonManagerInstallTests : IDisposable
         Assert.True(result.Success, result.Message);
         Assert.False(File.Exists(_unitPath));
         Assert.False(File.Exists(_paths.DaemonEnvironmentFilePath));
+    }
+
+    [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Service installation is Linux-only.")]
+    public async Task Install_keeps_operator_lines_in_daemon_env()
+    {
+        File.WriteAllText(
+            _paths.DaemonEnvironmentFilePath,
+            "NETCLAW_HOME=/x/home\n# proxy for the shell tool\nHTTP_PROXY=http://proxy.example:3128\nPATH=/old\n");
+        var sut = CreateManager(new FakeSystemCommandRunner());
+
+        var first = await sut.InstallAsync();
+        var afterFirst = File.ReadAllText(_paths.DaemonEnvironmentFilePath);
+        var second = await sut.InstallAsync();
+
+        Assert.True(first.Success, first.Message);
+        Assert.True(second.Success, second.Message);
+        var lines = afterFirst.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("NETCLAW_HOME=/x/home", lines[0]);
+        Assert.Equal("# proxy for the shell tool", lines[1]);
+        Assert.Equal("HTTP_PROXY=http://proxy.example:3128", lines[2]);
+        Assert.StartsWith("PATH=", lines[3], StringComparison.Ordinal);
+        Assert.DoesNotContain("PATH=/old", afterFirst, StringComparison.Ordinal);
+        Assert.Single(lines, line => line.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Equal(afterFirst, File.ReadAllText(_paths.DaemonEnvironmentFilePath));
+    }
+
+    // The operator lines can hold a sensitive value, so a rewrite must not open the file more.
+    [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
+    [Theory(SkipUnless = nameof(IsLinux), Skip = "Service installation is Linux-only.")]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite)]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead)]
+    public async Task Install_keeps_the_mode_of_an_existing_daemon_env(UnixFileMode mode)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        File.WriteAllText(_paths.DaemonEnvironmentFilePath, "HTTP_PROXY=http://proxy.example:3128\nPATH=/old\n");
+        File.SetUnixFileMode(_paths.DaemonEnvironmentFilePath, mode);
+
+        var result = await CreateManager(new FakeSystemCommandRunner()).InstallAsync();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(mode, File.GetUnixFileMode(_paths.DaemonEnvironmentFilePath));
+    }
+
+    // Fleet tools can link daemon.env to a managed file. Install writes through the link and
+    // never replaces the link with a regular file.
+    [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Service installation is Linux-only.")]
+    public async Task Install_writes_through_a_symlinked_daemon_env()
+    {
+        var targetDir = Path.Combine(_dir.Path, "managed");
+        Directory.CreateDirectory(targetDir);
+        var target = Path.Combine(targetDir, "daemon.env");
+        File.WriteAllText(target, "HTTP_PROXY=http://proxy.example:3128\nPATH=/old\n");
+        File.CreateSymbolicLink(_paths.DaemonEnvironmentFilePath, target);
+
+        var result = await CreateManager(new FakeSystemCommandRunner()).InstallAsync();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(target, new FileInfo(_paths.DaemonEnvironmentFilePath).LinkTarget);
+        var text = File.ReadAllText(target);
+        Assert.StartsWith("HTTP_PROXY=http://proxy.example:3128\n", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("PATH=/old", text, StringComparison.Ordinal);
+        Assert.Single(text.Split('\n', StringSplitOptions.RemoveEmptyEntries), line => line.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Equal([target], Directory.GetFiles(targetDir));
+    }
+
+    // File.Exists is true for a link to a missing file. The read must not throw, and the write
+    // creates the target.
+    [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Service installation is Linux-only.")]
+    public async Task Install_creates_the_target_of_a_symlink_to_a_missing_file()
+    {
+        var targetDir = Path.Combine(_dir.Path, "later");
+        Directory.CreateDirectory(targetDir);
+        var target = Path.Combine(targetDir, "daemon.env");
+        File.CreateSymbolicLink(_paths.DaemonEnvironmentFilePath, target);
+
+        var result = await CreateManager(new FakeSystemCommandRunner()).InstallAsync();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(target, new FileInfo(_paths.DaemonEnvironmentFilePath).LinkTarget);
+        Assert.StartsWith("PATH=", File.ReadAllText(target), StringComparison.Ordinal);
     }
 
     private DaemonManager CreateManager(FakeSystemCommandRunner runner)

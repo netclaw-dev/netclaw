@@ -120,6 +120,43 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
 
     protected override ChannelType ExpectedChannelType => ChannelType.Mattermost;
 
+    protected override IReadOnlyList<RenderedPrompt> GetPromptRedraws()
+        => _replyClient.Updates.Select(update => new RenderedPrompt(
+            string.Join("\n", new[] { update.Text }.Concat((update.Attachments ?? [])
+                .SelectMany(attachment => new[] { attachment.Text ?? string.Empty, attachment.Fallback ?? string.Empty }))),
+            (update.Attachments ?? []).Any(attachment => attachment.Actions is { Count: > 0 }))).ToList();
+
+    // A Mattermost binding renders buttons only with a callback URL. The child prompt specs need the button mode.
+    protected override IActorRef CreateButtonBindingActor(
+        SessionId sessionId,
+        RecordingSessionPipeline pipeline,
+        ConfigurablePromptInjectionDetector detector)
+    {
+        ResetReplyClient();
+        var options = new MattermostChannelOptions { CallbackUrl = "https://example.test/api/mattermost/actions" };
+        var deps = new MattermostGatewayDependencies(
+            Pipeline: pipeline,
+            IngressGate: null,
+            TimeProvider: TimeProvider.System,
+            Options: options,
+            DefaultChannelId: null,
+            ChannelRegistry: TestChannelRegistries.MattermostWithProcessingRenderer(_replyClient),
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            AudienceProfiles: TestMattermostGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestMattermostGatewayDeps.DefaultVisionCapableModel,
+            StorageResolver: Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance,
+            CallbackUrl: options.CallbackUrl,
+            PromptInjectionDetector: detector,
+            CallbackActionStore: new MattermostCallbackActionStore(TimeProvider.System));
+
+        return Sys.ActorOf(MattermostSessionBindingActor.CreateProps(
+            sessionId,
+            new MattermostChannelId("ch-test"),
+            new MattermostRootPostId("root-test"),
+            deps), $"mm-session-buttons-{Interlocked.Increment(ref _actorCounter)}");
+    }
+
     protected override bool SupportsApprovalSenderReplies => true;
 
     protected override bool SupportsThreadHydration => true;
@@ -443,5 +480,61 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
                 }
             },
             cancellationToken: ct);
+    }
+
+    // Design D3 (S7): a child prompt has buttons only. A Mattermost binding with no callback URL can post only text, so
+    // it cannot show a child prompt. It posts no text prompt and reports the prompt as unavailable, and the session
+    // withdraws the request. A parent prompt keeps the text-only mode.
+    // Planted bug: the text-only binding posts the child prompt with "Reply with" (today).
+    [Fact]
+    public async Task Text_only_binding_reports_a_child_prompt_unavailable_and_posts_no_text_prompt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-mm-text-only-child-prompt");
+        var request = ChildApprovalRequest(sid);
+        var pipeline = new RecordingSessionPipeline(_ => [request]);
+
+        CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = Assert.Single(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>());
+            Assert.Equal(request.CallId, feedback.CallId);
+            Assert.Equal(ApprovalOptionKeys.PromptUnavailable, feedback.SelectedKey.Value);
+        }, cancellationToken: ct);
+        Assert.DoesNotContain(_replyClient.Posts, post => post.Text.Contains("reply with", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Review fix S1 of PR 2: the typed Lifetime is the one signal for a child prompt. The call ID shape is not. A parent
+    // prompt whose call ID holds "/subagent-approval/" keeps the lifetime "until turn end", so a text-only binding posts
+    // it as a text prompt with its reply hint and does not refuse it.
+    // Planted bug: the binding detects a child prompt by the call ID shape (today), so it refuses the parent prompt as
+    // prompt_unavailable and the session withdraws a call that a person could answer.
+    [Fact]
+    public async Task Text_only_binding_posts_a_parent_prompt_with_a_child_shaped_call_id_as_a_text_prompt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-mm-text-only-child-shaped-parent-prompt");
+        var request = ChildApprovalRequest(sid) with { Lifetime = ToolInteractionLifetime.UntilTurnEnd };
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            request,
+            // The binding handles outputs in order, so this post proves that it handled the prompt.
+            new TextOutput("after-prompt-marker") { SessionId = sid }
+        ]);
+
+        CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var texts = _replyClient.Posts.Select(post => post.Text).ToList();
+            Assert.Contains(texts, text => text.Contains("after-prompt-marker", StringComparison.Ordinal));
+            Assert.Contains(texts, text => text.Contains("gh pr view 2558", StringComparison.Ordinal)
+                && text.Contains("reply with", StringComparison.OrdinalIgnoreCase));
+        }, cancellationToken: ct);
+        Assert.DoesNotContain(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>(),
+            feedback => feedback.SelectedKey.Value == ApprovalOptionKeys.PromptUnavailable);
     }
 }

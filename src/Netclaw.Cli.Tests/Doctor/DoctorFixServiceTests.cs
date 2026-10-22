@@ -261,13 +261,48 @@ public sealed class DoctorFixServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task RehydratesEnvFile_KeepsOperatorLines_AndKeepsTheFileMode()
+    {
+        var paths = NewPaths();
+        var unitPath = WriteWiredUnit(paths);
+        await File.WriteAllTextAsync(
+            paths.DaemonEnvironmentFilePath,
+            "NETCLAW_HOME=/x/home\n# proxy\nHTTP_PROXY=http://proxy.example:3128\nPATH=/usr/bin\n",
+            TestContext.Current.CancellationToken);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                paths.DaemonEnvironmentFilePath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        var service = new DoctorFixService(paths, unitPath, systemdEnabled: true);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        var lines = (await File.ReadAllTextAsync(paths.DaemonEnvironmentFilePath, TestContext.Current.CancellationToken))
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("NETCLAW_HOME=/x/home", lines[0]);
+        Assert.Equal("# proxy", lines[1]);
+        Assert.Equal("HTTP_PROXY=http://proxy.example:3128", lines[2]);
+        Assert.StartsWith($"PATH={InstallDir}:", lines[3], StringComparison.Ordinal);
+        Assert.Equal(4, lines.Length);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                File.GetUnixFileMode(paths.DaemonEnvironmentFilePath));
+        }
+    }
+
+    [Fact]
     public async Task NoEnvFix_WhenHealthy()
     {
         var paths = NewPaths();
         var unitPath = WriteWiredUnit(paths);
         await File.WriteAllTextAsync(
             paths.DaemonEnvironmentFilePath,
-            DaemonPathEnvironmentFile.Render(InstallDir, "/usr/bin"),
+            DaemonPathEnvironmentFile.Merge(null, InstallDir, "/usr/bin"),
             TestContext.Current.CancellationToken);
 
         var service = new DoctorFixService(paths, unitPath, systemdEnabled: true);

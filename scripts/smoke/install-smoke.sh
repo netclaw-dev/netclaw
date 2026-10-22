@@ -20,6 +20,9 @@
 
 set -euo pipefail
 
+# A developer value would send every case below to a real home directory.
+unset NETCLAW_HOME
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INSTALL_SH="$ROOT_DIR/scripts/install.sh"
 MANIFEST_GEN="$ROOT_DIR/feeds/scripts/generate-release-manifest.sh"
@@ -352,54 +355,79 @@ else
 fi
 
 # ── 8. Config channel persistence ───────────────────────────────────────────
+# NETCLAW_HOME is the only variable that moves the config directory, the same
+# way it moves NetclawPaths in the CLI and the daemon. Each case runs with its
+# own HOME so a wrong directory shows up as a file under that HOME.
 echo ""
 echo "=== config channel persistence ==="
 
-# 8a. Fresh install with --channel beta seeds a config file
-FRESH_DIR="$WORK/fresh-beta"
-FRESH_CONFIG_DIR="$WORK/fresh-beta-config/config"
+hash_of() { sha256_of "$1"; }
+
+# run_home_install <fake-home> <netclaw-home-or-empty> <install-args...>
+# An empty second argument runs the installer with NETCLAW_HOME unset.
+run_home_install() {
+  local fake_home="$1" nc_home="$2"
+  shift 2
+  mkdir -p "$fake_home" "$WORK/cwd"
+  if [ -n "$nc_home" ]; then
+    (cd "$WORK/cwd" && SHELL="${INSTALL_SHELL:-/bin/sh}" HOME="$fake_home" NETCLAW_HOME="$nc_home" \
+      FEED_BASE_URL="$BASE_URL" bash "$INSTALL_SH" "$@" 2>&1)
+  else
+    (cd "$WORK/cwd" && SHELL="${INSTALL_SHELL:-/bin/sh}" HOME="$fake_home" \
+      FEED_BASE_URL="$BASE_URL" bash "$INSTALL_SH" "$@" 2>&1)
+  fi
+}
+
+# 8a. Fresh install with --channel beta seeds a config file under NETCLAW_HOME
+FRESH_HOME="$WORK/fresh-beta-home"
+FRESH_FAKE="$WORK/fresh-beta-user"
 set +e
-fresh_out=$(FEED_BASE_URL="$BASE_URL" \
-            INSTALL_DIR="$FRESH_DIR" \
-            CONFIG_DIR="$FRESH_CONFIG_DIR" \
-            bash "$INSTALL_SH" --channel beta --skip-shell 2>&1)
+fresh_out=$(INSTALL_DIR="$WORK/fresh-beta" run_home_install "$FRESH_FAKE" "$FRESH_HOME" --channel beta --skip-shell)
 fresh_rc=$?
 set -e
-if [ "$fresh_rc" -eq 0 ] && [ -f "$FRESH_CONFIG_DIR/netclaw.json" ]; then
+if [ "$fresh_rc" -eq 0 ] && [ -f "$FRESH_HOME/config/netclaw.json" ] && [ ! -e "$FRESH_FAKE/.netclaw" ]; then
+  if echo "$fresh_out" | grep -qF "Created $FRESH_HOME/config/netclaw.json with UpdateChannel 'beta'"; then
+    pass "config: fresh --channel beta seeds \$NETCLAW_HOME/config and leaves \$HOME/.netclaw absent"
+  else
+    fail "config: fresh --channel beta did not print the created-file line"
+    echo "$fresh_out" | indent
+  fi
   if command -v jq >/dev/null 2>&1; then
-    val=$(jq -r '.Daemon.UpdateChannel' "$FRESH_CONFIG_DIR/netclaw.json")
+    val=$(jq -r '.Daemon.UpdateChannel' "$FRESH_HOME/config/netclaw.json")
     if [ "$val" = "beta" ]; then
       pass "config: fresh --channel beta seeds config with UpdateChannel=beta"
     else
       fail "config: fresh --channel beta wrote UpdateChannel='$val' (expected 'beta')"
     fi
-  else
-    pass "config: fresh --channel beta created config file (no jq to verify contents)"
   fi
 else
-  fail "config: fresh --channel beta did not create config (exit=$fresh_rc)"
+  fail "config: fresh --channel beta did not seed \$NETCLAW_HOME/config (exit=$fresh_rc)"
   echo "$fresh_out" | indent
 fi
 
-# 8b. --channel beta on existing config patches UpdateChannel
-EXIST_DIR="$WORK/existing-beta"
-EXIST_CONFIG_DIR="$WORK/existing-beta-config/config"
-mkdir -p "$EXIST_CONFIG_DIR"
-printf '{"configVersion":1,"Daemon":{"ExposureMode":"local"}}\n' > "$EXIST_CONFIG_DIR/netclaw.json"
+# 8b. --channel beta on existing config patches only the file under NETCLAW_HOME
+EXIST_HOME="$WORK/existing-beta-home"
+EXIST_FAKE="$WORK/existing-beta-user"
+mkdir -p "$EXIST_HOME/config" "$EXIST_FAKE/.netclaw/config"
+printf '{"configVersion":1,"Daemon":{"ExposureMode":"local"}}\n' > "$EXIST_HOME/config/netclaw.json"
+printf '{"configVersion":1,"Daemon":{"ExposureMode":"public"}}\n' > "$EXIST_FAKE/.netclaw/config/netclaw.json"
+decoy_hash=$(hash_of "$EXIST_FAKE/.netclaw/config/netclaw.json")
 set +e
-exist_out=$(FEED_BASE_URL="$BASE_URL" \
-            INSTALL_DIR="$EXIST_DIR" \
-            CONFIG_DIR="$EXIST_CONFIG_DIR" \
-            bash "$INSTALL_SH" --channel beta --skip-shell 2>&1)
+exist_out=$(INSTALL_DIR="$WORK/existing-beta" run_home_install "$EXIST_FAKE" "$EXIST_HOME" --channel beta --skip-shell)
 exist_rc=$?
 set -e
 if [ "$exist_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
-  val=$(jq -r '.Daemon.UpdateChannel' "$EXIST_CONFIG_DIR/netclaw.json")
-  mode=$(jq -r '.Daemon.ExposureMode' "$EXIST_CONFIG_DIR/netclaw.json")
+  val=$(jq -r '.Daemon.UpdateChannel' "$EXIST_HOME/config/netclaw.json")
+  mode=$(jq -r '.Daemon.ExposureMode' "$EXIST_HOME/config/netclaw.json")
   if [ "$val" = "beta" ] && [ "$mode" = "local" ]; then
     pass "config: --channel beta patches existing config, preserves other Daemon keys"
   else
     fail "config: --channel beta patch (UpdateChannel='$val', ExposureMode='$mode')"
+  fi
+  if [ "$(hash_of "$EXIST_FAKE/.netclaw/config/netclaw.json")" = "$decoy_hash" ]; then
+    pass "config: --channel beta leaves the \$HOME/.netclaw config alone when NETCLAW_HOME is set"
+  else
+    fail "config: --channel beta changed the \$HOME/.netclaw config"
   fi
 else
   fail "config: --channel beta on existing config (exit=$exist_rc)"
@@ -407,43 +435,34 @@ else
 fi
 
 # 8c. Plain upgrade (no --channel) leaves existing beta config alone
-NOFLAG_DIR="$WORK/noflag"
-NOFLAG_CONFIG_DIR="$WORK/noflag-config/config"
-mkdir -p "$NOFLAG_CONFIG_DIR"
-printf '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}\n' > "$NOFLAG_CONFIG_DIR/netclaw.json"
+NOFLAG_HOME="$WORK/noflag-home"
+NOFLAG_FAKE="$WORK/noflag-user"
+mkdir -p "$NOFLAG_HOME/config"
+printf '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}\n' > "$NOFLAG_HOME/config/netclaw.json"
+noflag_hash=$(hash_of "$NOFLAG_HOME/config/netclaw.json")
 set +e
-noflag_out=$(FEED_BASE_URL="$BASE_URL" \
-             INSTALL_DIR="$NOFLAG_DIR" \
-             CONFIG_DIR="$NOFLAG_CONFIG_DIR" \
-             bash "$INSTALL_SH" --skip-shell 2>&1)
+noflag_out=$(INSTALL_DIR="$WORK/noflag" run_home_install "$NOFLAG_FAKE" "$NOFLAG_HOME" --skip-shell)
 noflag_rc=$?
 set -e
-if [ "$noflag_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
-  val=$(jq -r '.Daemon.UpdateChannel' "$NOFLAG_CONFIG_DIR/netclaw.json")
-  if [ "$val" = "beta" ]; then
-    pass "config: plain upgrade preserves existing beta channel"
-  else
-    fail "config: plain upgrade changed UpdateChannel to '$val' (expected 'beta')"
-  fi
+if [ "$noflag_rc" -eq 0 ] && [ "$(hash_of "$NOFLAG_HOME/config/netclaw.json")" = "$noflag_hash" ] \
+    && [ ! -e "$NOFLAG_FAKE/.netclaw" ]; then
+  pass "config: plain upgrade changes no config file"
 else
-  fail "config: plain upgrade (exit=$noflag_rc)"
+  fail "config: plain upgrade changed a config file or created \$HOME/.netclaw (exit=$noflag_rc)"
   echo "$noflag_out" | indent
 fi
 
 # 8d. --channel stable on existing beta overwrites to stable
-DOWNGRADE_DIR="$WORK/downgrade"
-DOWNGRADE_CONFIG_DIR="$WORK/downgrade-config/config"
-mkdir -p "$DOWNGRADE_CONFIG_DIR"
-printf '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}\n' > "$DOWNGRADE_CONFIG_DIR/netclaw.json"
+DOWNGRADE_HOME="$WORK/downgrade-home"
+DOWNGRADE_FAKE="$WORK/downgrade-user"
+mkdir -p "$DOWNGRADE_HOME/config"
+printf '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}\n' > "$DOWNGRADE_HOME/config/netclaw.json"
 set +e
-down_out=$(FEED_BASE_URL="$BASE_URL" \
-           INSTALL_DIR="$DOWNGRADE_DIR" \
-           CONFIG_DIR="$DOWNGRADE_CONFIG_DIR" \
-           bash "$INSTALL_SH" --channel stable --skip-shell 2>&1)
+down_out=$(INSTALL_DIR="$WORK/downgrade" run_home_install "$DOWNGRADE_FAKE" "$DOWNGRADE_HOME" --channel stable --skip-shell)
 down_rc=$?
 set -e
 if [ "$down_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
-  val=$(jq -r '.Daemon.UpdateChannel' "$DOWNGRADE_CONFIG_DIR/netclaw.json")
+  val=$(jq -r '.Daemon.UpdateChannel' "$DOWNGRADE_HOME/config/netclaw.json")
   if [ "$val" = "stable" ]; then
     pass "config: --channel stable overwrites existing beta"
   else
@@ -452,6 +471,192 @@ if [ "$down_rc" -eq 0 ] && command -v jq >/dev/null 2>&1; then
 else
   fail "config: --channel stable on existing beta (exit=$down_rc)"
   echo "$down_out" | indent
+fi
+
+# 8e. The install directory and the shell env file follow NETCLAW_HOME
+BIN_HOME="$WORK/bin-home"
+BIN_FAKE="$WORK/bin-user"
+set +e
+bin_out=$(INSTALL_SHELL="$(command -v bash)" run_home_install "$BIN_FAKE" "$BIN_HOME" --channel beta)
+bin_rc=$?
+set -e
+if [ "$bin_rc" -eq 0 ] && [ -x "$BIN_HOME/bin/netclaw" ] && [ -f "$BIN_HOME/env" ] \
+    && [ ! -e "$BIN_FAKE/.netclaw" ]; then
+  pass "home: default install directory and env script follow NETCLAW_HOME"
+else
+  fail "home: install directory or env script ignored NETCLAW_HOME (exit=$bin_rc)"
+  echo "$bin_out" | indent
+fi
+
+# 8f. With NETCLAW_HOME unset the installer still uses $HOME/.netclaw
+UNSET_FAKE="$WORK/unset-user"
+set +e
+unset_out=$(INSTALL_DIR="$WORK/unset" run_home_install "$UNSET_FAKE" "" --channel beta --skip-shell)
+unset_rc=$?
+set -e
+if [ "$unset_rc" -eq 0 ] && [ -f "$UNSET_FAKE/.netclaw/config/netclaw.json" ]; then
+  pass "home: unset NETCLAW_HOME seeds \$HOME/.netclaw/config"
+else
+  fail "home: unset NETCLAW_HOME did not seed \$HOME/.netclaw/config (exit=$unset_rc)"
+  echo "$unset_out" | indent
+fi
+
+# 8g. NETCLAW_HOME forms. Each one lands where NetclawPaths puts it: it expands
+# ~, $HOME, ${HOME}, and treats a blank value as unset. A relative path
+# resolves against the working directory (a subdirectory of $WORK/cwd here).
+check_home_form() {
+  local desc="$1" fake_home="$2" value="$3" expected_config="$4" out rc
+  set +e
+  out=$(INSTALL_DIR="$WORK/forms-bin" run_home_install "$fake_home" "$value" --channel beta --skip-shell)
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ] && [ -f "$expected_config/netclaw.json" ]; then
+    pass "home: $desc"
+  else
+    fail "home: $desc (exit=$rc, expected $expected_config/netclaw.json)"
+    echo "$out" | indent
+  fi
+}
+FORMS_FAKE="$WORK/forms-user"
+check_home_form "NETCLAW_HOME=~/nc"        "$FORMS_FAKE-tilde"  '~/nc'        "$FORMS_FAKE-tilde/nc/config"
+check_home_form "NETCLAW_HOME=\$HOME/nc"   "$FORMS_FAKE-dollar" '$HOME/nc'    "$FORMS_FAKE-dollar/nc/config"
+check_home_form "NETCLAW_HOME=\${HOME}/nc" "$FORMS_FAKE-brace"  '${HOME}/nc'  "$FORMS_FAKE-brace/nc/config"
+check_home_form "NETCLAW_HOME=\$home/nc is case-insensitive" "$FORMS_FAKE-lower" '$home/nc' "$FORMS_FAKE-lower/nc/config"
+check_home_form "NETCLAW_HOME=rel/nc is relative to the working directory" "$FORMS_FAKE-rel" 'rel/nc' "$WORK/cwd/rel/nc/config"
+check_home_form "blank NETCLAW_HOME means unset" "$FORMS_FAKE-blank" '   ' "$FORMS_FAKE-blank/.netclaw/config"
+
+check_home_form "NETCLAW_HOME=%USERPROFILE%/nc expands to the home directory" "$FORMS_FAKE-profile" '%USERPROFILE%/nc' "$FORMS_FAKE-profile/nc/config"
+check_home_form "NETCLAW_HOME=%userprofile%/nc is case-insensitive" "$FORMS_FAKE-profile-lower" '%userprofile%/nc' "$FORMS_FAKE-profile-lower/nc/config"
+
+# 8h. A fresh install with NETCLAW_HOME set uses the new layout: bin, env, and config all sit
+# under NETCLAW_HOME, and sourcing the env script puts that bin directory on PATH.
+FRESH_HOME="$WORK/fresh-nc-home"
+FRESH_FAKE="$WORK/fresh-user"
+set +e
+fresh_layout_out=$(INSTALL_SHELL="$(command -v bash)" run_home_install "$FRESH_FAKE" "$FRESH_HOME" --channel beta)
+fresh_layout_rc=$?
+set -e
+fresh_bin_physical=""
+[ -d "$FRESH_HOME/bin" ] && fresh_bin_physical="$(cd "$FRESH_HOME/bin" && pwd -P)"
+fresh_on_path=$(HOME="$FRESH_FAKE" PATH="/usr/bin:/bin" sh -c ". '$FRESH_HOME/env'; command -v netclaw" 2>/dev/null || true)
+if [ "$fresh_layout_rc" -eq 0 ] \
+    && [ "$fresh_on_path" = "$fresh_bin_physical/netclaw" ] \
+    && [ -f "$FRESH_HOME/config/netclaw.json" ] \
+    && [ ! -e "$FRESH_FAKE/.netclaw" ]; then
+  pass "home: fresh install with NETCLAW_HOME uses <home>/bin, <home>/env, and <home>/config"
+else
+  fail "home: fresh install with NETCLAW_HOME did not use the new layout (exit=$fresh_layout_rc, on PATH: '$fresh_on_path')"
+  echo "$fresh_layout_out" | indent
+fi
+
+# 8i. An existing install at the legacy default location is upgraded in place, even when
+# NETCLAW_HOME is set. The env script stays at $HOME/.netclaw/env and its PATH entry still
+# names the legacy bin directory. Only the config directory follows NETCLAW_HOME.
+LEGACY_FAKE="$WORK/legacy-user"
+LEGACY_NC_HOME="$WORK/legacy-nc-home"
+LEGACY_BIN="$LEGACY_FAKE/.netclaw/bin"
+mkdir -p "$LEGACY_BIN"
+for name in netclaw netclawd; do
+  printf '#!/usr/bin/env sh\necho "%s old"\n' "$name" > "$LEGACY_BIN/$name"
+  chmod +x "$LEGACY_BIN/$name"
+done
+set +e
+legacy_out=$(INSTALL_SHELL="$(command -v bash)" run_home_install "$LEGACY_FAKE" "$LEGACY_NC_HOME" --channel beta)
+legacy_rc=$?
+set -e
+legacy_bin_physical="$(cd "$LEGACY_BIN" && pwd -P)"
+legacy_on_path=$(HOME="$LEGACY_FAKE" PATH="/usr/bin:/bin" sh -c ". '$LEGACY_FAKE/.netclaw/env'; command -v netclaw" 2>/dev/null || true)
+if [ "$legacy_rc" -eq 0 ] \
+    && [ "$("$LEGACY_BIN/netclaw")" = "netclaw $VERSION-smoke" ] \
+    && [ "$("$LEGACY_BIN/netclawd")" = "netclawd $VERSION-smoke" ] \
+    && [ "$legacy_on_path" = "$legacy_bin_physical/netclaw" ] \
+    && [ ! -e "$LEGACY_NC_HOME/bin" ] \
+    && [ ! -e "$LEGACY_NC_HOME/env" ] \
+    && [ -f "$LEGACY_NC_HOME/config/netclaw.json" ] \
+    && [ ! -e "$LEGACY_FAKE/.netclaw/config" ] \
+    && echo "$legacy_out" | grep -qF "$LEGACY_BIN"; then
+  pass "home: existing legacy install is upgraded in place and the old binary stays on PATH"
+else
+  fail "home: existing legacy install was not upgraded in place (exit=$legacy_rc, on PATH: '$legacy_on_path')"
+  echo "$legacy_out" | indent
+fi
+
+# 8j. The install says where it installs and why, so an operator is not surprised by the location.
+if echo "$legacy_out" | grep -qE 'Existing install found at .*/\.netclaw/bin'; then
+  pass "home: an in-place upgrade names the existing install directory"
+else
+  fail "home: an in-place upgrade does not name the existing install directory"
+  echo "$legacy_out" | indent
+fi
+
+# 8k. INSTALL_DIR always wins over the existing install.
+EXPLICIT_FAKE="$WORK/explicit-user"
+EXPLICIT_DIR="$WORK/explicit-bin"
+mkdir -p "$EXPLICIT_FAKE/.netclaw/bin"
+printf '#!/usr/bin/env sh\necho "netclaw old"\n' > "$EXPLICIT_FAKE/.netclaw/bin/netclaw"
+chmod +x "$EXPLICIT_FAKE/.netclaw/bin/netclaw"
+set +e
+explicit_out=$(INSTALL_DIR="$EXPLICIT_DIR" run_home_install "$EXPLICIT_FAKE" "$WORK/explicit-nc-home" --skip-shell)
+explicit_rc=$?
+set -e
+if [ "$explicit_rc" -eq 0 ] \
+    && [ -x "$EXPLICIT_DIR/netclaw" ] \
+    && [ "$("$EXPLICIT_FAKE/.netclaw/bin/netclaw")" = "netclaw old" ]; then
+  pass "home: INSTALL_DIR wins over an existing install"
+else
+  fail "home: INSTALL_DIR did not win over an existing install (exit=$explicit_rc)"
+  echo "$explicit_out" | indent
+fi
+
+# 8l. A dry run reports the in-place location and changes nothing.
+DRY_FAKE="$WORK/dry-user"
+mkdir -p "$DRY_FAKE/.netclaw/bin"
+printf '#!/usr/bin/env sh\necho "netclaw old"\n' > "$DRY_FAKE/.netclaw/bin/netclaw"
+chmod +x "$DRY_FAKE/.netclaw/bin/netclaw"
+set +e
+dry_out=$(run_home_install "$DRY_FAKE" "$WORK/dry-nc-home" --dry-run)
+dry_rc=$?
+set -e
+if [ "$dry_rc" -eq 0 ] \
+    && echo "$dry_out" | grep -qF "Install dir: $DRY_FAKE/.netclaw/bin" \
+    && [ ! -e "$WORK/dry-nc-home" ] \
+    && [ "$("$DRY_FAKE/.netclaw/bin/netclaw")" = "netclaw old" ]; then
+  pass "home: dry run reports the in-place install directory and changes nothing"
+else
+  fail "home: dry run did not report the in-place install directory (exit=$dry_rc)"
+  echo "$dry_out" | indent
+fi
+
+# 8m. An install that already sits in $NETCLAW_HOME/bin is upgraded there, even when a stale
+# install also sits in $HOME/.netclaw/bin. The legacy directory is not touched, and the env
+# script of NETCLAW_HOME puts the upgraded binary on PATH.
+BOTH_FAKE="$WORK/both-user"
+BOTH_HOME="$WORK/both-nc-home"
+for bin_dir in "$BOTH_FAKE/.netclaw/bin" "$BOTH_HOME/bin"; do
+  mkdir -p "$bin_dir"
+  for name in netclaw netclawd; do
+    printf '#!/usr/bin/env sh\necho "%s old"\n' "$name" > "$bin_dir/$name"
+    chmod +x "$bin_dir/$name"
+  done
+done
+set +e
+both_out=$(INSTALL_SHELL="$(command -v bash)" run_home_install "$BOTH_FAKE" "$BOTH_HOME" --channel beta)
+both_rc=$?
+set -e
+both_bin_physical="$(cd "$BOTH_HOME/bin" && pwd -P)"
+both_on_path=$(HOME="$BOTH_FAKE" PATH="/usr/bin:/bin" sh -c ". '$BOTH_HOME/env'; command -v netclaw" 2>/dev/null || true)
+if [ "$both_rc" -eq 0 ] \
+    && [ "$("$BOTH_HOME/bin/netclaw")" = "netclaw $VERSION-smoke" ] \
+    && [ "$("$BOTH_HOME/bin/netclawd")" = "netclawd $VERSION-smoke" ] \
+    && [ "$("$BOTH_FAKE/.netclaw/bin/netclaw")" = "netclaw old" ] \
+    && [ "$("$BOTH_FAKE/.netclaw/bin/netclawd")" = "netclawd old" ] \
+    && [ "$both_on_path" = "$both_bin_physical/netclaw" ] \
+    && [ ! -e "$BOTH_FAKE/.netclaw/env" ] \
+    && echo "$both_out" | grep -qF "Install dir: $BOTH_HOME/bin"; then
+  pass "home: an install in NETCLAW_HOME/bin is upgraded there and a stale legacy install stays untouched"
+else
+  fail "home: an install in NETCLAW_HOME/bin was not upgraded in place (exit=$both_rc, on PATH: '$both_on_path')"
+  echo "$both_out" | indent
 fi
 
 # ── 9. Shell integration (PATH automation) ───────────────────────────────────
@@ -474,7 +679,6 @@ run_unix_installer() {
   shift 3
   SHELL="$shell_path" HOME="$home" \
     FEED_BASE_URL="$BASE_URL" INSTALL_DIR="$install_dir" \
-    CONFIG_DIR="$home/.netclaw/config" \
     bash "$INSTALL_SH" "$@"
 }
 

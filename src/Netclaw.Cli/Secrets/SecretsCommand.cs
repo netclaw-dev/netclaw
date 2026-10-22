@@ -12,7 +12,8 @@ namespace Netclaw.Cli.Secrets;
 
 /// <summary>
 /// Handles <c>netclaw secrets set &lt;key&gt; &lt;value&gt;</c>.
-/// Values are encrypted on write — no plaintext ever touches disk.
+/// Values are encrypted on write, except the provider token expiry that
+/// <see cref="SecretsFileWriter.IsPlaintextLeaf"/> names.
 /// </summary>
 internal static class SecretsCommand
 {
@@ -79,6 +80,15 @@ internal static class SecretsCommand
             return 1;
         }
 
+        // The expiry stays unencrypted so the daemon binder can read it as a date. Reject a
+        // value the binder cannot parse before anything is written.
+        var isPlaintextLeaf = SecretsFileWriter.IsPlaintextLeaf(segments);
+        if (isPlaintextLeaf && !OAuthTokenExpiryStorage.TryParse(value, out _))
+        {
+            writer.WriteLine($"Error: {string.Join('.', segments)} must be an ISO 8601 date, for example 2026-06-01T01:00:00+00:00.");
+            return 1;
+        }
+
         SecretsJsonUpdater.UpsertValue(root, segments, value);
 
         // Write with encryption — the protector encrypts all plaintext leaves
@@ -86,7 +96,9 @@ internal static class SecretsCommand
         var json = root.ToJsonString(JsonDefaults.Indented);
         SecretsFileWriter.Write(paths.SecretsPath, json, protector);
 
-        writer.WriteLine($"Set {string.Join('.', segments)} (encrypted).");
+        writer.WriteLine(isPlaintextLeaf
+            ? $"Set {string.Join('.', segments)} (not encrypted: the token expiry is not a secret)."
+            : $"Set {string.Join('.', segments)} (encrypted).");
         return 0;
     }
 

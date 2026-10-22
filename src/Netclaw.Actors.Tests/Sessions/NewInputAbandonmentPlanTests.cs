@@ -34,7 +34,7 @@ public sealed class NewInputAbandonmentPlanTests
         var workflow = WorkflowWithOpenApproval();
 
         // Act
-        var plan = workflow.PlanNewInputAbandonment(SessionState.Empty, Session, principal, nowMs: 100);
+        var plan = workflow.PlanNewInputAbandonment(SessionState.Empty, Session, principal, isChildNotice: false, nowMs: 100);
 
         // Assert
         Assert.IsType<NewInputPlan.WaitForApproval>(plan);
@@ -52,7 +52,7 @@ public sealed class NewInputAbandonmentPlanTests
         var workflow = WorkflowWithOpenApproval();
 
         // Act
-        var plan = workflow.PlanNewInputAbandonment(SessionState.Empty, Session, principal, nowMs: 100);
+        var plan = workflow.PlanNewInputAbandonment(SessionState.Empty, Session, principal, isChildNotice: false, nowMs: 100);
 
         // Assert
         Assert.IsType<NewInputPlan.AbandonThenActivate>(plan);
@@ -79,7 +79,7 @@ public sealed class NewInputAbandonmentPlanTests
         workflow.ApplyResolvedResponse(workflow.CreateResolution(accepted, Session, nowMs: 50));
 
         // Act
-        var plan = workflow.PlanNewInputAbandonment(SessionState.Empty, Session, principal, nowMs: 100);
+        var plan = workflow.PlanNewInputAbandonment(SessionState.Empty, Session, principal, isChildNotice: false, nowMs: 100);
 
         // Assert
         Assert.IsType<NewInputPlan.AbandonThenActivate>(plan);

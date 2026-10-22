@@ -47,6 +47,10 @@ internal sealed class SessionToolPipelineTestFixture(
         = new Dictionary<string, IReadOnlyList<string>>();
     private IReadOnlyDictionary<string, RefusalKind> _decisionOverrides
         = new Dictionary<string, RefusalKind>();
+    private IReadOnlyDictionary<string, string> _managedTemporaryDenialDirectories
+        = new Dictionary<string, string>();
+    private IReadOnlyDictionary<string, AuthorizationAttemptId> _authorizationAttemptIds
+        = new Dictionary<string, AuthorizationAttemptId>();
     private IReadOnlyList<ManagedTemporaryCorrectionKey> _managedTemporaryCorrectionKeys = [];
     private ILoggingAdapter _logger = NoLogger.Instance;
 
@@ -150,12 +154,17 @@ internal sealed class SessionToolPipelineTestFixture(
         return this;
     }
 
+    // The four maps of an ApprovalRedrivePlan, one entry for each re-driven call.
     public SessionToolPipelineTestFixture RedrivingApprovals(
         IReadOnlyDictionary<string, IReadOnlyList<string>> preSeed,
-        IReadOnlyDictionary<string, RefusalKind> overrides)
+        IReadOnlyDictionary<string, RefusalKind> overrides,
+        IReadOnlyDictionary<string, string> managedTemporaryDenialDirectories,
+        IReadOnlyDictionary<string, AuthorizationAttemptId> authorizationAttemptIds)
     {
         _oneTimeApprovalPreSeed = preSeed;
         _decisionOverrides = overrides;
+        _managedTemporaryDenialDirectories = managedTemporaryDenialDirectories;
+        _authorizationAttemptIds = authorizationAttemptIds;
         return this;
     }
 
@@ -177,7 +186,7 @@ internal sealed class SessionToolPipelineTestFixture(
             Storage = SessionStoragePaths.CreateLegacy(
                 _sessionDirectory,
                 Path.Combine(Path.GetTempPath(), "netclaw-test-session-logs"),
-                "test-session"),
+                "test-session", ManagedTemporaryLayout.InsideSessionStorage.Instance),
             InlineOutputBudget = _inlineOutputBudget,
             ModelInputModalities = _modelInputModalities,
             SpawnChildActor = _spawnChildActor,
@@ -203,6 +212,8 @@ internal sealed class SessionToolPipelineTestFixture(
             CanDeclareWorkingDirectory = _canDeclareWorkingDirectory,
             OneTimeApprovalPreSeed = _oneTimeApprovalPreSeed,
             DecisionOverrides = _decisionOverrides,
+            ManagedTemporaryDenialDirectories = _managedTemporaryDenialDirectories,
+            AuthorizationAttemptIds = _authorizationAttemptIds,
             ManagedTemporaryCorrections = new ManagedTemporaryCorrectionDispatch(_managedTemporaryCorrectionKeys),
             CancellationToken = cancellationToken
         };

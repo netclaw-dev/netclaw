@@ -94,17 +94,33 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
     [InlineData(": < {X}/notes.txt", false)]
     [InlineData("< {X}/notes.txt", true)]
     [InlineData("x=$(< {X}/notes.txt)", true)]
-    public async Task Input_redirect_outside_the_read_roots_is_denied(string command, bool attended)
+    public async Task Input_redirect_outside_the_read_and_write_roots_is_denied(string command, bool attended)
     {
-        await using var scope = await CreateHarnessAsync(attended, ConfineReadsToProject);
+        await using var scope = await CreateHarnessAsync(attended, ConfineReadsAndWritesToProject);
         var harness = scope.Harness;
-        var target = Expand(harness, "{X}/notes.txt");
 
         var observed = await harness.EvaluateShellAsync(Expand(harness, command), Ct);
 
+        // Issue #2554: Personal reads reach the write profile, so the shell
+        // trust zone (the write profile) refuses the path first.
         Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
-        Assert.Equal("shell_redirect_read_denied", observed.DenyReason);
-        Assert.Contains(target, observed.DenyMessage, StringComparison.Ordinal);
+        Assert.Equal("shell_path_outside_trusted_roots", observed.DenyReason);
+    }
+
+    // Issue #2554: an input redirect that the Personal write profile reaches is
+    // a read that file_read may do, also outside the configured read roots.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Input_redirect_that_the_personal_write_profile_reaches_is_allowed(bool attended)
+    {
+        await using var scope = await CreateHarnessAsync(attended, ConfineReadsToProject);
+        var harness = scope.Harness;
+
+        var observed = await harness.EvaluateShellAsync(Expand(harness, ": < {X}/notes.txt"), Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, observed.Outcome);
     }
 
     // Positive control: the same read inside the project root, which file_read may read.
@@ -238,14 +254,16 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
     {
         await using var scope = await CreateHarnessAsync(
             attended: true,
-            ConfineReadsToProject,
+            ConfineReadsAndWritesToProject,
             new() { ["file_write"] = ToolApprovalMode.Approval });
         var harness = scope.Harness;
 
         var observed = await harness.EvaluateShellAsync(Expand(harness, ": < {X}/notes.txt > out.txt"), Ct);
 
+        // Issue #2554: the refusal now comes from the shell trust zone, because
+        // Personal reads reach the write profile.
         Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
-        Assert.Equal("shell_redirect_read_denied", observed.DenyReason);
+        Assert.Equal("shell_path_outside_trusted_roots", observed.DenyReason);
     }
 
     // One prompt names each read and write that needs consent.
@@ -490,6 +508,14 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
             Mode = ToolFilesystemMode.Roots,
             Roots = [project]
         };
+    }
+
+    // Issue #2554: Personal reads reach the write profile. A case that needs a
+    // refused read must confine both profiles.
+    private static void ConfineReadsAndWritesToProject(ToolConfig config, string project)
+    {
+        ConfineReadsToProject(config, project);
+        ConfineWritesToProject(config, project);
     }
 
     // A temporary root holds the project, the session, and a folder outside

@@ -19,7 +19,9 @@ using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Tests.Mcp;
 using Netclaw.Daemon.Services;
+using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -57,7 +59,8 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         ProviderRuntimeValidation? providerValidation = null,
         RejectedConfigState? rejectedConfig = null,
         MemoryEmbedderHolder? memoryEmbedderHolder = null,
-        MemoryConfig? memoryConfig = null)
+        MemoryConfig? memoryConfig = null,
+        ProviderOAuthTokenRefreshService? oauthRefresh = null)
     {
         return new DaemonRuntimeStatusService(
             new DaemonStartClock(TimeProvider.System),
@@ -71,6 +74,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             chatClientProvider ?? new TestChatClientProvider(),
             providerValidation ?? new ProviderRuntimeValidation(ProviderRuntimeStatus.Valid, null, []),
             rejectedConfig ?? new RejectedConfigState(),
+            oauthRefresh ?? CreateOAuthRefresh(paths ?? CreatePaths(), _ => throw new InvalidOperationException("no refresh expected")),
             mcpClientManager,
             sqliteMemoryStore,
             memoryEmbedderHolder,
@@ -137,6 +141,51 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
 
         // Best effort cleanup: file handles can remain briefly open on Windows CI.
         // Leaving temp dirs behind is preferable to failing the test run.
+    }
+
+    private static ProviderOAuthTokenRefreshService CreateOAuthRefresh(NetclawPaths paths, Func<HttpRequestMessage, HttpResponseMessage> tokenServer)
+    {
+        var http = new HttpClient(new FakeHttpMessageHandler(tokenServer));
+        return new ProviderOAuthTokenRefreshService(
+            paths,
+            new DeviceFlowServiceFactory(new OAuthDeviceFlowService(http), new OpenAiDeviceFlowService(http)),
+            NullLogger<ProviderOAuthTokenRefreshService>.Instance);
+    }
+
+    [Fact]
+    public async Task ProviderWithRejectedRefreshToken_IsReportedAsAuthFailedAndMakesOverallDegraded()
+    {
+        var paths = CreatePaths();
+        var oauthRefresh = CreateOAuthRefresh(paths, _ => FakeHttpMessageHandler.JsonResponse(
+            new { error = new { code = "refresh_token_reused" } }, HttpStatusCode.Unauthorized));
+        var service = CreateService(paths: paths, oauthRefresh: oauthRefresh);
+        Assert.Equal("healthy", (await service.GetStatusAsync(TestContext.Current.CancellationToken)).Overall);
+
+        await Assert.ThrowsAsync<ProviderOAuthRefreshRequiredException>(() => oauthRefresh.GetValidAccessTokenAsync(
+            "codex",
+            new ProviderEntry
+            {
+                Type = "openai",
+                AuthMethod = AuthMethod.OAuthDevice,
+                OAuthAccessToken = new SensitiveString("access-0"),
+                OAuthRefreshToken = new SensitiveString("refresh-0"),
+                OAuthTokenExpiry = DateTimeOffset.UnixEpoch,
+            },
+            new OAuthAuth
+            {
+                SupportedAuthMethods = [AuthMethod.OAuthDevice],
+                TokenEndpoint = new Uri("https://auth.openai.com/oauth/token"),
+                ClientId = "client-id",
+                UseProprietaryDeviceFlow = true,
+            },
+            TestContext.Current.CancellationToken));
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+        var connector = Assert.Single(status.Connectors, c => c.Key == "provider:codex");
+        Assert.True(connector.Enabled);
+        Assert.Equal("auth-failed", connector.Status);
+        Assert.Contains("refresh_token_reused", connector.Message, StringComparison.Ordinal);
+        Assert.Equal("degraded", status.Overall);
     }
 
     [Fact]

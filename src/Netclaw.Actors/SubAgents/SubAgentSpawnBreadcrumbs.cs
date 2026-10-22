@@ -44,6 +44,14 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName);
     }
 
+    public static void NoResultReader(ILogger? logger, ToolInvocationContext context, string agentName)
+    {
+        using (BeginSessionScope(logger, context.SessionId))
+            logger?.LogWarning(
+                "SubAgent [{AgentName}] was refused: the parent audience policy does not allow file_read, so the parent cannot read the result",
+                agentName);
+    }
+
     public static void ChildSpawnFailed(ILogger? logger, ToolInvocationContext context, string agentName, SubAgentRunId runId, Exception ex)
     {
         using (BeginSessionScope(logger, context.SessionId))

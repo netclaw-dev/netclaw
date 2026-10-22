@@ -9,6 +9,7 @@ using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Memory;
+using Netclaw.Actors.Tests.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -140,6 +141,115 @@ public sealed class SubAgentObservabilityTests : TestKit
             await agent.Ask<SubAgentResult>(
                 NewRun("Greet the user"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Sub_agent_tool_call_logs_redacted_arguments_and_rationale()
+    {
+        // Issue #2589: a sub-agent tool call writes the same args line as a
+        // session tool call, through the same redaction helper.
+        const string rationale = "Greet the user for the observability test.";
+        const string apiKey = "subagent-raw-key-61";
+        var fakeTool = new FakeNetclawTool("greet", "Hello from tool!");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-args", "greet",
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "World",
+                        ["api_key"] = apiKey,
+                        ["_rationale"] = rationale
+                    })
+            ]
+        };
+        var diagnostics = CreateTestProbe();
+        Sys.EventStream.Subscribe(diagnostics.Ref, typeof(Akka.Event.Info));
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
+
+        await EventFilter.Info(contains: "Invoking tool [greet] (call=call-args)").ExpectAsync(1, async () =>
+        {
+            await agent.Ask<SubAgentResult>(
+                NewRun("Greet the user", "console/C123/subagent/test-agent/run-args"),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+
+        var started = await FishPropertiesAsync(diagnostics, "SubAgent [test-agent] authorization attempt started");
+        var invokedMessage = await FishMessageAsync(diagnostics, "Invoking tool [greet]");
+        var invoked = invokedMessage.GetProperties();
+        var args = invoked["Args"]?.ToString();
+        Assert.NotNull(args);
+        Assert.Contains("World", args, StringComparison.Ordinal);
+        Assert.Contains("***REDACTED***", args, StringComparison.Ordinal);
+        Assert.DoesNotContain(apiKey, invokedMessage.ToString(), StringComparison.Ordinal);
+        Assert.Equal(rationale, invoked["Rationale"]?.ToString());
+        Assert.Equal("call-args", invoked["CallId"]?.ToString());
+        Assert.Equal(started["AuthorizationAttemptId"]?.ToString(), invoked["AuthorizationAttemptId"]?.ToString());
+        Assert.Equal(started["SessionId"]?.ToString(), invoked["SessionId"]?.ToString());
+    }
+
+    [Fact]
+    public async Task Sub_agent_tool_call_with_a_throwing_argument_still_runs_and_its_sibling_succeeds()
+    {
+        // Review finding 3 (issue #2589): the log line comes before the tool runs.
+        // An exception from the formatter must not fail this call or its sibling.
+        // The sub-agent hashes the arguments for tool cycle detection before the
+        // batch runs. That hash reads the list through its indexer, so this list
+        // throws only when a reader enumerates it.
+        var listTool = new FakeNetclawTool("list_items", "listed");
+        var greetTool = new FakeNetclawTool("greet", "Hello from tool!");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-throwing", "list_items",
+                    new Dictionary<string, object?>
+                    {
+                        ["items"] = new EnumeratorThrowingArgumentList(),
+                        ["_rationale"] = "Read the items."
+                    }),
+                new FunctionCallContent("call-sibling", "greet",
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "World",
+                        ["_rationale"] = "Greet the user."
+                    })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([listTool, greetTool]), fakeClient, PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            NewRun("Read the items and greet the user."),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Output);
+        Assert.True(listTool.WasCalled, "The call with the throwing argument did not run.");
+        Assert.True(greetTool.WasCalled, "The sibling call did not run.");
+        var toolResults = (fakeClient.LastReceivedMessages ?? [])
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+            .ToDictionary(static item => item.CallId, static item => item.Result?.ToString(), StringComparer.Ordinal);
+        Assert.Equal("listed", toolResults.GetValueOrDefault("call-throwing"));
+        Assert.Equal("Hello from tool!", toolResults.GetValueOrDefault("call-sibling"));
+    }
+
+    private static async Task<IReadOnlyDictionary<string, object?>> FishPropertiesAsync(
+        Akka.TestKit.TestProbe diagnostics,
+        string prefix)
+        => (await FishMessageAsync(diagnostics, prefix)).GetProperties();
+
+    private static async Task<Akka.Event.LogMessage> FishMessageAsync(
+        Akka.TestKit.TestProbe diagnostics,
+        string prefix)
+    {
+        var info = await diagnostics.FishForMessageAsync<Akka.Event.Info>(
+            message => message.Message.ToString()!.StartsWith(prefix, StringComparison.Ordinal),
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        return Assert.IsAssignableFrom<Akka.Event.LogMessage>(info.Message);
     }
 
     [Fact]

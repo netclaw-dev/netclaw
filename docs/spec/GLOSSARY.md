@@ -83,6 +83,56 @@ shell job is not a child run.
 **Code anchors:** `TurnCompleted.OpenChildRunIds`, `ChildRunLifecycle`,
 `HeadlessChannel`
 
+### Agent event
+
+An agent event is a typed fact between the agents of one session, for example
+"child approval requested". It has an envelope with a sender, a target, and a
+send time. Only the session that owns a child run builds an event about that
+run. An event never carries consent and never holds text that an agent wrote.
+The model sees a notice that the runtime renders from events. Added by
+`child-approval-events-and-parent-pause` (#2583).
+
+**Code anchors:** `AgentEvent`, `AgentEnvelope`, `AgentAddress`,
+`AgentEventFactory`, `AgentEventRenderer` (`src/Netclaw.Actors/Sessions/AgentEvents.cs`)
+
+### Child consent pause
+
+The child consent pause is the state of a whole session while any child
+consent request of the session is open. The session refuses `spawn_agent`, and
+automated input waits. The current turn can finish. A person's message starts a
+turn, but it does not end the pause. No request expires. Only the close of
+every open child request (an answer, a refusal, or a withdrawal) ends the pause.
+Added by `child-approval-events-and-parent-pause` (#2583).
+
+**Code anchors:** `SessionToolWorkflow.IsChildConsentPaused`,
+`SessionInputFlow.MoveHeldInputBehind`, `LlmSessionActor.StartInputsHeldByThePause`
+
+### Parked child run
+
+A parked child run is a child run that waits for consent with no actor. Its
+conversation and its parked calls are in its child journal, and the parent run
+record says that it is parked. The parent snapshot keeps its open requests.
+When every parked request has an answer, the session recreates the child from
+its journal, under the authority of the run record, and runs only the parked
+calls, each once. Planned in PR 3 of `child-approval-events-and-parent-pause`
+(#2572). This part is not on `dev` yet.
+
+**Code anchors (planned):** `ChildRunLifecycle.Parked`, `ChildRunEvent.Parked`
+
+### Child journal
+
+A child journal is the Akka.Persistence journal of one child run, with the
+persistence ID `subagent-{escaped session ID}/{run ID}`. A run writes it at its
+first park only, so a run that never parks has none. Its first event freezes
+the system prompt, the resolved provider and model, the tool set, the project
+instructions, the operating rules, and the findings flag. The parent purges it
+last: after the run end, `result.md`, and the result notice, with a closing
+event and then a delete of all messages. Match the prefix of one session with
+an ordinal comparison, because the escaped ID can hold `%`. Planned in PR 3 of
+`child-approval-events-and-parent-pause` (#2572). This part is not on `dev` yet.
+
+**Code anchor (planned):** `SubAgentRunProtocol`
+
 ### Working context
 
 The working context is actor-local state that helps later model turns. It
@@ -695,22 +745,24 @@ A session storage envelope is the one physical directory that contains all
 session-owned files for a new-layout session. Its path is fixed when the
 session binds its versioned storage binding. Its contents are mutable.
 
-The envelope contains distinct working, artifact, temporary, worktree, log,
-and child-run areas. Netclaw supplies the current envelope as an implicit
-trusted root. It is not a project scope, the default shell cwd, or an
-unconditional shell grant.
+The envelope contains distinct working, artifact, worktree, log, and child-run
+areas. On Windows it also contains the temporary areas. On Linux and macOS the
+[managed temporary directory](#managed-temporary-directory) is outside the
+envelope. Netclaw supplies the current envelope as an implicit trusted root.
+It is not a project scope, the default shell cwd, or an unconditional shell
+grant.
 
 ```text
 <session-envelope>/
 ├── attachment-staging/        # untrusted inbound bytes before admission
 ├── workspace/                 # default no-project working directory
 ├── artifacts/                 # retained parent outputs
-├── tmp/parent/                # disposable parent files
+├── tmp/parent/                # disposable parent files (Windows only)
 ├── worktrees/                 # managed source worktrees
 ├── logs/session.log           # raw parent log
 └── subagents/<run-id>/
     ├── artifacts/
-    ├── tmp/
+    ├── tmp/                   # Windows only
     └── logs/session.log       # raw child log
 ```
 
@@ -772,11 +824,19 @@ use a separate activity projection or log-specific redaction layer.
 ### Managed temporary directory
 
 A managed temporary directory contains disposable files for one parent or
-subagent run. Netclaw places it inside the session storage envelope. Each run
-receives a different directory.
+subagent run. Each run receives a different directory.
+
+- On Linux and macOS it is `<base>/<key>/p` for a parent and `<base>/<key>/c<h>`
+  for a child. The base is `/tmp/netclaw-<uid>` (`/private/tmp/...` on macOS).
+  All runs of one session share the key folder `<base>/<key>`.
+- On Windows it is inside the session storage envelope.
 
 Netclaw sets `TMPDIR`, `TMP`, and `TEMP` to this directory for child processes.
-The managed temporary directory is not a project scope or an authority grant.
+The directory is not a project scope. Its key folder is an implicit trusted root
+of its session for every audience. The base is not a root.
+
+**Code anchors:** `ManagedTemporaryLocation`, `ManagedTemporaryLayout`,
+`ManagedTemporaryEnvironment`
 
 ### Artifact directory
 

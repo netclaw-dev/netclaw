@@ -25,19 +25,29 @@ internal abstract record AdmissionDecision
     // A reminder keeps at most one waiting fire in a session. The newer fire is acknowledged and not stored.
     internal sealed record Dropped(ReminderFireKey Fire, ReminderFireKey Waiting) : AdmissionDecision;
     internal sealed record Persist(InputAdmitted Event) : AdmissionDecision;
+    // While the child consent pause applies, the newer fire replaces the waiting fire. The owner closes the waiting
+    // fire with InputClosed and then stores the newer fire, so one turn of the reminder runs after the pause.
+    internal sealed record ReplaceWaitingFire(InputAdmitted Event, InputId Waiting) : AdmissionDecision;
 }
 
 // AdoptsAuthority: the batch starts a turn for its own requester. The flow then holds the authority of the first
 // input in the batch, and the actor must derive trust for it before the next model call.
+// JoinsAutomationTurn: automated input joins a running turn. Either the requester of the turn is automation (a
+// reminder, a background job, a webhook), whose later inputs have the same fixed system sender, or every input of
+// the batch is a child result notice, which is automated input by its kind and brings no new person input.
 internal sealed record BufferedInputBatch(
     IReadOnlyList<SendUserMessage> Messages,
     bool StartsNewTurn,
-    bool AdoptsAuthority);
+    bool AdoptsAuthority,
+    bool JoinsAutomationTurn);
 
+// NoticeRunIds: the child runs that the notices of the running turn name, in input order. They stay for the whole
+// turn, also after a tool batch closes the selected inputs, and end when the turn is recorded.
 internal readonly record struct SelectedInputFacts(
     IReadOnlyList<InputId> Ids,
     ReminderId? ReminderId,
-    BackgroundJobId? BackgroundJobId);
+    BackgroundJobId? BackgroundJobId,
+    IReadOnlyList<SubAgentRunId> NoticeRunIds);
 
 internal readonly record struct TurnAuthorityFacts(
     TurnContext? Context,
@@ -70,6 +80,7 @@ internal sealed class SessionInputFlow
 {
     private readonly List<(SendUserMessage Message, bool IsReplay)> _buffer = [];
     private readonly List<InputId> _selectedIds = [];
+    private readonly List<SubAgentRunId> _noticeRunIds = [];
     private readonly InFlightTurnDedup _inFlightDedup = new();
     // The executable context can clear while source attribution and telemetry remain for late diagnostics.
     private MessageSource? _source;
@@ -88,7 +99,7 @@ internal sealed class SessionInputFlow
     public TurnTelemetryFacts Telemetry => _telemetry;
     // Input closure events copy IDs before journal callbacks clear or remove the selection.
     public SelectedInputFacts SelectedInputs =>
-        new(_selectedIds.ToArray(), _source?.ReminderId, _source?.BackgroundJobId);
+        new(_selectedIds.ToArray(), _source?.ReminderId, _source?.BackgroundJobId, _noticeRunIds.ToArray());
 
     public bool IsBackgroundJobDuplicate(BackgroundJobId? backgroundJobId, SessionState state)
     {
@@ -104,12 +115,16 @@ internal sealed class SessionInputFlow
         SendUserMessage command,
         SessionState state,
         SessionId sessionId,
-        long admittedAtMs)
+        long admittedAtMs,
+        bool childConsentPaused)
     {
         if (command.AdmittedInputId is { } admittedId)
             return state.IsLegacyInputQuarantined(admittedId)
                 ? new AdmissionDecision.Reject("The legacy input is quarantined and cannot execute.")
                 : new AdmissionDecision.Existing();
+
+        if (command.Notice is { } notice)
+            return PrepareNoticeAdmission(command, notice, state, sessionId, admittedAtMs);
 
         var context = TurnContext.FromMessageSource(
             sessionId,
@@ -145,6 +160,11 @@ internal sealed class SessionInputFlow
         if (sourceKey is not null && state.RecentSourceMessageKeys.Contains(sourceKey))
             return new AdmissionDecision.Duplicate();
 
+        // While the child consent pause applies (also with a parent prompt open), the newer fire replaces the waiting
+        // fire. Elsewhere the drop rule below keeps the waiting fire.
+        if (childConsentPaused && TryFindWaitingFire(evt, state, out _, out var held))
+            return new AdmissionDecision.ReplaceWaitingFire(evt, WaitingInputOf(held, state));
+
         if (TryFindWaitingFire(evt, state, out var fire, out var waiting))
             return new AdmissionDecision.Dropped(fire, waiting);
 
@@ -152,7 +172,7 @@ internal sealed class SessionInputFlow
     }
 
     // Drop rule: a fire waits only while this flow's queue holds it. Recovery rebuilds that queue for approval waits.
-    // A journal row that nothing will run (a crash, a restart with two requesters, an expired restart reminder) is not
+    // A journal row that nothing will run (a crash, an expired restart reminder, a damaged stored authority) is not
     // waiting, so it must not block a later fire. An input that a turn selected has left the queue. A newer fire of
     // its reminder gets its own turn. An input whose key is not a fire key has an unknown owner, so it is never
     // dropped and never blocks.
@@ -177,11 +197,120 @@ internal sealed class SessionInputFlow
         return false;
     }
 
+    private InputId WaitingInputOf(ReminderFireKey waiting, SessionState state)
+        => state.PendingInputs.First(pending => IsBuffered(pending.InputId)
+                                                && TryReadFireKey(pending, out var key) && key == waiting).InputId;
+
+    /// <summary>The reminder fires that wait in the queue, in admission order.</summary>
+    public IReadOnlyList<ReminderFireKey> WaitingFires(SessionState state)
+        => state.PendingInputs
+            .Where(pending => IsBuffered(pending.InputId))
+            .Select(pending => TryReadFireKey(pending, out var key) ? key : (ReminderFireKey?)null)
+            .OfType<ReminderFireKey>()
+            .ToArray();
+
     private static bool TryReadFireKey(InputAdmitted input, out ReminderFireKey key)
     {
         key = default;
         return input.TurnContext.SourceKind == ReminderExecutionActor.ReminderSourceKind
                && ReminderFireKey.TryParse(input.SourceMessageId, out key);
+    }
+
+    // The owner built the notice from the state of a run. The reducer validates it against that state before the write,
+    // so a second notice for a run, or a notice with another authority, fails here and never reaches the journal.
+    private static AdmissionDecision PrepareNoticeAdmission(
+        SendUserMessage command,
+        ChildNoticeInput notice,
+        SessionState state,
+        SessionId sessionId,
+        long admittedAtMs)
+    {
+        var evt = new InputAdmitted
+        {
+            SessionId = sessionId,
+            InputId = InputId.New(),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = command.Content ?? string.Empty },
+            TurnContext = notice.Context,
+            ChildNotice = notice.Notice,
+            AdmittedAtMs = admittedAtMs
+        };
+        if (!TurnContext.TryFromRecord(evt.TurnContext, out _, out var reason))
+            return new AdmissionDecision.Reject(reason ?? "invalid stored authority");
+        try
+        {
+            _ = state.Apply(evt);
+        }
+        catch (InvalidOperationException error)
+        {
+            return new AdmissionDecision.Reject(error.Message);
+        }
+
+        return new AdmissionDecision.Persist(evt);
+    }
+
+    /// <summary>
+    /// Builds an approval notice input. The notice is automation that the runtime made: the principal
+    /// VerifiedAutomation, the sender and the source kind <c>child-consent</c>, and the authenticity LocalProcess. It
+    /// takes the session, audience, boundary, channel type, and delivery targets of the run owner, so the reply goes
+    /// to the thread of the owner. It never takes the requester of the owner, and it cannot open a prompt.
+    /// </summary>
+    public static InputAdmitted PrepareConsentNotice(
+        SessionId sessionId,
+        TurnContextRecord owner,
+        string text,
+        long admittedAtMs)
+    {
+        var context = new TurnContextRecord
+        {
+            SessionId = sessionId,
+            TurnId = IdGen.ShortId(),
+            Audience = owner.Audience,
+            Boundary = owner.Boundary,
+            ChannelType = owner.ChannelType,
+            RequesterSenderId = new SenderId(ChildConsentNotice.Kind),
+            RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
+            TransportAuthenticity = TransportAuthenticity.LocalProcess,
+            PayloadTaint = PayloadTaint.Trusted,
+            SourceKind = ChildConsentNotice.Kind,
+            DefaultDeliveryTarget = owner.DefaultDeliveryTarget,
+            RequestedDeliveryTarget = owner.RequestedDeliveryTarget,
+            SupportsInteractiveApproval = false
+        };
+        if (owner.SessionId != sessionId)
+            throw new InvalidOperationException($"The run owner of the notice belongs to session {owner.SessionId.Value}.");
+        if (!TurnContext.TryFromRecord(context, out var notice, out var reason) || notice is not { IsChildConsentNotice: true })
+            throw new InvalidOperationException($"The approval notice context is invalid: {reason ?? "not a notice"}");
+
+        return new InputAdmitted
+        {
+            SessionId = sessionId,
+            InputId = InputId.New(),
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = text },
+            TurnContext = context,
+            AdmittedAtMs = admittedAtMs
+        };
+    }
+
+    // At most one approval notice waits. A newer notice replaces it (design D4: the text is true for the session).
+    public InputId? WaitingConsentNotice()
+        => _buffer.Where(static queued => !queued.IsReplay && BufferedAuthority(queued.Message).IsChildConsentNotice)
+            .Select(static queued => queued.Message.AdmittedInputId)
+            .FirstOrDefault();
+
+    // An approval notice goes in front of the other waiting input, so the model reads the state of the pause before
+    // a held input runs. A replay of the running turn stays first.
+    public void ConsentNoticeCommitted(InputAdmitted admitted)
+    {
+        var authority = RecordedAuthority(admitted);
+        var position = _buffer.FindIndex(static queued => !queued.IsReplay);
+        _buffer.Insert(position < 0 ? _buffer.Count : position, (new SendUserMessage
+        {
+            SessionId = admitted.SessionId,
+            Content = admitted.UserMessage.Content ?? string.Empty,
+            Source = RecordedSource(admitted, authority),
+            AdmittedInputId = admitted.InputId,
+            AdmittedAuthority = authority
+        }, false));
     }
 
     public SendUserMessage AdmissionCommitted(
@@ -192,7 +321,12 @@ internal sealed class SessionInputFlow
         // The journal callback applies the event before this owner reserves or places the input.
         var authority = RecordedAuthority(admitted);
         _inFlightDedup.ReserveBackgroundJob(command.Source?.BackgroundJobId);
-        var accepted = command with { AdmittedInputId = admitted.InputId, AdmittedAuthority = authority };
+        var accepted = command with
+        {
+            AdmittedInputId = admitted.InputId,
+            AdmittedAuthority = authority,
+            Source = command.Source ?? (admitted.ChildNotice is null ? null : RecordedSource(admitted, authority))
+        };
         PlaceAccepted(accepted, placement);
         return accepted;
     }
@@ -210,6 +344,30 @@ internal sealed class SessionInputFlow
 
     private bool IsBuffered(InputId? id)
         => id is { } inputId && _buffer.Any(item => item.Message.AdmittedInputId == inputId);
+
+    /// <summary>
+    /// Separates the pending inputs whose recorded authority parses from the damaged ones. The queue takes only valid
+    /// inputs (<see cref="RestoreWaitingInputs"/> throws for a damaged one). Each caller decides what a damaged input
+    /// means for its message. The idle restart resume uses it only after a slash command (#2587). The other idle
+    /// restart resume and the recovery queue behind a parked approval do not use it yet (#2576). Each valid input comes
+    /// with its parsed authority, so a caller that decides on the authority (for example
+    /// <see cref="ChildConsentPause.Holds"/>) does not parse the record again.
+    /// </summary>
+    public static (IReadOnlyList<(InputAdmitted Input, TurnContext Authority)> Valid, IReadOnlyList<InputAdmitted> Damaged)
+        SplitByAuthority(IEnumerable<InputAdmitted> inputs)
+    {
+        var valid = new List<(InputAdmitted Input, TurnContext Authority)>();
+        var damaged = new List<InputAdmitted>();
+        foreach (var input in inputs)
+        {
+            if (TurnContext.TryFromRecord(input.TurnContext, out var authority, out _) && authority is not null)
+                valid.Add((input, authority));
+            else
+                damaged.Add(input);
+        }
+
+        return (valid, damaged);
+    }
 
     /// <summary>
     /// Rebuilds the waiting queue from the journal after recovery. The session acknowledged each pending input, and the
@@ -235,7 +393,9 @@ internal sealed class SessionInputFlow
                 MediaReferences = admitted.UserMessage.MediaReferences,
                 Source = source,
                 AdmittedInputId = admitted.InputId,
-                AdmittedAuthority = authority
+                AdmittedAuthority = authority,
+                // The journal keeps the kind. A rebuilt notice stays automated input.
+                Notice = admitted.ChildNotice is { } notice ? new ChildNoticeInput(notice, admitted.TurnContext) : null
             }, false));
             restored++;
         }
@@ -295,6 +455,8 @@ internal sealed class SessionInputFlow
         _selectedIds.Clear();
         _selectedIds.Add(id);
         _source = command.Source;
+        _noticeRunIds.Clear();
+        AddNoticeRun(command.Notice?.Notice);
         _context = context;
         _trust = deriver?.DeriveFromTurnContext(context);
         _telemetry = new TurnTelemetryFacts(
@@ -311,6 +473,7 @@ internal sealed class SessionInputFlow
         _emittedText = false;
         _selectedIds.Clear();
         _source = source;
+        _noticeRunIds.Clear();
         RestoreTurnAuthority(context, deriver);
     }
 
@@ -328,8 +491,7 @@ internal sealed class SessionInputFlow
     public bool CompleteSlashResume(
         bool handled,
         IReadOnlyList<InputAdmitted> pending,
-        SessionId sessionId,
-        SessionPhase phase)
+        SessionId sessionId)
     {
         if (!handled)
         {
@@ -337,21 +499,9 @@ internal sealed class SessionInputFlow
             return false;
         }
 
-        if (phase != SessionPhase.Processing)
-            return true;
-
-        foreach (var item in pending.Skip(1))
-        {
-            _buffer.Add((new SendUserMessage
-            {
-                SessionId = sessionId,
-                Content = item.UserMessage.Content ?? string.Empty,
-                MediaReferences = item.UserMessage.MediaReferences,
-                AdmittedInputId = item.InputId,
-                AdmittedAuthority = RecordedAuthority(item)
-            }, false));
-        }
-
+        // The other inputs of the requester run after the slash command. A rejected command keeps the session in
+        // Ready, so the queue must not depend on the phase (#2587). The caller validated the authority of each input.
+        RestoreWaitingInputs(pending.Skip(1).ToArray(), sessionId);
         return true;
     }
 
@@ -361,6 +511,8 @@ internal sealed class SessionInputFlow
         var resumed = pending.Select(static item => item.InputId).ToHashSet();
         _buffer.RemoveAll(item => item.Message.AdmittedInputId is { } id && resumed.Contains(id));
         _selectedIds.AddRange(pending.Select(static item => item.InputId));
+        foreach (var item in pending)
+            AddNoticeRun(item.ChildNotice);
         return pending.Select(static item => item.UserMessage).ToArray();
     }
 
@@ -373,21 +525,32 @@ internal sealed class SessionInputFlow
     //                  owns that turn may join it, and the turn keeps its authority.
     //   otherwise:     the first buffered input starts a new turn, and the flow adopts its recorded authority.
     // A replay is the current turn's own message after an overflow, so it always joins the current turn.
-    private BufferedInputBatch? DrainBufferedBatch(bool continuesTurn)
+    private BufferedInputBatch? DrainBufferedBatch(bool continuesTurn, bool childConsentPaused)
     {
         if (_buffer.Count == 0)
             return null;
 
+        if (!continuesTurn)
+            MoveHeldInputBehind(childConsentPaused);
         var adoptsAuthority = !continuesTurn && !_buffer[0].IsReplay;
         var owner = adoptsAuthority ? BufferedAuthority(_buffer[0].Message) : _context;
+        // Security boundary (design D5): an approval notice never joins a turn, so it waits first for its own turn. A
+        // continued turn scans past it, so input of the turn owner still joins. PassesPause and JoinsTurn still apply.
+        var start = continuesTurn
+            ? _buffer.FindIndex(static queued => queued.IsReplay || !BufferedAuthority(queued.Message).IsChildConsentNotice)
+            : 0;
+        if (start < 0)
+            return null;
         var count = 0;
-        while (count < _buffer.Count && JoinsTurn(_buffer[count], owner))
+        while (start + count < _buffer.Count
+               && PassesPause(_buffer[start + count], owner, startsTurn: adoptsAuthority && count == 0, childConsentPaused)
+               && JoinsTurn(_buffer[start + count], owner))
             count++;
         if (count == 0)
             return null;
 
-        var drained = _buffer.GetRange(0, count);
-        _buffer.RemoveRange(0, count);
+        var drained = _buffer.GetRange(start, count);
+        _buffer.RemoveRange(start, count);
 
         // Fresh input resets the turn limits; overflow replay keeps the current limits.
         var startsNewTurn = drained.Any(static item => !item.IsReplay);
@@ -403,20 +566,78 @@ internal sealed class SessionInputFlow
 
         if (adoptsAuthority)
             AdoptAuthority(messages[0], BufferedAuthority(messages[0]));
-        return new BufferedInputBatch(messages, startsNewTurn, adoptsAuthority);
+        foreach (var message in messages)
+            AddNoticeRun(message.Notice?.Notice);
+        var joinsAutomationTurn = !adoptsAuthority
+            && ((owner is { } running && SessionToolWorkflow.IsAutomation(running.RequesterPrincipal))
+                || messages.All(static message => message.Notice is not null));
+        return new BufferedInputBatch(messages, startsNewTurn, adoptsAuthority, joinsAutomationTurn);
     }
 
     private static bool JoinsTurn((SendUserMessage Message, bool IsReplay) input, TurnContext? owner)
         => input.IsReplay || (owner is not null && BufferedAuthority(input.Message).HasSameRequester(owner));
 
+    // <child-consent-drain>
+    // Security boundary (child consent pause, design D5). While the pause applies, automated input and child result
+    // notices are held: a held input never joins a running turn and never starts a turn. A person input is never held.
+    // An approval notice is never held, never joins a turn, and nothing joins a notice turn.
+    private static bool PassesPause(
+        (SendUserMessage Message, bool IsReplay) input, TurnContext? owner, bool startsTurn, bool childConsentPaused)
+    {
+        if (input.IsReplay)
+            return true;
+        if (childConsentPaused && IsHeldByPause(input.Message))
+            return false;
+        return startsTurn
+               || (owner?.IsChildConsentNotice != true && !BufferedAuthority(input.Message).IsChildConsentNotice);
+    }
+
+    private static bool IsHeldByPause(SendUserMessage message)
+        => ChildConsentPause.Holds(BufferedAuthority(message), isChildNotice: message.Notice is not null);
+
+    // A new turn starts at the first input that the pause does not hold. The held inputs keep their order behind the
+    // other inputs and run after the last close.
+    private void MoveHeldInputBehind(bool childConsentPaused)
+    {
+        if (!childConsentPaused)
+            return;
+        var held = _buffer.Where(static queued => !queued.IsReplay && IsHeldByPause(queued.Message)).ToArray();
+        _buffer.RemoveAll(static queued => !queued.IsReplay && IsHeldByPause(queued.Message));
+        _buffer.AddRange(held);
+    }
+    // </child-consent-drain>
+
     private void AdoptAuthority(SendUserMessage first, TurnContext authority)
     {
         _source = first.Source;
+        _noticeRunIds.Clear();
         _context = authority;
         // The old trust belongs to another authority. Tool exposure fails closed until DeriveAdoptedTrust runs.
         _trust = null;
         _telemetry = new TurnTelemetryFacts(authority.TurnId, first.Source?.MessageId, first.Source?.ChannelType);
     }
+
+    private void AddNoticeRun(ChildNotice? notice)
+    {
+        if (notice is not null)
+            AddNoticeRun(notice.RunId);
+    }
+
+    private void AddNoticeRun(SubAgentRunId runId)
+    {
+        if (!_noticeRunIds.Contains(runId))
+            _noticeRunIds.Add(runId);
+    }
+
+    // Replay rebuilds the noticed runs of the open journal turn from the inputs that its tool batches consumed. An
+    // approval re-drive on a new actor instance then keeps the reminder link of the noticed run, as the live actor does.
+    public void RestoreNoticeRuns(IEnumerable<SubAgentRunId> runIds)
+    {
+        foreach (var runId in runIds)
+            AddNoticeRun(runId);
+    }
+
+    public void ClearNoticeRuns() => _noticeRunIds.Clear();
 
     public void DeriveAdoptedTrust(TrustContextDeriver? deriver)
         => _trust = _context is { } context ? deriver?.DeriveFromTurnContext(context) : null;
@@ -431,12 +652,12 @@ internal sealed class SessionInputFlow
             ? context
             : throw new InvalidOperationException($"Journal input {admitted.InputId} has invalid authority: {reason}");
 
-    public AfterTurnResult AdvanceAfterTurn(bool restartDrainRequested)
+    public AfterTurnResult AdvanceAfterTurn(bool restartDrainRequested, bool childConsentPaused)
     {
         if (restartDrainRequested)
             return new AfterTurnResult(InputProgressAction.Restart, null);
 
-        var batch = DrainBufferedBatch(continuesTurn: false);
+        var batch = DrainBufferedBatch(continuesTurn: false, childConsentPaused);
         return batch is null
             ? new AfterTurnResult(InputProgressAction.Ready, null)
             : new AfterTurnResult(InputProgressAction.FollowUp, batch);
@@ -444,9 +665,10 @@ internal sealed class SessionInputFlow
 
     public ToolBatchInputAdvance AdvanceAfterToolBatch(
         BatchCompletion.Ready completion,
-        bool compactionDue)
+        bool compactionDue,
+        bool childConsentPaused)
     {
-        var batch = DrainBufferedBatch(continuesTurn: true);
+        var batch = DrainBufferedBatch(continuesTurn: true, childConsentPaused);
         var next = completion.ChooseNext(compactionDue);
         return new ToolBatchInputAdvance(batch, next);
     }
@@ -466,9 +688,16 @@ internal sealed class SessionInputFlow
     {
         _inFlightDedup.CompleteBackgroundJob(evt.SourceBackgroundJobId);
         _selectedIds.Clear();
+        // A delivery retry repeats the recorded turn with no input, so it takes the link from the pending retry.
+        _noticeRunIds.Clear();
     }
 
-    public void InputsClosed(InputClosed evt) => _selectedIds.RemoveAll(evt.InputIds.Contains);
+    // A closed input never runs: a turn closed it, or a newer fire of its reminder replaced it in the queue.
+    public void InputsClosed(InputClosed evt)
+    {
+        _selectedIds.RemoveAll(evt.InputIds.Contains);
+        _buffer.RemoveAll(item => item.Message.AdmittedInputId is { } id && evt.InputIds.Contains(id));
+    }
 
     public void FailedTurn()
     {
@@ -504,8 +733,10 @@ internal sealed class SessionInputFlow
 
     public void DeferApproval(IWithSessionId response) => _deferredApproval = response;
     public void ResumeToolLoopAfterCompaction() => _resumeToolLoopAfterCompaction = true;
+    public bool ResumesToolLoopAfterCompaction => _resumeToolLoopAfterCompaction;
+    public bool StartsWithReplay => _buffer.Count > 0 && _buffer[0].IsReplay;
 
-    public CompactionContinuation AdvanceAfterCompaction(bool restartDrainRequested)
+    public CompactionContinuation AdvanceAfterCompaction(bool restartDrainRequested, bool childConsentPaused)
     {
         // Restart takes priority over a deferred approval or tool-loop continuation.
         if (restartDrainRequested)
@@ -517,7 +748,7 @@ internal sealed class SessionInputFlow
 
         var resume = _resumeToolLoopAfterCompaction;
         _resumeToolLoopAfterCompaction = false;
-        var batch = DrainBufferedBatch(continuesTurn: resume);
+        var batch = DrainBufferedBatch(continuesTurn: resume, childConsentPaused);
         // The actor replays this response only after it applies the phase transition.
         var deferred = _deferredApproval;
         _deferredApproval = null;

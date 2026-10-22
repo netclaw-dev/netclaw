@@ -26,7 +26,7 @@ public sealed class SessionInputFlowTests
         var admissions = new List<InputAdmitted>();
         foreach (var command in commands)
         {
-            var decision = flow.PrepareAdmission(command, state, sessionId, 1)
+            var decision = flow.PrepareAdmission(command, state, sessionId, 1, childConsentPaused: false)
                 as AdmissionDecision.Persist
                 ?? throw new InvalidOperationException("The test input was not admitted.");
             admissions.Add(decision.Event);
@@ -40,7 +40,7 @@ public sealed class SessionInputFlowTests
         flow.AdmissionCommitted(admissions[2], commands[2], InputPlacement.BufferDuringModel);
         var firstSelected = flow.SelectedInputs.Ids;
         flow.TurnCommitted(new TurnRecorded { SessionId = sessionId, ConsumedInputIds = [admissions[0].InputId] });
-        var continuation = flow.AdvanceAfterTurn(false);
+        var continuation = flow.AdvanceAfterTurn(false, childConsentPaused: false);
         var nextSelected = flow.SelectedInputs.Ids;
         flow.TurnCommitted(new TurnRecorded
         {
@@ -48,7 +48,7 @@ public sealed class SessionInputFlowTests
             ConsumedInputIds = [admissions[1].InputId, admissions[2].InputId]
         });
         var finalSelected = flow.SelectedInputs.Ids;
-        var ready = flow.AdvanceAfterTurn(false);
+        var ready = flow.AdvanceAfterTurn(false, childConsentPaused: false);
 
         // Assert
         Assert.Equal([admissions[0].InputId], firstSelected);

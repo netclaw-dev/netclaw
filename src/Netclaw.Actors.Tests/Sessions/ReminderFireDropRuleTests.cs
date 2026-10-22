@@ -219,7 +219,7 @@ public sealed class ReminderFireDropRuleTests
         private SessionInputFlow _flow = new();
         private SessionState _state = SessionState.Empty;
 
-        public AdmissionDecision Prepare(SendUserMessage command) => _flow.PrepareAdmission(command, _state, Id, 1);
+        public AdmissionDecision Prepare(SendUserMessage command) => _flow.PrepareAdmission(command, _state, Id, 1, childConsentPaused: false);
 
         // A crash or a restart without a resume: the journal keeps every pending input, and the new flow has no memory.
         public void RestartWithEmptyFlow() => _flow = new SessionInputFlow();
@@ -253,7 +253,7 @@ public sealed class ReminderFireDropRuleTests
             var recorded = new TurnRecorded { SessionId = Id, ConsumedInputIds = _flow.SelectedInputs.Ids };
             _state = _state.Apply(recorded, userAlreadyInHistory: true);
             _flow.TurnCommitted(recorded);
-            var next = _flow.AdvanceAfterTurn(restartDrainRequested: false);
+            var next = _flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: false);
             Assert.Equal(InputProgressAction.FollowUp, next.Action);
         }
     }

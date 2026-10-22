@@ -101,19 +101,21 @@ internal sealed partial class SessionToolWorkflow
     public bool ShouldAbandonResolvedForIdle() => ResolvedParentCount > 0;
 
     // Security boundary: only a person can abandon an open approval. Automation (a reminder fire, a webhook, a
-    // background job completion) cannot answer a prompt, so it must not cancel one. Its input waits until the
-    // approval closes, and the approval stays open. Any person may still abandon the approval, as before; this
-    // check does not compare the person with the requester of the parked call.
-    // A resolved or interrupted batch has no open approval, so any input closes it before its own turn.
+    // background job completion, a child result notice) cannot answer a prompt, so it must not cancel one. Its input
+    // waits until the approval closes, and the approval stays open. Any person may still abandon the approval, as
+    // before; this check does not compare the person with the requester of the parked call.
+    // A notice carries the principal of the person who owns the child, so the kind of the input decides and not the
+    // principal. A resolved or interrupted batch has no open approval, so any input closes it before its own turn.
     public NewInputPlan PlanNewInputAbandonment(
         SessionState state,
         SessionId sessionId,
         PrincipalClassification? inputPrincipal,
+        bool isChildNotice,
         long nowMs)
     {
         if (PendingParentCount > 0)
         {
-            if (IsAutomation(inputPrincipal))
+            if (isChildNotice || IsAutomation(inputPrincipal))
                 return new NewInputPlan.WaitForApproval();
 
             MarkAbandoning();
@@ -124,6 +126,13 @@ internal sealed partial class SessionToolWorkflow
                 + "superseded by a new message before approval was given.",
                 nowMs));
         }
+
+        // <child-consent-hold>
+        // The child consent pause holds automated input until the last child request closes. A person input runs.
+        // An approval notice never comes here: the owner admits it on its own path.
+        if (IsChildConsentPaused && (isChildNotice || IsAutomation(inputPrincipal)))
+            return new NewInputPlan.WaitForApproval();
+        // </child-consent-hold>
 
         if (ResolvedParentCount > 0)
             return new NewInputPlan.AbandonThenActivate(CreateAbandonment(
@@ -142,7 +151,7 @@ internal sealed partial class SessionToolWorkflow
     }
 
     // An input with no source has the default principal of TurnContext.FromMessageSource (UntrustedExternal).
-    private static bool IsAutomation(PrincipalClassification? principal)
+    internal static bool IsAutomation(PrincipalClassification? principal)
         => principal is PrincipalClassification.VerifiedAutomation or PrincipalClassification.SystemProcess;
 
     public ToolBatchAbandoned? PlanFailedRunAbandonment(
@@ -165,7 +174,7 @@ internal sealed partial class SessionToolWorkflow
     public bool HasPendingApprovals() => PendingParentCount > 0;
 
     // A parked batch still waits for an answer, or has an answer and no result yet. Input admitted after it waits.
-    // Only parent approvals count: a child approval belongs to the child run and must not hold the parent's input.
+    // Only parent approvals count here. The child consent pause holds automated input on its own rule.
     public bool HasParkedApprovals() => PendingParentCount > 0 || ResolvedParentCount > 0;
 
     public int PendingDiagnosticCount => PendingParentCount;

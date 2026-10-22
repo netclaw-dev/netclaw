@@ -96,11 +96,12 @@ public sealed partial record SessionState
         if (keys.Count > 256)
             keys = keys.RemoveRange(0, keys.Count - 256);
 
-        return this with
+        var admitted = this with
         {
             PendingInputs = PendingInputs.Add(evt),
             RecentSourceMessageKeys = keys
         };
+        return evt.ChildNotice is { } notice ? admitted.ApplyChildNotice(evt, notice) : admitted;
     }
 
     public SessionState CloseInputs(IReadOnlyList<InputId> inputIds)
@@ -193,7 +194,7 @@ public sealed partial record SessionState
 
     internal SessionState Apply(TurnRecorded evt, bool userAlreadyInHistory)
     {
-        var closed = CommitChildContinuation(evt.ChildContinuation, close: true)
+        var closed = CloseLegacyContinuation(evt.ChildContinuation, close: true)
             .CloseInputs(evt.ConsumedInputIds);
         // Live history already has the user message. Replay can restore it by input ID.
         var history = userAlreadyInHistory || evt.ChildContinuation is not null
@@ -379,6 +380,18 @@ public sealed partial record SessionState
     {
         var message = BuildNudgeMessage(nudge, mediaReferences);
         return this with { History = History.Add(message) };
+    }
+
+    /// <summary>
+    /// Remove each earlier system nudge whose text starts with <paramref name="nudgeStart"/>, then add
+    /// <paramref name="nudge"/> at the end of history. The history then keeps only the latest nudge of that kind.
+    /// </summary>
+    public SessionState ReplaceSystemNudge(string nudgeStart, string nudge)
+    {
+        var earlier = $"{SystemNudgePrefix} {nudgeStart}";
+        var history = History.RemoveAll(message => IsSystemNudge(message)
+            && message.Content.StartsWith(earlier, StringComparison.Ordinal));
+        return (this with { History = history }).AddSystemNudge(nudge);
     }
 
     /// <summary>

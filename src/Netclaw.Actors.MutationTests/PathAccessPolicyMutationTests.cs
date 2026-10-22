@@ -27,7 +27,7 @@ public sealed class PathAccessPolicyMutationTests : IDisposable
         _paths = new NetclawPaths(_basePath);
         _paths.EnsureDirectoriesExist();
         _storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")));
+            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "current")), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         _policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
     }
 

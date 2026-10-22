@@ -69,6 +69,8 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
         var spawner = new SubAgentSpawner(_clients, registry, policy, null, prompt,
             _preparation, NullLogger<SubAgentSpawner>.Instance, new SessionConfig());
         registry.RegisterCore(new SpawnAgentTool(profiles, spawner, TestPaths));
+        // The runtime refuses a spawn when the requester cannot read the result file.
+        registry.RegisterCore(new FileReadTool(toolConfig, TestPaths, new ToolPathPolicy([])));
         registry.RegisterCore(_tool);
         services.AddSingleton<IChatClientProvider>(_clients);
         services.AddSingleton(new ModelCapabilities { ModelId = "boundary-model", ContextWindowTokens = 128_000 });
@@ -171,12 +173,16 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
                 evt => evt.RunId == accepted.Run.RunId && evt.Terminal.Lost && !evt.Terminal.Result.Success),
                 Deadline, cancellationToken: Cancellation);
             await AwaitAssertAsync(() => Assert.Contains(_clients.Parent.ReceivedMessages,
-                request => Calls(request).Any(call => call.Name == "child_run_result")),
+                request => request.Any(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                    && message.Text.Contains(accepted.Run.RunId.Value, StringComparison.Ordinal)
+                    && message.Text.Contains("result.md", StringComparison.Ordinal))),
                 Deadline, cancellationToken: Cancellation);
-            var delivery = _clients.Parent.ReceivedMessages.First(request => Calls(request).Any(call => call.Name == "child_run_result"));
-            AssertChildPair(delivery, accepted.Run.RunId, "actor_stopped", lost: true);
+            var notice = Assert.Single(control.Committed.OfType<InputAdmitted>(), evt => evt.ChildNotice?.RunId == accepted.Run.RunId);
+            // The session actor stopped and started again in a live daemon. Recovery names that fact (issue 2602).
+            Assert.Contains("reason=owner_restarted", notice.UserMessage.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain(_clients.Parent.ReceivedMessages, request => Calls(request).Any(call => call.Name == "child_run_result"));
             await AwaitAssertAsync(() => Assert.Single(control.Committed.OfType<TurnRecorded>(),
-                evt => evt.ChildContinuation?.RunId == accepted.Run.RunId), Deadline, cancellationToken: Cancellation);
+                evt => evt.ConsumedInputIds.Contains(notice.InputId)), Deadline, cancellationToken: Cancellation);
             await StopAsync(await ResolveSessionAsync(sessionId));
             Assert.All(_clients.Parent.ReceivedMessages.Skip(1), request =>
                 Assert.Single(Results(request), result => result.CallId == "original-acceptance-call"));
@@ -188,131 +194,6 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
         {
             control.ReleaseAcceptance.TrySetResult();
             recoveredGate.TrySetResult();
-        }
-    }
-
-    [Fact]
-    public async Task Ready_child_passes_held_preparation_and_preserves_the_whole_ordered_user_batch()
-    {
-        // Arrange
-        var sessionId = new SessionId("boundary/ready-child-and-user-batch");
-        var control = await ConfigureJournalAsync(rejectAcceptance: false, holdAcceptance: false);
-        var childA = NewGate();
-        var childB = NewGate();
-        var parentBoundary = NewGate();
-        var childContinuation = NewGate();
-        _clients.A.NextResponseGate = childA;
-        _clients.B.NextResponseGate = childB;
-        _clients.A.PlannedResponses.Enqueue([new TextContent("Child A result.")]);
-        _clients.B.PlannedResponses.Enqueue([new TextContent("Child B result.")]);
-        _clients.Parent.ToolCallsOnFirstCall = [Spawn("accept-a", "child-a"), Spawn("accept-b", "child-b")];
-        _clients.Parent.AfterToolCallResponse = _ => _clients.Parent.NextResponseGate = parentBoundary;
-        _clients.Parent.PlannedResponses.Enqueue([new TextContent("Both starts returned.")]);
-        _clients.Parent.PlannedResponses.Enqueue([Probe("child-b-authority")]);
-        var subscriber = CreateTestProbe();
-        await JoinSessionAsync(ActorRegistry.Get<SessionManagerActorKey>(), subscriber, sessionId, OutputFilter.Full);
-
-        try
-        {
-            // Act
-            await SendAsync(sessionId, "Start both children.", "original-owner");
-            await Task.WhenAll(_clients.A.FirstCallEntered.Task, _clients.B.FirstCallEntered.Task).WaitAsync(Deadline, Cancellation);
-            await AwaitAssertAsync(() =>
-            {
-                Assert.Equal(2, _clients.Parent.CallCount);
-                Assert.Null(_clients.Parent.NextResponseGate);
-            }, Deadline, cancellationToken: Cancellation);
-            var accepted = control.Committed.OfType<ChildRunAccepted>().ToArray();
-            var acceptedA = Assert.Single(accepted, evt => evt.Run.AgentName.Value == "child-a");
-            var acceptedB = Assert.Single(accepted, evt => evt.Run.AgentName.Value == "child-b");
-            Assert.Equal(acceptedA.Run.ScopeId.Value,
-                Assert.IsType<SessionScopedChatOptions>(Assert.Single(_clients.A.ReceivedOptions)).SubSessionId);
-            Assert.Equal(acceptedB.Run.ScopeId.Value,
-                Assert.IsType<SessionScopedChatOptions>(Assert.Single(_clients.B.ReceivedOptions)).SubSessionId);
-            _preparation.HoldNext();
-            childA.TrySetResult();
-            await _preparation.Entered.Task.WaitAsync(Deadline, Cancellation);
-            Assert.Contains(control.Committed.OfType<ChildRunEvent.TerminalRecorded>(), evt => evt.RunId == acceptedA.Run.RunId);
-            await SendAsync(sessionId, "Ordinary message one.", "later-user");
-            childB.TrySetResult();
-            await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<ChildRunEvent.ResultPrepared>(),
-                evt => evt.RunId == acceptedB.Run.RunId), Deadline, cancellationToken: Cancellation);
-            await SendAsync(sessionId, "Ordinary message two.", "later-user");
-            _clients.Parent.NextResponseGate = childContinuation;
-            parentBoundary.TrySetResult();
-            await AwaitAssertAsync(() => Assert.Equal(3, _clients.Parent.CallCount), Deadline,
-                cancellationToken: Cancellation);
-
-            // Assert
-            Assert.False(_preparation.Release.Task.IsCompleted);
-            Assert.DoesNotContain(control.Committed.OfType<ChildRunEvent.ResultPrepared>(), evt => evt.RunId == acceptedA.Run.RunId);
-            var request = _clients.Parent.ReceivedMessages[2];
-            AssertChildPair(request, acceptedB.Run.RunId, "completed", lost: false);
-            using var childResult = JsonDocument.Parse(Assert.IsType<string>(Assert.Single(Results(request),
-                result => result.CallId == $"child-result-{acceptedB.Run.RunId.Value}").Result));
-            Assert.Equal("Child B result.", childResult.RootElement.GetProperty("output").GetString());
-            Assert.Equal(acceptedB.Run.ScopeId.Value, childResult.RootElement.GetProperty("scope_id").GetString());
-            Assert.DoesNotContain(Calls(request), call => call.CallId == $"child-result-{acceptedA.Run.RunId.Value}");
-            Assert.DoesNotContain(request, message => message.Text?.Contains("Ordinary message", StringComparison.Ordinal) == true);
-            childContinuation.TrySetResult();
-            var approval = await subscriber.FishForMessageAsync<ToolInteractionRequest>(
-                item => item.CallId.Value == "child-b-authority", Deadline, cancellationToken: Cancellation);
-            Assert.Equal("original-owner", approval.RequesterSenderId?.Value);
-            Assert.Empty(_tool.Contexts);
-            var approvalReply = await ActorRegistry.Get<SessionManagerActorKey>().Ask<ISessionResponse>(new ToolInteractionResponse
-            {
-                SessionId = sessionId, CallId = approval.CallId,
-                SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
-                SenderId = new SenderId("original-owner")
-            }, Deadline, Cancellation);
-            Assert.IsType<CommandAck>(approvalReply);
-            await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<TurnRecorded>(), evt =>
-                evt.UserMessage.Content.Contains("Ordinary message two.", StringComparison.Ordinal)),
-                Deadline, cancellationToken: Cancellation);
-            var authority = Assert.Single(_tool.Contexts);
-            Assert.Equal(TrustBoundary.Personal, authority.Boundary);
-            Assert.Equal(TrustAudience.Personal, authority.Audience);
-            var decision = Assert.Single(control.Committed.OfType<ToolBatchStarted>(), evt =>
-                evt.AssistantMessage.ToolCalls.Any(call => call.CallId.Value == "child-b-authority"));
-            Assert.Equal(acceptedB.Run.RunId, decision.ChildContinuation?.RunId);
-            Assert.Equal("original-owner", acceptedB.Run.OriginalContext.RequesterSenderId?.Value);
-            Assert.Equal("confirmed\n[approval: once]", Assert.Single(control.Committed.OfType<ToolCallRecorded>(),
-                evt => evt.ToolResult.ToolCallId?.Value == "child-b-authority").ToolResult.Content);
-            Assert.Equal(1, _clients.A.CallCount);
-            Assert.Equal(1, _clients.B.CallCount);
-            var userRequests = _clients.Parent.ReceivedMessages.Where(messages => messages.Any(message =>
-                message.Role == Microsoft.Extensions.AI.ChatRole.User &&
-                message.Text.StartsWith("Ordinary message", StringComparison.Ordinal))).ToArray();
-            var batchRequest = Assert.Single(userRequests);
-            var batch = batchRequest.Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User &&
-                message.Text.StartsWith("Ordinary message", StringComparison.Ordinal)).ToArray();
-            Assert.Equal(["Ordinary message one.", "Ordinary message two."], batch.Select(message => message.Text));
-            var admitted = control.Committed.OfType<InputAdmitted>().Where(evt => evt.UserMessage.Content.StartsWith("Ordinary message", StringComparison.Ordinal)).ToArray();
-            Assert.Equal(["Ordinary message one.", "Ordinary message two."], admitted.Select(evt => evt.UserMessage.Content));
-            var closedBatch = Assert.Single(control.Committed.OfType<TurnRecorded>(), evt => evt.ConsumedInputIds.Contains(admitted[0].InputId));
-            Assert.Equal(admitted.Select(evt => evt.InputId), closedBatch.ConsumedInputIds);
-            Assert.DoesNotContain(control.Committed.OfType<TurnRecorded>(), evt => evt.ChildContinuation is not null &&
-                evt.ConsumedInputIds.Intersect(admitted.Select(item => item.InputId)).Any());
-            Assert.False(_preparation.Release.Task.IsCompleted);
-            var laterRequests = _clients.Parent.ReceivedMessages.Skip(2).ToArray();
-            Assert.Contains(laterRequests, messages =>
-                Results(messages).Any(result => result.CallId == "child-b-authority"));
-            var deliveryCallId = $"child-result-{acceptedB.Run.RunId.Value}";
-            Assert.All(laterRequests, messages =>
-            {
-                var callCount = Calls(messages).Count(call => call.CallId == deliveryCallId);
-                var resultCount = Results(messages).Count(result => result.CallId == deliveryCallId);
-                Assert.True(callCount == 1 && resultCount == 1,
-                    $"Child {acceptedB.Run.RunId.Value}: request has {callCount} calls/{resultCount} results for {deliveryCallId}.");
-            });
-        }
-        finally
-        {
-            childA.TrySetResult();
-            childB.TrySetResult();
-            parentBoundary.TrySetResult();
-            childContinuation.TrySetResult();
-            _preparation.Release.TrySetResult();
         }
     }
 
@@ -540,19 +421,6 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
     private static IEnumerable<FunctionCallContent> Calls(IEnumerable<ChatMessage> messages) => messages.SelectMany(message => message.Contents.OfType<FunctionCallContent>());
     private static IEnumerable<FunctionResultContent> Results(IEnumerable<ChatMessage> messages) => messages.SelectMany(message => message.Contents.OfType<FunctionResultContent>());
 
-    private static void AssertChildPair(IReadOnlyList<ChatMessage> messages, SubAgentRunId runId, string outcomeOrReason, bool lost)
-    {
-        var call = Assert.Single(Calls(messages), call => call.Name == "child_run_result");
-        Assert.Equal($"child-result-{runId.Value}", call.CallId);
-        Assert.Equal(runId.Value, call.Arguments?["run_id"]?.ToString());
-        var result = Assert.Single(Results(messages), result => result.CallId == call.CallId);
-        using var json = JsonDocument.Parse(Assert.IsType<string>(result.Result));
-        Assert.Equal(runId.Value, json.RootElement.GetProperty("run_id").GetString());
-        Assert.Equal(lost, json.RootElement.GetProperty("lost").GetBoolean());
-        Assert.Equal(outcomeOrReason, json.RootElement.GetProperty(lost ? "reason" : "outcome").GetString());
-        Assert.Equal("spawn_agent", json.RootElement.GetProperty("source_operation").GetString());
-    }
-
     internal sealed class BoundaryClients : IChatClientProvider
     {
         public FakeChatClient Parent { get; } = new();
@@ -612,6 +480,34 @@ internal sealed class AcceptanceFault(bool rejectAcceptance, bool holdAcceptance
     public TaskCompletionSource<ChildRunAccepted> Acceptance { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource ReleaseAcceptance { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource WriteReturned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // The journal rejects this many later writes that admit an approval notice (source kind child-consent). Akka then
+    // reports a WriteMessageRejected for each event of that atomic write. Other writes are stored as usual.
+    private int _consentNoticeRejections;
+
+    public TaskCompletionSource<InputAdmitted> ConsentNoticeRejected { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void RejectNextConsentNotice() => Interlocked.Exchange(ref _consentNoticeRejections, 1);
+
+    public bool TryTakeConsentNoticeRejection() => Interlocked.CompareExchange(ref _consentNoticeRejections, 0, 1) == 1;
+
+    // The journal stores the next matching admission with a damaged authority record (no turn ID), so that
+    // TurnContext.TryFromRecord fails for it after a replay. The live actor keeps the event that it wrote.
+    private Func<InputAdmitted, bool>? _damageMatch;
+
+    public TaskCompletionSource<InputAdmitted> AdmissionDamaged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void DamageNextAdmission(Func<InputAdmitted, bool> match) => Interlocked.Exchange(ref _damageMatch, match);
+
+    public InputAdmitted? TryDamage(InputAdmitted admitted)
+    {
+        var match = Volatile.Read(ref _damageMatch);
+        if (match is null || !match(admitted) || Interlocked.CompareExchange(ref _damageMatch, null, match) != match)
+            return null;
+        var damaged = admitted with { TurnContext = admitted.TurnContext with { TurnId = string.Empty } };
+        AdmissionDamaged.TrySetResult(damaged);
+        return damaged;
+    }
 }
 
 public sealed class AcceptanceBoundaryJournal : MemoryJournal
@@ -631,7 +527,11 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
     protected override async Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages, CancellationToken cancellationToken)
     {
         var writes = messages.ToArray();
+        if (_fault is { } damageFault)
+            writes = writes.Select(write => Damaged(damageFault, write)).ToArray();
         var events = writes.SelectMany(write => (IEnumerable<IPersistentRepresentation>)write.Payload).Select(item => item.Payload).ToArray();
+        if (_fault is { } noticeFault && writes.Any(IsConsentNoticeWrite) && noticeFault.TryTakeConsentNoticeRejection())
+            return await RejectConsentNoticeAsync(noticeFault, writes, cancellationToken);
         var accepted = events.OfType<ChildRunAccepted>().SingleOrDefault();
         if (accepted is not null && _fault is { RejectAcceptance: true } rejected)
         {
@@ -660,4 +560,50 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
         }
         return result;
     }
+
+    // One result for each atomic write, in order. A null result is a success, and a non-null result is a rejection.
+    private async Task<IImmutableList<Exception>> RejectConsentNoticeAsync(
+        AcceptanceFault fault, IReadOnlyList<AtomicWrite> writes, CancellationToken cancellationToken)
+    {
+        var results = new List<Exception>();
+        foreach (var write in writes)
+        {
+            if (IsConsentNoticeWrite(write))
+            {
+                fault.ConsentNoticeRejected.TrySetResult(Payloads(write).OfType<InputAdmitted>().First(IsConsentNotice));
+                results.Add(new InvalidOperationException("The test journal rejected the approval notice admission."));
+                continue;
+            }
+
+            var written = await base.WriteMessagesAsync([write], cancellationToken);
+            foreach (var evt in Payloads(write))
+                fault.Committed.Enqueue(evt);
+            results.Add(written?.FirstOrDefault()!);
+        }
+
+        return results.ToImmutableList();
+    }
+
+    private static AtomicWrite Damaged(AcceptanceFault fault, AtomicWrite write)
+    {
+        var items = ((IEnumerable<IPersistentRepresentation>)write.Payload).ToArray();
+        var changed = false;
+        for (var index = 0; index < items.Length; index++)
+        {
+            if (items[index].Payload is InputAdmitted admitted && fault.TryDamage(admitted) is { } damaged)
+            {
+                items[index] = items[index].WithPayload(damaged);
+                changed = true;
+            }
+        }
+
+        return changed ? new AtomicWrite(items.ToImmutableList()) : write;
+    }
+
+    private static IEnumerable<object> Payloads(AtomicWrite write)
+        => ((IEnumerable<IPersistentRepresentation>)write.Payload).Select(static item => item.Payload);
+
+    private static bool IsConsentNoticeWrite(AtomicWrite write) => Payloads(write).OfType<InputAdmitted>().Any(IsConsentNotice);
+
+    private static bool IsConsentNotice(InputAdmitted admitted) => admitted.TurnContext.SourceKind == "child-consent";
 }

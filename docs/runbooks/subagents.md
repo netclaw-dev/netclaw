@@ -93,11 +93,16 @@ first user message is just the raw task, identical to the pre-context protocol.
    supervised child of the session actor and can outlive the parent model call.
 5. A final response completes the child run. An inactivity timeout or
    cancellation can stop it. The runtime sets no fixed tool-iteration ceiling.
-6. After the session records and prepares a terminal result, it selects that
-   result at a safe parent model boundary. Ready results take priority. The
-   session delivers a paired `child_run_result` call and tool result. The result
-   holds the agent name, run id, outcome (`completed`, `partial`, or `failed`),
-   optional reason, diagnostics pointer, and the subagent's final text.
+6. Before the session accepts the start, the spawner writes `task.md` in the run
+   folder (`subagents/<run_id>/`). It records the agent, the requester, and the
+   brief. The spawner refuses a start when the requester cannot use `file_read`.
+7. After the session records the terminal result, it reviews the child working
+   context and writes `result.md` in the run folder. It then admits one notice
+   as an ordinary input of the requester that owns the child. The notice names
+   the agent, the run, the outcome, and the path of `result.md`. It holds no child
+   output. The notice joins a running turn of the same requester, or it waits
+   for its own turn, in admission order. The parent model reads the file with a
+   real `file_read` call.
 
 Child creation is marshaled back onto the session actor thread, so supervision
 stays within Akka's actor-thread rules. After durable acceptance, the child can
@@ -174,8 +179,8 @@ runs in each `TurnCompleted`. A background shell job is not a child run.
 
 - While the run waits, stdout shows `[subagent:waiting] <n> open: <run ids>`.
   With `--json`, stdout shows no such line.
-- The delivered result prints as `[tool:result] child_run_result`, so the child
-  text reaches stdout.
+- The child result starts a notice turn. The child text reaches stdout only
+  when the model reads `result.md` with `file_read`.
 - With `--json`, stdout holds one envelope. `response` is the text of the last
   turn. `turnResponses` holds each turn. `usage` is the sum over all turns.
 - The run has no timeout of its own. Each child has its daemon timeouts. Use an
@@ -337,6 +342,11 @@ runtime whitelist.
 
 Spawned subagents inherit the parent session's current `project_dir`.
 Each child receives its own `temp_dir`, `artifact_dir`, and `log_path`.
+On Linux and macOS, the child `temp_dir` is
+`/tmp/netclaw-<uid>/<key>/c<8 hex>`, in the key folder of the parent session.
+The parent and its children can read each other's temp files. Another
+session cannot. See
+[Managed Temporary Folder](session-storage.md#managed-temporary-folder).
 The child also receives the session `session_dir` as its workspace base.
 Project instructions come from the inherited project root.
 
@@ -416,7 +426,13 @@ known-good version.
   back-and-forth interaction with the user.
 - Subagents have no fixed maximum number of tool iterations. A final response
   completes the run; cancellation or an inactivity timeout can stop it.
-  A recurrence refusal can settle the child turn without another model request.
+  A repeated refused call does not stop the child at once. The runtime refuses
+  the call again and adds a nudge. The child then selects another action or
+  returns its result to the parent. A child cannot start a background job, so
+  its nudge tells it to name a long command for the parent. The fifth refused
+  repeat gets an escalated nudge. A sixth refused repeat ends the run as a
+  successful `partial` result with the reason `tool_cycle_stopped` and the last
+  text of the child.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's
   capabilities.
@@ -436,11 +452,21 @@ known-good version.
 The compatibility reader accepts deployed child manifests `cra-v1`, `cre-v1`, and `tta-v1`.
 It translates exact old child delivery correlations before the ordinary parent recovery path.
 The current writer uses `cra-v2`, `cre-v2`, and `ss-v2` for child facts and snapshots.
-Older binaries cannot read these records. Do not downgrade a database in place.
+The swap that adds child notices is roll-forward only. Build 0.27.1 reads the new rows without an error, and it reads them wrongly:
+
+- It replays a notice as a plain user input.
+- It prepares the result again for a run that the new build already reported and delivers it a second time, as a `child_run_result` pair.
+
+Before the swap, stop the daemon and back up `netclaw.db`. To roll back, stop the daemon and restore that backup.
+Never start 0.27.1 on a database that the new build wrote.
 
 Unresolved historical evidence remains inert and visible through the owner status response.
-Recovery does not relaunch uncertain child work or convert child results into user input.
-An exact settled delivery stays settled. A ready result can resume only its original parent authority.
+Recovery does not relaunch uncertain child work. A result that the parent has not received becomes one notice.
+A result that a deployed build already delivered as a `child_run_result` pair stays delivered, and no notice follows.
+A notice carries only the recorded authority of the child owner.
+After a crash, a notice can wait behind an older input of a person that has no turn (issue 2516).
+Recovery then logs a Warning that names the run and says the notice waits behind an input.
+The notice stays pending, and `result.md` stays in the run folder. Read it with `file_read`.
 
 The restore unit is a complete, consistent pre-upgrade SQLite backup.
 The backup must include the journal and snapshot tables from the same database state.
@@ -457,18 +483,35 @@ No live deployment or database restore forms part of this source change.
 
 The parent and child use exact tool identities and actual results to detect repeated work.
 After two equal feedback rounds, the runtime returns a correction for each repeated call.
-A repeat after that correction ends the turn without another model request.
-In a parent session, the turn fails with the error category `ModelBehavior`. A child run ends with a partial result.
+A repeat after that correction gets the same correction and a nudge. The turn continues.
+The runtime counts refused repeats in each turn. Refused repeat 5 gets an escalated nudge.
+Refused repeat 6 ends the turn quietly with the text of the model. The person sees no error.
+In a parent session, the turn completes with no `ModelBehavior` category. A child run ends with a successful partial result.
 Unrelated calls remain available. Live context compaction preserves this evidence.
 A process restart does not restore a detector checkpoint or repeat tool calls automatically.
+
+Only a new turn and new person input reset the count. This includes person input that joins a running turn.
+A child result in the middle of a turn does not reset it. An automation input that joins an automation turn does not reset it.
+Examples of an automation input: a reminder fire, a background job result, and a webhook call.
+
+A quiet end with no text posts nothing in Slack, Discord, and Mattermost. The session sets `TurnCompleted.QuietEnd`
+(wire name `quietEnd`) for this end only. The channel then skips the empty-turn warning and still clears the typing indicator.
+Any other turn with no reply keeps the warning.
+
+A reminder turn that ends quietly records success with empty output, and it sends no failure alert.
+The exception: a reminder that requires channel delivery, and whose loop never called the notify tool, records a failure in reminder history and the logs. It does not post in the thread.
+To find such an end, search the session log for `turn_refused_repeat_end`. The line shows the number of refused repeats
+and whether the last response had text.
 
 Authorized status queries for a pending background job can repeat.
 Each query repeats the normal access checks. Cancellation and inaccessible jobs receive no exception.
 
 `MaxToolIterationsPerTurn` remains readable in old configuration files. The runtime does not enforce that value.
 Useful work can exceed the former parent and child iteration limits.
-The runtime still enforces deadlines, cancellation, and authorization.
-Distinct calls can continue indefinitely if no other stop condition applies.
+The runtime still enforces authorization and the per-call tool timeouts.
+The session and the TUI have no cancel command for a running turn.
+A child has inactivity watchdogs only. Each model response resets them.
+Distinct calls can continue indefinitely if the model, the provider, or a daemon stop does not end them.
 
 A recurrence refusal executes no tool and grants no authority.
 The result retains the call identity, validation error, and authorization-attempt identity.

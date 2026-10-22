@@ -31,6 +31,7 @@ public static class SessionOutputTypes
     public const string Compaction = "compaction";
     public const string SessionJoined = "session_joined";
     public const string ToolInteraction = "tool_interaction";
+    public const string ToolInteractionClosed = "tool_interaction_closed";
     public const string SessionDeactivated = "session_deactivated";
     public const string Unknown = "unknown";
 }
@@ -86,6 +87,10 @@ public sealed record SessionOutputDto
     public string? TurnOutcome { get; init; }
     public string? SourceReminderId { get; init; }
 
+    // Wire name: quietEnd. Written for every TurnCompleted. Absent or null comes from an earlier daemon and reads
+    // as false, so the channel keeps the empty-turn fallback for it.
+    public bool? QuietEnd { get; init; }
+
     // Wire name: openChildRunIds. Written for every TurnCompleted, as an empty array when no run is open.
     // Absent or null comes from an earlier daemon and reads as an empty list.
     public List<string>? OpenChildRunIds { get; init; }
@@ -125,6 +130,12 @@ public sealed record SessionOutputDto
     public bool? InteractionHasAdoptedContext { get; init; }
     public bool? InteractionHasThirdPartyAdoptedContext { get; init; }
     public List<string>? InteractionAdoptedSpeakerIds { get; init; }
+    /// <summary>The <c>ToolInteractionLifetime</c> member name. An older daemon sends none: a turn prompt.</summary>
+    public string? InteractionLifetime { get; init; }
+    /// <summary>How a prompt closed: <c>answered</c> or <c>withdrawn</c>.</summary>
+    public string? InteractionCloseKind { get; init; }
+    /// <summary>The <c>WithdrawReason</c> member name of a withdrawn prompt. None for an answered prompt.</summary>
+    public string? InteractionWithdrawReason { get; init; }
 
     // SubAgent
     public string? AgentName { get; init; }

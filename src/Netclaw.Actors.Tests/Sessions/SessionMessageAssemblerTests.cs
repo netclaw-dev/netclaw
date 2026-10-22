@@ -515,7 +515,7 @@ public sealed class SessionMessageAssemblerTests
             Storage: SessionStoragePaths.CreateLegacy(
                 Path.Combine(Path.GetTempPath(), "netclaw-test", "session"),
                 Path.Combine(Path.GetTempPath(), "netclaw-test", "logs"),
-                "test-session"),
+                "test-session", ManagedTemporaryLayout.InsideSessionStorage.Instance),
             FileReadGranted: fileReadGranted,
             ActiveRecall: activeRecall,
             WorkingContextBlock: state.WorkingContext.ToContextBlock(),

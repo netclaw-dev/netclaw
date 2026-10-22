@@ -51,7 +51,7 @@ public sealed class ToolExecutionValueObjectTests
             SessionStoragePaths.CreateLegacy(
                 Path.GetFullPath(Path.Combine(Path.GetTempPath(), "session")),
                 Path.GetFullPath(Path.Combine(Path.GetTempPath(), "logs")),
-                "session")));
+                "session", ManagedTemporaryLayout.InsideSessionStorage.Instance)));
 
     [Fact]
     public void Context_rejects_missing_semantic_values()
@@ -131,7 +131,7 @@ public sealed class ToolExecutionValueObjectTests
                 SessionStoragePaths.CreateLegacy(
                     Path.GetFullPath("/tmp/session"),
                     Path.GetFullPath("/tmp/logs"),
-                    "slack_thread-1")),
+                    "slack_thread-1", ManagedTemporaryLayout.InsideSessionStorage.Instance)),
             Audience = TrustAudience.Personal,
             InlineOutputBudget = InlineOutputBudget.Default,
             InteractiveApproval = new InteractiveApprovalCapability.Unavailable()

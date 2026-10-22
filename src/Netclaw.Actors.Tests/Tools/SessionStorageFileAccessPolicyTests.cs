@@ -27,7 +27,7 @@ public sealed class SessionStorageFileAccessPolicyTests : IDisposable
         _paths.EnsureDirectoriesExist();
         var envelope = Path.Combine(_paths.SessionsDirectory, "current-session");
         _storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.GetFullPath(envelope)));
+            new SessionStorageEnvelopeRoot(Path.GetFullPath(envelope)), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         _policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
         _context = TestToolExecutionContext.CreateBoundWithStorage(
             "signalr/current-session",
@@ -160,7 +160,7 @@ public sealed class SessionStorageFileAccessPolicyTests : IDisposable
         Directory.CreateDirectory(outside);
         Directory.CreateSymbolicLink(linkedEnvelope, outside);
         var storage = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.GetFullPath(linkedEnvelope)));
+            new SessionStorageEnvelopeRoot(Path.GetFullPath(linkedEnvelope)), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         var context = TestToolExecutionContext.CreateBoundWithStorage(
             "signalr/linked-session",
             storage,
@@ -337,8 +337,8 @@ public sealed class SessionStorageFileAccessPolicyTests : IDisposable
         var link = Path.Combine(storageBase, "linked");
         Directory.CreateSymbolicLink(link, outside);
         var storage = legacy
-            ? SessionStoragePaths.CreateLegacy(Path.Combine(_paths.SessionsDirectory, "own"), link, "nested")
-            : SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(Path.Combine(link, "nested")));
+            ? SessionStoragePaths.CreateLegacy(Path.Combine(_paths.SessionsDirectory, "own"), link, "nested", ManagedTemporaryLayout.InsideSessionStorage.Instance)
+            : SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(Path.Combine(link, "nested")), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         await SeedFile(Path.GetDirectoryName(storage.LogPath.Value)!, "session.log", "outside-marker");
         var context = CreateContext(storage, TrustAudience.Team);
         var result = await new FileReadTool(new ToolConfig(), _policy).ExecuteAsync(ToolInput.Create("Path", storage.LogPath.Value), context, TestContext.Current.CancellationToken);
@@ -350,8 +350,8 @@ public sealed class SessionStorageFileAccessPolicyTests : IDisposable
     {
         var root = Path.Combine(_paths.SessionsDirectory, id);
         var storage = legacy
-            ? SessionStoragePaths.CreateLegacy(root, _paths.SessionLogsDirectory, id)
-            : SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(root));
+            ? SessionStoragePaths.CreateLegacy(root, _paths.SessionLogsDirectory, id, ManagedTemporaryLayout.InsideSessionStorage.Instance)
+            : SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(root), ManagedTemporaryLayout.InsideSessionStorage.Instance);
         Directory.CreateDirectory(storage.SessionDirectory.Value);
         return storage;
     }

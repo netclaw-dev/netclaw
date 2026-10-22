@@ -125,7 +125,7 @@ This must not happen.
   The state is not reachable in normal flow, and a failed turn heals on the next input. → Follow-up.
 - A delivery retry in `Ready` with a parked approval can drain a waiting input.
   This edge exists on `dev`. → Follow-up.
-- A restart resume refuses mixed authority (on `dev`). More states reach it now. → Follow-up.
+- A restart resume refused mixed authority (on `dev` at that time). #2515 changed the resume: it takes the leading inputs of the first requester and queues the other inputs. → Done in #2515.
 - The restart-drain branch of the idle path leaves the deferral flag set in a stopping actor. → Harmless.
 - `AdmittedAuthority` duplicates journal data. → Remove it in a follow-up that may edit the protected tests.
 

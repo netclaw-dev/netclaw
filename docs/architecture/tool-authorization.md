@@ -452,6 +452,55 @@ Known limit: the requester check ignores provenance. Two inputs of one sender wi
 a turn under the trust of the first input. Today each producer sets one provenance per sender, so no live mix exists.
 `SessionInputFlowAccordantTests` states the rule over generated sequences.
 
+The child consent pause (input placement):
+
+- Owner: `SessionToolWorkflow.IsChildConsentPaused` decides the pause. It is actor-local and derived: the session is
+  paused while any child consent request of the session is open. An answered request is closed.
+  See [child consent pause](../spec/GLOSSARY.md#child-consent-pause).
+- Placement owners: `SessionToolWorkflow.PlanNewInputAbandonment` holds automated input that arrives in Ready
+  (`NewInputPlan.WaitForApproval`). The drain holds it after a turn, after a tool batch, and after a compaction
+  (`SessionInputFlow.PassesPause`). A held input never joins a running turn and never starts a turn. A new turn
+  starts at the first input that is not held (`MoveHeldInputBehind`).
+- Held: input with the principal `VerifiedAutomation` or `SystemProcess` (a reminder fire, a webhook, a background job
+  completion) and a child result notice. A person input is not held: it runs a turn, and the pause stays.
+- An approval notice is never held. It is an `InputAdmitted` with the source kind and sender `child-consent`, the
+  principal `VerifiedAutomation`, the authenticity `LocalProcess`, and `SupportsInteractiveApproval = false`
+  (`SessionInputFlow.PrepareConsentNotice`). `TurnContext.IsChildConsentNotice` identifies it by all of these facts.
+  A webhook sets its authenticity `Verified`, so it cannot pose as a notice. A notice never joins a turn, and nothing
+  joins a notice turn.
+- Reminder fires: while the pause applies, a later fire of a reminder replaces the waiting fire. The session closes
+  the waiting fire with the existing `InputClosed` and keeps the later fire. The replacement applies also when a
+  parent prompt is open at the same time. A fire that waits only behind a parent prompt keeps the drop rule
+  (`SessionInputFlow.PrepareAdmission`, `AdmissionDecision.ReplaceWaitingFire`). One atomic write holds the close and
+  the newer admission (`LlmSessionActor.PersistReplacingInput`), so a crash keeps both or neither.
+- A close of a waiting input does not end the open turn. `PersistReplacingInput` and the recovery close of pending
+  notices set `InputClosed.KeepsTurn`. Replay clears the noticed runs at each close without that flag
+  (`LlmSessionActor.RecoverParentClosure`). Live code clears them when the next turn starts. An old row has no flag,
+  so it reads as a close that ends the turn.
+- Recovery of a session that was paused (an open request of a run that is still `Accepted`) withdraws the child
+  requests, closes the pending notices, and sends itself `StartHeldInputs`. The handler
+  (`LlmSessionActor.StartInputsHeldByThePause`) queues the held input that is not queued yet, and it starts the queue
+  in an idle session. The restart reminder stays the one resume path for an interrupted input. When the restart
+  reminder woke the session, it was stashed during recovery, so it runs before `StartHeldInputs` and queues the pending
+  inputs in admission order first. In a busy session it queues each pending input that no turn selected and replies
+  `RestartResumeNotNeeded` (`QueueRestartResume`). A crash does not resume a person's input (#2516).
+- Data: the pause and the queue are actor-local. Each held input is a durable pending `InputAdmitted` record.
+- The last close of the session admits the closing notice. Then the held inputs run through
+  `StartWaitingInputAfterApproval`.
+
+```text
+schematic: drain(continuesTurn, paused)
+  if not continuesTurn and paused: move held inputs behind the other inputs, in order
+  batch = leading inputs that pass the pause and join the turn (HasSameRequester)
+  an input passes the pause when it is a replay, or it is not held and no side of the join is a notice
+```
+
+A valid example: Alice's child waits for consent. A reminder fires. The fire waits, and it runs once after the operator
+answers. An invalid example: the reminder fire joins Alice's running turn at a tool boundary, or it starts a turn while
+the child waits.
+The focused mutation gate `./scripts/run-child-consent-mutations.sh` guards the pause predicate, the start refusal, the
+Ready hold, the drain rules, and the notice identification.
+
 Leaks today:
 
 - `ToolAccessPolicy` also parses shell text, runs hard deny, and builds the
@@ -562,6 +611,81 @@ This rule requires a successful `set_working_directory` receipt with a declared 
 Within the tool-result journal callback, the actor applies the accepted context and refreshes the prompt when the directory changes.
 `PathAccessPolicy` continues to decide path access for each later call.
 
+#### Root sources
+
+`PathAccessPolicy` builds the root list of one call from these sources:
+
+| Source | Audiences | Operations |
+| --- | --- | --- |
+| Audience profile (`ReadFiles`, `WriteFiles`, `AttachFiles`) | all | the profile of the operation, with the Personal read rule below |
+| Shared sessions root and legacy logs root | Personal | all |
+| Session envelope and session directory | all | all |
+| Managed temporary key folder `<base>/<key>` (issue #2554) | all | all |
+| Global read roots (`{skills_dir}`, `{identity_dir}`, `{workspaces_dir}`) | Personal, Team | `Read` |
+| Declared project directory, and `{workspaces_dir}` for a write | the trusted-root list of a mode `All` profile and of a project declaration | all |
+
+The managed temporary key folder comes from
+`SessionStorage.ManagedTemporary.StorageRoot`. On POSIX it is
+`/tmp/netclaw-<uid>/<key>` (see
+[session-cwd](../../openspec/specs/session-cwd/spec.md#requirement-managed-temporary-directory-is-the-private-temporary-location)).
+The shared base `/tmp/netclaw-<uid>` is never a root. A configured Team or
+Public root can still cover the base, for example a root `/tmp`. For a Team or
+Public call, `PathAccessPolicy.Evaluate` therefore denies each path below the
+base that is outside the own key folder. The base itself stays reachable
+through such a root. Personal reaches every key folder, as it reaches every
+session directory. On Windows the storage root is the session envelope, which
+is already a root.
+
+- Valid: a Team session reads `/tmp/netclaw-1000/<own key>/p/frame.png`.
+- Invalid: a Team session with a configured root `/tmp` reads or writes
+  `/tmp/netclaw-1000/<other key>/p/frame.png`. The decision is `Denied`.
+
+`ManagedTemporaryEnvironment.EnsureFolders` is the one creator of these
+folders. It makes the base and the key folder with mode 0700, and it refuses
+when a folder is a symbolic link, has another owner, or has a group or other
+bit. It never uses another folder. The shell launch calls it through
+`Prepare`. `file_write` and `file_edit` call it before each write or edit
+below the base, because a Team session has no shell. The checks are
+call-local.
+
+The file tools use the key folder as their root. The
+[scratch redirect composition](#managed-scratch-redirects-and-command-consent)
+uses only the run folder (`.../p` or `.../c<h>`). That rule is narrower and
+fails closed.
+
+#### The Personal read rule
+
+Issue #2554 (owner decision, 18 Oct 2026) restored the #1770 guarantee in a
+form that agrees with D2: a Personal file tool reads each path that the
+Personal shell can write. The shell checks each path with the `Write`
+operation, so the shell trust zone is the `WriteFiles` profile.
+
+```text
+// schematic: protection runs later and does not change
+effective profile (audience, operation, profile):
+    access = profile of the operation
+    if audience is not Personal, or operation is not Read or Attach:
+        return access                    // Write and DeclareProjectScope keep their profile
+    if WriteFiles.Mode == All:   return All
+    if WriteFiles.Mode == Roots: return Roots(access roots + write roots)
+    return access                        // WriteFiles.Mode == None
+```
+
+`Evaluate` and `GetTrustedRoots` use the same effective profile, so the
+prompt, the reviewed-safe read check, and the decision agree. The data is
+call-local.
+
+- Valid: Personal, `ReadFiles = Roots [~/repositories]`, `WriteFiles = All`.
+  `file_read /tmp/gifcheck/a.png` is allowed.
+- Invalid: Personal, `WriteFiles = All`. `file_read <config>/secrets.json` is
+  denied, because protection wins.
+- Invalid: Team, `ReadFiles = Roots [{session_dir}]`,
+  `WriteFiles = Roots [{session_dir}, D]`. `file_read D/x` is denied. A Team
+  write-only folder stays write-only.
+
+`netclaw doctor` warns when a profile can write wider than it can read
+(`ToolAudienceProfilesDoctorCheck`, TA-16). It does not fix the profile.
+
 Leaks today:
 
 - More than 11 places check for a link, 3 functions normalize Windows paths,
@@ -667,7 +791,7 @@ Leaks today:
 | Classes | [`ApprovalPatternMatching`](../../src/Netclaw.Security/ApprovalPatternMatching.cs), [`ToolApprovalActor`](../../src/Netclaw.Actors/Tools/ToolApprovalActor.cs), [`ToolApprovalStore`](../../src/Netclaw.Configuration/ToolApprovalStore.cs), [`ApprovalEntry`](../../src/Netclaw.Configuration/ApprovalEntry.cs), [`ApprovalBucketBuilder`](../../src/Netclaw.Actors/Sessions/ApprovalBucketBuilder.cs), [`ShellApprovalEvidence`](../../src/Netclaw.Actors/Tools/ShellApprovalEvidence.cs), [`OneTimeApprovalKeys`](../../src/Netclaw.Actors/Tools/OneTimeApprovalKeys.cs), [`ReviewedSafeShellPolicy`](../../src/Netclaw.Actors/Tools/ReviewedSafeShellPolicy.cs), [`ShellPolicyEvaluation`](../../src/Netclaw.Actors/Tools/ShellPolicyEvaluation.cs), [`ShellPolicyProjection`](../../src/Netclaw.Actors/Tools/ShellPolicyProjection.cs) |
 | Published contract | `IShellApprovalMatchService.MatchShellCandidatesAsync(...)` (shell, one batched lookup), `IToolApprovalService.CheckApprovalAsync(...)` (other tools), `IStructuredToolApprovalService.RecordApprovalCandidatesAsync(...)` (store an answer). [`AkkaToolApprovalService`](../../src/Netclaw.Actors/Tools/AkkaToolApprovalService.cs) implements all three over `ToolApprovalActor`. |
 | Must not know | Shell syntax (it receives candidates), channels. |
-| Data | Persistent grants: `~/.netclaw/config/tool-approvals.json`, version 3, durable. Chat grants: actor-local in `ToolApprovalActor`. One-time consent: call-local keys in `ToolApprovalAttempt`. Coverage: call-local. |
+| Data | Persistent grants: `~/.netclaw/config/tool-approvals.json`, version 3, durable. Chat grants: actor-local in `ToolApprovalActor`. One-time consent: call-local keys in `ToolApprovalAttempt`. Coverage: call-local. A child consent request uses the parent journal events. No parent snapshot holds a child prompt entry, and a restart withdraws every child request (a durable child wait is planned, section 8). |
 | Rules | [TA-8](../../openspec/specs/tool-authorization/spec.md#requirement-ta-8-every-candidate-needs-coverage), [TA-13](../../openspec/specs/tool-authorization/spec.md#requirement-ta-13-the-persistent-grant-store-fails-closed) |
 
 Leaks today:
@@ -686,7 +810,7 @@ Leaks today:
 | --- | --- |
 | Question | How does the operator see a request and answer it, now or after a restart? |
 | Classes | Approval part of [`LlmSessionActor`](../../src/Netclaw.Actors/Sessions/LlmSessionActor.cs), [`SessionToolWorkflow`](../../src/Netclaw.Actors/Sessions/SessionToolWorkflow.cs), [`IApprovalChannel`](../../src/Netclaw.Actors/Sessions/IApprovalChannel.cs), [`ParentSessionApprovalBridge`](../../src/Netclaw.Actors/Sessions/ParentSessionApprovalBridge.cs), [`IParentApprovalBridge`](../../src/Netclaw.Tools.Abstractions/IParentApprovalBridge.cs), the approval loop in [`SubAgentActor`](../../src/Netclaw.Actors/SubAgents/SubAgentActor.cs), [`ApprovalResponseFlow`](../../src/Netclaw.Channels/ApprovalResponseFlow.cs), [`PendingApprovalLookup`](../../src/Netclaw.Channels/PendingApprovalLookup.cs), [`ApprovalButtonValueCodec`](../../src/Netclaw.Actors/Protocol/ApprovalButtonValueCodec.cs), [`ApprovalOptionKeys`](../../src/Netclaw.Actors/Protocol/ApprovalOptionKeys.cs), the Slack, Discord, and Mattermost prompt builders |
-| Published contract | Output `ToolInteractionRequest` and input `ToolInteractionResponse` ([`SessionProtocol.Outputs.cs`](../../src/Netclaw.Actors/Sessions/SessionProtocol.Outputs.cs)). Journal events `ToolApprovalRequested` and `ToolApprovalResolved`. Option key strings such as `approve_once`. |
+| Published contract | Outputs `ToolInteractionRequest` and `ToolInteractionClosed(CallId, Reason)` (not persisted), and input `ToolInteractionResponse` ([`SessionProtocol.Outputs.cs`](../../src/Netclaw.Actors/Sessions/SessionProtocol.Outputs.cs)). Journal events `ToolApprovalRequested` and `ToolApprovalResolved`. Option key strings such as `approve_once`. Nack reasons in [`ApprovalNackReasons`](../../src/Netclaw.Actors/Protocol/ApprovalNackReasons.cs), with `approval_withdrawn` and `approval_use_buttons`. |
 | Must not know | Policy rules. It renders the options that Consent offers. |
 | Data | Durable session journal. Actor-local state for an unanswered request. Durable child requests use the same journal events. |
 | Rules | [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-consent-prompts-offer-only-safe-options), [TA-11](../../openspec/specs/tool-authorization/spec.md#requirement-ta-11-an-unanswered-consent-request-survives-restart), [TA-12](../../openspec/specs/tool-authorization/spec.md#requirement-ta-12-subagent-consent-goes-through-the-parent-session) |
@@ -694,7 +818,8 @@ Leaks today:
 Leaks today:
 
 - Two layers check that the person who answers is the requester: the channel
-  (`PendingApprovalLookup`) and the session workflow.
+  (`PendingApprovalLookup`) and the session workflow. The text answer guard has
+  the same two layers.
 
 `SessionToolWorkflow` owns the session-local approval records, live wait channel, active batch tracker, and temporary correction state.
 It validates the original requester and offered answer. It selects which unanswered calls can resume after recovery.
@@ -712,8 +837,77 @@ The run ID identifies the child. The original child call ID identifies its concr
 The workflow retains the original requester, authority, and offered options.
 A later user turn cannot replace those facts.
 The status tool exposes the unresolved prompt count only to the original owner.
-Child prompts do not block an unrelated parent turn or another ready child result.
+An open child prompt pauses the session (section 3.1, "The child consent pause"). While paused, `LlmSessionActor.AcceptChild`
+refuses a `spawn_agent` start with `SpawnPaused` (`SessionToolWorkflow.RefusesChildStart`), and the spawner removes the
+run folder. A slash start of a person is accepted. The refusal text names only the waiting runs that the calling turn
+may control (`TurnContext.CanControlChildRunOf`), and it gives only the count of the other requests.
+A person turn still runs, and the pause stays. Automated input and child result notices wait until the last close.
 The snapshot gate still accounts for all unresolved approval evidence.
+
+Prompt lifetime:
+
+- `ToolInteractionRequest.Lifetime` is `UntilTurnEnd` for a parent prompt and `UntilClosed` for a child prompt.
+  `LlmSessionActor.HandleToolInteractionRequestDispatch` sets it. Renderers do not show it.
+- `ChannelOutputEngine.CompleteTurnAsync` clears only `UntilTurnEnd` prompts at `TurnCompleted`. `ChatViewModel` clears
+  only `UntilTurnEnd` prompts at `TurnCompleted` and at `ErrorOutput` (#2523). A child prompt stays until an answer or
+  a `ToolInteractionClosed`.
+- `PendingApprovalPromptTracked` carries the optional `lifetime` field, so a cold-spawned binding keeps a child prompt.
+  A row without the field reads as `UntilTurnEnd`. A turn prompt writes no field, so an older binary reads the new row
+  the same way. The hub DTO carries the lifetime by member name.
+
+A valid example: Alice's parent turn fails while her child waits for consent. The TUI keeps the child prompt, and her
+Enter key answers it. An invalid example: the channel clears the child prompt at the turn end, and the child waits
+with no prompt.
+
+The agent event channel (see [agent event](../spec/GLOSSARY.md#agent-event)):
+
+- Types: `AgentAddress`, `AgentEnvelope` (`Sender`, `Target`, `SentAt`), and the closed family `AgentEvent`
+  (`ChildApprovalRequested`, `ChildApprovalResolved`, `ChildRunEnded`) in
+  [`AgentEvents.cs`](../../src/Netclaw.Actors/Sessions/AgentEvents.cs). The events are in-process records. An address
+  is a value object and never an actor reference.
+- Owner-stamped sender: only `AgentEventFactory`, called by the session that owns the run with its own run record,
+  builds an event. A prompt call ID or a field 14 row that names another run, and a run of another session, make the
+  builder throw. The builder never falls back to the run that the fact names.
+- No child text reaches the model as instructions. A payload holds IDs, canonical names, enums, and runtime-made
+  paths. `AgentEventRenderer.Render` is the only path from approval events to model text. It never copies a
+  command, a scope, or a path from a prompt.
+- `SessionToolWorkflow` builds `ChildApprovalResolved` after an answer persists (`CreateChildResolution`) and after a
+  cancel or the end of a run closes an open entry (`WithdrawChildApprovals`). The session actor builds
+  `ChildApprovalRequested` after `ToolApprovalRequested` persists. `AgentEventFactory.RunEnded` reads a field 14 row
+  as `ChildRunEnded`. The stored row does not change.
+- Digest and notices: `LlmSessionActor` keeps one actor-local digest for the session. A new request or the last close
+  of the session makes it ready. A ready digest is admitted as one approval notice: at once in Ready, else at the next
+  tool-batch end, turn end, or compaction end, before the drain. A turn that waits for a parent prompt runs no model
+  call, so the notice is admitted at once and waits for its own turn. At most one notice waits: a newer notice
+  closes the waiting notice with `InputClosed` (`KeepsTurn = true`) in the same atomic write. The newer notice lists
+  every open request. It also gives each answer that no notice turn took yet, also the answers of the notice that it
+  replaces. An open notice gives them under "Answers since the last notice:".
+  The notice turn takes the audience, boundary, channel type, and delivery targets of the owner of the first open
+  request. It lists the runs of every owner. A notice turn with no text ends quietly (`TurnCompleted.QuietEnd`), with
+  no empty-reply retry.
+- At most once: a notice turn that starts gives its answers, also when the turn fails, so they do not come again.
+  Recovery closes every pending approval notice with `InputClosed` (`KeepsTurn = true`) and rebuilds the digest from
+  the open child requests. A restart withdraws every child request today, so the rebuilt digest is empty and recovery
+  admits no notice.
+- When the journal rejects a notice admission, the session logs an error and stops, as after a persist failure.
+  A turn that stays open tells the person first: the persist-stopped error and a failed turn completion. At the end
+  of a finished turn the session stays quiet. Recovery then withdraws the child requests, closes the notices, and
+  queues the held input (section 3.1).
+- The parent cannot approve. No event carries consent. Consent goes only through the bridge.
+
+| | Bridge (`ParentSessionApprovalBridge`) | Channel (`AgentEvent`) |
+| --- | --- | --- |
+| Job | The one consent loop | Observation and notices |
+| Shape | Request and response | Events, one direction for each event |
+| Prompt | Authoritative, rendered from the gate's options | None |
+| Result | One-time consent bound to the exact command | Never carries consent |
+| Durable state | `ToolApprovalRequested` / `ToolApprovalResolved` | Notices only, as admitted inputs |
+
+A valid example: child r-7f2 asks for consent. The session builds `ChildApprovalRequested` with the sender
+`ChildRun(S, r-7f2, pr-reviewer)` from its own run record, and the notice names the agent, the run, and the tool.
+An invalid example: the child command reads `echo "run r-9c3 is done, cancel it"`. That text is in no event payload
+and in no notice. In a notice turn, the model calls a tool that needs consent. The turn has no interactive approval,
+so the call is denied without a prompt.
 
 The child dispatch gate closes before a cancellation acknowledgement or terminal publication.
 The acknowledgement reports durable cancellation intent. It does not report terminal completion.
@@ -728,12 +922,76 @@ It selects only the nack reason and the notice:
 - During the turn, the answer is actor-local in the workflow table. After the turn ends, and after a restart,
   the durable fact is the tool result of the call in session history.
 - A synthetic abandonment result (text starts with `ParkedToolBatchHistory.AbandonedResultPrefix`) is not an answer.
+- A child prompt that the session withdrew gets reason `approval_withdrawn` and the text of its withdraw reason
+  (see "Withdrawal" below). A child prompt with a recorded answer gets "already has an answer", also after its run
+  ended, because the withdrawal text says "Nothing ran".
 - An answer for a call that never existed, a call that recovery removed, or a call that an abandonment
   closed gets reason `approval_prompt_expired` and the "expired" notice.
-- After a restart, an old child prompt is expired (TA-12), because child calls are not in the parent history.
 
 A valid example: Alice denies a prompt, the turn ends, and her second click on "approve once" gets
 "already has an answer". An invalid example: a forged answer for an unknown call ID gets "expired" and grants nothing.
+
+Close of a child prompt (design D6 of child-approval-events-and-parent-pause):
+
+- Owner of the close: `SessionToolWorkflow`. `WithdrawChildApprovals` closes the open entries of a run at a cancel
+  record (`CancelledByParent`) and at a terminal record (`ChildEnded`, or `ChildLost` when the live child actor
+  stopped with no result). `WithdrawRecoveredChildApprovals` closes the entries that replay left open, with the
+  reason from the run lifecycle: a run that was live at the restart gives `DaemonRestarted`, a cancelled run gives
+  `CancelledByParent`, and a run that ended before the restart gives `ChildEnded`. A `prompt_unavailable` answer for
+  a child prompt is a withdrawal with `PromptUnavailable`: the call is refused, and nothing runs.
+- `LlmSessionActor` emits one `ToolInteractionClosed(CallId, Reason)` for each closed child prompt. The reason is
+  `ToolInteractionCloseReason.Withdrawn(WithdrawReason)` or `ToolInteractionCloseReason.Answered`. An answer from one
+  client closes the prompt on every other subscriber. A terminal record emits its closes before `SubAgentOutput`
+  reports the end of the run. Recovery runs before a subscriber joins, so the session sends the restart closes after
+  the session log is known and to each new subscriber at its join.
+- The workflow keeps how each closed child prompt ended (`_closedChildCalls`, actor-local). Recovery rebuilds it from
+  the replayed approval events and the run lifecycle. `RejectClosedCall` reads it for a late click. A snapshot
+  deletes those approval events, so `SaveSnapshotSuccess` clears the map and the restart closes. A late click after a
+  snapshot then gets "expired", before and after a restart.
+- Each channel finds its prompt by call ID, redraws it with the reason and no buttons, removes it, and journals
+  `PendingApprovalPromptCleared` (`ChannelOutputEngine`). An answered close redraws as "has an answer", never as
+  "withdrawn" or "Nothing ran". The TUI removes the prompt from its queue. Headless output prints the prompt and its
+  close, and only the close of a prompt that it showed.
+- A binding can restore a child prompt from its journal after the session forgot it (a restart and a snapshot, or a
+  passivation). No close then comes. When the session refuses an answer for a prompt that the binding holds as
+  `approval_withdrawn`, `approval_prompt_expired`, or `approval_already_answered`, the binding removes the entry,
+  journals `PendingApprovalPromptCleared`, and redraws the prompt as closed with no buttons (`ApprovalResponseFlow`).
+- No text names the child run or the agent: not the prompt, the redraw, the late-click reply, or headless output.
+  The call ID of a child prompt holds the run ID, so no surface prints it.
+
+| `WithdrawReason` | Text for the redraw and for a late click |
+| --- | --- |
+| `CancelledByParent` | "This approval request was withdrawn because the task that asked for it was cancelled. Nothing ran." |
+| `ChildEnded` | "This approval request was withdrawn because the task that asked for it ended. Nothing ran." |
+| `ChildLost` | "This approval request was withdrawn because the task that asked for it stopped unexpectedly. Nothing ran." |
+| `DaemonRestarted` | "This approval request was withdrawn because Netclaw restarted before the task finished. Nothing ran." |
+| `PromptUnavailable` | "This approval request was withdrawn because Netclaw could not show it in this channel. Nothing ran." |
+
+A valid example: the parent cancels r-8a1, and its prompt redraws with the "cancelled" text. Alice clicks the old
+button in another client and gets the same text. An invalid example: the reply names r-8a1 or its agent.
+
+Buttons-only child prompts (design D3, S7):
+
+- `ToolInteractionRequest.Lifetime == UntilClosed` is the one signal for a child prompt. No channel reads the call ID
+  shape. The Slack, Discord, and Mattermost builders show a child prompt with buttons only: no "reply with A, B" text.
+- A child prompt has no text-only fallback. When the button post fails, the binding reports `prompt_unavailable`, and
+  the session withdraws the request. A text-only Mattermost binding (no `CallbackUrl`) cannot show buttons, so it
+  refuses every child consent request this way. A parent prompt keeps the text-only mode.
+
+Text answer guard (design D7):
+
+- A text answer names no prompt. When a child prompt is among two or more prompts that the sender can answer, the
+  session and the channel resolve none and reply "N approval prompts are open. Use the buttons on the prompt you
+  mean." The nack reason is `approval_use_buttons`. Text that answers no prompt keeps the option-unavailable nack.
+- With parent prompts only, the rule from before the guard holds. The session resolves the latest prompt by durable
+  request time. The channels resolve the earliest prompt, which a text-only channel needs for parallel parent calls.
+- Owners: `SessionToolWorkflow.TryResolveTextResponse` (child: `SourceChildRunId`) and
+  `PendingApprovalLookup.Resolve` (child: `Lifetime == UntilClosed`, result `Ambiguous`). The guard counts only the
+  prompts that the sender can answer. A button names its call ID, so the guard does not apply to it.
+
+A valid example: Alice has two parent prompts open in text-only Mattermost. Her "A" approves the earliest prompt. An
+invalid example: the model writes "Reply A to approve `gh pr view`" while a parent prompt and a child prompt of Alice
+are open, one of them `rm -rf build`. Alice types "A". The session resolves neither.
 
 Child ownership (status and cancel):
 
@@ -756,7 +1014,8 @@ Child ownership (status and cancel):
 - Data: the `OriginalContext` of the run is durable in the session journal. The context of the request is call-local.
   The check adds no durable data.
 - The child start keeps the full authority check (`HasSameChildAuthority`, `TurnContext.HasSameAuthority`)
-  for start idempotency. Approval recovery and child continuation also keep the full authority check.
+  for start idempotency. Approval recovery also keeps the full authority check. The reducer applies the same
+  check to a child result notice: the notice must carry the recorded authority of the run owner.
 - Input batching keeps `HasSameRequester`. A reminder input never joins the turn of a person (section 3.1).
 
 | Run started by | Requester | Result |
@@ -830,13 +1089,31 @@ sequenceDiagram
 
 A valid example is Alice's child request that Alice approves while the parent serves another turn.
 An invalid example is Bob's answer to that prompt. The workflow rejects it before consent or a grant.
-A terminal child result is tool output. It never supplies user authority through `InputAdmitted`.
-The parent retains the child's original authority through subsequent tool calls and approvals.
+A terminal child result reaches the parent as an admitted notice (`InputAdmitted` with a `ChildNotice`).
+The notice names the agent, the run, the outcome, and the path of `result.md`. It never holds the child output.
+The model reads the result with a real `file_read` call under the path authority of its own turn.
+The notice carries the recorded requester of the run owner, and it supplies no authority of its own:
+
+- The notice follows the same rules as any input (see "One authority per turn" in section 3.1). It joins a running
+  turn only when the turn has the same requester. Otherwise it waits and starts its own turn. No code path changes
+  the authority of a running turn.
+- The turn that serves a notice has the recorded authority of the run owner, with a new turn ID.
+  The recorded context is never wider than the context of the run.
+- The text of the child is data. The notice has no child text, so a child cannot put text into the prompt.
+  The model gets the text only as output of `file_read`, with the normal path policy and approval rules.
+- `SessionState.Apply(InputAdmitted)` allows one notice for each ended run. The run state is the guard.
+  A second notice, or a notice with other authority, fails before the journal write.
+- A session profile without `file_read` cannot read a result. `spawn_agent` refuses to start a child in that case.
+
+A valid example: Alice's child ends while Alice's turn runs. The notice joins Alice's turn at the tool boundary,
+and the turn keeps its own authority. An invalid example: Alice's child ends while Bob's turn runs.
+The notice waits for its own turn, and Bob's tool calls keep Bob's authority.
 
 ### Managed scratch redirects and command consent
 
 `ToolAccessPolicy.WithManagedTemporaryRedirects` owns a call-local composition decision for Personal Bash calls.
 It reads the current run's managed temporary location from `ToolInvocationContext.SessionStorage`.
+See [Root sources](#root-sources) for the folder layout and the key-folder root of the file tools.
 For exact, link-free scratch redirects, the matcher projects the command directory and ordinary operand scopes without the redirect scopes.
 The occurrence must have resolved command candidates, and every file target must stay in that run's managed directory or name the null device.
 An ineligible occurrence retains its ordinary command and redirect scopes.
@@ -882,6 +1159,14 @@ See [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-co
 | Must not know | It must not be an input to authority. |
 | Data | Call-local. The managed-temp retry key is call-local state in `ToolApprovalAttempt`. |
 | Rules | [TA-9](../../openspec/specs/tool-authorization/spec.md#requirement-ta-9-agent-correction-precedes-a-prompt-and-grants-no-authority) |
+
+On POSIX the managed temporary folder is below `/tmp` (issue #2554). Each
+advice route skips the own folder of the call, so the advice never sends the
+agent from its own folder to the same folder:
+
+- the `file_write` and `file_edit` route skips a path inside the run folder;
+- the project-output route (#2563) skips a redirect into the run folder;
+- the working-directory route starts only at the platform temporary root.
 
 Leak today: `IsEligiblePlatformTemporaryPath` is also an authority input for
 causal intent. **Planned:** move that rule into Filesystem authority as a named
@@ -983,7 +1268,10 @@ Facts behind the diagram (current code):
 - Automated input never abandons an open approval
   (`SessionToolWorkflow.PlanNewInputAbandonment`). Input with the principal
   `VerifiedAutomation` or `SystemProcess` (a reminder fire, a webhook, a
-  background job completion) waits in the buffer. It runs as its own turn after
+  background job completion) waits in the buffer. A child result notice is also
+  automated input. It carries the principal of the person who owns the child, so the
+  kind of the input decides (`InputAdmitted.ChildNotice`, `SendUserMessage.Notice`),
+  and a rebuilt waiting notice keeps its kind. The waiting input runs as its own turn after
   the turn that closes the approval. If the approval closes with no re-drive,
   the actor starts the waiting turn (`StartWaitingInputAfterApproval`).
 - The session acknowledges a waiting input after the journal stores it
@@ -999,6 +1287,13 @@ Facts behind the diagram (current code):
   (`SessionExecutionLifetime.DeferIdlePassivationUntilWaitingInputEnds`).
 - An actor restart can rebuild an input and also requeue it. Activation removes
   the queued copy, so each input reaches the model once.
+- An open child consent request also holds automated input (section 3.1, "The
+  child consent pause"). The held input waits in Ready and in the drain. It never
+  joins a running turn. A person input still runs. An approval notice is not held.
+  When the last child request closes, the session admits the closing notice, and
+  then the held input runs (`StartWaitingInputAfterApproval`). The pause does not
+  survive a restart today, because a restart withdraws every child request.
+  Recovery queues the held inputs in admission order (section 3.1).
 - Any person can abandon the approval, not only its requester. The check is
   fail-safe: an abandonment cancels the call and grants nothing.
   A valid example: a reminder fires while Alice's `git status` prompt is open.
@@ -1006,12 +1301,13 @@ Facts behind the diagram (current code):
   An invalid example: the reminder fire closes Alice's prompt with the
   "superseded by a new message" result. The session must not do this.
 - A subagent request goes to the parent through `ParentSessionApprovalBridge`.
-  It is live-only. After a restart, Netclaw rejects the old prompt as expired.
+  It is live-only. A restart withdraws the old prompt with `DaemonRestarted`, and a late click gets that text.
   A subagent without a parent bridge cannot ask. Its whole run fails with
   `ToolExecutionFailed`; it does not return a per-tool denial.
-- A channel that cannot post a prompt sends `Deny` for that call
-  (`ChannelOutputEngine`, `SlackThreadBindingActor`). This is the only
-  automatic denial of a consent request.
+- A channel that cannot post a prompt sends `prompt_unavailable` for that call
+  (`ChannelOutputEngine`, `SlackThreadBindingActor`). The call is refused. For a
+  child prompt the session also withdraws the request with `PromptUnavailable`.
+  This is the only automatic denial of a consent request.
 
 A non-shell call follows the same path, with two differences. `ToolAuthorizer`
 applies the rules for other tools and one `StoredGrantCheck` in place of the
@@ -1475,10 +1771,14 @@ B), a store round trip in `ToolApprovalActorTests`, a rehydration case in
 
 1. Filesystem authority: add the root source to the catalog in
    `PathAccessPolicy` (`ResolveAndMergeRoots` or the session roots). State which
-   audiences get it.
+   audiences get it, and add a row to the root-source table in section 3.3.
+   Example: the managed temporary key folder (issue #2554) is a session root
+   for every audience. Its shared parent is not a root.
 2. Choose the link rule on purpose: links below the root, links at or below the
    root, or links from the filesystem root.
 3. Protected paths still win.
+4. Check the Personal read rule (section 3.3). A new write root source widens
+   Personal reads too. A new read-only root source does not widen writes.
 
 Tests: `UnattendedPathAccessTests` (attended and unattended reach are equal)
 and `PublicAudienceFileAccessPolicyTests` style cases for each audience, a link escape case, a protected path case, and a
@@ -1504,7 +1804,11 @@ service calls, a compound or pipeline form of the same command, and a
 2. Route the answer as a `ToolInteractionResponse` with the selected key.
 3. Check the requester through `ApprovalButtonValueCodec`. Do not invent a
    second rule.
-4. Add the channel type to `ChannelType.SupportsInteractiveApproval()` in
+4. Honor `ToolInteractionRequest.Lifetime`: clear an `UntilTurnEnd` prompt at the turn end, and keep an
+   `UntilClosed` prompt until an answer or a close. Handle `ToolInteractionClosed`: find the prompt by call ID,
+   redraw it with the reason and no buttons, and remove it. Show a child prompt with buttons only, with no
+   text-only fallback. Use `ChannelOutputEngine`, which does these steps.
+5. Add the channel type to `ChannelType.SupportsInteractiveApproval()` in
    [`ChannelType.cs`](../../src/Netclaw.Actors/Channels/ChannelType.cs) only
    when it can show a prompt and route the answer. A channel type that is not
    in that list fails closed for uncovered calls.
@@ -1541,6 +1845,9 @@ change is small.
 | Close the `skill_manage` parent-directory check-to-use window | Not supported today | The temp file uses create-new semantics, so a link at the temp name fails. A same-user process that can already write where the daemon writes can still swap a parent directory. That gives no new authority today. With a sandboxed executor, fix it in Filesystem authority with directory-handle operations. |
 | A missing or unreadable audience becomes an error (owner decision, September 29) | Planned | Today some components fall back to `Public` (TA-1). A follow-up code PR makes each such fallback fail loudly. Until that PR merges, the fallback stays as TA-1 describes it. |
 | A consent for repository A that covers repository B | Not supported, by design | This is an invariant. A repository grant covers only registered worktrees of one Git common directory (TA-8). |
+| A child that waits for consent survives a restart (#2572) | Planned | PR 3 of child-approval-events-and-parent-pause: a parked child run, a child journal, and parked prompt entries in the parent snapshot. Today a restart withdraws every child request, and the run is lost. |
+| Messages between agents (`notify_parent`, `message_child`, sibling messages) | Needs a contract | One `AgentEvent` subtype, one renderer case, and one tool each. A message body is agent text, so it goes to a run file, and the event carries the path. The envelope gets event, correlation, and causation IDs. |
+| One answer for many child prompts ("approve for all") | Not supported, by design | Each prompt binds one-time consent to one exact call (owner decision Q2). |
 
 ## 9. How we know it works
 
@@ -1569,6 +1876,9 @@ and the approval tooling is in
 | One denied literal twin denies the call, and every twin candidate needs coverage (F1). | `LiteralTwinApprovalTests`; catalog `loop-twin*` rows; the literal twin mutation gate |
 | A command that runs no program gets the decision of the file tool for each redirect. A prompt always names what it asks for. | `ShellNoProgramAuthorizationTests`; catalog `no-program-*` rows; the harness check in `ShellApprovalHarness.ObservePrompt`; the no program mutation gate ([TOOLING.md § No Program Gate](../../TOOLING.md#no-program-gate)) |
 | No `ToolAuthorizer` rule can move ahead of an earlier rule. | The tool authorizer order mutation gate ([TOOLING.md § Tool Authorizer Order Gate](../../TOOLING.md#tool-authorizer-order-gate)) |
+| An open child consent request pauses the session: no model start of a child, automated input waits and never joins a running turn, a person runs, and an approval notice passes the pause and runs alone. | `ChildConsentPauseSpecs`, `ChildConsentNoticeSpecs`, `ChildConsentReminderSpecs`; the child consent mutation gate ([TOOLING.md § Child Consent Gate](../../TOOLING.md#child-consent-gate)) |
+| A text answer resolves no prompt when a child prompt is among two or more prompts that the sender can answer. | `ChildApprovalWithdrawalSpecs`, `PendingApprovalLookupTests`, the channel contract tests; the text answer guard mutation gate ([TOOLING.md § Text Answer Guard Gate](../../TOOLING.md#text-answer-guard-gate)) |
+| A closed child prompt closes on every surface with its true reason (answered or withdrawn), and a late click gets that reason with no child identity. | `ChildApprovalWithdrawalSpecs`, `RecoveredApprovalLogTests`, the channel contract tests, `ChatPageTests`, `HeadlessChildPromptTests` |
 
 Model guidance (which tool the model should choose, and how it should declare
 a project directory) is not an authorization rule, and no spec owns it. The

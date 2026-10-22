@@ -264,7 +264,7 @@ public class McpStdioSmokeTests : IAsyncDisposable
         var storage = SessionStoragePaths.CreateLegacy(
             Path.Combine(directory.Path, "session"),
             Path.Combine(directory.Path, "logs"),
-            "test-thread");
+            "test-thread", ManagedTemporaryLayout.InsideSessionStorage.Instance);
         return TestToolExecutionContext.CreateBoundWithStorage(
             "test/thread",
             storage,

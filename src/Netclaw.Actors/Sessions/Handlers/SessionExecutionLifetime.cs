@@ -29,7 +29,7 @@ internal enum ReminderEligibility { None, Eligible, EmittedText }
 internal enum PassivationWork { NoAction, WaitForReap, AttemptSnapshot }
 internal readonly record struct PassivationStart(long? ReapEpoch, bool RequestDistillation);
 internal sealed record FinalStopResult(IActorRef? ReplyTo, ReminderDefinition? Reminder, string? OmissionReason);
-internal sealed record RestartContextResult(TurnContext? Context, string? Reason);
+internal sealed record RestartContextResult(TurnContext? Context, string? Reason, int ResumeCount);
 
 /// <summary>
 /// Owns model and tool resources, restart drain, and passivation policy on the session actor thread.
@@ -110,13 +110,18 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private Task? _toolTask;
     private bool _toolStopRequested;
     private IActorRef? _restartDrainReplyTo;
+    private string _restartDrainReason = string.Empty;
     private DateTimeOffset? _restartInterruptionAt;
+    // The reminder wakes a session that only owes a child result. Its pending inputs, if any, wait behind an approval
+    // and do not resume.
+    private bool _restartResumesChildrenOnly;
     private long _jobReapEpoch;
     private ReapOperation? _reap;
     private PassivationAttempt? _attempt;
     private bool _idlePassivationAfterWaitingInput;
 
     public bool RestartDrainRequested => _restartDrainReplyTo is not null;
+    public string RestartDrainReason => _restartDrainReason;
 
     // The idle handler closed a parked batch while an acknowledged input waited behind it. The input runs first,
     // because nothing would rebuild it after passivation. The idle decision completes when that work ends.
@@ -134,19 +139,22 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
 
     public RestartAction RequestRestart(
         IActorRef replyTo,
+        string reason,
         SessionPhase phase,
-        bool hasActiveTurn,
         bool hasBufferedContinuation,
         bool canParkDurableApprovals)
     {
         _restartDrainReplyTo = replyTo;
+        _restartDrainReason = reason;
         if (phase == SessionPhase.Ready)
             return RestartAction.EnterPassivation;
 
         if (TryStopDurableApprovalWaits(phase, hasBufferedContinuation, canParkDurableApprovals))
             return RestartAction.StopToolTask;
 
-        if (phase == SessionPhase.Processing && HasLiveModel && hasActiveTurn)
+        // A tool batch clears the selected inputs, but the model call after it is still a live call of the turn.
+        // The grace period applies to each live model call, so that a tool loop cannot hold the drain (#2601).
+        if (phase == SessionPhase.Processing && HasLiveModel)
         {
             timers.StartSingleTimer(
                 RestartModelGraceTimerKey,
@@ -168,10 +176,9 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
            && canParkDurableApprovals
            && RequestToolStop();
 
-    public long? PlanRestartModelStop(RestartModelGraceExpired message, SessionPhase phase, bool hasActiveTurn)
+    public long? PlanRestartModelStop(RestartModelGraceExpired message, SessionPhase phase)
         => RestartDrainRequested
            && phase == SessionPhase.Processing
-           && hasActiveTurn
            && CanDispatchPreparedModel(message.CallId)
             ? message.CallId
             : null;
@@ -196,23 +203,42 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
             : ToolStopAction.EnterPassivation;
     }
 
+    // A session with a pending input, or with a child run whose result the parent has not received, needs the restart
+    // reminder. The reminder wakes the session after the restart, and the recovery then ends the lost child.
     public ReminderEligibility MarkRestartReminderEligible(
         int pendingInputCount,
+        int unreportedChildCount,
         bool emittedText,
         int selectedInputCount,
         DateTimeOffset now)
     {
-        if (pendingInputCount == 0)
+        if (pendingInputCount == 0 && unreportedChildCount == 0)
             return ReminderEligibility.None;
 
         if (emittedText && selectedInputCount > 0)
             return ReminderEligibility.EmittedText;
 
         _restartInterruptionAt = now;
+        _restartResumesChildrenOnly = pendingInputCount == 0;
         return ReminderEligibility.Eligible;
     }
 
     public void ClearRestartReminderEligibility() => _restartInterruptionAt = null;
+
+    /// <summary>
+    /// The notice that tells the person that a restart drain stopped the turn, or null when the restart reminder
+    /// resumes the turn. The turn resumes only when the reminder replays the inputs of the turn, so
+    /// <paramref name="pendingTurnInputCount"/> counts the selected inputs of the stopped turn that stay pending.
+    /// <paramref name="drainReason"/> is <see cref="Protocol.PrepareForDaemonRestart.Reason"/>.
+    /// </summary>
+    internal static string? RestartStoppedTurnNotice(
+        ReminderEligibility eligibility,
+        int pendingTurnInputCount,
+        string drainReason)
+        => eligibility == ReminderEligibility.Eligible && pendingTurnInputCount > 0
+            ? null
+            : $"Netclaw stopped this turn because the daemon is {(drainReason == "daemon-stop" ? "stopping" : "restarting")}. "
+              + "The turn did not finish, and it will not continue by itself. Send a message to continue.";
 
     public PassivationStart BeginPassivation(bool hasTrackedJobs, bool managerAvailable, bool observerAvailable)
     {
@@ -303,48 +329,64 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         _attempt = null;
     }
 
-    public FinalStopResult? ClaimFinalStop(SessionPhase phase, SessionId sessionId, IReadOnlyList<InputAdmitted> pending)
+    public FinalStopResult? ClaimFinalStop(
+        SessionPhase phase,
+        SessionId sessionId,
+        IReadOnlyList<InputAdmitted> pending,
+        IReadOnlyList<BackgroundChildRun> unreportedChildren)
     {
         if (phase != SessionPhase.Passivating || _attempt is null
             || _attempt.Milestone is not (AttemptMilestone.Grace or AttemptMilestone.SnapshotReady))
             return null;
 
-        var (reminder, reason) = BuildRestartReminder(sessionId, pending);
+        var (reminder, reason) = BuildRestartReminder(sessionId, pending, unreportedChildren);
         _attempt.Milestone = AttemptMilestone.FinalEffectsClaimed;
         return new FinalStopResult(_restartDrainReplyTo, reminder, reason);
     }
 
+    // One turn serves one requester. The resume takes the leading pending inputs that share the requester of the
+    // first one. The other pending inputs run in their own turns after it.
     public RestartContextResult ValidateRestartResume(IReadOnlyList<InputAdmitted> pending)
     {
         TurnContext? first = null;
-        var reason = "no pending input";
+        var count = 0;
         foreach (var input in pending)
         {
-            if (!TurnContext.TryFromRecord(input.TurnContext, out var candidate, out reason)
+            if (!TurnContext.TryFromRecord(input.TurnContext, out var candidate, out var reason)
                 || candidate is null)
-                return new RestartContextResult(null, reason);
+                return new RestartContextResult(null, reason, 0);
 
             if (first is null)
             {
                 first = candidate;
+                count = 1;
                 continue;
             }
 
-            if (!first.HasSameAuthority(candidate))
-                return new RestartContextResult(null, "pending inputs have different authority");
+            if (!first.HasSameRequester(candidate))
+                break;
+            count++;
         }
 
-        return new RestartContextResult(first, first is null ? reason : null);
+        return new RestartContextResult(first, first is null ? "no pending input" : null, count);
     }
 
     private (ReminderDefinition? Reminder, string? Reason) BuildRestartReminder(
         SessionId sessionId,
-        IReadOnlyList<InputAdmitted> pending)
+        IReadOnlyList<InputAdmitted> pending,
+        IReadOnlyList<BackgroundChildRun> unreportedChildren)
     {
-        if (_restartInterruptionAt is not { } interruptedAt || pending.Count == 0)
+        if (_restartInterruptionAt is not { } interruptedAt)
             return (null, null);
 
-        var contextResult = ValidateRestartResume(pending);
+        // With no resumable input, the oldest unreported child supplies the recorded context. Its owner is the
+        // requester whose work the restart interrupted.
+        var fromChildren = _restartResumesChildrenOnly || pending.Count == 0;
+        if (fromChildren ? unreportedChildren.Count == 0 : pending.Count == 0)
+            return (null, null);
+        var contextResult = fromChildren
+            ? ChildRestartContext(unreportedChildren)
+            : ValidateRestartResume(pending);
         if (contextResult.Context is not { } context)
             return (null, contextResult.Reason ?? "invalid stored authority");
 
@@ -371,6 +413,15 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
             UpdatedAt = interruptedAt,
             ExpiresAt = interruptedAt + RestartReminderLifetime
         }, null);
+    }
+
+    private static RestartContextResult ChildRestartContext(IReadOnlyList<BackgroundChildRun> unreportedChildren)
+    {
+        var oldest = unreportedChildren.MinBy(static run => run.AcceptedAtMs)
+            ?? throw new InvalidOperationException("A child restart context requires an unreported child run.");
+        return TurnContext.TryFromRecord(oldest.OriginalContext, out var context, out var reason) && context is not null
+            ? new RestartContextResult(context, null, 0)
+            : new RestartContextResult(null, reason, 0);
     }
 
     public long CurrentModelCallId => _modelCallId;

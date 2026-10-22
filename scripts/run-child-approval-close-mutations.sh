@@ -41,7 +41,7 @@ read -r span_start span_end first_line last_line < <(
 )
 
 report="$output_path/reports/mutation-report.json"
-expected_count=6
+expected_count=5
 tested_count="$(
   jq '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length' "$report"
 )"

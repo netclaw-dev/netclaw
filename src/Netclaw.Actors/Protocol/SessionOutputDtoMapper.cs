@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.Sessions;
 using Netclaw.Media;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -95,6 +96,7 @@ public static class SessionOutputDtoMapper
             TurnNumber = msg.TurnNumber,
             TurnOutcome = msg.Outcome.ToString().ToLowerInvariant(),
             SourceReminderId = msg.SourceReminderId?.Value,
+            QuietEnd = msg.QuietEnd,
             // Always an array, never null: an absent field means an earlier daemon.
             OpenChildRunIds = [.. msg.OpenChildRunIds.Select(id => id.Value)]
         },
@@ -213,7 +215,23 @@ public static class SessionOutputDtoMapper
             InteractionOptions = [.. msg.Options],
             InteractionHasAdoptedContext = msg.HasAdoptedContext,
             InteractionHasThirdPartyAdoptedContext = msg.HasThirdPartyAdoptedContext,
-            InteractionAdoptedSpeakerIds = [.. msg.AdoptedSpeakerIds]
+            InteractionAdoptedSpeakerIds = [.. msg.AdoptedSpeakerIds],
+            InteractionLifetime = msg.Lifetime.ToString()
+        },
+
+        ToolInteractionClosed msg => new SessionOutputDto
+        {
+            Type = SessionOutputTypes.ToolInteractionClosed,
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs,
+            CallId = msg.CallId.Value,
+            InteractionCloseKind = msg.Reason switch
+            {
+                ToolInteractionCloseReason.Answered => AnsweredCloseKind,
+                ToolInteractionCloseReason.Withdrawn => WithdrawnCloseKind,
+                _ => throw new InvalidOperationException($"Unknown close reason {msg.Reason.GetType().Name}.")
+            },
+            InteractionWithdrawReason = (msg.Reason as ToolInteractionCloseReason.Withdrawn)?.Reason.ToString()
         },
 
         _ => new SessionOutputDto
@@ -290,6 +308,7 @@ public static class SessionOutputDtoMapper
                     ? outcome
                     : TurnOutcome.Completed,
                 SourceReminderId = dto.SourceReminderId is null ? null : new ReminderId(dto.SourceReminderId),
+                QuietEnd = dto.QuietEnd ?? false,
                 OpenChildRunIds = dto.OpenChildRunIds is null
                     ? []
                     : [.. dto.OpenChildRunIds.Select(id => new SubAgentRunId(id))]
@@ -370,7 +389,16 @@ public static class SessionOutputDtoMapper
                 CandidateVerbs = dto.InteractionCandidateVerbs ?? [],
                 Cwd = dto.InteractionCwd,
                 IsMessy = dto.InteractionIsMessy ?? false,
-                Options = dto.InteractionOptions ?? []
+                Options = dto.InteractionOptions ?? [],
+                Lifetime = ParseInteractionLifetime(dto.InteractionLifetime)
+            },
+            SessionOutputTypes.ToolInteractionClosed => new ToolInteractionClosed(
+                new Netclaw.Tools.ToolCallId(dto.CallId
+                    ?? throw new InvalidDataException("A closed tool interaction has no call ID.")),
+                ParseCloseReason(dto))
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs
             },
             _ => new ErrorOutput
             {
@@ -397,6 +425,31 @@ public static class SessionOutputDtoMapper
         => name is not null && Enum.IsDefined(typeof(ErrorCategory), name)
             ? Enum.Parse<ErrorCategory>(name)
             : ErrorCategory.Unknown;
+
+    // No name is an older daemon, whose prompts all end with the turn. An unknown name is a newer daemon. It fails the
+    // read, because a guess could drop a prompt that a child still waits on.
+    private static ToolInteractionLifetime ParseInteractionLifetime(string? name)
+    {
+        if (name is null)
+            return ToolInteractionLifetime.UntilTurnEnd;
+        return Enum.IsDefined(typeof(ToolInteractionLifetime), name)
+            ? Enum.Parse<ToolInteractionLifetime>(name)
+            : throw new InvalidDataException($"Unknown tool interaction lifetime '{name}'.");
+    }
+
+    private const string AnsweredCloseKind = "answered";
+    private const string WithdrawnCloseKind = "withdrawn";
+
+    // A closed prompt with no reason, an unknown reason, or an answered close with a withdraw reason fails the read. A
+    // guess would show the operator a false reason.
+    private static ToolInteractionCloseReason ParseCloseReason(SessionOutputDto dto) => dto.InteractionCloseKind switch
+    {
+        AnsweredCloseKind when dto.InteractionWithdrawReason is null => new ToolInteractionCloseReason.Answered(),
+        WithdrawnCloseKind when dto.InteractionWithdrawReason is { } name && Enum.IsDefined(typeof(WithdrawReason), name)
+            => new ToolInteractionCloseReason.Withdrawn(Enum.Parse<WithdrawReason>(name)),
+        _ => throw new InvalidDataException(
+            $"Unknown close of a tool interaction: '{dto.InteractionCloseKind}' '{dto.InteractionWithdrawReason}'.")
+    };
 
     private static SubAgentOutput MapSubAgentOutput(SessionOutputDto dto, SessionId sessionId)
     {

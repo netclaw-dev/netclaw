@@ -116,6 +116,9 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
 
     protected override ChannelType ExpectedChannelType => ChannelType.Discord;
 
+    protected override IReadOnlyList<RenderedPrompt> GetPromptRedraws()
+        => _replyClient.Updates.ToList().Select(update => new RenderedPrompt(update.Text, !update.RemoveComponents)).ToList();
+
     protected override bool SupportsThreadHydration => true;
 
     protected override IActorRef CreateBindingActorWithHydration(

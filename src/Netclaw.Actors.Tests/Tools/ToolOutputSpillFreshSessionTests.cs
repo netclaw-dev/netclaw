@@ -146,7 +146,7 @@ public sealed class ToolOutputSpillFreshSessionTests : IDisposable
         var childStorage = SessionStoragePaths.CreateLegacy(
             _sessionDirectory,
             Path.Combine(_temp.Path, "sessions", "fresh-session", "logs"),
-            "parent").ForChild(new SubAgentRunId("child-run"), new SubAgentScopeId("parent/subagent/child"));
+            "parent", ManagedTemporaryLayout.InsideSessionStorage.Instance).ForChild(new SubAgentRunId("child-run"), new SubAgentScopeId("parent/subagent/child"));
         Assert.Equal(_sessionDirectory, childStorage.SessionDirectory.Value);
 
         var childContext = TestToolExecutionContext.CreateBoundWithStorage(

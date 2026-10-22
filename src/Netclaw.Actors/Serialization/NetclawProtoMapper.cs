@@ -176,8 +176,7 @@ internal static partial class NetclawProtoMapper
         if (evt.SourceBackgroundJobId is { } backgroundJobId)
             proto.SourceBackgroundJobId = backgroundJobId.Value;
         proto.ConsumedInputIds.AddRange(evt.ConsumedInputIds.Select(static id => id.Value));
-        if (evt.ChildContinuation is not null)
-            proto.ChildContinuation = ToProto(evt.ChildContinuation);
+        RejectLegacyContinuation(evt.ChildContinuation);
         return proto;
     }
 
@@ -210,6 +209,8 @@ internal static partial class NetclawProtoMapper
         if (evt.ExecutableText is not null)
             proto.ExecutableText = evt.ExecutableText;
         proto.TurnContext = ToProto(evt.TurnContext);
+        if (evt.ChildNotice is { } notice)
+            proto.ChildNotice = ToProto(notice);
         return proto;
     }
 
@@ -225,6 +226,7 @@ internal static partial class NetclawProtoMapper
         TurnContext = proto.TurnContext is null
             ? throw new InvalidDataException("An admitted input has no turn context.")
             : FromProto(proto.TurnContext),
+        ChildNotice = proto.ChildNotice is null ? null : FromProto(proto.ChildNotice),
         AdmittedAtMs = proto.AdmittedAtMs
     };
 
@@ -240,8 +242,9 @@ internal static partial class NetclawProtoMapper
             proto.SourceBackgroundJobId = sourceBackgroundJobId.Value;
         if (evt.RejectedJobReport is not null)
             proto.RejectedJobReport = ToProto(evt.RejectedJobReport);
-        if (evt.ChildContinuation is not null)
-            proto.ChildContinuation = ToProto(evt.ChildContinuation);
+        if (evt.KeepsTurn)
+            proto.KeepsTurn = true;
+        RejectLegacyContinuation(evt.ChildContinuation);
         return proto;
     }
 
@@ -252,7 +255,8 @@ internal static partial class NetclawProtoMapper
         SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
         RejectedJobReport = proto.RejectedJobReport is null ? null : FromProto(proto.RejectedJobReport),
         ClosedAtMs = proto.ClosedAtMs,
-        ChildContinuation = proto.ChildContinuation is null ? null : FromProto(proto.ChildContinuation)
+        ChildContinuation = proto.ChildContinuation is null ? null : FromProto(proto.ChildContinuation),
+        KeepsTurn = proto.HasKeepsTurn && proto.KeepsTurn
     };
 
     // ── SessionTitleSet ──
@@ -310,8 +314,7 @@ internal static partial class NetclawProtoMapper
             StartedAtMs = evt.StartedAtMs
         };
         proto.ConsumedInputIds.AddRange(evt.ConsumedInputIds.Select(static id => id.Value));
-        if (evt.ChildContinuation is not null)
-            proto.ChildContinuation = ToProto(evt.ChildContinuation);
+        RejectLegacyContinuation(evt.ChildContinuation);
         return proto;
     }
 
@@ -945,7 +948,21 @@ internal static partial class NetclawProtoMapper
             proto.ToolName = evt.ToolName;
         if (evt.DisplayText is not null)
             proto.DisplayText = evt.DisplayText;
+        if (evt.Lifetime != Sessions.SessionProtocol.ToolInteractionLifetime.UntilTurnEnd)
+            proto.Lifetime = (int)evt.Lifetime;
         return proto;
+    }
+
+    // An unknown lifetime number comes from a newer writer. It fails the read: a guess could clear a prompt that a
+    // child still waits on, or keep a turn prompt after its turn.
+    private static Sessions.SessionProtocol.ToolInteractionLifetime FromProtoLifetime(Proto.PendingApprovalPromptTrackedProto proto)
+    {
+        if (!proto.HasLifetime)
+            return Sessions.SessionProtocol.ToolInteractionLifetime.UntilTurnEnd;
+        var lifetime = (Sessions.SessionProtocol.ToolInteractionLifetime)proto.Lifetime;
+        return Enum.IsDefined(lifetime)
+            ? lifetime
+            : throw new InvalidDataException($"Tracked prompt {proto.CallId} has an unknown lifetime {proto.Lifetime}.");
     }
 
     internal static PendingApprovalPromptTracked FromProto(Proto.PendingApprovalPromptTrackedProto proto) => new()
@@ -958,7 +975,8 @@ internal static partial class NetclawProtoMapper
         OptionKeys = proto.OptionKeys.ToArray(),
         PromptId = proto.PromptId,
         ToolName = proto.HasToolName ? proto.ToolName : null,
-        DisplayText = proto.HasDisplayText ? proto.DisplayText : null
+        DisplayText = proto.HasDisplayText ? proto.DisplayText : null,
+        Lifetime = FromProtoLifetime(proto)
     };
 
     internal static Proto.PendingApprovalPromptClearedProto ToProto(PendingApprovalPromptCleared evt) => new()

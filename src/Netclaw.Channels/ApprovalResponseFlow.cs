@@ -6,6 +6,7 @@
 using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -57,7 +58,11 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
     private readonly TimeSpan _operationTimeout;
     private readonly List<TRequest> _pendingRequests;
     private readonly Func<bool> _hasObservedApprovalRequest;
-    private readonly Func<Task> _postWrongRequesterWarningAsync;
+    /// <summary>The reply to an answer from a person who is not the requester.</summary>
+    public const string WrongRequesterWarning = ":warning: Only the requesting user can approve this tool action.";
+
+    private readonly Func<string, Task> _postNoticeAsync;
+    private readonly Func<TRequest, string, Task> _redrawClosedPromptAsync;
     private readonly Action<ToolCallId> _persistPromptCleared;
     private readonly ResolvedApprovalPromptRenderer<TPromptId> _renderResolvedPromptAsync;
     private readonly ILoggingAdapter _log;
@@ -77,12 +82,18 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
     /// entry it resolves; the actor keeps adding to it and replaying it.
     /// </param>
     /// <param name="hasObservedApprovalRequest">Reads the cold-path gate.</param>
-    /// <param name="postWrongRequesterWarningAsync">Posts the channel's wrong-requester warning.</param>
+    /// <param name="postNoticeAsync">
+    /// Posts a notice of the flow in the conversation: the wrong-requester warning or the text answer guard reply.
+    /// </param>
     /// <param name="persistPromptCleared">
     /// Journals <c>PendingApprovalPromptCleared</c> for the resolved call. The
     /// actor owns the persistence call; the flow never touches Akka persistence.
     /// </param>
     /// <param name="renderResolvedPromptAsync">Redraws the resolved prompt on the channel.</param>
+    /// <param name="redrawClosedPromptAsync">
+    /// Redraws a posted prompt as closed, with the given text and no buttons. The flow calls it only for a prompt with
+    /// a locator.
+    /// </param>
     /// <param name="log">The binding actor's logger, with its adapter context fields.</param>
     public ApprovalResponseFlow(
         SessionId sessionId,
@@ -92,9 +103,10 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
         TimeSpan operationTimeout,
         List<TRequest> pendingRequests,
         Func<bool> hasObservedApprovalRequest,
-        Func<Task> postWrongRequesterWarningAsync,
+        Func<string, Task> postNoticeAsync,
         Action<ToolCallId> persistPromptCleared,
         ResolvedApprovalPromptRenderer<TPromptId> renderResolvedPromptAsync,
+        Func<TRequest, string, Task> redrawClosedPromptAsync,
         ILoggingAdapter log)
     {
         _sessionId = sessionId;
@@ -104,7 +116,8 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
         _operationTimeout = operationTimeout;
         _pendingRequests = pendingRequests;
         _hasObservedApprovalRequest = hasObservedApprovalRequest;
-        _postWrongRequesterWarningAsync = postWrongRequesterWarningAsync;
+        _postNoticeAsync = postNoticeAsync;
+        _redrawClosedPromptAsync = redrawClosedPromptAsync;
         _persistPromptCleared = persistPromptCleared;
         _renderResolvedPromptAsync = renderResolvedPromptAsync;
         _log = log;
@@ -139,7 +152,21 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
 
         if (result is ApprovalLookupResult.WrongRequester)
         {
-            await _postWrongRequesterWarningAsync();
+            await _postNoticeAsync(WrongRequesterWarning);
+            return true;
+        }
+
+        if (result is ApprovalLookupResult.Ambiguous)
+        {
+            // The text answer guard (design D7): the text names no prompt, so it answers none. Text that is no
+            // approval answer stays ordinary conversation.
+            var answerable = PendingApprovalLookup.Answerable<TRequest, TPromptId>(_pendingRequests, senderId);
+            if (!answerable.Any(candidate => ToolInteractionResponseParser.TryParseApprovalResponse(
+                    text ?? string.Empty, candidate.Options, out _)))
+                return false;
+            _log.Info("Ignoring {Channel} text approval response from sender={SenderId}: {OpenCount} prompts are open",
+                _channelName, senderId, answerable.Count);
+            await _postNoticeAsync(ChildApprovalPrompt.UseButtonsText(answerable.Count));
             return true;
         }
 
@@ -175,12 +202,13 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
         {
             case CommandNack nack:
                 if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await _postWrongRequesterWarningAsync();
+                    await _postNoticeAsync(WrongRequesterWarning);
                 _log.Info(
-                    "Session rejected {Channel} text approval response for call {CallId} reason={Reason}; skipping redraw",
+                    "Session rejected {Channel} text approval response for call {CallId} reason={Reason}",
                     _channelName,
                     pending.CallId,
                     nack.Reason ?? "<none>");
+                await ClearIfSessionClosedAsync(pending, nack);
                 return true;
 
             case not CommandAck:
@@ -246,7 +274,7 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
         // see #939 + #979.
         if (result is ApprovalLookupResult.WrongRequester)
         {
-            await _postWrongRequesterWarningAsync();
+            await _postNoticeAsync(WrongRequesterWarning);
             respondSynchronously?.Invoke(CommandNack.For(_sessionId, ApprovalNackReasons.WrongRequester));
             return;
         }
@@ -282,16 +310,20 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
         {
             case CommandNack nack:
                 // Session rejected (wrong requester, unknown call, stale resolution).
-                // For wrong-requester surface the warning; for any other reason just
-                // log and DO NOT redraw — the prompt UI must stay consistent with the
+                // For wrong-requester surface the warning. When the session says that a
+                // prompt that this binding holds is closed (withdrawn, expired, or already
+                // answered), clear it and redraw it with no buttons (review fix B1). For
+                // any other reason only log, so the prompt UI stays consistent with the
                 // session's authoritative state.
                 if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await _postWrongRequesterWarningAsync();
+                    await _postNoticeAsync(WrongRequesterWarning);
                 _log.Info(
-                    "Session rejected {Channel} approval response for call {CallId} reason={Reason}; skipping redraw",
+                    "Session rejected {Channel} approval response for call {CallId} reason={Reason}",
                     _channelName,
                     callId,
                     nack.Reason ?? "<none>");
+                if (pending is not null)
+                    await ClearIfSessionClosedAsync(pending, nack);
                 respondSynchronously?.Invoke(nack);
                 return;
 
@@ -423,6 +455,21 @@ public sealed class ApprovalResponseFlow<TRequest, TPromptId>
                 senderId);
             return false;
         }
+    }
+
+    // The session is the authority on a prompt. A binding can restore a child prompt from its journal after the
+    // session forgot it (a restart or a passivation), and then no close output comes. When the session says that the
+    // prompt is closed (withdrawn, expired, or answered), the binding drops it, journals the clear, and redraws it with
+    // no buttons. Otherwise a dead prompt keeps taking every text answer (review fix B1).
+    private async Task ClearIfSessionClosedAsync(TRequest pending, CommandNack nack)
+    {
+        if (nack.Reason is not (ApprovalNackReasons.Withdrawn or ApprovalNackReasons.PromptExpired
+            or ApprovalNackReasons.AlreadyAnswered))
+            return;
+
+        ClearResolved(pending);
+        if (pending.PromptId is not null)
+            await _redrawClosedPromptAsync(pending, ChildApprovalPrompt.ClosedText);
     }
 
     private void ClearResolved(TRequest pending)

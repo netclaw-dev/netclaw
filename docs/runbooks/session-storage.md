@@ -40,6 +40,61 @@ Example: A child writes a diagnostic archive below its own `temp_dir`.
 
 Counterexample: A child does not treat `session_dir` as disposable storage.
 
+## Managed Temporary Folder
+
+On Linux and macOS, `temp_dir` is short, so that a Unix socket path below it
+fits the socket limit (107 characters on Linux, 103 on macOS; issue #2554):
+
+| Run | `temp_dir` |
+| --- | --- |
+| Parent | `/tmp/netclaw-<uid>/<key>/p` |
+| Child | `/tmp/netclaw-<uid>/<key>/c<8 hex>` |
+
+- `<uid>` is the user ID of the daemon (`id -u`). On macOS the folder is
+  `/private/tmp/netclaw-<uid>`.
+- `<key>` is 16 hex characters from a hash of the session envelope path. All
+  runs of one session share the key folder.
+- The key folder is a trusted root of its session. The folder
+  `/tmp/netclaw-<uid>` is not a root. A Team or Public session cannot reach
+  the key folder of another session, also when a configured root covers
+  `/tmp`. A Personal session can, as it can reach each session folder.
+- On Windows, `temp_dir` stays `<session-envelope>/tmp/parent` for a parent and
+  `<session-envelope>/subagents/<run-id>/tmp` for a child.
+
+Before each shell launch, and before each `file_write` or `file_edit` below
+`/tmp/netclaw-<uid>`, Netclaw creates `/tmp/netclaw-<uid>` and the
+key folder with mode 0700. It checks that each folder is not a symbolic link,
+that the daemon user owns it, and that it has no group or other permission
+bits. The checks assume that `/tmp` has the sticky bit (mode 1777), as on each
+supported host.
+
+Caution: if a check fails, the shell call or the write fails, and Netclaw does
+not use another folder. The error names the folder and the cause. To recover:
+
+1. Find who owns the folder: `ls -ld /tmp/netclaw-$(id -u)`.
+2. If another user owns the folder, or if it is a link, find out why. Somebody
+   can have made it to read your temp files.
+3. Remove the folder, or set its mode with `chmod 700`. Netclaw creates a
+   missing folder again at the next shell call. If another user owns the
+   folder, only root can remove it.
+
+The OS can delete `/tmp` files at a reboot or with `systemd-tmpfiles`. The
+files in `temp_dir` are disposable. Put files that you must keep in
+`artifact_dir`. Netclaw does not delete `temp_dir` when a session ends. Smoke
+runs and test daemons on a developer host also leave key folders below the
+same base.
+
+A background-job record keeps the `temp_dir` that it had when it started. An
+older record can therefore name `<session-envelope>/tmp/parent`.
+
+Example: Chrome starts below `temp_dir` and makes
+`/tmp/netclaw-1000/<key>/p/com.google.Chrome.XXXXXX/SingletonSocket` (77
+characters).
+
+Counterexample: Do not set `TMPDIR=/tmp/<name>` in a shell command. Files in
+another `/tmp` folder are outside the session roots of a Team or Public
+session, and the agent must not depend on them.
+
 ## Log Access
 
 The current session envelope is an implicit trusted root for parent and child

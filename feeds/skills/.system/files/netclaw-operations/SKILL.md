@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.120.0"
+  version: "2.128.0"
 ---
 
 # Netclaw Operations
@@ -21,12 +21,14 @@ a reference file — load the one matching the user's intent with
 
 | User intent | Where |
 |-------------|-------|
-| Schedule reminders/cron; run background shell jobs | `skill_read_resource('netclaw-operations', 'references/scheduling.md')` |
+| Schedule reminders/cron | `skill_read_resource('netclaw-operations', 'references/scheduling.md')` |
+| A command timed out or was refused as repeated; run long work or background shell jobs | `skill_read_resource('netclaw-operations', 'references/long-running-commands.md')` |
 | How tool arguments are validated | [Tool argument validation](#tool-argument-validation) |
 | Handle very large tool output | [Large tool output](#large-tool-output) |
 | Understand approval prompts | [Approval Prompts](#approval-prompts) |
 | Update identity / where facts go (identity vs memory) | [Identity](#identity) |
 | Work on a project, switch projects | `skill_read_resource('netclaw-operations', 'references/projects.md')` |
+| `temp_dir` problems (`Socket path too long`, a temp folder check error), or `file_read` refuses a path that the shell can write | `skill_read_resource('netclaw-operations', 'references/projects.md')` |
 | Discover MCP / available tools | `skill_read_resource('netclaw-operations', 'references/tools.md')` |
 | Authorize or diagnose an HTTP/SSE MCP server | [MCP OAuth](#mcp-oauth) |
 | Manage skills and sources | `skill_read_resource('netclaw-operations', 'references/skills.md')` |
@@ -105,8 +107,8 @@ When available, use `shell_execute` for local search, VCS, builds, tests, proces
 Do not substitute shell commands when a listed first-party tool satisfies the task.
 Do not delegate a known file operation that an available file tool can complete.
 After a successful file tool result, do not use shell only to verify it unless the user requests shell behavior.
-For disposable text, use `file_write` in `temp_dir`, then use `file_read`; do not attempt a shell redirect first.
-Standard temporary APIs use `temp_dir` in each shell process.
+For disposable text that you write, use `file_write` in `temp_dir`, then use `file_read`; do not attempt a shell redirect first. For command output, redirect to `"$TMPDIR/<name>"` (see the scratch redirect rules below).
+Standard temporary APIs use `temp_dir` in each shell process. Do not set `TMPDIR`, `TMP`, or `TEMP` in a shell command.
 Use `load_tool` directly for a known exact tool name.
 Use `search_tools` when the capability is known but its exact tool name is not.
 
@@ -174,7 +176,7 @@ A denied child-directory call does not permit a project change.
 The `[session]` block separates five paths:
 
 - `session_dir` is the workspace and the relative-path fallback.
-- `temp_dir` is run-local storage for disposable files.
+- `temp_dir` is run-local storage for disposable files. On Linux it is `/tmp/netclaw-<uid>/<key>/p`; on macOS it is below `/private/tmp`.
 - `artifact_dir` is the run-owned output area.
 - `worktree_dir` is the session area for Git worktrees.
 - `log_path` is the exact raw audit log for the current run.
@@ -213,14 +215,20 @@ Use `agent-coordination` for task composition and independent review.
 
 `spawn_agent`, routed `skill_load`, and a routed slash command return after durable acceptance.
 The response contains `run_id` and `scope_id`. Acceptance does not mean completion.
-Continue independent work. A ready child result arrives as tool output at the next safe parent boundary.
-Another child's unfinished work does not delay a ready result.
+Continue independent work. When a child ends, the runtime writes `result.md` in the run folder and admits one notice.
+The notice is a user message. It names the agent, the run, the outcome, and the path of `result.md`. It holds no child output.
+Read `result.md` with `file_read`. The result never arrives as tool output.
+Another child's unfinished work does not delay a ready notice.
+A child consent request pauses the session until the operator answers: `spawn_agent` is refused, and automated turns
+and child result notices wait. An approval notice tells you about the request. Tell the operator to answer the prompt.
+Do not cancel or respawn a waiting child. A child prompt has buttons only, so tell the operator to use the buttons.
+Read `references/child-runs.md` for the notice, the pause, and the withdrawal rules.
 Use `check_agent_run` with the returned `run_id` for a status check.
 The original owner can see `pending_approval_count` and request cancellation with `cancel: true`.
 A cancellation acknowledgement reports intent. Wait for the terminal result before you report that the child stopped.
 Do not poll status in a loop. Use it when the user needs a status update or intervention.
 Do not wait or poll for a child in a headless run. End the turn. The result starts a later parent turn.
-The terminal result includes authorized log and artifact paths when available.
+`result.md` names the log and the artifact paths. `task.md` in the same folder records what you asked.
 Use normal file tools for those exact paths. Do not derive a broader session path.
 A lost child reports uncertainty. Recovery does not repeat its external work.
 If result evidence preparation fails, do not assume parent context adoption.
@@ -235,21 +243,28 @@ it needs first with `netclaw approvals trust-verb <verb>`, or test it with
 test runs the reminder's exact prompt in the chat, so the user can answer each
 prompt with an "Always" grant that the scheduled run reads. The CLI form is
 `netclaw reminder run <id>`. The test runs only in a chat at the reminder's
-audience, and a CLI chat is Personal (#2330). Background shell: set
-`_background: true` on `shell_execute` (max 5 concurrent; cancel servers/watchers
-when done; background jobs are killed when the session passivates).
+audience, and a CLI chat is Personal (#2330).
 
-Full detail — delivery contract, proactive channel messaging, approval scoping,
-job lifecycle — is in
+Full reminder detail — delivery contract, proactive channel messaging, approval
+scoping — is in
 `skill_read_resource('netclaw-operations', 'references/scheduling.md')`.
+
+Background shell: set `_background: true` on `shell_execute`, then use
+`check_background_job`. Netclaw runs at most 5 jobs at a time and stops them when
+the session passivates. Read
+`skill_read_resource('netclaw-operations', 'references/long-running-commands.md')`
+for the job lifecycle, the output log, and the rules.
 
 ## Repeated tool calls
 
 Two equal feedback rounds for the same tool and arguments cause a correction before the next dispatch.
-Change the approach after that correction. Another repeat ends the turn without another model request.
-The turn then fails with `kind=ModelBehavior`. A text answer after the correction completes the turn.
-Unrelated calls and context compaction do not erase this evidence.
-An authorized status query for a pending background job can repeat through the normal access checks.
+The refused call did not execute. Change the approach after that correction.
+Netclaw refuses each later identical call again and adds a nudge. The turn continues.
+The fifth refused repeat in a turn gets an escalated nudge: stop, end your turn, and tell the person what blocked you.
+A refused call after that ends the turn with your text and no error. A new message from the person starts a new count.
+A timeout change alone is the same call. A valid `_background: true` on `shell_execute` is a different call.
+For the options after a timeout or a refusal, read
+`skill_read_resource('netclaw-operations', 'references/long-running-commands.md')`.
 `MaxToolIterationsPerTurn` is a legacy config field. The runtime no longer enforces its fixed limit.
 Deadlines, cancellation, and tool policy still apply.
 
@@ -281,14 +296,12 @@ fix and re-issue once, do not retry the same shape:
 
 A repeated action-and-outcome correction means that no requested call ran.
 Choose a different action or finish the task from the available evidence.
-Do not repeat the blocked batch.
-If the same blocked call appears again, Netclaw ends the turn as a `ModelBehavior` failure.
+Do not repeat the blocked batch. Netclaw refuses it again, and the fifth repeat escalates.
 Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
-A repeat of a refused call after the correction is a `ModelBehavior` failure.
-Repeated empty replies get the same `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
+Repeated empty replies get the `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
 A text reply that ends with the finish reason `length` and has no tool call is also `ModelBehavior`. Netclaw does not post the cut-off text.
 One model call that streams only thinking for three times `Session.NoProgressTimeoutSeconds` is also `ModelBehavior`.
 An empty reply with no finish reason is `StreamFailure`. A `content_filter` reply is `ProviderFailure`. Both are `infra`.
@@ -315,9 +328,8 @@ The shell tail retains the process exit status.
   specific range with `StartLine`/`Limit` or `grep` (`StartLine` is a 1-based line
   number — line 1 is the first line). Don't `cat` a huge file through
   `shell_execute` to get around it — that just spills again.
-- **`background_job`** output goes to `~/.netclaw/jobs/{id}/output.log` (bounded);
-  `check_background_job` returns a tail, and you can `file_read`/`grep` the log for the rest.
-  Netclaw deletes a terminal job's definition and logs 24 hours after completion.
+- **Background job** output goes to a bounded log file. `check_background_job` returns a
+  tail. See `references/long-running-commands.md` for the log path and retention.
 
 Use bounded continuation before re-running a command or re-reading a whole file.
 Secret-bearing values are redacted from all tool output.
@@ -801,6 +813,17 @@ gives the near-miss reason (`TokenMismatch`, `ShellMismatch`,
 `OutsideDirectory`, or `Symlink`) and the grant creation time. The trace never
 holds raw paths or arguments.
 
+Each tool call also logs `Invoking tool [<tool>] (call=<id>) args=<json>
+rationale=<text>` with the same `authorizationAttemptId` and the `sessionId`.
+Use this line to see what the agent sent. `args` is redacted: a secret-named
+key or a known token shape shows `***REDACTED***`. A string longer than 256
+characters shows `<N chars, sha256:...>`, or `<N chars, redacted>` when it held
+a secret. A value of another type shows `<TypeName>`; only `int` and `long`
+integers show their value. If the daemon cannot read the arguments, `args` is
+`<arguments unavailable>`. `args` stops at 4,096 characters, and it ends with
+`...` when the daemon stopped the walk after about 16 KB. The rationale stops at 500 characters, and it is empty for a
+rejected call or an unknown tool.
+
 ### Inspecting, revoking, and pre-approving grants
 
 To read the saved grants, call `file_read` on `~/.netclaw/config/tool-approvals.json`.
@@ -965,6 +988,11 @@ add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles
   `Security.StrictDefaults` is `false`. The daemon and the `netclaw config` screens use
   the same rule.
 - The daemon reads `netclaw.json`, `secrets.json`, and `NETCLAW_*` variables.
+  The OAuth token expiry of a provider is in `secrets.json`, unencrypted, beside the encrypted
+  tokens. An OAuth token refresh does not change `netclaw.json` and does not restart the daemon.
+  A `Providers.<name>.OAuthTokenExpiry` key in `netclaw.json` is retired. It binds only until
+  `secrets.json` holds a value. `netclaw doctor` reports the key, and `netclaw doctor --fix`
+  moves the date to `secrets.json` and removes the key after a backup.
   `netclaw doctor`, `netclaw mcp permissions`, `netclaw mcp tools`, and the
   `netclaw config` screens read only `netclaw.json`, so they can show a different value.
 - `netclaw init` writes only the posture (`Security.DeploymentPosture`,
@@ -986,7 +1014,7 @@ add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles
 
 A `netclaw chat -p` run waits for open child runs. It ends on the first completed turn that reports none.
 While it waits, stdout shows `[subagent:waiting] <n> open: <run ids>`, and the session log has `WAITING_FOR_CHILDREN`.
-The child text reaches stdout as a `child_run_result` tool result. A background shell job does not hold the run.
+The child result arrives as a notice turn. The child text reaches stdout only when the model reads `result.md` with `file_read`. A background shell job does not hold the run.
 With `--json`, stdout holds one envelope. `response` is the text of the last turn, and `turnResponses` holds each turn.
 A signal, a failed turn, or a stopped session ends the run with exit 1.
 Stderr then has `[headless:open-runs] session=<id> runs=<ids>`. Resume with `netclaw chat --resume <id>`.
@@ -1014,6 +1042,22 @@ A web page on another origin also gets 401, also a local web app on another port
 When a protected route denies such a request, `daemon.log` has a warning, `Refused loopback request`, with the `Host` and `Origin` values.
 Fix: call the daemon as `http://127.0.0.1:<port>` or `http://localhost:<port>`, or pair the client and send a device token.
 A device token request is not checked for `Host` or `Origin`.
+
+The systemd service reads `<home>/config/daemon.env`. It also holds operator lines, for example
+`NETCLAW_HOME=...`.
+
+Caution: the file holds plain text. If a line holds a credential, run `chmod 600` on `daemon.env`.
+`netclaw daemon uninstall` deletes `daemon.env`, including the operator lines. To refresh the unit
+and keep the lines, run `netclaw daemon install` again.
+
+`netclaw daemon install` and `netclaw doctor --fix` replace the `PATH` line and remove a duplicate
+`PATH` line. They keep every other line, and they do not open the file mode more than it was.
+
+The install scripts (`install.sh` and `install.ps1`) read `NETCLAW_HOME` for the config directory.
+`install.sh` uses `<home>/bin` and `<home>/env` for a fresh install. When `INSTALL_DIR` is not set, it
+upgrades an install that sits in `<home>/bin`. Else, if `~/.netclaw/bin` holds `netclaw` or
+`netclawd`, it upgrades there, keeps the env script at `~/.netclaw/env`, and prints that directory.
+`CONFIG_DIR` and `NETCLAW_CONFIG_DIR` no longer work.
 
 When something is broken, start with `netclaw status`, then `netclaw doctor`. Feature
 kill switches and self-update/health are covered in the reference. Memory embeddings

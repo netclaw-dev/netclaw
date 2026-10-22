@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Serialization;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Channels;
@@ -50,6 +51,12 @@ public sealed record PendingApprovalPromptTracked : INetclawSerializableMessage
     /// journal entries written before this field was added.
     /// </summary>
     public string? DisplayText { get; init; }
+
+    /// <summary>
+    /// The lifetime of the tracked prompt, so a cold-spawned binding keeps a child prompt at the next turn end. A row
+    /// without the optional field reads as <see cref="SessionProtocol.ToolInteractionLifetime.UntilTurnEnd"/>.
+    /// </summary>
+    public SessionProtocol.ToolInteractionLifetime Lifetime { get; init; } = SessionProtocol.ToolInteractionLifetime.UntilTurnEnd;
 }
 
 /// <summary>
