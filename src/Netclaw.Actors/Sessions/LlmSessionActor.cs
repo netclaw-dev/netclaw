@@ -118,6 +118,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private bool RestartDrainRequested => _execution.RestartDrainRequested;
     private string? _pendingRestartNotice;
     private string? _turnRestartNotice;
+    // Replay only: the requester of the journal turn that the last replayed tool batch belongs to. Actor-local.
+    private TurnContext? _replayTurnOwner;
 
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
@@ -2269,6 +2271,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var evt = LegacyCoordinationReplay.TranslateParentDecision(_state, recorded);
         // The consumed notices name the runs of this turn. RestoreConsumedInputs closes the inputs, so read them first.
         var pendingById = _state.PendingInputs.ToDictionary(input => input.InputId);
+        if (evt.ConsumedInputIds.Count > 0 && pendingById.TryGetValue(evt.ConsumedInputIds[0], out var first))
+        {
+            // Live, an input joins a running turn only when it has the requester of the turn (SessionInputFlow.JoinsTurn).
+            // An input of another requester starts a new turn, and AdoptAuthority clears the noticed runs. A failed turn
+            // can end with no journal event (#2574), so replay ends the old turn here. A failed turn that is followed by
+            // a turn of the same requester stays ambiguous in the journal, so replay keeps its runs.
+            TurnContext.TryFromRecord(first.TurnContext, out var requester, out _);
+            if (requester is null || _replayTurnOwner is null || !requester.HasSameRequester(_replayTurnOwner))
+                _input.ClearNoticeRuns();
+            _replayTurnOwner = requester;
+        }
         _input.RestoreNoticeRuns(evt.ConsumedInputIds
             .Select(id => pendingById.TryGetValue(id, out var input) ? input.ChildNotice?.RunId : null)
             .OfType<SubAgentRunId>());
