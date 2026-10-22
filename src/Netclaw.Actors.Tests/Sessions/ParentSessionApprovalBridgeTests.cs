@@ -367,6 +367,116 @@ public sealed class ParentSessionApprovalBridgeTests
         Assert.Equal(OneTimeApprovalKeys.CreateConsent("shell_execute", request.Approval), step.RetryConsent);
     }
 
+    /// <summary>
+    /// durable-child-consent-wait, task 2.1. A characterization of the child prompt shape before the move to the
+    /// shared prompt builder. The prompt keeps the original child call ID for the journal. It never carries the
+    /// managed temporary directory, because only a journaled parent wait can restore the managed temporary retry.
+    /// The gate facts go to the prompt without change.
+    /// </summary>
+    [Fact]
+    public async Task A_child_prompt_names_its_child_call_and_leaves_out_the_managed_temporary_directory()
+    {
+        var channel = new ApprovalChannel();
+        ToolInteractionRequestDispatch? emitted = null;
+        var bridge = new ParentSessionApprovalBridge(
+            channel,
+            dispatch =>
+            {
+                emitted = dispatch;
+                channel.Complete(dispatch.Request.CallId, ConsentAnswer.Once.Instance);
+            },
+            ApprovalTimeout,
+            new SessionId("signalr/thread-child-shape"),
+            approvalScopeId: "spawn-call-shape",
+            requesterSenderId: new SenderId("user-123"),
+            requesterPrincipal: PrincipalClassification.Operator,
+            hasAdoptedContext: false,
+            hasThirdPartyAdoptedContext: false,
+            adoptedSpeakerIds: []);
+        var request = ShellRequest(new ToolCallId("child-call-7"), "git push origin main", "/home/user/repos/foo", "/home/user/repos/foo");
+        request = request with
+        {
+            Approval = request.Approval with
+            {
+                IsMessy = true,
+                IsManagedTemporaryRetry = true,
+                ManagedTemporaryDirectory = "/home/user/.netclaw/tmp"
+            }
+        };
+
+        await bridge.RequestConsentAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(emitted);
+        Assert.False(emitted!.PersistApprovalState);
+        Assert.Equal(new ToolCallId("child-call-7"), emitted.OriginalChildCallId);
+        Assert.Null(emitted.ManagedTemporaryDirectory);
+        Assert.Equal("approval", emitted.Request.Kind);
+        Assert.Equal(new ToolName("shell_execute"), emitted.Request.ToolName);
+        Assert.Equal(request.AuthorizationAttemptId.Value, emitted.Request.AuthorizationAttemptId);
+        Assert.Equal("git push origin main", emitted.Request.DisplayText);
+        Assert.True(emitted.Request.IsMessy);
+        Assert.Equal("/home/user/repos/foo", emitted.Request.Cwd);
+        Assert.Null(emitted.Request.RepositoryCommonDirectory);
+    }
+
+    /// <summary>
+    /// durable-child-consent-wait, task 2.1. A characterization of the option filter before the move to the shared
+    /// prompt builder. A repository option needs a repository directory: without one, the prompt drops each
+    /// repository variant and keeps the other options in order. A session prompt has no child call ID.
+    /// </summary>
+    [Fact]
+    public async Task The_repository_options_appear_only_with_a_repository_directory()
+    {
+        var channel = new ApprovalChannel();
+        var emitted = new List<ToolInteractionRequestDispatch>();
+        var bridge = new ParentSessionApprovalBridge(
+            channel,
+            dispatch =>
+            {
+                emitted.Add(dispatch);
+                channel.Complete(dispatch.Request.CallId, ConsentAnswer.Once.Instance);
+            },
+            ApprovalTimeout,
+            new SessionId("signalr/thread-repository-options"),
+            approvalScopeId: "call-repository",
+            requesterSenderId: new SenderId("user-123"),
+            requesterPrincipal: PrincipalClassification.Operator,
+            hasAdoptedContext: false,
+            hasThirdPartyAdoptedContext: false,
+            adoptedSpeakerIds: []);
+        ToolApprovalOption[] options =
+        [
+            new(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+            new(ApprovalOptionKeys.ApproveRepositoryKey, ApprovalOptionKeys.ApproveRepositoryLabel),
+            new(ApprovalOptionKeys.ApproveAssignmentRepositoryV1Key, ApprovalOptionKeys.ApproveRepositoryLabel),
+            new(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+        ];
+        var outside = ShellRequest(new ToolCallId("call-outside"), "git status", "/home/user/scratch", "/home/user/scratch");
+        outside = outside with { Approval = outside.Approval with { Options = options } };
+        var inside = ShellRequest(new ToolCallId("call-inside"), "git status", "/home/user/repos/foo", "/home/user/repos/foo");
+        inside = inside with
+        {
+            Approval = inside.Approval with { Options = options, RepositoryCommonDirectory = "/home/user/repos/foo/.git" }
+        };
+
+        await bridge.RequestSessionConsentAsync(outside, TestContext.Current.CancellationToken);
+        await bridge.RequestSessionConsentAsync(inside, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, emitted.Count);
+        Assert.Equal(
+            [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+            emitted[0].Request.Options.Select(static option => option.Key.Value));
+        Assert.Null(emitted[0].Request.RepositoryCommonDirectory);
+        Assert.Equal(
+            [
+                ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveRepository,
+                ApprovalOptionKeys.ApproveAssignmentRepositoryV1, ApprovalOptionKeys.Deny
+            ],
+            emitted[1].Request.Options.Select(static option => option.Key.Value));
+        Assert.Equal("/home/user/repos/foo/.git", emitted[1].Request.RepositoryCommonDirectory);
+        Assert.All(emitted, static dispatch => Assert.Null(dispatch.OriginalChildCallId));
+    }
+
     private static Task<ConsentStep> RequestShellApprovalAsync(
         ParentSessionApprovalBridge bridge,
         ToolCallId callId)

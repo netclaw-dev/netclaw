@@ -545,7 +545,7 @@ public sealed partial class LlmSessionActor
     }
 
     // The pause holds automated input and child result notices (SessionInputFlow, design D5).
-    private static bool WasHeldByPause(InputAdmitted input)
+    internal static bool WasHeldByPause(InputAdmitted input)
         => input.ChildNotice is not null
            || (TurnContext.TryFromRecord(input.TurnContext, out var context, out _) && context is not null
                && SessionToolWorkflow.IsAutomation(context.RequesterPrincipal) && !context.IsChildConsentNotice);

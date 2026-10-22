@@ -276,6 +276,25 @@ internal sealed class TurnStateTracker
         return true;
     }
 
+    /// <summary>
+    /// Copies the loop guard: the tool iteration and call counts, the completed action and outcome hashes, the last
+    /// blocked action, the recurrence episodes, and the refused-repeat count. A parked child keeps this copy, so a
+    /// park does not reset the loop guard (durable-child-consent-wait, design D2 and M10). The copy shares no
+    /// collection with the tracker.
+    /// </summary>
+    // STUB (PR 0 test author): this body makes the PR 0 tests compile and fail on an assertion. The implementer
+    // replaces it.
+    public TurnLoopGuardState ExportLoopGuard()
+        => new(0, 0, [], null, new Dictionary<ToolRecurrenceKey, ToolRecurrenceEpisode>(), 0);
+
+    /// <summary>
+    /// Replaces the loop guard with an exported copy. The tracker then makes the same decisions as the tracker that
+    /// exported the copy. The tracker shares no collection with the copy.
+    /// </summary>
+    // STUB (PR 0 test author): the implementer replaces this body.
+    public void RestoreLoopGuard(TurnLoopGuardState state)
+        => ArgumentNullException.ThrowIfNull(state);
+
     public void RecordToolCompletion(int resultCount)
     {
         ToolCallCount = (int)Math.Min(int.MaxValue, (long)ToolCallCount + resultCount);
@@ -341,6 +360,19 @@ internal sealed class TurnStateTracker
 }
 
 internal sealed record ToolActionSignature(string Value);
+
+/// <summary>
+/// The loop guard of a tool loop, as <see cref="TurnStateTracker.ExportLoopGuard"/> copies it. It holds only counts
+/// and hashes, never raw arguments or results. <see cref="CompletedCycles"/> keeps the order of completion, because
+/// the adjacent cycle check reads the order.
+/// </summary>
+internal sealed record TurnLoopGuardState(
+    int ToolIterationCount,
+    int ToolCallCount,
+    IReadOnlyList<(ToolActionSignature Action, string OutcomeValue)> CompletedCycles,
+    ToolActionSignature? LastBlockedAction,
+    IReadOnlyDictionary<ToolRecurrenceKey, ToolRecurrenceEpisode> Episodes,
+    int RefusedRepeatCount);
 
 internal sealed record CompletedToolCycleIteration(
     ToolActionSignature Action,
