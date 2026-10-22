@@ -48,7 +48,7 @@ public sealed class SkillCommandTests : IDisposable
         // Nested under the test's own temp dir so Dispose cleans it up.
         var paths = new NetclawPaths(Path.Combine(_dir.Path, $"api-{Guid.NewGuid():N}"));
         paths.EnsureDirectoriesExist();
-        return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths);
+        return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
     }
 
     private Task<int> RunListAsync(DaemonApi? daemonApi)

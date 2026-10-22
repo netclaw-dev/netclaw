@@ -189,7 +189,7 @@ public sealed class ContextWindowResolutionTests : IDisposable
         var configuration = new ConfigurationBuilder().Build();
         var paths = new NetclawPaths(Path.Combine(_temp.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
-        return new DaemonApi(new StubHttpClientFactory(handler), configuration, paths);
+        return new DaemonApi(new StubHttpClientFactory(handler), configuration, paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
     }
 
     private static object BuildStatusResponse(

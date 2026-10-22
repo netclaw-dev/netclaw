@@ -668,7 +668,7 @@ public sealed class McpToolPermissionsPageTests : IDisposable
         CreateHeadlessApp(out VirtualInputSource input, int width = 120, int height = 40)
     {
         var configuration = new ConfigurationBuilder().Build();
-        var daemonApi = new DaemonApi(new FailingHttpClientFactory(), configuration, _paths);
+        var daemonApi = new DaemonApi(new FailingHttpClientFactory(), configuration, _paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
 
         return HeadlessTerminaFixture.Create<McpToolPermissionsPage, McpToolPermissionsViewModel>(
             "/mcp-tools",

@@ -154,6 +154,7 @@ public sealed class PairingSecurityMatrixTests
         builder.Services.AddSingleton(registry);
         builder.Services.AddSingleton<PairingExchangeGuard>();
         builder.Services.AddSingleton<LocalControlPairingProofValidator>();
+        builder.Services.AddSingleton<LocalControlRequests>();
         builder.Services.AddNetclawAuthSchemes(new DaemonConfig { ExposureMode = mode });
         builder.Services.AddAuthorization();
         builder.Services.AddAkka($"pairing-matrix-tests-{Guid.NewGuid():N}", (akka, _) =>
@@ -161,8 +162,6 @@ public sealed class PairingSecurityMatrixTests
         builder.Services.AddRateLimiter(options =>
         {
             options.AddPolicy("pairing-exchange", context =>
-                RateLimitPartition.GetNoLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
-            options.AddPolicy(PairingEndpointRouteBuilderExtensions.LocalControlRateLimitPolicy, context =>
                 RateLimitPartition.GetNoLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
         });
 
@@ -208,13 +207,13 @@ public sealed class PairingSecurityMatrixTests
         {
             "missing" => "",
             "malformed" => "not-a-proof",
-            "changed" => ChangeFirstCharacter(hostProtector.ProtectPayload(payload)),
-            "cross-home" => remoteProtector.ProtectPayload(payload),
-            "stale" => hostProtector.ProtectPayload(payload with { IssuedAt = now.AddSeconds(-31) }),
-            "future" => hostProtector.ProtectPayload(payload with { IssuedAt = now.AddSeconds(6) }),
-            "unsupported-version" => hostProtector.ProtectPayload(payload with { Version = 2 }),
-            "wrong-operation" => hostProtector.ProtectPayload(payload with { Operation = 2 }),
-            _ => hostProtector.ProtectPayload(payload),
+            "changed" => ChangeFirstCharacter(hostProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload)),
+            "cross-home" => remoteProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload),
+            "stale" => hostProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload with { IssuedAt = now.AddSeconds(-31) }),
+            "future" => hostProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload with { IssuedAt = now.AddSeconds(6) }),
+            "unsupported-version" => hostProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload with { Version = 2 }),
+            "wrong-operation" => hostProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload with { Operation = 2 }),
+            _ => hostProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload),
         };
     }
 

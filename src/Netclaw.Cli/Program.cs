@@ -616,13 +616,10 @@ static async Task RunAsync(string[] args)
 
                 using var pairHost = pairBuilder.Build();
                 var pairApi = pairHost.Services.GetRequiredService<DaemonApi>();
-                var proofProtector = pairHost.Services.GetRequiredService<LocalControlPairingProofProtector>();
-                var timeProvider = pairHost.Services.GetRequiredService<TimeProvider>();
 
                 try
                 {
-                    var proof = proofProtector.CreateProof(timeProvider.GetUtcNow());
-                    var response = await pairApi.RequestPairingCodeAsync(proof);
+                    var response = await pairApi.RequestPairingCodeAsync();
                     if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         Console.Error.WriteLine("error: The daemon does not support local-control pairing.");

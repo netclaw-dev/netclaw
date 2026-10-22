@@ -11,6 +11,7 @@ using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Cli.Daemon;
 
@@ -30,22 +31,26 @@ public sealed class DaemonApi
     private readonly IHttpClientFactory _factory;
     private readonly string _endpoint;
     private readonly NetclawPaths _paths;
+    private readonly LocalControlPairingProofProtector _proofProtector;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Default daemon endpoint when no override is configured.
     /// </summary>
     public const string DefaultEndpoint = "http://127.0.0.1:5199";
 
-    public DaemonApi(IHttpClientFactory factory, IConfiguration configuration, NetclawPaths paths)
+    public DaemonApi(
+        IHttpClientFactory factory,
+        IConfiguration configuration,
+        NetclawPaths paths,
+        LocalControlPairingProofProtector proofProtector,
+        TimeProvider timeProvider)
     {
         _factory = factory;
         _paths = paths;
+        _proofProtector = proofProtector;
+        _timeProvider = timeProvider;
         _endpoint = ResolveEndpoint(paths);
-    }
-
-    internal DaemonApi(IHttpClientFactory factory, IConfiguration configuration)
-        : this(factory, configuration, new NetclawPaths())
-    {
     }
 
     /// <summary>
@@ -86,37 +91,62 @@ public sealed class DaemonApi
 
     internal string LocalControlEndpoint => ResolveLocalControlEndpoint(_paths);
 
-    internal async Task<PairingCodeRequestResult> RequestPairingCodeAsync(
-        string proof,
+    internal Task<LocalControlResult<PairingCodeResultDto>> RequestPairingCodeAsync(CancellationToken ct = default)
+    {
+        var proof = _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, _timeProvider.GetUtcNow());
+        return PostLocalControlAsync<LocalControlPairingCodeRequest, PairingCodeResultDto>(
+            "pairing-code", new LocalControlPairingCodeRequest(proof), ct);
+    }
+
+    /// <summary>
+    /// Reads the tokens of a completed provider OAuth flow. The proof binds to
+    /// <paramref name="state"/>. It goes only to the direct local-control endpoint,
+    /// never through a proxy, a redirect, or the paired-client endpoint.
+    /// </summary>
+    internal Task<LocalControlResult<ProviderOAuthResultDto>> ReadProviderOAuthResultAsync(
+        string state,
         CancellationToken ct = default)
+    {
+        var proof = _proofProtector.CreateProof(
+            LocalControlOperation.ReadProviderOAuthResult(state),
+            _timeProvider.GetUtcNow());
+        return PostLocalControlAsync<LocalControlProviderOAuthResultRequest, ProviderOAuthResultDto>(
+            "provider-oauth-result", new LocalControlProviderOAuthResultRequest(state, proof), ct);
+    }
+
+    private async Task<LocalControlResult<TResult>> PostLocalControlAsync<TRequest, TResult>(
+        string operationPath,
+        TRequest request,
+        CancellationToken ct)
+        where TResult : class
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
         var client = _factory.CreateClient(LocalControlHttpClientName);
         using var response = await client.PostAsJsonAsync(
-            $"{LocalControlEndpoint}/api/local-control/v1/pairing-code",
-            new LocalControlPairingCodeRequest(proof),
+            $"{LocalControlEndpoint}/api/local-control/v1/{operationPath}",
+            request,
             JsonDefaults.Api,
             cts.Token);
 
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
         if (response.IsSuccessStatusCode)
         {
-            var result = await JsonSerializer.DeserializeAsync<PairingCodeResultDto>(stream, JsonDefaults.Api, cts.Token);
-            return new PairingCodeRequestResult(response.StatusCode, result, null);
+            var result = await JsonSerializer.DeserializeAsync<TResult>(stream, JsonDefaults.Api, cts.Token);
+            return new LocalControlResult<TResult>(response.StatusCode, result, null);
         }
 
-        PairingCodeErrorResponse? error = null;
+        LocalControlErrorResponse? error = null;
         try
         {
-            error = await JsonSerializer.DeserializeAsync<PairingCodeErrorResponse>(stream, JsonDefaults.Api, cts.Token);
+            error = await JsonSerializer.DeserializeAsync<LocalControlErrorResponse>(stream, JsonDefaults.Api, cts.Token);
         }
         catch (JsonException)
         {
-            error = new PairingCodeErrorResponse(
+            error = new LocalControlErrorResponse(
                 response.ReasonPhrase ?? "The daemon returned an invalid error response.");
         }
 
-        return new PairingCodeRequestResult(response.StatusCode, null, error?.Error);
+        return new LocalControlResult<TResult>(response.StatusCode, null, error?.Error);
     }
 
     // ── Status ────────────────────────────────────────────────────────
@@ -534,9 +564,18 @@ public sealed class DaemonApi
 
 internal sealed record LocalControlPairingCodeRequest(string Proof);
 
-internal sealed record PairingCodeErrorResponse(string Error);
+internal sealed record LocalControlProviderOAuthResultRequest(string State, string Proof);
 
-internal sealed record PairingCodeRequestResult(
+internal sealed record ProviderOAuthResultDto(
+    string AccessToken,
+    string? RefreshToken,
+    string? AccountId,
+    DateTimeOffset? ExpiresAt);
+
+internal sealed record LocalControlErrorResponse(string Error);
+
+internal sealed record LocalControlResult<T>(
     HttpStatusCode StatusCode,
-    PairingCodeResultDto? Result,
-    string? Error);
+    T? Result,
+    string? Error)
+    where T : class;

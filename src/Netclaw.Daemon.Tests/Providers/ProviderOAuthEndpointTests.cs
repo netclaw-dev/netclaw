@@ -15,9 +15,15 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
+using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Providers;
+using Netclaw.Daemon.Security;
+using Netclaw.Daemon.Tests.Security;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
@@ -25,8 +31,12 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Providers;
 
-public sealed class ProviderOAuthEndpointTests
+public sealed class ProviderOAuthEndpointTests : IDisposable
 {
+    private readonly DisposableTempDir _dir = new();
+
+    public void Dispose() => _dir.Dispose();
+
     [Fact]
     public async Task StartEndpoint_RequiresAuthorization()
     {
@@ -62,50 +72,303 @@ public sealed class ProviderOAuthEndpointTests
         Assert.False(statusPayload.GetProperty("hasToken").GetBoolean());
     }
 
-    [Fact]
-    public async Task CallbackEndpoint_CompletesFlow_AndStatusReturnsTokens()
+    public static TheoryData<ExposureMode, bool> StatusCallers => new()
     {
-        await using var host = await CreateHostAsync(_ => SuccessfulTokenResponse());
+        { ExposureMode.Local, false },
+        { ExposureMode.Local, true },
+        { ExposureMode.TailscaleServe, true },
+        { ExposureMode.TailscaleFunnel, true },
+        { ExposureMode.CloudflareTunnel, true },
+        { ExposureMode.ReverseProxy, true },
+    };
+
+    [Theory]
+    [MemberData(nameof(StatusCallers))]
+    public async Task StatusEndpoint_NeverReturnsTokens(ExposureMode mode, bool withDeviceToken)
+    {
+        // A tunnel agent connects from loopback, so every caller here has a loopback
+        // RemoteIpAddress. Local mode without a bearer token is the LocalProcess caller.
+        await using var host = await CreateExposureHostAsync(mode);
         var client = host.GetTestClient();
-        client.DefaultRequestHeaders.Add(TestAuthHandler.HeaderName, TestAuthHandler.HeaderValue);
+        var state = await CompleteFlowAsync(client, host);
 
-        var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
-        var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
-        var state = startPayload.GetProperty("state").GetString();
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/api/provider/oauth/status/{state}");
+        if (withDeviceToken)
+            request.Headers.Authorization = new("Bearer", host.DeviceToken);
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
-        var callbackResponse = await client.GetAsync($"/api/provider/oauth/callback?code=test-code&state={state}", TestContext.Current.CancellationToken);
-        callbackResponse.EnsureSuccessStatusCode();
-        var html = await callbackResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Contains("Authorization complete", html);
-
-        var statusPayload = await client.GetFromJsonAsync<JsonElement>($"/api/provider/oauth/status/{state}", TestContext.Current.CancellationToken);
+        response.EnsureSuccessStatusCode();
+        var statusPayload = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         Assert.Equal("Completed", statusPayload.GetProperty("status").GetString());
         Assert.True(statusPayload.GetProperty("hasToken").GetBoolean());
-        Assert.Equal("access-token", statusPayload.GetProperty("accessToken").GetString());
-        Assert.Equal("refresh-token", statusPayload.GetProperty("refreshToken").GetString());
-        Assert.Equal("account-id", statusPayload.GetProperty("accountId").GetString());
+        AssertNoTokens(statusPayload);
+    }
+
+    [Theory]
+    [InlineData(ExposureMode.TailscaleServe)]
+    [InlineData(ExposureMode.CloudflareTunnel)]
+    public async Task StatusEndpoint_RejectsUnauthenticatedLoopbackCaller_InTunnelModes(ExposureMode mode)
+    {
+        await using var host = await CreateExposureHostAsync(mode);
+        var client = host.GetTestClient();
+        var state = await CompleteFlowAsync(client, host);
+
+        var response = await client.GetAsync($"/api/provider/oauth/status/{state}", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(ExposureMode.Local)]
+    [InlineData(ExposureMode.TailscaleServe)]
+    [InlineData(ExposureMode.TailscaleFunnel)]
+    [InlineData(ExposureMode.CloudflareTunnel)]
+    [InlineData(ExposureMode.ReverseProxy)]
+    public async Task ResultEndpoint_ReturnsTokens_ForStateBoundHostProof(ExposureMode mode)
+    {
+        await using var host = await CreateExposureHostAsync(mode);
+        var client = host.GetTestClient();
+        var state = await CompleteFlowAsync(client, host);
+        var proof = host.CreateProof(LocalControlOperation.ReadProviderOAuthResult(state));
+
+        var response = await PostResultAsync(client, state, proof);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        Assert.Equal("access-token", payload.GetProperty("accessToken").GetString());
+        Assert.Equal("refresh-token", payload.GetProperty("refreshToken").GetString());
+        Assert.Equal("account-id", payload.GetProperty("accountId").GetString());
+    }
+
+    [Theory]
+    [InlineData(ExposureMode.Local)]
+    [InlineData(ExposureMode.TailscaleServe)]
+    [InlineData(ExposureMode.TailscaleFunnel)]
+    [InlineData(ExposureMode.CloudflareTunnel)]
+    public async Task ResultEndpoint_RefusesDeviceToken_WithoutProof(ExposureMode mode)
+    {
+        await using var host = await CreateExposureHostAsync(mode);
+        var client = host.GetTestClient();
+        var state = await CompleteFlowAsync(client, host);
+
+        var response = await PostResultAsync(client, state, proof: "", bearer: host.DeviceToken);
+
+        await AssertRefusedAsync(response);
     }
 
     [Fact]
-    public async Task StatusEndpoint_HidesTokens_ForNonLoopbackRequests()
+    public async Task ResultEndpoint_RefusesPairingProof()
     {
-        await using var host = await CreateHostAsync(_ => SuccessfulTokenResponse(), remoteIp: IPAddress.Parse("192.168.1.100"));
+        await using var host = await CreateExposureHostAsync(ExposureMode.TailscaleServe);
         var client = host.GetTestClient();
-        client.DefaultRequestHeaders.Add(TestAuthHandler.HeaderName, TestAuthHandler.HeaderValue);
+        var state = await CompleteFlowAsync(client, host);
+        var proof = host.CreateProof(LocalControlOperation.GeneratePairingCode);
 
+        var response = await PostResultAsync(client, state, proof);
+
+        await AssertRefusedAsync(response);
+    }
+
+    [Fact]
+    public async Task ResultEndpoint_RefusesProofForAnotherState()
+    {
+        await using var host = await CreateExposureHostAsync(ExposureMode.CloudflareTunnel);
+        var client = host.GetTestClient();
+        var state = await CompleteFlowAsync(client, host);
+        var otherState = await CompleteFlowAsync(client, host);
+        var proof = host.CreateProof(LocalControlOperation.ReadProviderOAuthResult(otherState));
+
+        var response = await PostResultAsync(client, state, proof);
+
+        await AssertRefusedAsync(response);
+    }
+
+    [Fact]
+    public async Task ResultEndpoint_RefusesReplayedProof()
+    {
+        await using var host = await CreateExposureHostAsync(ExposureMode.TailscaleFunnel);
+        var client = host.GetTestClient();
+        var state = await CompleteFlowAsync(client, host);
+        var proof = host.CreateProof(LocalControlOperation.ReadProviderOAuthResult(state));
+
+        var first = await PostResultAsync(client, state, proof);
+        var replay = await PostResultAsync(client, state, proof);
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        await AssertRefusedAsync(replay);
+    }
+
+    [Fact]
+    public async Task ResultEndpoint_RefusesExpiredProof()
+    {
+        await using var host = await CreateExposureHostAsync(ExposureMode.TailscaleServe);
+        var client = host.GetTestClient();
+        var state = await CompleteFlowAsync(client, host);
+        var proof = host.CreateProof(
+            LocalControlOperation.ReadProviderOAuthResult(state),
+            issuedAt: host.Time.GetUtcNow() - LocalControlPairingProofValidator.ProofLifetime - TimeSpan.FromSeconds(1));
+
+        var response = await PostResultAsync(client, state, proof);
+
+        await AssertRefusedAsync(response);
+    }
+
+    [Fact]
+    public async Task ResultEndpoint_ReturnsConflict_WhenFlowHasNoResult()
+    {
+        await using var host = await CreateExposureHostAsync(ExposureMode.Local);
+        var client = host.GetTestClient();
         var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
         var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
-        var state = startPayload.GetProperty("state").GetString();
+        var state = startPayload.GetProperty("state").GetString()!;
+        var proof = host.CreateProof(LocalControlOperation.ReadProviderOAuthResult(state));
+
+        var response = await PostResultAsync(client, state, proof);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ResultEndpoint_ReturnsTokens_DuringAFloodOfRefusedRequests()
+    {
+        // A tunnel agent forwards every remote request from loopback, so remote junk and
+        // the host CLI share one source address. Only refused requests count.
+        await using var host = await CreateExposureHostAsync(ExposureMode.TailscaleServe);
+        var client = host.GetTestClient();
+        var state = await CompleteFlowAsync(client, host);
+
+        var flood = new List<HttpStatusCode>();
+        for (var index = 0; index < 30; index++)
+            flood.Add((await PostResultAsync(client, state, proof: "not-a-proof")).StatusCode);
+        var response = await PostResultAsync(
+            client,
+            state,
+            host.CreateProof(LocalControlOperation.ReadProviderOAuthResult(state)));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(
+            Enumerable.Repeat(HttpStatusCode.Unauthorized, 10).Concat(Enumerable.Repeat(HttpStatusCode.TooManyRequests, 20)),
+            flood);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        Assert.Equal("access-token", payload.GetProperty("accessToken").GetString());
+    }
+
+    [Fact]
+    public async Task ResultEndpoint_RefusalLimit_ResetsAfterTheWindow()
+    {
+        await using var host = await CreateExposureHostAsync(ExposureMode.CloudflareTunnel);
+        var client = host.GetTestClient();
+        var state = await CompleteFlowAsync(client, host);
+        for (var index = 0; index < 11; index++)
+            await PostResultAsync(client, state, proof: "not-a-proof");
+
+        host.Time.Advance(TimeSpan.FromSeconds(1));
+        var afterWindow = await PostResultAsync(client, state, proof: "not-a-proof");
+
+        await AssertRefusedAsync(afterWindow);
+    }
+
+    private static Task<HttpResponseMessage> PostResultAsync(
+        HttpClient client,
+        string state,
+        string proof,
+        string? bearer = null)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/local-control/v1/provider-oauth-result")
+        {
+            Content = JsonContent.Create(new { state, proof }),
+        };
+        if (bearer is not null)
+            request.Headers.Authorization = new("Bearer", bearer);
+
+        return client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    private static async Task AssertRefusedAsync(HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("access-token", body);
+        Assert.DoesNotContain("refresh-token", body);
+    }
+
+    private static void AssertNoTokens(JsonElement payload)
+    {
+        Assert.False(payload.TryGetProperty("accessToken", out _));
+        Assert.False(payload.TryGetProperty("refreshToken", out _));
+        Assert.False(payload.TryGetProperty("accountId", out _));
+    }
+
+    private static async Task<string> CompleteFlowAsync(HttpClient client, ExposureHost host)
+    {
+        var startRequest = new HttpRequestMessage(HttpMethod.Post, "/api/provider/oauth/start?provider=test-oauth");
+        if (host.Mode != ExposureMode.Local)
+            startRequest.Headers.Authorization = new("Bearer", host.DeviceToken);
+        var startResponse = await client.SendAsync(startRequest, TestContext.Current.CancellationToken);
+        startResponse.EnsureSuccessStatusCode();
+        var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        var state = startPayload.GetProperty("state").GetString()!;
 
         var callbackResponse = await client.GetAsync($"/api/provider/oauth/callback?code=test-code&state={state}", TestContext.Current.CancellationToken);
         callbackResponse.EnsureSuccessStatusCode();
+        return state;
+    }
 
-        var statusPayload = await client.GetFromJsonAsync<JsonElement>($"/api/provider/oauth/status/{state}", TestContext.Current.CancellationToken);
-        Assert.Equal("Completed", statusPayload.GetProperty("status").GetString());
-        Assert.True(statusPayload.GetProperty("hasToken").GetBoolean());
-        Assert.Equal(JsonValueKind.Null, statusPayload.GetProperty("accessToken").ValueKind);
-        Assert.Equal(JsonValueKind.Null, statusPayload.GetProperty("refreshToken").ValueKind);
-        Assert.Equal(JsonValueKind.Null, statusPayload.GetProperty("accountId").ValueKind);
+    private async Task<ExposureHost> CreateExposureHostAsync(ExposureMode mode)
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 16, 0, 0, 0, TimeSpan.Zero));
+        var registry = new DeviceRegistry(new NetclawPaths(_dir.Path), time, NullLogger<DeviceRegistry>.Instance);
+        var (rawToken, device) = DeviceTestHelpers.MakeDevice("remote-phone", time.GetUtcNow());
+        await registry.AddAsync(device, TestContext.Current.CancellationToken);
+
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(registry);
+        builder.Services.AddNetclawAuthSchemes(new DaemonConfig { ExposureMode = mode });
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<ClaimsPrincipalMapper>();
+        builder.Services.AddSingleton(new OAuthPkceService(new HttpClient(new FakeHttpMessageHandler(_ => SuccessfulTokenResponse()))));
+        builder.Services.AddSingleton<IProviderOAuthCallbackListener, NoOpProviderOAuthCallbackListener>();
+        builder.Services.AddSingleton(new ProviderDescriptorRegistry([new TestOAuthDescriptor()]));
+        var protector = new LocalControlPairingProofProtector(
+            SecretsProtection.CreateDataProtectionProvider(new NetclawPaths(_dir.Path)));
+        builder.Services.AddSingleton(protector);
+        builder.Services.AddSingleton(new LocalControlPairingProofValidator(
+            protector,
+            time,
+            NullLogger<LocalControlPairingProofValidator>.Instance));
+        builder.Services.AddSingleton<TimeProvider>(time);
+        builder.Services.AddSingleton<LocalControlRequests>();
+
+        var app = builder.Build();
+        app.Use(async (context, next) =>
+        {
+            context.Connection.RemoteIpAddress = IPAddress.Loopback;
+            await next();
+        });
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapProviderOAuthEndpoints();
+        await app.StartAsync();
+        return new ExposureHost(app, mode, rawToken, protector, time);
+    }
+
+    private sealed class ExposureHost(
+        WebApplication app,
+        ExposureMode mode,
+        string deviceToken,
+        LocalControlPairingProofProtector protector,
+        FakeTimeProvider time) : IAsyncDisposable
+    {
+        public ExposureMode Mode { get; } = mode;
+        public string DeviceToken { get; } = deviceToken;
+        public FakeTimeProvider Time { get; } = time;
+        public HttpClient GetTestClient() => app.GetTestClient();
+
+        public string CreateProof(LocalControlOperation operation, DateTimeOffset? issuedAt = null)
+            => protector.CreateProof(operation, issuedAt ?? Time.GetUtcNow());
+
+        public ValueTask DisposeAsync() => app.DisposeAsync();
     }
 
     [Fact]
@@ -131,8 +394,7 @@ public sealed class ProviderOAuthEndpointTests
     }
 
     private static async Task<WebApplication> CreateHostAsync(
-        Func<HttpRequestMessage, HttpResponseMessage> tokenHandler,
-        IPAddress? remoteIp = null)
+        Func<HttpRequestMessage, HttpResponseMessage> tokenHandler)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -141,17 +403,12 @@ public sealed class ProviderOAuthEndpointTests
             .AddAuthentication(TestAuthHandler.SchemeName)
             .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
         builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<ClaimsPrincipalMapper>();
         builder.Services.AddSingleton(new OAuthPkceService(new HttpClient(new FakeHttpMessageHandler(tokenHandler))));
         builder.Services.AddSingleton<IProviderOAuthCallbackListener, NoOpProviderOAuthCallbackListener>();
         builder.Services.AddSingleton(new ProviderDescriptorRegistry([new TestOAuthDescriptor()]));
 
         var app = builder.Build();
-        var effectiveIp = remoteIp ?? IPAddress.Loopback;
-        app.Use(async (context, next) =>
-        {
-            context.Connection.RemoteIpAddress ??= effectiveIp;
-            await next();
-        });
         app.UseAuthentication();
         app.UseAuthorization();
         app.MapProviderOAuthEndpoints();
@@ -210,7 +467,13 @@ public sealed class ProviderOAuthEndpointTests
             if (!Request.Headers.TryGetValue(HeaderName, out var value) || value != HeaderValue)
                 return Task.FromResult(AuthenticateResult.NoResult());
 
-            var identity = new ClaimsIdentity([new Claim(ClaimTypes.Name, "test-user")], SchemeName);
+            var identity = new ClaimsIdentity(
+                [
+                    new Claim(ClaimTypes.Name, "test-user"),
+                    new Claim(NetclawClaimTypes.PrincipalClassification, nameof(PrincipalClassification.Operator)),
+                    new Claim(NetclawClaimTypes.TransportAuthenticity, nameof(TransportAuthenticity.LocalProcess)),
+                ],
+                SchemeName);
             var principal = new ClaimsPrincipal(identity);
             return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName)));
         }

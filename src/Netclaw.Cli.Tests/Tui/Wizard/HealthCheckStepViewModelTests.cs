@@ -228,7 +228,7 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
             }
             return response;
         });
-        var daemonApi = new DaemonApi(new StubHttpClientFactory(handler), new ConfigurationBuilder().Build(), _paths);
+        var daemonApi = new DaemonApi(new StubHttpClientFactory(handler), new ConfigurationBuilder().Build(), _paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
 
         using var step = new HealthCheckStepViewModel(
             daemonManager,

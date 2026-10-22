@@ -6,12 +6,14 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -81,11 +83,10 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
                 return FakeHttpMessageHandler.JsonResponse(
                     new PairingCodeResultDto("ABCD-EFGH", expiresAt));
             });
-        var api = new DaemonApi(factory, new ConfigurationBuilder().Build(), _paths);
+        var protector = DaemonApiTestDependencies.CreateProofProtector();
+        var api = new DaemonApi(factory, new ConfigurationBuilder().Build(), _paths, protector, TimeProvider.System);
 
-        var result = await api.RequestPairingCodeAsync(
-            "host-proof",
-            TestContext.Current.CancellationToken);
+        var result = await api.RequestPairingCodeAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedRequest);
         Assert.Equal(DaemonApi.LocalControlHttpClientName, factory.LastClientName);
@@ -96,9 +97,60 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         Assert.Equal("https://remote.example.test", api.Endpoint);
         var requestJson = await capturedRequest.Content!.ReadFromJsonAsync<JsonElement>(
             TestContext.Current.CancellationToken);
-        Assert.Equal("host-proof", requestJson.GetProperty("proof").GetString());
+        var payload = protector.Unprotect(
+            LocalControlOperation.GeneratePairingCode,
+            requestJson.GetProperty("proof").GetString()!);
+        Assert.Equal(LocalControlPairingProofProtector.GeneratePairingCodeOperation, payload.Operation);
         Assert.Equal(HttpStatusCode.OK, result.StatusCode);
         Assert.Equal("ABCD-EFGH", result.Result!.FormattedCode);
+        Assert.Equal(expiresAt, result.Result.ExpiresAt);
+    }
+
+    [Fact]
+    public async Task ReadProviderOAuthResult_sends_a_state_bound_proof_to_the_local_daemon_without_bearer_token()
+    {
+        ClientConfigFile.WriteEndpoint(_paths, "https://remote.example.test");
+        File.WriteAllText(
+            _paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"Daemon\":{\"Host\":\"127.0.0.1\",\"Port\":6200,\"ExposureMode\":\"tailscale-serve\"}}");
+        WriteDeviceToken("bootstrap-device-token");
+        HttpRequestMessage? capturedRequest = null;
+        var expiresAt = new DateTimeOffset(2026, 10, 17, 13, 0, 0, TimeSpan.Zero);
+        var factory = new FakeHttpClientFactory(request =>
+        {
+            capturedRequest = request;
+            return FakeHttpMessageHandler.JsonResponse(new
+            {
+                accessToken = "access-token",
+                refreshToken = "refresh-token",
+                accountId = "account-id",
+                expiresAt = expiresAt.ToString("o"),
+            });
+        });
+        var protector = DaemonApiTestDependencies.CreateProofProtector();
+        var api = new DaemonApi(factory, new ConfigurationBuilder().Build(), _paths, protector, TimeProvider.System);
+
+        var result = await api.ReadProviderOAuthResultAsync("flow-state", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal(DaemonApi.LocalControlHttpClientName, factory.LastClientName);
+        Assert.Equal(
+            "http://127.0.0.1:6200/api/local-control/v1/provider-oauth-result",
+            capturedRequest.RequestUri!.AbsoluteUri);
+        Assert.Null(capturedRequest.Headers.Authorization);
+        var requestJson = await capturedRequest.Content!.ReadFromJsonAsync<JsonElement>(
+            TestContext.Current.CancellationToken);
+        Assert.Equal("flow-state", requestJson.GetProperty("state").GetString());
+        var proof = requestJson.GetProperty("proof").GetString()!;
+        var payload = protector.Unprotect(LocalControlOperation.ReadProviderOAuthResult("flow-state"), proof);
+        Assert.Equal(LocalControlPairingProofProtector.ReadProviderOAuthResultOperation, payload.Operation);
+        Assert.Throws<CryptographicException>(() =>
+            protector.Unprotect(LocalControlOperation.ReadProviderOAuthResult("other-state"), proof));
+        Assert.Throws<CryptographicException>(() =>
+            protector.Unprotect(LocalControlOperation.GeneratePairingCode, proof));
+        Assert.Equal("access-token", result.Result!.AccessToken);
+        Assert.Equal("refresh-token", result.Result.RefreshToken);
+        Assert.Equal("account-id", result.Result.AccountId);
         Assert.Equal(expiresAt, result.Result.ExpiresAt);
     }
 
@@ -114,11 +166,9 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
                 Headers = { Location = new Uri("https://remote.example.test/capture") },
             };
         });
-        var api = new DaemonApi(factory, new ConfigurationBuilder().Build(), _paths);
+        var api = new DaemonApi(factory, new ConfigurationBuilder().Build(), _paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
 
-        var result = await api.RequestPairingCodeAsync(
-            "host-proof",
-            TestContext.Current.CancellationToken);
+        var result = await api.RequestPairingCodeAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.TemporaryRedirect, result.StatusCode);
         Assert.Equal(1, requestCount);
@@ -181,9 +231,7 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
                 new { error = "unsupported_protocol_version" },
                 HttpStatusCode.BadRequest));
 
-        var result = await api.RequestPairingCodeAsync(
-            "host-proof",
-            TestContext.Current.CancellationToken);
+        var result = await api.RequestPairingCodeAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, result.StatusCode);
         Assert.Null(result.Result);
@@ -202,9 +250,7 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
                 return new HttpResponseMessage(HttpStatusCode.NotFound);
             });
 
-        var result = await api.RequestPairingCodeAsync(
-            "host-proof",
-            TestContext.Current.CancellationToken);
+        var result = await api.RequestPairingCodeAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, result.StatusCode);
         Assert.Null(result.Result);
@@ -419,7 +465,9 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         var api = new DaemonApi(
             new FakeHttpClientFactory(request => { captured = request; return new HttpResponseMessage(HttpStatusCode.OK); }),
             new ConfigurationBuilder().Build(),
-            _paths);
+            _paths,
+            DaemonApiTestDependencies.CreateProofProtector(),
+            TimeProvider.System);
 
         // ...then a Daemon-section change rebinds it to :5300 (as the wizard would write).
         // A frozen endpoint would keep probing :5199; the probe must re-resolve to :5300 (#1304).
@@ -436,7 +484,7 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         ClientConfigFile.WriteEndpoint(_paths, endpoint);
         var configuration = new ConfigurationBuilder().Build();
 
-        return new DaemonApi(new FakeHttpClientFactory(handler), configuration, _paths);
+        return new DaemonApi(new FakeHttpClientFactory(handler), configuration, _paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
     }
 
     private void WriteDeviceToken(string token)

@@ -112,7 +112,9 @@ public sealed class McpOAuthEndToEndTests : IDisposable
         var daemonApi = new DaemonApi(
             new TestServerHttpClientFactory(app.GetTestClient),
             new ConfigurationBuilder().Build(),
-            paths);
+            paths,
+            DaemonApiTestDependencies.CreateProofProtector(),
+            TimeProvider.System);
         var output = new StringWriter();
 
         var exitCode = await McpCommand.RunAsync(

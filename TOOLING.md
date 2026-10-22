@@ -55,7 +55,7 @@ Hosted runs from 2026-10-17 through 2026-10-19 measured these gate times (minute
 | `shell-command-analysis` | `shell-command-analysis` (two invocations: 303 mutants, up to 15.8, and 27 mutants, up to 4.7) | 14 to 21 |
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
-| `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4) | 10 to 11 |
+| `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally) | 11 to 12 (estimate; hosted measurement required) |
 | `child-owner-and-report` | `child-owner` (3.2), `child-control` (2.8), `reminder-report-once` (2.7), `child-approval-close` (2.7) | 13 to 18 (estimate) |
 | `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local) | 7 to 8 (estimate) |
@@ -116,6 +116,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `BashLiteralTwinSlices.Apply` and the denial check of `ToolAccessPolicy.ScreenScopedSlices` | Decision F1: the strictest literal twin result decides a call. The candidates of every twin replace the candidates of their source command, an unresolved source keeps its exact answer, twins without their source command fail loudly, and one denied twin denies the call | 9 killed | `./scripts/run-literal-twin-mutations.sh` |
 | `DeliveryRetryHandler.ReminderOf` (turn number check), `DeliveryRetryHandler.TryMarkReported`, the mark reset of `DeliveryRetryHandler.RecordTurn`, and the retry link (`RetriedTurnReminder`, its start in `RecordRetry`, and its end in `RecordTurn` and `Clear`) | A failed post of a reminder reply raises one alert for the right fire: the handler answers only for the latest recorded turn, so a report that names another turn finds an unknown turn and never a reminder; a turn is reported once, a wrong turn, a turn with no reminder, and a second report get nothing, and a new recorded turn starts with a fresh mark; a retry turn keeps the link of the turn that it repeats, and the link ends at the next recorded turn or a new input | 15 killed | `./scripts/run-reminder-report-once-mutations.sh` |
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; automated input waits behind an open approval, and only input from a person closes it; a child result notice is automated input by its kind, although its principal is a person | 11 killed | `./scripts/run-input-one-authority-mutations.sh` |
+| `LocalControlPairingProofValidator.ValidateAndConsume` operation check and the result of `LocalControlRequests.AuthorizeAsync` | A local-control proof grants only its own operation: a payload with the provider OAuth result purpose and the pairing operation byte is refused; a request without a valid proof is refused, and only a refused request counts against the per-source limit, so a flood of refused requests cannot block a valid proof | 4 killed | `./scripts/run-local-control-proof-mutations.sh` |
 | `StreamCommitGate` | An attempt commits only at its first real output; id-bearing lifecycle updates are held, role-only keepalives pass through, and held updates are released on commit or clean completion | 8 killed | `./scripts/run-stream-commit-gate-mutations.sh` |
 | `LoopbackHostOriginPolicy` (the Host and Origin rule and `IsEmptyOrPortSuffix`), `LoopbackHostName.IsStrictLoopback`, and the refusal call in `LoopbackAuthenticationHandler.HandleAuthenticateAsync` | Loopback operator trust needs a loopback Host name, and an `Origin` header must equal `http://` plus the Host: a foreign page cannot reach the daemon by DNS rebinding or a cross-site request | 41 killed | `./scripts/run-loopback-host-origin-mutations.sh` |
 | `ActiveToolBatchTracker.CanComplete`, `SessionToolWorkflow.ValidateResponse`, `SessionModelContext.IsCurrentInspection`, `SessionState.Apply(TurnRecorded, bool)`, `SessionExecutionLifetime.AcceptModelStop`, `SessionExecutionLifetime.ObserveReapReply`, `SessionInputFlow.DrainBufferedBatch`, and `TurnStateTracker.CountRefusedRepeat` | A batch waits for every result and task completion; another sender cannot approve a call; an old inspection cannot change a later call; terminal history adds the user exactly once; an old model stop cannot settle a new call; one accepted reap reply requests only one journal commit; fresh buffered input starts a new turn; refused repeats 1 to 4 get the nudge, repeat 5 gets the escalated nudge, repeat 6 ends the turn, and a new call does not count | 19 killed | `./scripts/run-tool-batch-readiness-mutations.sh` |
@@ -211,6 +212,32 @@ error in the selected span.
 
 The local run took 1 minute 40 seconds after package restore. The separate CI
 job retains a 10-minute timeout and uploads `mcp-artifact-admission-mutation-report`.
+
+### Local-Control Proof Gate
+
+Run the local-control proof gate:
+
+```bash
+./scripts/run-local-control-proof-mutations.sh
+```
+
+The script runs Stryker one time on two spans. The first span is the
+operation byte check of `LocalControlPairingProofValidator.ValidateAndConsume`.
+A mutant that inverts the check lets a payload for one operation pass as
+another operation when the purpose chain matches.
+`LocalControlProofMutationTests` must kill it. The Data Protection purpose
+chain binds the OAuth state. Stryker has no mutant for that binding, so the
+deterministic validator and endpoint tests prove it.
+
+The second span is the result line of `LocalControlRequests.AuthorizeAsync`
+(3 mutants). One mutant lets a request with an invalid proof run its
+operation. The other two count a valid proof as a refusal. A tunnel agent
+forwards remote requests from loopback, so that mutant lets remote junk block
+the host CLI. `LocalControlRequestsMutationTests` must kill all three.
+
+The local run took about 1 minute after package restore. CI runs it in
+the `session-reliability` group of the `mutation-gates` job. Its report
+directory is `artifacts/stryker/local-control-proof`.
 
 ### Shutdown Notice Identity Gate
 
@@ -486,7 +513,8 @@ uses no actor, no timer, and no delay. It covers these cases:
 - the list keeps acceptance order, then run id order
 
 The local Stryker run took 1 minute 52 seconds. CI runs the gate in the `session-reliability` group of the
-`mutation-gates` job. That group holds three gates and takes 10 to 11 minutes on a hosted runner. The child owner
+`mutation-gates` job. That group holds four gates. The first three gates take 10 to 11 minutes on a hosted runner.
+The local-control proof gate adds about one minute locally. Hosted CI must measure the combined group. The child owner
 and report-once gates run in the `child-owner-and-report` group. Its report directory is
 `artifacts/stryker/open-child-runs`.
 

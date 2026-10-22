@@ -3,8 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
@@ -174,6 +177,113 @@ public sealed class ProviderManagerPageTests : IDisposable
         {
             input.EnqueueKey(ConsoleKey.Q, control: true);
             await run.WaitAsync(appCts.Token);
+        }
+    }
+
+    [Fact]
+    public async Task BrowserOAuth_WhenTheDaemonLacksTheResultRead_ShowsTheUpgradeError()
+    {
+        // A daemon older than this CLI completes the flow but has no local-control
+        // result endpoint. The flow must leave "Starting authorization..." and show why.
+        var callbackCompleted = false;
+        var factory = new FakeHttpClientFactory(request => request.RequestUri!.AbsolutePath switch
+        {
+            // An empty URL makes Process.Start throw before it launches anything,
+            // so this test never opens a real browser.
+            "/api/provider/oauth/start" => FakeHttpMessageHandler.JsonResponse(new
+            {
+                authorizationUrl = "",
+                state = "flow-state",
+                expiresAt = DateTimeOffset.UtcNow.AddMinutes(5),
+            }),
+            "/api/provider/oauth/status/flow-state" => FakeHttpMessageHandler.JsonResponse(
+                new { status = Volatile.Read(ref callbackCompleted) ? "Completed" : "Pending" }),
+            "/api/local-control/v1/provider-oauth-result" => new HttpResponseMessage(HttpStatusCode.NotFound),
+            var path => throw new InvalidOperationException($"Unexpected daemon request: {path}"),
+        });
+        var daemonApi = new DaemonApi(
+            factory,
+            new ConfigurationBuilder().Build(),
+            _paths,
+            DaemonApiTestDependencies.CreateProofProtector(),
+            TimeProvider.System);
+        var (terminal, app, vm) = HeadlessTerminaFixture.Create<ProviderManagerPage, ProviderManagerViewModel>(
+            "/provider",
+            sp => new ProviderManagerPage(sp.GetRequiredService<IAnsiTerminal>()),
+            () => new ProviderManagerViewModel(_paths, _registry, _fakeProbe, daemonApi: daemonApi),
+            out var input,
+            width: 200);
+
+        foreach (var _ in _registry.KnownTypeKeys.TakeWhile(type => type != "openai"))
+            input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);     // type row -> Name your provider
+        input.EnqueueKey(ConsoleKey.Enter);     // accept generated provider name
+        input.EnqueueKey(ConsoleKey.DownArrow); // ChatGPT Subscription (browser)
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var run = app.RunAsync(cts.Token);
+        try
+        {
+            // The flow rebuilds its view while it waits. Typed text in the paste box stays visible.
+            await WaitForConditionAsync(() => terminal.Contains("Paste the redirect URL"), cts.Token);
+            input.EnqueuePaste("partial-redirect");
+            await WaitForConditionAsync(() => terminal.Contains("partial-redirect"), cts.Token);
+            vm.StateVersion.Value++;
+            vm.RequestRedraw();
+            input.EnqueuePaste("-more");
+            await WaitForConditionAsync(() => terminal.Contains("partial-redirect-more"), cts.Token);
+            Volatile.Write(ref callbackCompleted, true);
+
+            await WaitForConditionAsync(() => vm.OAuth.FlowState.Value == DeviceFlowState.Error, cts.Token);
+            Assert.Equal(ProviderManagerState.AddBrowserOAuthFlow, vm.CurrentState.Value);
+            Assert.Equal(AuthMethod.OAuthPkce, vm.NewAuthMethod);
+
+            // A frame can be read while it is half drawn, so poll the screen.
+            using var renderCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            renderCts.CancelAfter(TimeSpan.FromSeconds(2));
+            await WaitForConditionAsync(
+                () => terminal.Contains("does not support the local-control provider OAuth read")
+                      && !terminal.Contains("Starting authorization..."),
+                renderCts.Token);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(cts.Token);
+        }
+    }
+
+    [Fact]
+    public async Task BrowserOAuth_KeyTypedWhileTheFlowReportsFromAnotherThread_IsKept()
+    {
+        var daemon = new OldDaemonBrowserOAuth();
+        var registry = daemon.PauseViewBuildsAtTheProviderName(_registry);
+        var daemonApi = daemon.CreateApi(_paths);
+        var (terminal, app, vm) = HeadlessTerminaFixture.Create<ProviderManagerPage, ProviderManagerViewModel>(
+            "/provider",
+            sp => new ProviderManagerPage(sp.GetRequiredService<IAnsiTerminal>()),
+            () => new ProviderManagerViewModel(_paths, registry, _fakeProbe, daemonApi: daemonApi),
+            out var input,
+            width: 200);
+
+        foreach (var _ in registry.KnownTypeKeys.TakeWhile(type => type != "openai"))
+            input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var run = app.RunAsync(cts.Token);
+        try
+        {
+            await daemon.TypeAKeyWhileTheFlowReportsARefusalOnTheTestThreadAsync(input, vm, terminal, cts.Token);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(cts.Token);
         }
     }
 

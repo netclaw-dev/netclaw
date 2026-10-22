@@ -357,7 +357,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         var configuration = new ConfigurationBuilder().Build();
         var paths = new NetclawPaths(Path.Combine(_dir.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
-        return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths);
+        return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
     }
 
     private static object BuildStatusResponse(int contextWindow) => new

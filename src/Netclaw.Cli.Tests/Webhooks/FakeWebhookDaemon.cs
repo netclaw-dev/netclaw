@@ -29,7 +29,7 @@ internal sealed class FakeWebhookDaemon
     public FakeWebhookDaemon(NetclawPaths paths, Func<HttpRequestMessage, HttpResponseMessage> respond)
     {
         ClientConfigFile.WriteEndpoint(paths, "http://127.0.0.1:5199");
-        Api = new DaemonApi(new FakeHttpClientFactory(request => Record(request, respond)), new ConfigurationBuilder().Build(), paths);
+        Api = new DaemonApi(new FakeHttpClientFactory(request => Record(request, respond)), new ConfigurationBuilder().Build(), paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
     }
 
     /// <summary>The client the CLI calls.</summary>

@@ -51,7 +51,10 @@ In scope:
 Not in scope:
 
 - network exposure, device pairing, and host authentication (see
-  `daemon-exposure`, `device-pairing`, `hub-auth`, and `local-control-proof`);
+  `daemon-exposure`, `device-pairing`, `hub-auth`, and `local-control-proof`).
+  A local-control proof grants one host operation: a pairing code or the read
+  of one provider OAuth result. It never authorizes a tool call, and a tool
+  grant never replaces it;
 - validation of tool arguments against a schema (`tool-arg-validation`);
 - output bounds and spill (`bounded-tool-output`);
 - containment of what an allowed process does after it starts. Netclaw has no

@@ -34,13 +34,13 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
         var reader = new LocalControlPairingProofProtector(
             SecretsProtection.CreateDataProtectionProvider(paths));
 
-        var proof = writer.ProtectPayload(new LocalControlPairingProofPayload(
+        var proof = writer.ProtectPayload(LocalControlOperation.GeneratePairingCode, new LocalControlPairingProofPayload(
             LocalControlPairingProofProtector.CurrentVersion,
             LocalControlPairingProofProtector.GeneratePairingCodeOperation,
             IssuedAt,
             "00112233445566778899AABBCCDDEEFF"));
 
-        var payload = reader.Unprotect(proof);
+        var payload = reader.Unprotect(LocalControlOperation.GeneratePairingCode, proof);
 
         Assert.Equal(LocalControlPairingProofProtector.CurrentVersion, payload.Version);
         Assert.Equal(LocalControlPairingProofProtector.GeneratePairingCodeOperation, payload.Operation);
@@ -55,8 +55,8 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
         var protector = new LocalControlPairingProofProtector(
             SecretsProtection.CreateDataProtectionProvider(paths));
 
-        var first = protector.Unprotect(protector.CreateProof(IssuedAt));
-        var second = protector.Unprotect(protector.CreateProof(IssuedAt));
+        var first = protector.Unprotect(LocalControlOperation.GeneratePairingCode, protector.CreateProof(LocalControlOperation.GeneratePairingCode, IssuedAt));
+        var second = protector.Unprotect(LocalControlOperation.GeneratePairingCode, protector.CreateProof(LocalControlOperation.GeneratePairingCode, IssuedAt));
 
         Assert.Equal(LocalControlPairingProofProtector.NonceSize * 2, first.Nonce.Length);
         Assert.NotEqual(first.Nonce, second.Nonce);
@@ -69,7 +69,7 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
     {
         var provider = SecretsProtection.CreateDataProtectionProvider(CreatePaths(_dir.Path));
         var codec = new LocalControlPairingProofProtector(provider);
-        var proof = codec.ProtectPayload(new LocalControlPairingProofPayload(
+        var proof = codec.ProtectPayload(LocalControlOperation.GeneratePairingCode, new LocalControlPairingProofPayload(
             version, operation, DateTimeOffset.FromUnixTimeMilliseconds(0x010203040506),
             "00112233445566778899AABBCCDDEEFF"));
 
@@ -78,6 +78,30 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
             .Unprotect(Base64Url.DecodeFromChars(proof));
 
         Assert.Equal(Convert.FromHexString(expectedHex), plaintext);
+    }
+
+    [Fact]
+    public void Provider_oauth_result_proof_uses_the_state_bound_purpose_chain()
+    {
+        var provider = SecretsProtection.CreateDataProtectionProvider(CreatePaths(_dir.Path));
+        var codec = new LocalControlPairingProofProtector(provider);
+        var proof = codec.ProtectPayload(
+            LocalControlOperation.ReadProviderOAuthResult("state-a"),
+            new LocalControlPairingProofPayload(
+                LocalControlPairingProofProtector.CurrentVersion,
+                LocalControlPairingProofProtector.ReadProviderOAuthResultOperation,
+                DateTimeOffset.FromUnixTimeMilliseconds(0x010203040506),
+                "00112233445566778899AABBCCDDEEFF"));
+        var protectedBytes = Base64Url.DecodeFromChars(proof);
+
+        var plaintext = provider.CreateProtector("Netclaw.LocalControl.ProviderOAuthResult.v1", "state-a")
+            .Unprotect(protectedBytes);
+
+        Assert.Equal(Convert.FromHexString("0102000001020304050600112233445566778899AABBCCDDEEFF"), plaintext);
+        Assert.Throws<CryptographicException>(() =>
+            provider.CreateProtector("Netclaw.LocalControl.ProviderOAuthResult.v1", "state-b").Unprotect(protectedBytes));
+        Assert.Throws<CryptographicException>(() =>
+            provider.CreateProtector("Netclaw.LocalControl.Pairing.v1").Unprotect(protectedBytes));
     }
 
     [Theory]
@@ -89,7 +113,7 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
         var proof = Base64Url.EncodeToString(provider.CreateProtector("Netclaw.LocalControl.Pairing.v1")
             .Protect(Convert.FromHexString(payloadHex)));
 
-        var payload = new LocalControlPairingProofProtector(provider).Unprotect(proof);
+        var payload = new LocalControlPairingProofProtector(provider).Unprotect(LocalControlOperation.GeneratePairingCode, proof);
 
         Assert.Equal(version, payload.Version);
         Assert.Equal(operation, payload.Operation);
@@ -109,7 +133,7 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
             .Protect(Convert.FromHexString(payloadHex)));
 
         Assert.Throws<CryptographicException>(() =>
-            new LocalControlPairingProofProtector(provider).Unprotect(proof));
+            new LocalControlPairingProofProtector(provider).Unprotect(LocalControlOperation.GeneratePairingCode, proof));
     }
 
     [Fact]
@@ -121,9 +145,9 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
         var reader = new LocalControlPairingProofProtector(
             SecretsProtection.CreateDataProtectionProvider(CreatePaths(otherDir.Path)));
 
-        var proof = writer.CreateProof(IssuedAt);
+        var proof = writer.CreateProof(LocalControlOperation.GeneratePairingCode, IssuedAt);
 
-        Assert.Throws<CryptographicException>(() => reader.Unprotect(proof));
+        Assert.Throws<CryptographicException>(() => reader.Unprotect(LocalControlOperation.GeneratePairingCode, proof));
     }
 
     [Fact]
@@ -133,7 +157,7 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
         var provider = SecretsProtection.CreateDataProtectionProvider(paths);
         var localControl = new LocalControlPairingProofProtector(provider);
         var secretsProtector = provider.CreateProtector(DataProtectionSecretsProtector.Purpose);
-        var proof = localControl.CreateProof(IssuedAt);
+        var proof = localControl.CreateProof(LocalControlOperation.GeneratePairingCode, IssuedAt);
         var protectedBytes = new byte[Base64Url.GetMaxDecodedLength(proof.Length)];
         Assert.True(Base64Url.TryDecodeFromChars(proof, protectedBytes, out var bytesWritten));
 
@@ -148,7 +172,7 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
         var protector = new LocalControlPairingProofProtector(
             SecretsProtection.CreateDataProtectionProvider(paths));
 
-        Assert.Throws<CryptographicException>(() => protector.Unprotect("not a proof"));
+        Assert.Throws<CryptographicException>(() => protector.Unprotect(LocalControlOperation.GeneratePairingCode, "not a proof"));
     }
 
     [Fact]
@@ -205,7 +229,7 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
         var protector = new LocalControlPairingProofProtector(
             SecretsProtection.CreateDataProtectionProvider(paths));
 
-        Assert.Throws<CryptographicException>(() => protector.CreateProof(IssuedAt));
+        Assert.Throws<CryptographicException>(() => protector.CreateProof(LocalControlOperation.GeneratePairingCode, IssuedAt));
     }
 
     private static NetclawPaths CreatePaths(string basePath)

@@ -575,6 +575,7 @@ public sealed class ProviderStepView : IWizardStepView
 
     private ILayoutNode BuildBrowserOAuthFlow(ProviderStepViewModel vm, StepViewCallbacks callbacks)
     {
+        _lastFocusedList = null;
         var providerType = vm.SelectedProviderType ?? "unknown";
         var result = OAuthFlowViews.BuildBrowserOAuthFlow(
             vm.Registry.Get(providerType).DisplayName,

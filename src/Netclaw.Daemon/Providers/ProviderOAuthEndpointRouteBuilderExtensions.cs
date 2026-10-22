@@ -5,6 +5,9 @@
 // -----------------------------------------------------------------------
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
+using Netclaw.Daemon.Security;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 
@@ -22,13 +25,18 @@ internal sealed record ProviderOAuthCallbackQuery(
 internal sealed record ProviderOAuthStartResponse(string AuthorizationUrl, string State);
 
 /// <summary>
-/// Status of a provider OAuth flow. Tokens are only populated for loopback callers;
-/// remote paired devices see boolean flags only to prevent credential exfiltration.
+/// Status of a provider OAuth flow. It never carries tokens. The host CLI reads the
+/// tokens from <c>POST /api/local-control/v1/provider-oauth-result</c> with a
+/// local-control proof.
 /// </summary>
 internal sealed record ProviderOAuthStatusResponse(
     string Status,
     bool HasToken,
-    string? AccessToken,
+    string? ExpiresAt);
+
+/// <summary>Tokens of a completed provider OAuth flow, returned only for a valid local-control proof.</summary>
+internal sealed record ProviderOAuthResultResponse(
+    string AccessToken,
     string? RefreshToken,
     string? AccountId,
     string? ExpiresAt);
@@ -108,30 +116,54 @@ internal static class ProviderOAuthEndpointRouteBuilderExtensions
 
         app.MapGet("/api/provider/oauth/status/{state}", (
             string state,
-            HttpContext httpContext,
             OAuthPkceService pkceService) =>
         {
             var status = pkceService.GetFlowStatus(state);
             var result = pkceService.GetFlowResult(state);
 
-            // Only return raw tokens over loopback — remote paired devices
-            // see boolean flags only to prevent credential exfiltration.
-            var remoteIp = httpContext.Connection.RemoteIpAddress;
-            var isLoopback = remoteIp is not null && System.Net.IPAddress.IsLoopback(remoteIp);
-
             return TypedResults.Ok(new ProviderOAuthStatusResponse(
                 Status: status.ToString(),
                 HasToken: result is not null,
-                AccessToken: isLoopback ? result?.AccessToken.Value : null,
-                RefreshToken: isLoopback ? result?.RefreshToken?.Value : null,
-                AccountId: isLoopback ? result?.AccountId?.Value : null,
                 ExpiresAt: result?.ExpiresAt?.ToString("o")));
         })
         .WithName("GetProviderOAuthStatus")
-        .WithSummary("Get the status (and, over loopback, tokens) of a provider OAuth flow.")
+        .WithSummary("Get the status of a provider OAuth flow. The response never contains tokens.")
         .WithTags("Provider OAuth")
         .RequireAuthorization();
 
+        app.MapPost("/api/local-control/v1/provider-oauth-result", ReadProviderOAuthResultAsync)
+            .WithName("ReadProviderOAuthResultV1")
+            .WithSummary("Read the tokens of a completed provider OAuth flow with a daemon-host local-control proof.")
+            .WithTags("Provider OAuth")
+            .AllowAnonymous();
+
         return app;
+    }
+
+    // Authority comes only from a local-control proof bound to this OAuth state. A
+    // tunnel agent connects from loopback and a paired device holds a bearer token, so
+    // neither the socket address nor a device or bootstrap token can unlock the tokens.
+    private static async Task<IResult> ReadProviderOAuthResultAsync(
+        HttpContext httpContext,
+        LocalControlRequests localControl,
+        OAuthPkceService pkceService,
+        CancellationToken cancellationToken)
+    {
+        var (request, refusal) = await localControl.AuthorizeAsync(
+            httpContext,
+            PairingEndpointJsonContext.Default.LocalControlProviderOAuthResultRequest,
+            cancellationToken);
+        if (refusal is not null)
+            return refusal;
+
+        var result = pkceService.GetFlowResult(request!.State);
+        if (result is null)
+            return TypedResults.Conflict(new ProviderOAuthErrorResponse("The provider OAuth flow has no completed result."));
+
+        return TypedResults.Ok(new ProviderOAuthResultResponse(
+            AccessToken: result.AccessToken.Value,
+            RefreshToken: result.RefreshToken?.Value,
+            AccountId: result.AccountId?.Value,
+            ExpiresAt: result.ExpiresAt?.ToString("o")));
     }
 }

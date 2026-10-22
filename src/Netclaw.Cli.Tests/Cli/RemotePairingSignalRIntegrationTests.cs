@@ -73,7 +73,7 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         var ct = TestContext.Current.CancellationToken;
         await using var app = await CreateAppAsync();
         var httpClient = app.GetTestClient();
-        var proof = _proofProtector.CreateProof(TimeProvider.System.GetUtcNow());
+        var proof = _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, TimeProvider.System.GetUtcNow());
         var codeResponse = await httpClient.PostAsJsonAsync(
             "/api/local-control/v1/pairing-code",
             new { proof },
@@ -128,6 +128,7 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         builder.Services.AddSingleton(_exchangeGuard);
         builder.Services.AddSingleton(_proofProtector);
         builder.Services.AddSingleton(_proofValidator);
+        builder.Services.AddSingleton<LocalControlRequests>();
         builder.Services.AddNetclawAuthSchemes(new DaemonConfig());
         builder.Services.AddAuthorization();
         builder.Services.AddSignalR();
@@ -145,8 +146,6 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                         QueueLimit = 0,
                     }));
-            options.AddPolicy(PairingEndpointRouteBuilderExtensions.LocalControlRateLimitPolicy, context =>
-                RateLimitPartition.GetNoLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
         });
 
         var app = builder.Build();

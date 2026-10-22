@@ -99,6 +99,7 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         builder.Services.AddSingleton(_exchangeGuard);
         builder.Services.AddSingleton(_proofProtector);
         builder.Services.AddSingleton(_proofValidator);
+        builder.Services.AddSingleton<LocalControlRequests>();
         builder.Services.AddSingleton<TimeProvider>(_time);
         builder.Services.AddNetclawAuthSchemes(new DaemonConfig { ExposureMode = exposureMode });
         builder.Services.AddAuthorization();
@@ -121,15 +122,6 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                         QueueLimit = 0,
                     }));
-            if (useRealRateLimiter)
-            {
-                PairingEndpointRouteBuilderExtensions.AddLocalControlRateLimitPolicy(options);
-            }
-            else
-            {
-                options.AddPolicy(PairingEndpointRouteBuilderExtensions.LocalControlRateLimitPolicy, context =>
-                    RateLimitPartition.GetNoLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
-            }
             options.RejectionStatusCode = 429;
         });
 
@@ -192,7 +184,7 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         var ct = TestContext.Current.CancellationToken;
         await using var app = await CreateAppAsync(exposureMode: mode);
         var client = app.GetTestClient();
-        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+        var proof = _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, _time.GetUtcNow());
 
         var response = await client.PostAsJsonAsync(
             "/api/local-control/v1/pairing-code",
@@ -213,7 +205,7 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         await _registry.AddAsync(device, ct);
         await using var app = await CreateAppAsync();
         var client = app.GetTestClient();
-        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+        var proof = _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, _time.GetUtcNow());
 
         var generation = await client.PostAsJsonAsync(
             "/api/local-control/v1/pairing-code",
@@ -327,7 +319,7 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         var ct = TestContext.Current.CancellationToken;
         await using var app = await CreateAppAsync();
         var client = app.GetTestClient();
-        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+        var proof = _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, _time.GetUtcNow());
 
         var first = await client.PostAsJsonAsync(
             "/api/local-control/v1/pairing-code",
@@ -352,7 +344,7 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         await _registry.AddAsync(device, ct);
         await using var app = await CreateAppAsync();
         var client = app.GetTestClient();
-        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+        var proof = _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, _time.GetUtcNow());
 
         var first = await client.PostAsJsonAsync(
             "/api/local-control/v1/pairing-code",
@@ -381,7 +373,7 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
             ct);
         Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
 
-        var freshProof = _proofProtector.CreateProof(_time.GetUtcNow());
+        var freshProof = _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, _time.GetUtcNow());
         var fresh = await client.PostAsJsonAsync(
             "/api/local-control/v1/pairing-code",
             new { proof = freshProof },
@@ -403,15 +395,15 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     {
         for (var index = 0; index < LocalControlPairingProofValidator.MaximumLiveNonces; index++)
         {
-            var accepted = _proofValidator.ValidateAndConsume(
-                _proofProtector.CreateProof(_time.GetUtcNow()));
+            var accepted = _proofValidator.ValidateAndConsume(LocalControlOperation.GeneratePairingCode, 
+                _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, _time.GetUtcNow()));
             Assert.Equal(LocalControlPairingProofValidation.Valid, accepted);
         }
 
         var ct = TestContext.Current.CancellationToken;
         await using var app = await CreateAppAsync();
         var client = app.GetTestClient();
-        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+        var proof = _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, _time.GetUtcNow());
 
         var response = await client.PostAsJsonAsync(
             "/api/local-control/v1/pairing-code",
@@ -439,33 +431,43 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     }
 
     [Fact]
-    public async Task Local_control_rate_limit_rejects_excess_requests_without_replacing_code()
+    public async Task Local_control_refusal_limit_never_refuses_a_valid_proof()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var app = await CreateAppAsync(useRealRateLimiter: true);
+        await using var app = await CreateAppAsync();
         var client = app.GetTestClient();
-        PairingCodeResultDto? lastAccepted = null;
 
-        for (var index = 0; index < 10; index++)
+        var flood = new List<HttpStatusCode>();
+        for (var index = 0; index < 30; index++)
+        {
+            var refused = await client.PostAsJsonAsync(
+                "/api/local-control/v1/pairing-code",
+                new { proof = "not-a-proof" },
+                ct);
+            flood.Add(refused.StatusCode);
+        }
+
+        var accepted = new List<HttpStatusCode>();
+        PairingCodeResultDto? lastAccepted = null;
+        for (var index = 0; index < 12; index++)
         {
             var response = await client.PostAsJsonAsync(
                 "/api/local-control/v1/pairing-code",
-                new { proof = _proofProtector.CreateProof(_time.GetUtcNow()) },
+                new { proof = _proofProtector.CreateProof(LocalControlOperation.GeneratePairingCode, _time.GetUtcNow()) },
                 ct);
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            lastAccepted = await response.Content.ReadFromJsonAsync<PairingCodeResultDto>(ct);
+            accepted.Add(response.StatusCode);
+            if (response.StatusCode == HttpStatusCode.OK)
+                lastAccepted = await response.Content.ReadFromJsonAsync<PairingCodeResultDto>(ct);
         }
 
-        var rejected = await client.PostAsJsonAsync(
-            "/api/local-control/v1/pairing-code",
-            new { proof = _proofProtector.CreateProof(_time.GetUtcNow()) },
-            ct);
+        Assert.Equal(Enumerable.Repeat(HttpStatusCode.OK, 12), accepted);
+        Assert.Equal(
+            Enumerable.Repeat(HttpStatusCode.Unauthorized, 10).Concat(Enumerable.Repeat(HttpStatusCode.TooManyRequests, 20)),
+            flood);
         var exchange = await client.PostAsJsonAsync(
             "/api/pair/exchange",
-            new { code = lastAccepted!.FormattedCode, deviceName = "rate-limit-proof" },
+            new { code = lastAccepted!.FormattedCode, deviceName = "flood-survivor" },
             ct);
-
-        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
         Assert.Equal(HttpStatusCode.OK, exchange.StatusCode);
     }
 
@@ -924,16 +926,16 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         {
             using var otherDir = new DisposableTempDir();
             var otherProvider = SecretsProtection.CreateDataProtectionProvider(new NetclawPaths(otherDir.Path));
-            return new LocalControlPairingProofProtector(otherProvider).ProtectPayload(payload);
+            return new LocalControlPairingProofProtector(otherProvider).ProtectPayload(LocalControlOperation.GeneratePairingCode, payload);
         }
 
         var proof = proofCase switch
         {
-            "stale" => _proofProtector.ProtectPayload(payload with { IssuedAt = _time.GetUtcNow().AddSeconds(-31) }),
-            "future" => _proofProtector.ProtectPayload(payload with { IssuedAt = _time.GetUtcNow().AddSeconds(6) }),
-            "wrong-operation" => _proofProtector.ProtectPayload(payload with { Operation = 2 }),
-            "unsupported-version" => _proofProtector.ProtectPayload(payload with { Version = 2 }),
-            _ => _proofProtector.ProtectPayload(payload),
+            "stale" => _proofProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload with { IssuedAt = _time.GetUtcNow().AddSeconds(-31) }),
+            "future" => _proofProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload with { IssuedAt = _time.GetUtcNow().AddSeconds(6) }),
+            "wrong-operation" => _proofProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload with { Operation = 2 }),
+            "unsupported-version" => _proofProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload with { Version = 2 }),
+            _ => _proofProtector.ProtectPayload(LocalControlOperation.GeneratePairingCode, payload),
         };
 
         return proofCase == "changed"

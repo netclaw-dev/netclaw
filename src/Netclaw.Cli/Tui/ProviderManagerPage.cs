@@ -127,6 +127,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         var revision = state is ProviderManagerState.Loading
             or ProviderManagerState.AddValidating
             or ProviderManagerState.AddOAuthDeviceFlow
+            or ProviderManagerState.AddBrowserOAuthFlow
             or ProviderManagerState.Details
             ? ViewModel.StateVersion.Value
             : 0;
@@ -733,6 +734,10 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private ILayoutNode BuildBrowserOAuthFlowView()
     {
+        // The keyed layout disposes this view, with its input, on each flow update.
+        // A new input takes over the text that the operator typed in the old one.
+        var typedRedirectUrl = _redirectUrlInput?.Text;
+        _redirectUrlInput = null;
         var oauthProviderType = ViewModel.NewProviderType ?? "unknown";
         var result = OAuthFlowViews.BuildBrowserOAuthFlow(
             ViewModel.Registry.Get(oauthProviderType).DisplayName,
@@ -748,6 +753,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         // Route keyboard input to the redirect URL paste box
         if (_redirectUrlInput is not null)
         {
+            NetclawTuiChrome.SeedTextInput(_redirectUrlInput, typedRedirectUrl);
             _lastFocusedInput = _redirectUrlInput;
             _redirectUrlInput.OnFocused();
         }

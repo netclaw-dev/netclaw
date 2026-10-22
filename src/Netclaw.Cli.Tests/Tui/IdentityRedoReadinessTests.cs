@@ -168,7 +168,7 @@ internal sealed class DaemonReadinessFixture : IDisposable, IHttpClientFactory
             return Task.FromResult(response);
         }));
         Step = new HealthCheckStepViewModel(new DaemonManager(paths, Clock),
-            new DaemonApi(this, new ConfigurationBuilder().Build(), paths), timeProvider: Clock);
+            new DaemonApi(this, new ConfigurationBuilder().Build(), paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System), timeProvider: Clock);
     }
     public HttpClient CreateClient(string name) => _http;
     public void Dispose() { Step.Dispose(); _http.Dispose(); _lock.Dispose(); }

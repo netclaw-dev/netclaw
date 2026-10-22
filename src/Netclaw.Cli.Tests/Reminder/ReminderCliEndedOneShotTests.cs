@@ -194,7 +194,9 @@ public sealed class ReminderCliEndedOneShotTests : IAsyncDisposable
         var api = new DaemonApi(
             new FixedHttpClientFactory(app.GetTestClient),
             new ConfigurationBuilder().Build(),
-            new NetclawPaths(_dir.Path));
+            new NetclawPaths(_dir.Path),
+            DaemonApiTestDependencies.CreateProofProtector(),
+            TimeProvider.System);
         return new DaemonHost(app, api);
     }
 

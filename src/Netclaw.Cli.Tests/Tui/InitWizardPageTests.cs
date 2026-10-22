@@ -382,6 +382,44 @@ public sealed class InitWizardPageTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task BrowserOAuth_KeepsTypedKeysAndShowsTheUpgradeErrorForAnOlderDaemon()
+    {
+        var daemon = new OldDaemonBrowserOAuth();
+        var registry = daemon.PauseViewBuildsAtTheProviderName(_registry);
+        var daemonApi = daemon.CreateApi(_paths);
+        var (terminal, app, vm) = HeadlessTerminaFixture.Create<InitWizardPage, InitWizardViewModel>(
+            "/init",
+            _ => new InitWizardPage(),
+            () => new InitWizardViewModel(_paths, registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe, daemonApi: daemonApi),
+            out var input,
+            width: 200);
+
+        foreach (var _ in registry.KnownTypeKeys.TakeWhile(type => type != "openai"))
+            input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var run = app.RunAsync(cts.Token);
+        try
+        {
+            await daemon.TypeAKeyWhileTheFlowReportsARefusalOnTheTestThreadAsync(input, vm, terminal, cts.Token);
+
+            daemon.CompleteAuthorization();
+            await WaitForConditionAsync(
+                () => terminal.Contains("does not support the local-control provider OAuth read")
+                      && !terminal.Contains("Paste the redirect URL"),
+                cts.Token);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(cts.Token);
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>

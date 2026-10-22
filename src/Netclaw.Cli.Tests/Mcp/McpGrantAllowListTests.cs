@@ -62,7 +62,7 @@ public sealed class McpGrantAllowListTests : IDisposable
             : new HttpResponseMessage(HttpStatusCode.NotFound));
         var paths = new NetclawPaths(Path.Combine(_dir.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
-        return new DaemonApi(factory, new ConfigurationBuilder().Build(), paths);
+        return new DaemonApi(factory, new ConfigurationBuilder().Build(), paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
     }
 
     // The tools the audience can call after the command, by the policy the daemon builds from the file.

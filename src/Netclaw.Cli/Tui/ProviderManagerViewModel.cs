@@ -198,11 +198,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         _probe = probe;
         _oauthFactory = oauthFactory;
         IsEmbeddedInConfig = embeddedHost is not null;
+        // Termina rebuilds a keyed view on the caller's thread, and the flow reports from the
+        // thread pool. Post keeps the paste box rebuild in order with key events.
         OAuth = new OAuthFlowCoordinator(
             registry,
             oauthFactory,
             daemonApi,
-            requestRedraw: () => NotifyStateChanged());
+            requestRedraw: () => Post(NotifyStateChanged));
     }
 
     public override void OnActivated()

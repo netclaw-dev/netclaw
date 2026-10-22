@@ -34,7 +34,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     private McpToolPermissionsViewModel CreateVm(McpToolPermissionsNavigationState? navigationState = null)
     {
         var configuration = new ConfigurationBuilder().Build();
-        var daemonApi = new DaemonApi(new NoopHttpClientFactory(), configuration, _paths);
+        var daemonApi = new DaemonApi(new NoopHttpClientFactory(), configuration, _paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
         return new McpToolPermissionsViewModel(_paths, daemonApi, navigationState);
     }
 
@@ -67,7 +67,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         // throw. LoadServersAsync runs fire-and-forget from OnActivated, so an unhandled throw
         // would fault page activation; the VM must instead surface a status message and not throw.
         var configuration = new ConfigurationBuilder().Build();
-        var daemonApi = new DaemonApi(new StubStatusesHttpClientFactory("[]"), configuration, _paths);
+        var daemonApi = new DaemonApi(new StubStatusesHttpClientFactory("[]"), configuration, _paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
         var vm = new McpToolPermissionsViewModel(_paths, daemonApi, navigationState: null);
 
         await vm.LoadServersAsync();
@@ -86,7 +86,9 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         var daemonApi = new DaemonApi(
             httpClientFactory,
             configuration,
-            _paths);
+            _paths,
+            DaemonApiTestDependencies.CreateProofProtector(),
+            TimeProvider.System);
         using var vm = new McpToolPermissionsViewModel(_paths, daemonApi);
         var toolGridReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var subscription = vm.CurrentState.Subscribe(state =>
@@ -123,7 +125,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         // A failed tool request must not strand the user on the Loading screen: the state
         // must fall back to the server list so Esc / GoBack has somewhere to go.
         var configuration = new ConfigurationBuilder().Build();
-        var daemonApi = new DaemonApi(new ThrowingToolsHttpClientFactory(), configuration, _paths);
+        var daemonApi = new DaemonApi(new ThrowingToolsHttpClientFactory(), configuration, _paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
         using var vm = new McpToolPermissionsViewModel(_paths, daemonApi);
         var serverListReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var subscription = vm.CurrentState.Subscribe(state =>

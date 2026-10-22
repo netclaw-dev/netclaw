@@ -76,7 +76,7 @@ public sealed class SecurityAccessNavigationTests : IDisposable
         McpToolPermissionsViewModel? capturedMcpVm = null;
 
         var configuration = new ConfigurationBuilder().Build();
-        var daemonApi = new DaemonApi(new FailingHttpClientFactory(), configuration, _paths);
+        var daemonApi = new DaemonApi(new FailingHttpClientFactory(), configuration, _paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
 
         var services = new ServiceCollection();
         services.AddSingleton<IAnsiTerminal>(terminal);

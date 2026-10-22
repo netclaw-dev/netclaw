@@ -355,7 +355,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         var paths = new NetclawPaths(Path.Combine(_dir.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
 
-        return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths);
+        return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths, DaemonApiTestDependencies.CreateProofProtector(), TimeProvider.System);
     }
 
 }

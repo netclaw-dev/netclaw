@@ -109,7 +109,9 @@ public sealed class ReminderCliDaemonContractTests : IAsyncDisposable
         var api = new DaemonApi(
             new StubHttpClientFactory(new Uri("http://daemon.test"), HttpStatusCode.BadRequest),
             new ConfigurationBuilder().Build(),
-            new NetclawPaths(_dir.Path));
+            new NetclawPaths(_dir.Path),
+            DaemonApiTestDependencies.CreateProofProtector(),
+            TimeProvider.System);
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
 
@@ -304,7 +306,9 @@ public sealed class ReminderCliDaemonContractTests : IAsyncDisposable
         var api = new DaemonApi(
             new StubHttpClientFactory(app.GetTestClient),
             new ConfigurationBuilder().Build(),
-            new NetclawPaths(_dir.Path));
+            new NetclawPaths(_dir.Path),
+            DaemonApiTestDependencies.CreateProofProtector(),
+            TimeProvider.System);
         return new DaemonHost(app, api);
     }
 

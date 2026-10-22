@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Net;
 using System.Text.Json;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
@@ -200,28 +201,8 @@ public sealed class OAuthFlowCoordinator : IDisposable
         return RunBrowserFlowCoreAsync(
             startFlow: async token => await _daemonApi!.StartProviderOAuthAsync(providerType, token),
             pollStatus: (state, token) => _daemonApi!.GetProviderOAuthStatusAsync(state, token),
-            parseResult: statusResponse =>
-            {
-                var accessToken = statusResponse.TryGetProperty("accessToken", out var atProp)
-                    ? atProp.GetString() : null;
-                var refreshToken = statusResponse.TryGetProperty("refreshToken", out var rtProp)
-                    ? rtProp.GetString() : null;
-                var accountId = statusResponse.TryGetProperty("accountId", out var accountIdProp)
-                    ? accountIdProp.GetString() : null;
-                var expiresAt = statusResponse.TryGetProperty("expiresAt", out var expProp)
-                    ? expProp.GetString() : null;
-
-                if (!string.IsNullOrEmpty(accessToken))
-                {
-                    return new OAuthDeviceFlowResult(
-                        new SensitiveString(accessToken),
-                        refreshToken is not null ? new SensitiveString(refreshToken) : null,
-                        expiresAt is not null ? DateTimeOffset.Parse(expiresAt, System.Globalization.CultureInfo.InvariantCulture) : null,
-                        accountId is not null ? new SensitiveString(accountId) : null);
-                }
-
-                return null;
-            },
+            readResult: async (state, token) =>
+                ToFlowResult(await _daemonApi!.ReadProviderOAuthResultAsync(state, token)),
             onSuccess: result =>
             {
                 if (result is null)
@@ -232,13 +213,38 @@ public sealed class OAuthFlowCoordinator : IDisposable
             ct);
     }
 
+    // The status poll never carries tokens. The tokens come only from the local-control
+    // read, so every refusal here must stop the flow with a visible error.
+    private static OAuthDeviceFlowResult ToFlowResult(LocalControlResult<ProviderOAuthResultDto> response)
+    {
+        if (response.Result is { } dto)
+        {
+            return new OAuthDeviceFlowResult(
+                new SensitiveString(dto.AccessToken),
+                dto.RefreshToken is not null ? new SensitiveString(dto.RefreshToken) : null,
+                dto.ExpiresAt,
+                dto.AccountId is not null ? new SensitiveString(dto.AccountId) : null);
+        }
+
+        if (response.StatusCode == HttpStatusCode.NotFound
+            || (response.StatusCode == HttpStatusCode.BadRequest && response.Error == "unsupported_protocol_version"))
+        {
+            throw new InvalidOperationException(
+                "The daemon does not support the local-control provider OAuth read. "
+                + "Update the daemon and CLI to the same Netclaw version.");
+        }
+
+        throw new InvalidOperationException(
+            $"The daemon refused the provider OAuth result: {response.Error ?? response.StatusCode.ToString()}");
+    }
+
     private Task RunMcpBrowserFlowAsync(
         McpServerName serverName, Action? onSuccess, CancellationToken ct)
     {
         return RunBrowserFlowCoreAsync(
             startFlow: async token => await _daemonApi!.StartMcpOAuthAsync(serverName.Value, token),
             pollStatus: (state, token) => _daemonApi!.GetMcpOAuthStatusByStateAsync(state, token),
-            parseResult: _ => null, // MCP tokens are persisted daemon-side
+            readResult: (_, _) => Task.FromResult<OAuthDeviceFlowResult?>(null), // MCP tokens are persisted daemon-side
             onSuccess: _ => onSuccess?.Invoke(),
             ct);
     }
@@ -250,7 +256,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
     private async Task RunBrowserFlowCoreAsync(
         Func<CancellationToken, Task<HttpResponseMessage>> startFlow,
         Func<string, CancellationToken, Task<JsonElement>> pollStatus,
-        Func<JsonElement, OAuthDeviceFlowResult?> parseResult,
+        Func<string, CancellationToken, Task<OAuthDeviceFlowResult?>> readResult,
         Action<OAuthDeviceFlowResult?>? onSuccess,
         CancellationToken ct)
     {
@@ -321,7 +327,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
                 var status = statusResponse.GetProperty("status").GetString();
                 if (status is "Completed")
                 {
-                    var result = parseResult(statusResponse);
+                    var result = await readResult(flowState, ct);
                     onSuccess?.Invoke(result);
                     Result = result;
                     FlowState.Value = DeviceFlowState.Succeeded;

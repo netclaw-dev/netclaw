@@ -5,43 +5,24 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Threading.RateLimiting;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Daemon.Security;
 
 public static class PairingEndpointRouteBuilderExtensions
 {
-    internal const string LocalControlRateLimitPolicy = "local-control";
-    private const int MaximumLocalControlRequestBytes = 4 * 1024;
-
-    internal static void AddLocalControlRateLimitPolicy(RateLimiterOptions options)
-    {
-        options.AddPolicy(LocalControlRateLimitPolicy, context =>
-            RateLimitPartition.GetFixedWindowLimiter(
-                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-                _ => new FixedWindowRateLimiterOptions
-                {
-                    PermitLimit = 10,
-                    Window = TimeSpan.FromSeconds(1),
-                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                    QueueLimit = 0,
-                }));
-    }
-
     public static IEndpointRouteBuilder MapPairingEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/local-control/v1/pairing-code", GeneratePairingCodeAsync)
             .WithName("GenerateHostPairingCodeV1")
             .WithSummary("Generate a pairing code with a daemon-host local-control proof.")
             .WithTags("Pairing")
-            .RequireRateLimiting(LocalControlRateLimitPolicy)
             .AllowAnonymous();
 
         // Device pairing exchange — unauthenticated, rate-limited, with per-IP lockout guard.
@@ -129,66 +110,23 @@ public static class PairingEndpointRouteBuilderExtensions
 
     private static async Task<IResult> GeneratePairingCodeAsync(
         HttpContext httpContext,
-        LocalControlPairingProofValidator proofValidator,
+        LocalControlRequests localControl,
         IRequiredActor<PairingActor> pairingActor,
         CancellationToken cancellationToken)
     {
-        if (httpContext.Request.ContentLength > MaximumLocalControlRequestBytes)
-            return TypedResults.StatusCode(StatusCodes.Status413PayloadTooLarge);
+        var (_, refusal) = await localControl.AuthorizeAsync(
+            httpContext,
+            PairingEndpointJsonContext.Default.LocalControlPairingCodeRequest,
+            cancellationToken);
+        if (refusal is not null)
+            return refusal;
 
-        var body = new byte[MaximumLocalControlRequestBytes + 1];
-        var totalRead = 0;
-        while (totalRead < body.Length)
-        {
-            var read = await httpContext.Request.Body.ReadAsync(body.AsMemory(totalRead), cancellationToken);
-            if (read == 0)
-                break;
-
-            totalRead += read;
-        }
-
-        if (totalRead > MaximumLocalControlRequestBytes)
-            return TypedResults.StatusCode(StatusCodes.Status413PayloadTooLarge);
-
-        LocalControlPairingCodeRequest? request;
-        try
-        {
-            request = JsonSerializer.Deserialize(
-                body.AsSpan(0, totalRead),
-                PairingEndpointJsonContext.Default.LocalControlPairingCodeRequest);
-        }
-        catch (JsonException)
-        {
-            return TypedResults.BadRequest(new PairingErrorResponse("The request body is invalid."));
-        }
-
-        if (request is null)
-            return TypedResults.BadRequest(new PairingErrorResponse("The request body is invalid."));
-
-        var validation = proofValidator.ValidateAndConsume(request.Proof);
-        switch (validation)
-        {
-            case LocalControlPairingProofValidation.Valid:
-                var actor = await pairingActor.GetAsync(cancellationToken);
-                var result = await actor.Ask<PairingCodeResultDto>(
-                    new PairingActor.GenerateCode(cancellationToken),
-                    Timeout.InfiniteTimeSpan,
-                    cancellationToken);
-                return TypedResults.Ok(result);
-
-            case LocalControlPairingProofValidation.UnsupportedVersion:
-                return TypedResults.BadRequest(new PairingErrorResponse("unsupported_protocol_version"));
-
-            case LocalControlPairingProofValidation.CapacityExhausted:
-                return TypedResults.Json(
-                    new PairingErrorResponse("Local control is temporarily unavailable."),
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-
-            default:
-                return TypedResults.Json(
-                    new PairingErrorResponse("Invalid local-control proof."),
-                    statusCode: StatusCodes.Status401Unauthorized);
-        }
+        var actor = await pairingActor.GetAsync(cancellationToken);
+        var result = await actor.Ask<PairingCodeResultDto>(
+            new PairingActor.GenerateCode(cancellationToken),
+            Timeout.InfiniteTimeSpan,
+            cancellationToken);
+        return TypedResults.Ok(result);
     }
 }
 
@@ -197,7 +135,23 @@ public static class PairingEndpointRouteBuilderExtensions
 /// </summary>
 internal sealed record PairingCodeExchangeRequest(string Code, string DeviceName);
 
-internal sealed record LocalControlPairingCodeRequest(string Proof);
+internal sealed record LocalControlPairingCodeRequest(string Proof) : ILocalControlRequest
+{
+    [JsonIgnore]
+    public LocalControlOperation? Operation => LocalControlOperation.GeneratePairingCode;
+}
+
+/// <summary>
+/// Request body for <c>POST /api/local-control/v1/provider-oauth-result</c>. The proof
+/// is bound to <see cref="State"/>.
+/// </summary>
+internal sealed record LocalControlProviderOAuthResultRequest(string State, string Proof) : ILocalControlRequest
+{
+    [JsonIgnore]
+    public LocalControlOperation? Operation => string.IsNullOrEmpty(State)
+        ? null
+        : LocalControlOperation.ReadProviderOAuthResult(State);
+}
 
 /// <summary>Bearer token issued on a successful pairing exchange.</summary>
 internal sealed record PairingTokenResponse(string Token);
@@ -206,5 +160,6 @@ internal sealed record PairingTokenResponse(string Token);
 internal sealed record PairingErrorResponse(string Error);
 
 [JsonSerializable(typeof(LocalControlPairingCodeRequest))]
+[JsonSerializable(typeof(LocalControlProviderOAuthResultRequest))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class PairingEndpointJsonContext : JsonSerializerContext;

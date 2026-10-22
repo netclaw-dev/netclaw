@@ -203,6 +203,7 @@ static async Task RunDaemonAsync(
     builder.Services.AddSingleton<BootstrapDeviceSeeder>();
     builder.Services.AddSingleton<LocalControlPairingProofProtector>();
     builder.Services.AddSingleton<LocalControlPairingProofValidator>();
+    builder.Services.AddSingleton<LocalControlRequests>();
     builder.Services.AddSingleton<PairingExchangeGuard>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
     builder.Services.AddNetclawAuthSchemes(daemonConfig);
@@ -211,8 +212,8 @@ static async Task RunDaemonAsync(
     // Add OpenAPI
     builder.Services.AddOpenApi();
 
-    // Rate limits bound both unauthenticated pairing endpoints.
-    // The exchange uses a long brute-force window. Local control uses a short load-shed window.
+    // The pairing exchange uses a long brute-force window. Local control counts only
+    // refused requests, in LocalControlRequests, so a valid proof is never refused.
     builder.Services.AddRateLimiter(options =>
     {
         options.AddPolicy("pairing-exchange", context =>
@@ -225,7 +226,6 @@ static async Task RunDaemonAsync(
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     QueueLimit = 0,
                 }));
-        PairingEndpointRouteBuilderExtensions.AddLocalControlRateLimitPolicy(options);
         options.RejectionStatusCode = 429;
     });
     builder.Services.AddMattermostActionEndpointRateLimiting();
