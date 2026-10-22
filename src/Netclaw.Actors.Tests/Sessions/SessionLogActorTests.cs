@@ -274,6 +274,57 @@ public sealed class SessionLogActorTests : TestKit
         }
     }
 
+    // Issue #2590: a tool call line must use the same redaction as the OTel tool call line.
+    // Each row gives the arguments, a text that must not be in the line, and a text that must be in it.
+    [Theory]
+    [InlineData("api_key")]
+    [InlineData("bearer_in_shell")]
+    [InlineData("json_body_password")]
+    [InlineData("large_content")]
+    [InlineData("harmless_path")]
+    public async Task ToolCallOutput_arguments_are_redacted_in_session_log(string row)
+    {
+        var (argsJson, absent, present) = row switch
+        {
+            "api_key" => ("""{"api_key":"sk-live-a1b2c3d4e5f6"}""", "sk-live-a1b2c3d4e5f6", "***REDACTED***"),
+            "bearer_in_shell" => ("""{"command":"curl -H 'Authorization: Bearer tok-9f8e7d6c5b4a' https://api.example.com"}""",
+                "tok-9f8e7d6c5b4a", "***REDACTED***"),
+            "json_body_password" => ("""{"body":"{\"user\":\"bob\",\"password\":\"hunter2\"}"}""", "hunter2", "***REDACTED***"),
+            // A 100 KB file body must become "<100000 chars, sha256:...>" or "<100000 chars, redacted>".
+            "large_content" => ($$"""{"path":"/tmp/f","content":"{{string.Concat(Enumerable.Repeat("file-body-0123456789", 5000))}}"}""",
+                "file-body-0123456789", "<100000 chars,"),
+            // Guard: the redaction must keep a harmless argument readable.
+            "harmless_path" => ("""{"path":"/tmp/x"}""", "***REDACTED***", "/tmp/x"),
+            _ => throw new ArgumentOutOfRangeException(nameof(row))
+        };
+        var basePath = Path.Combine(Path.GetTempPath(), $"netclaw-session-log-tests-{Guid.NewGuid():N}");
+        var sessionId = new SessionId("ch/thread");
+
+        try
+        {
+            var dispatcher = SpawnDispatcher(Sys, basePath, new FakeTimeProvider(DateTimeOffset.Parse("2026-10-22T00:00:00Z")));
+            dispatcher.Tell(new ToolCallOutput
+            {
+                SessionId = sessionId,
+                CallId = new ToolCallId("call-1"),
+                ToolName = new ToolName("shell_execute"),
+                ArgumentsJson = argsJson
+            }, ActorRefs.NoSender);
+
+            await AwaitAssertAsync(async () =>
+            {
+                var text = await ReadLogAsync(GetLegacyLogPath(sessionId, basePath), TestContext.Current.CancellationToken);
+                var line = Assert.Single(text.Split('\n'), l => l.Contains("Tool call: shell_execute", StringComparison.Ordinal));
+                Assert.DoesNotContain(absent, line, StringComparison.Ordinal);
+                Assert.Contains(present, line, StringComparison.Ordinal);
+            }, cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            await TryDeleteDirectoryAsync(basePath);
+        }
+    }
+
     private sealed class FixedSessionStorageResolver(SessionStoragePaths storage)
         : ISessionStorageResolver
     {
