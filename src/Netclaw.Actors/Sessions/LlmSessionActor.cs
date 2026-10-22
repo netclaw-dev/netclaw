@@ -2353,28 +2353,28 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     // The one resume path then queues each pending input that no turn selected, and the normal drain runs them after
     // the running turn, in admission order. The queue keeps one copy of an input that recovery queued already.
     // No turn of this message runs: each queued input runs later under its own recorded source. So the reply is
-    // RestartResumeNotNeeded, and a caller on the Reminder-origin route (#2491) settles at once. A pending input whose
-    // recorded authority does not parse gets a nack, as in an idle session.
+    // RestartResumeNotNeeded, and a caller on the Reminder-origin route (#2491) settles at once. This message resumes
+    // no leading input, so a damaged pending input gets no nack. The session logs it and keeps it pending (#2576).
     private void QueueRestartResume(SendUserMessage cmd)
     {
         var selected = _input.SelectedInputs.Ids;
-        var (pending, damaged) = SessionInputFlow.SplitByAuthority(
-            _state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId)));
-        if (damaged.Count > 0)
-        {
-            _log.Error(
-                "Restart reminder {ReminderId} cannot queue input(s) {InputIds}: the stored authority is invalid. "
-                + "{ValidCount} valid input(s) are not queued by this message.",
-                cmd.Source?.ReminderId, string.Join(",", damaged.Select(static input => input.InputId)), pending.Count);
-            TryReplyNack("The interrupted input authority is invalid.");
-            return;
-        }
-
-        var queued = _input.RestoreWaitingInputs(pending.Select(static pair => pair.Input).ToArray(), _sessionId);
+        var queued = QueueValidWaitingInputs(
+            cmd, _state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId)));
         if (queued > 0)
             _execution.ClearRestartReminderEligibility();
         _log.Info("restart_resume_queued count={QueuedCount} phase={Phase}", queued, _phase.Current);
         ReplyRestartResumeNotNeeded();
+    }
+
+    // RestoreWaitingInputs throws for a damaged authority record. A damaged input never runs, so the session logs it,
+    // keeps it pending in the journal, and queues only the valid inputs (#2576).
+    private int QueueValidWaitingInputs(SendUserMessage cmd, IEnumerable<InputAdmitted> waiting)
+    {
+        var (valid, damaged) = SessionInputFlow.SplitByAuthority(waiting);
+        foreach (var input in damaged)
+            _log.Error("Restart reminder {ReminderId}: pending input {InputId} has a damaged authority",
+                cmd.Source?.ReminderId, input.InputId);
+        return _input.RestoreWaitingInputs(valid.Select(static pair => pair.Input).ToArray(), _sessionId);
     }
 
     // The restart reminder is not an input. It only resumes inputs that the journal already holds.
@@ -2450,20 +2450,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (TryResumeSlashCommand(pending))
         {
             // A rejected slash command keeps the session in Ready. The close of its input then starts the queue
-            // (RejectSlashCommand), so the other requesters are queued in each phase (#2587). The validation above
-            // stops at the second requester. RestoreWaitingInputs throws for a damaged record, so the session logs
-            // it and keeps it pending in the journal.
-            var (valid, damaged) = SessionInputFlow.SplitByAuthority(waiting);
-            foreach (var input in damaged)
-                _log.Error("Restart reminder {ReminderId}: pending input {InputId} has a damaged authority",
-                    cmd.Source?.ReminderId, input.InputId);
-            _input.RestoreWaitingInputs(valid.Select(static pair => pair.Input).ToArray(), _sessionId);
+            // (RejectSlashCommand), so the other requesters are queued in each phase (#2587).
+            QueueValidWaitingInputs(cmd, waiting);
             return true;
         }
 
         foreach (var message in _input.ResumePendingInputs(pending))
             _state = _state with { History = _state.History.Add(message) };
-        _input.RestoreWaitingInputs(waiting, _sessionId);
+        QueueValidWaitingInputs(cmd, waiting);
 
         _modelContext.ResetForNewTurn();
         _input.ResetOverflowRetry();

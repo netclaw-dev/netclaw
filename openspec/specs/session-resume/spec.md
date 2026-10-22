@@ -448,7 +448,8 @@ The session SHALL treat the restart reminder as a signal to resume stored work. 
 - In `Ready` phase with nothing to resume, or in `Ready` phase when a parked approval owns the next turn, the session SHALL reply `RestartResumeNotNeeded` (a `CommandAck`), make no change, and log `restart_resume_noop`. This includes a redelivery after the resumed turn ended.
 - `RestartResumeNotNeeded` SHALL tell the caller that this message resumes nothing and that no turn will run for it. A caller on the Reminder-origin route (#2491) SHALL then settle its run as success at once and SHALL NOT wait for a terminal turn.
 - A reply that resumes a turn in `Ready` phase SHALL be an ordinary `CommandAck`, and the caller SHALL wait for the resumed turn. A reply that only queues work SHALL be `RestartResumeNotNeeded`, and the caller SHALL settle at once.
-- A refusal (`CommandNack`) SHALL remain only for two causes: a pending input whose stored authority is invalid, and a restart reminder that arrives in `Processing`, `Compacting`, or `Passivating` phase while a restart drain is pending.
+- A refusal (`CommandNack`) SHALL remain only for two causes: in `Ready` phase, a first pending input whose stored authority does not parse, and a restart reminder that arrives in `Processing`, `Compacting`, or `Passivating` phase while a restart drain is pending.
+- A damaged pending input is an input whose stored authority does not parse. In each other case, the session SHALL log each damaged pending input, keep it pending, and queue the valid inputs (#2576). In `Ready` phase, a damaged input after the first input ends the leading inputs that the session resumes. The session SHALL NOT throw for a damaged input.
 - In `Ready` phase, the session SHALL check for a parked approval before it checks the stored authority. In `Processing` or `Compacting` phase, the session does not check for a parked approval. It checks for a pending restart drain, and then it checks the stored authority.
 
 #### Scenario: A redelivered restart message during the resumed turn
@@ -486,8 +487,22 @@ The session SHALL treat the restart reminder as a signal to resume stored work. 
 
 - **GIVEN** a turn runs, and a pending input from before the restart has a stored authority that does not parse
 - **WHEN** the restart reminder arrives
+- **THEN** the session logs the damaged input and keeps it pending
+- **AND** it queues the valid inputs and replies `RestartResumeNotNeeded`
+
+#### Scenario: A damaged pending input after the first input in Ready phase
+
+- **GIVEN** an idle session with pending inputs `[A, damaged C, B]`
+- **WHEN** the restart reminder arrives
+- **THEN** the session resumes A and replies `CommandAck`
+- **AND** it logs C, keeps C pending, and queues B
+
+#### Scenario: A damaged first pending input in Ready phase
+
+- **GIVEN** an idle session whose first pending input has a stored authority that does not parse
+- **WHEN** the restart reminder arrives
 - **THEN** the session replies `CommandNack`
-- **AND** it queues no input
+- **AND** it starts no turn
 
 #### Scenario: A no-op acknowledgement on the Reminder-origin route ends the run
 

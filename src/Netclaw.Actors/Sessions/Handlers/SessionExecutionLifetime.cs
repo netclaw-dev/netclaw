@@ -345,7 +345,8 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     }
 
     // One turn serves one requester. The resume takes the leading pending inputs that share the requester of the
-    // first one. The other pending inputs run in their own turns after it.
+    // first one. The other pending inputs run in their own turns after it. Only a damaged first input refuses the
+    // resume. A later damaged input ends the leading inputs, and the caller keeps it pending (#2576).
     public RestartContextResult ValidateRestartResume(IReadOnlyList<InputAdmitted> pending)
     {
         TurnContext? first = null;
@@ -354,7 +355,11 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         {
             if (!TurnContext.TryFromRecord(input.TurnContext, out var candidate, out var reason)
                 || candidate is null)
-                return new RestartContextResult(null, reason, 0);
+            {
+                if (first is null)
+                    return new RestartContextResult(null, reason, 0);
+                break;
+            }
 
             if (first is null)
             {

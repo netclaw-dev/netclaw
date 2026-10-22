@@ -348,10 +348,9 @@ internal sealed class SessionInputFlow
     /// <summary>
     /// Separates the pending inputs whose recorded authority parses from the damaged ones. The queue takes only valid
     /// inputs (<see cref="RestoreWaitingInputs"/> throws for a damaged one). Each caller decides what a damaged input
-    /// means for its message. The idle restart resume uses it only after a slash command (#2587). The other idle
-    /// restart resume and the recovery queue behind a parked approval do not use it yet (#2576). Each valid input comes
-    /// with its parsed authority, so a caller that decides on the authority (for example
-    /// <see cref="ChildConsentPause.Holds"/>) does not parse the record again.
+    /// means for its message. Each restart resume path uses it (#2576). The recovery queue behind a parked approval
+    /// does not use it yet. Each valid input comes with its parsed authority, so a caller that decides on the authority
+    /// (for example <see cref="ChildConsentPause.Holds"/>) does not parse the record again.
     /// </summary>
     public static (IReadOnlyList<(InputAdmitted Input, TurnContext Authority)> Valid, IReadOnlyList<InputAdmitted> Damaged)
         SplitByAuthority(IEnumerable<InputAdmitted> inputs)

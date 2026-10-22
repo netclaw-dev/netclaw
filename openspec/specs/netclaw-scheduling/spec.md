@@ -786,21 +786,17 @@ restart or a passivation for those inputs:
   requester and queues the other pending inputs. This rule applies also when
   the first input is a slash command. When the slash command keeps the session
   in `Ready` phase, the session starts the next queued input after it closes
-  the slash command input. In this slash resume, the session logs each
-  damaged waiting input after the first input of another requester and keeps
-  it pending. It queues the valid inputs and replies with an ack. Issue #2576
-  owns the rule for a damaged input in the plain resume path.
+  the slash command input.
 - A live slash command that the session rejects in `Ready` phase also starts
   the next queued input, for example a fire that waited behind a parked
   approval that the command closed.
 - A restart reminder in `Processing` or `Compacting` phase queues each pending
   input that no turn selected. It replies `RestartResumeNotNeeded`.
 
-In `Processing` or `Compacting` phase, if one pending input that no turn
-selected has a stored authority that does not parse, the restart reminder
-replies `CommandNack` and queues no input. In `Ready` phase, the same reply
-applies when such an input comes before the first input of another requester,
-or is that input.
+A restart reminder replies `CommandNack` for a damaged stored authority only
+in `Ready` phase, and only when the first pending input is damaged. In each
+other case, the session logs each damaged pending input, keeps it pending, and
+queues the valid inputs. The `session-resume` capability owns this rule.
 
 A stored input that nothing will run is not waiting. A crash, an expired
 restart reminder, or a stored authority that does not parse can leave such an
