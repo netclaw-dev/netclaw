@@ -22,6 +22,8 @@ public static partial class SecretOutputRedactor
         "token",
         "secret",
         "password",
+        "passwd",
+        "passphrase",
         "authorization",
         "credential",
         "privatekey",
@@ -39,8 +41,19 @@ public static partial class SecretOutputRedactor
 
         var normalized = Netclaw.Tools.ToolArgumentHelper.NormalizeKey(key);
         return SecretKeyFragments.Any(fragment =>
-            normalized.Contains(fragment, StringComparison.OrdinalIgnoreCase));
+                normalized.Contains(fragment, StringComparison.OrdinalIgnoreCase))
+            || EndsWithShortSecretWord(normalized);
     }
+
+    // "pwd" and "cookie" are short, and ordinary names start with them (pwd_dir, cookie_consent,
+    // cookie_jar). Thus they are secret only at the end of a name. PWD and OLDPWD are the shell
+    // variables that hold the working directory, so these two names are not secret.
+    private static readonly string[] SecretKeySuffixes = ["pwd", "cookie", "cookies"];
+
+    private static bool EndsWithShortSecretWord(string normalized)
+        => !normalized.Equals("pwd", StringComparison.OrdinalIgnoreCase)
+           && !normalized.Equals("oldpwd", StringComparison.OrdinalIgnoreCase)
+           && SecretKeySuffixes.Any(suffix => normalized.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
 
     public static bool ContainsSecretLikeContent(string output)
     {
@@ -81,7 +94,141 @@ public static partial class SecretOutputRedactor
 
         sanitized = PrivateKeyBlockRegex.Replace(sanitized, Redacted);
 
+        // The rules below run after the private-key rule. A rule that runs before it can mask
+        // a part of an END line, and then the key body stays visible. The rules below also
+        // keep all text outside the secret value, so they only add masks to the output above.
+        sanitized = UrlCredentialsRegex.Replace(sanitized, m => MaskGroup(m, m.Groups["value"]));
+
+        sanitized = AuthorizationSchemeRegex().Replace(sanitized, m => MaskGroup(m, m.Groups["value"]));
+
+        sanitized = SecretHeaderLineRegex.Replace(sanitized, m => MaskGroup(m, m.Groups["value"]));
+
+        sanitized = CookieHeaderLineRegex.Replace(sanitized, m => MaskGroup(m, m.Groups["value"]));
+
+        sanitized = JsonSecretHeaderRegex.Replace(sanitized, m => MaskGroup(m, m.Groups["value"]));
+
+        sanitized = NameValuePairRegex.Replace(sanitized, m =>
+            IsSecretPairName(m.Groups["name"].Value) ? MaskGroup(m, m.Groups["value"]) : m.Value);
+
+        sanitized = SecretOptionValueRegex.Replace(sanitized, RedactOptionValue);
+
         return sanitized;
+    }
+
+    // Replaces only the value group. All other text of the match stays as it is.
+    // A value that is already masked, a variable reference, or a help placeholder stays too.
+    private static string MaskGroup(Match m, Group value)
+    {
+        if (!value.Success || value.Length == 0)
+            return m.Value;
+
+        var text = value.Value.AsSpan();
+        if (text.SequenceEqual(Redacted) || IsReferenceOrPlaceholder(text))
+            return m.Value;
+
+        var start = value.Index - m.Index;
+        return string.Concat(m.Value.AsSpan(0, start), Redacted, m.Value.AsSpan(start + value.Length));
+    }
+
+    // A value that does not hold a secret: a variable or template reference ($X, ${X}, $(cmd),
+    // %X%, {{ x }}), a help placeholder (<token>, [token], PASSWORD, API_KEY), or a literal
+    // true/false/null/none.
+    private static bool IsReferenceOrPlaceholder(ReadOnlySpan<char> value)
+    {
+        if (value.IsEmpty)
+            return true;
+
+        if (value[0] is '$' or '<' or '[' or '{')
+            return true;
+
+        if (value.Length > 2 && value[0] == '%' && value[^1] == '%' && IsMetaVariable(value[1..^1]))
+            return true;
+
+        if (value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("null", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return IsMetaVariable(value);
+    }
+
+    // An upper-case name with no digit, such as PASSWORD or API_KEY. Help text uses this form for
+    // a value that the user must supply.
+    private static bool IsMetaVariable(ReadOnlySpan<char> value)
+    {
+        if (!char.IsAsciiLetterUpper(value[0]))
+            return false;
+
+        foreach (var c in value)
+        {
+            if (!char.IsAsciiLetterUpper(c) && c is not '_' and not '-')
+                return false;
+        }
+
+        return true;
+    }
+
+    // HAR files and Postman collections keep a header or a variable as a name and a value. The
+    // name must end with a secret word. A plain "contains" rule hides pagination cursors
+    // (next_page_token) and counters (max_tokens).
+    private static readonly string[] SecretPairNameSuffixes =
+    [
+        "apikey", "token", "secret", "password", "passwd", "passphrase", "authorization",
+        "credential", "credentials", "privatekey", "signingkey", "connectionstring", "cookie", "cookies"
+    ];
+
+    private static readonly string[] PaginationTokenSuffixes = ["nexttoken", "pagetoken", "continuationtoken", "cursortoken", "startingtoken"];
+
+    private static bool IsSecretPairName(string name)
+    {
+        if (name.Length > MaxSecretKeyChars)
+            return true;
+
+        var normalized = Netclaw.Tools.ToolArgumentHelper.NormalizeKey(name);
+        return SecretPairNameSuffixes.Any(suffix => normalized.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+               && !PaginationTokenSuffixes.Any(suffix => normalized.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Prose names an option and then continues the sentence: "pass --token to the CLI",
+    // "the --password option". The next word is then not a value.
+    private static readonly HashSet<string> ProseWords = new(
+    [
+        "a", "an", "the", "to", "and", "or", "for", "with", "from", "if", "is", "as", "in", "on", "of",
+        "when", "then", "so", "but", "not", "instead", "flag", "option", "argument", "parameter", "switch", "value"
+    ], StringComparer.Ordinal);
+
+    // The option word list is in SecretOptionValueRegex. "--no-password" is a flag with no
+    // value, and a pagination cursor (--next-token, --starting-token) is not a secret.
+    private static string RedactOptionValue(Match m)
+    {
+        var name = m.Groups["name"].Value;
+        var normalizedName = Netclaw.Tools.ToolArgumentHelper.NormalizeKey(name);
+        if (name.StartsWith("no-", StringComparison.OrdinalIgnoreCase)
+            || PaginationTokenSuffixes.Any(suffix => normalizedName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)))
+        {
+            return m.Value;
+        }
+
+        var value = m.Groups["value"];
+        var core = value.Value.AsSpan();
+        if (core.Length >= 2 && core[0] is '"' or '\'' && core[^1] == core[0])
+        {
+            // A quoted value keeps its quotes, so the command stays readable.
+            var inner = core[1..^1];
+            if (inner.IsEmpty || IsReferenceOrPlaceholder(inner))
+                return m.Value;
+
+            var start = value.Index - m.Index;
+            return string.Concat(m.Value.AsSpan(0, start + 1), Redacted, m.Value.AsSpan(start + value.Length - 1));
+        }
+
+        if (ProseWords.Contains(value.Value))
+            return m.Value;
+
+        return MaskGroup(m, value);
     }
 
     /// <summary>
@@ -109,7 +256,7 @@ public static partial class SecretOutputRedactor
     private sealed class RedactedLoggingException(string message) : Exception(message);
 
     // The secret-bearing words shared by the JSON and env-style name rules.
-    private const string SecretNameWords = "api[_-]?key|token|secret|password|passwd|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|signing[_-]?key|private[_-]?key|connection[_-]?string|credential";
+    private const string SecretNameWords = "api[_-]?key|token|secret|password|passwd|passphrase|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|signing[_-]?key|private[_-]?key|connection[_-]?string|credential";
 
     // The whole whitespace-delimited value is masked, so a password that contains ')' or ','
     // is not left half visible. Only a trailing run of closers is given back, which keeps
@@ -224,4 +371,50 @@ public static partial class SecretOutputRedactor
     private static readonly Regex JwtTokenRegex = LinearRegex("\\beyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b", RegexOptions.None);
 
     private static readonly Regex PrivateKeyBlockRegex = LinearRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]+?-----END [A-Z ]*PRIVATE KEY-----");
+
+    // The password in the userinfo part of a URL: scheme://user:password@host. The user name
+    // can be empty (redis://:pw@host). The password can contain ':' (RFC 3986). The user name
+    // cannot contain '/', so a port and a path ("host:4873/@scope/pkg") do not match.
+    private static readonly Regex UrlCredentialsRegex = LinearRegex(
+        "://[^\\s/?#@:\"'<>\\[\\]\\\\]*:(?<value>[^\\s/?#@\"'<>\\\\]+)@", RegexOptions.None);
+
+    // An Authorization or Proxy-Authorization header with a known scheme. The scheme stays, so
+    // the reader can see the kind of credential. "Authorization: required" has no scheme and stays.
+    // In the 4 MB timing tests, the NonBacktracking form of this rule ran past the budget. This rule
+    // starts only at the literal "Authorization", and each run is atomic, so an attempt reads
+    // each character once and never gives a character back.
+    [GeneratedRegex("Authorization(?>[ \\t]*):(?>[ \\t]*)(?>Basic|Bearer|Token|Bot|Digest|Negotiate|NTLM|ApiKey|Key)(?>[ \\t]+)(?<value>(?>[^\\s\"'\\\\]+))", RegexOptions.IgnoreCase)]
+    private static partial Regex AuthorizationSchemeRegex();
+
+    // A header line whose name ends with "token" or "api-key": X-Api-Key, X-Auth-Token,
+    // X-Vault-Token. The name must start a line (after an optional curl "> " or "< " marker) or
+    // follow a quote (curl -H "..."). Thus "Allow-Headers: X-Api-Key, ..." and prose stay.
+    private static readonly Regex SecretHeaderLineRegex = LinearRegex(
+        "(?:^(?:[<>][ \\t]*)?|[\"'])[ \\t]*(?:[A-Za-z0-9]+-)*(?:api-?key|token)[ \\t]*:[ \\t]*(?<value>[^\\s\"'\\\\]+)",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline);
+
+    // A Cookie or Set-Cookie header line. All of the value is masked, to the end of the line or
+    // the quote. The value must hold a "name=value" pair, so "Cookie policy: ..." stays.
+    private static readonly Regex CookieHeaderLineRegex = LinearRegex(
+        "(?:^(?:[<>][ \\t]*)?|[\"'])[ \\t]*(?:Set-)?Cookie[ \\t]*:[ \\t]*(?<value>[^\\r\\n\"'=]+=[^\\r\\n\"']*)",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline);
+
+    // The same header names as JSON keys: {"X-Api-Key": "..."}. The name must follow the quote
+    // directly, so "next_page_token" and "progressToken" do not match.
+    private static readonly Regex JsonSecretHeaderRegex = LinearRegex(
+        "\"(?:(?:[A-Za-z0-9]+-)*(?:api-?key|token)|(?:Set-)?Cookie|Proxy-Authorization)\"\\s*:\\s*\"(?<value>[^\"]+)\"");
+
+    // A name and value pair: {"name":"Authorization","value":"..."} or {"key":"api_key","value":"..."}.
+    // IsSecretPairName decides on the name in code.
+    private static readonly Regex NameValuePairRegex = LinearRegex(
+        "\"(?:name|key)\"\\s*:\\s*\"(?<name>[^\"]+)\"\\s*,\\s*\"value\"\\s*:\\s*\"(?<value>[^\"]+)\"");
+
+    // A secret option and its value after a space: --password x, --api-key x, --client-secret x.
+    // The option name must end with the secret word, so --password-file and --password-stdin do
+    // not match. A bare "--secret" names a secret spec for some tools (docker build), so "secret"
+    // must have a word before it. The value cannot cross a line end and cannot start with '-'.
+    // "-p" is not covered: it is a port, a path flag, or a database name for many tools.
+    private static readonly Regex SecretOptionValueRegex = LinearRegex(
+        "--(?<name>(?:[A-Za-z0-9]+-)*(?:password|passwd|passphrase|token|api-?key)|(?:[A-Za-z0-9]+-)+secret)[ \\t]+"
+        + "(?<value>\"[^\"\\r\\n]*\"|'[^'\\r\\n]*'|[^\\s\"'-][^\\s]*)");
 }
