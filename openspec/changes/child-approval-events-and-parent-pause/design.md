@@ -306,8 +306,17 @@ The operator answers these prompts in the channel. You cannot answer them.
 **Rejected admission.** When the journal rejects the admission of a notice, the session logs an error and stops
 (`LlmSessionActor.OnPersistRejected`). This applies in every phase, as after a persist failure. The boundary that
 admitted the notice cannot continue, and a pause with no notice would hold automated input with no end. The session
-posts no failure for a turn that it recorded as complete. Recovery then withdraws the child requests, closes the
-pending notices, and runs the held input (see "Recovery" below).
+tells the channel only when a turn stays open:
+
+- The admission happens inside a turn that stays open: at a tool-batch end, while the turn waits for a parent prompt,
+  or at a compaction end that resumes the tool loop. The session posts the persist-stopped error ("The session could
+  not save its progress and stopped. Some actions may already have run. ...") and a failed `TurnCompleted` before the
+  stop (`EmitFailedTurnOutputs`).
+- The admission happens at the end of a finished turn, or in `Ready`. The session posts no error and no failed
+  completion, because it recorded the turn as complete.
+
+Recovery then withdraws the child requests, closes the pending notices, and queues the held input (see "Recovery"
+below).
 
 **Text (true for the session).** A notice lists the runs of the session. The closing notice comes only when no child
 request of the session stays open, so its "spawn_agent is available again" line is always true. The closing notice
@@ -346,7 +355,10 @@ spawn_agent is available again.
   admission order. With no held fire, the line does not appear.
 - An open notice has no held-fires line, because those fires still wait.
 
-**Recovery (PR 1, Cut 4).** Recovery runs in this order:
+**Recovery (PR 1, Cut 4).** Before step 1, recovery decides whether the session was paused at the crash
+(`WasPausedAtRecovery`). The session was paused when an open child request belongs to a run that is still `Accepted`.
+Replay does not close a request that a cancel or the end of its run withdrew, so the run state decides, not the
+replayed request alone. Recovery then runs in this order:
 
 1. It withdraws the child requests that remain (`ExpireRecoveredChildApprovals`).
 2. It closes every pending approval notice with one `InputClosed` (`KeepsTurn = true`).
@@ -354,10 +366,35 @@ spawn_agent is available again.
    rebuilt digest is ready, because the model did not see those requests. If not, the rebuilt digest is a baseline
    that does not wake the parent. In PR 1 and PR 2 a restart withdraws all child requests, so the rebuilt digest is
    empty, and recovery admits no notice.
-4. It resumes the orphan child result notices (`ResumeOrphanNotices`). When the previous run was paused, it also
-   restores each input that the pause held: automated input and child result notices. They run in admission order,
-   because the restart withdrew every child request and the pause ended. A pending input of a person is not part of
-   this step (issue 2516). Behind a parked parent approval, this step does nothing.
+4. It resumes the orphan child result notices at the head of the pending inputs (`ResumeOrphanNotices`, existing).
+   This step starts only those notices. It does not start the input that the pause held.
+5. When the session was paused at the crash, recovery queues the input that the pause held: automated input and child
+   result notices that no turn selected (`QueueInputsHeldByThePause`). It queues them in admission order and sends
+   itself `StartHeldInputs`. Behind a parked parent approval, this step does nothing.
+
+`StartHeldInputs` starts the queued input only in an idle session. A turn that runs drains the queue at its end.
+Akka.Persistence unstashes the commands that arrived during recovery before `StartHeldInputs`. So a stashed restart
+reminder runs first, and the restart reminder stays the one resume path for an interrupted input of a person. The
+held input then runs through the normal drain, in admission order. After a crash, no restart reminder exists, and
+recovery still does not resume a pending input of a person (#2516).
+
+A restart reminder that arrives in `Processing` or `Compacting` queues each pending input that no turn selected and
+that the queue does not hold yet (`QueueRestartResume`). It replies with an ordinary `CommandAck` and logs
+`restart_resume_queued`. The normal drain runs those inputs after the running turn, in admission order. When it
+queues nothing, the reminder is a no-op (`RestartResumeNotNeeded`, `restart_resume_noop`). This replaces the earlier
+rule of `d2-reminders-end-at-admission` (#2511): a restart reminder that found another turn running was a no-op, and
+the input stayed pending with no turn.
+
+```text
+schematic: restart of a paused session (graceful drain, admission order [P, F])
+  drain: Alice's input P stays pending; fire F waits for the pause; the drain writes a restart reminder R
+  recovery: paused := open child request of an Accepted run   -> true
+            withdraw requests; close notices; rebuild digest
+            queue F (held input); Tell StartHeldInputs
+  unstash R (Ready): resume P -> turn of P runs
+  StartHeldInputs: session busy -> no-op; F waits in the queue
+  turn of P ends: drain -> turn of F runs
+```
 
 ### D5. The pause (PR 1)
 
@@ -691,6 +728,8 @@ sequenceDiagram
 | Digest, merge, and rebuild | `LlmSessionActor` (Children partial), `ChildConsentDigest` | actor-local |
 | Replace a waiting notice or fire (one atomic write) | `LlmSessionActor.PersistReplacingInput`; `SessionInputFlow.WaitingConsentNotice` | durable `InputClosed` (`KeepsTurn`) and `InputAdmitted` |
 | Stop on a rejected notice admission | `LlmSessionActor.OnPersistRejected` | durable journal is the recovery source |
+| Queue the input that the pause held at recovery | `LlmSessionActor.QueueInputsHeldByThePause`, `StartHeldInputs` | durable pending inputs; actor-local queue |
+| Queue pending input for a busy restart reminder | `LlmSessionActor.QueueRestartResume` | durable pending inputs; actor-local queue |
 | Render model text | `AgentEventRenderer` (pure) | call-local |
 | Notice kind, principal, and identification (source kind, authenticity, sender) | `SessionInputFlow` admission; `TurnContext` | durable in `TurnContext` |
 | Field 14 adapter to `ChildRunEnded` | `NetclawProtoMapper` / `SessionState` | durable format unchanged |

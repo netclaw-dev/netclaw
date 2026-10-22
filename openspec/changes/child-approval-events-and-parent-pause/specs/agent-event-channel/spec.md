@@ -202,23 +202,35 @@ notice SHALL NOT repeat the answers of the failed notice.
 ### Requirement: A rejected notice admission stops the session
 
 When the journal rejects the admission of an approval notice, the session SHALL log an error and SHALL stop. This
-SHALL apply in every session phase, as after a persist failure. The session SHALL NOT post a failure for a turn that
-it recorded as complete. At the next recovery, the session SHALL withdraw the child requests, close the pending
-notices, and run the held automated input and child result notices in admission order.
+SHALL apply in every session phase, as after a persist failure. When the admission happens inside a turn that stays
+open, the session SHALL post the persist-stopped error and a failed turn completion before it stops. A turn stays open
+at a tool-batch end, while it waits for a parent prompt, and at a compaction end that resumes the tool loop. At the
+end of a finished turn, and in `Ready`, the session SHALL post no error and no failed completion. At the next
+recovery, the session SHALL withdraw the child requests, close the pending notices, and then queue the held automated
+input and child result notices in admission order.
 
-#### Scenario: A rejected notice at a turn end stops the session
+#### Scenario: A rejected notice inside an open turn tells the channel before the stop
+
+- **GIVEN** a child of Alice asks for consent during the first model call of Alice's turn
+- **WHEN** the journal rejects the notice that the end of tool batch 1 admits
+- **THEN** the session posts the error "The session could not save its progress and stopped. Some actions may
+  already have run. Check them before you send your message again."
+- **AND** it posts a `TurnCompleted` with outcome `Failed`
+- **AND** then the session stops
+
+#### Scenario: A rejected notice at a turn end stops the session quietly
 
 - **GIVEN** a child of Alice asks for consent while Alice's model call runs
 - **WHEN** the turn ends and the journal rejects the notice that the turn end admits
 - **THEN** the session stops
-- **AND** it posts no failure for the turn that ended
+- **AND** it posts no error and no failed completion for the turn that ended
 
 #### Scenario: A rejected notice in an idle paused session does not leave the pause
 
 - **GIVEN** an idle session that is paused, and a reminder fire that waits for the pause
 - **WHEN** child B asks, and the journal rejects its notice
 - **THEN** the session stops, and it does not keep a pause with no notice
-- **AND** the next recovery withdraws the child requests, and the held fire runs
+- **AND** the next recovery withdraws the child requests and queues the held fire, and the held fire runs
 
 #### Scenario: A rejected admission of other input does not stop the session
 

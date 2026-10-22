@@ -46,7 +46,7 @@ The spec deltas describe the state after PR 3. The change syncs to the main spec
 - `tool-authorization`: TA-12 adds the buttons-only prompt with command and scope, the consent boundary for the parent model, the text answer guard, the withdrawal reply, and a parked child's prompt that survives a restart.
 - `netclaw-session`: the `child-consent` input kind and principal; an automated input waits while the pause is active; a reminder fire into a paused session waits, and a later fire replaces it.
 - `netclaw-subagents`: the execution contract, progressive tool disclosure, and run-scoped working context for a parked child; the child journal; park always; consent outcomes at resume. The watchdog-during-approval and live outcome requirements are removed.
-- `session-resume`: the parent snapshot keeps parked requests; recovery keeps parked child requests, resumes answered parks, withdraws the others with a stated reason, closes pending approval notices, and purges ended child journals.
+- `session-resume`: the parent snapshot keeps parked requests; recovery keeps parked child requests, resumes answered parks, withdraws the others with a stated reason, closes pending approval notices, queues the input that the pause held, and purges ended child journals. A restart reminder that finds another turn running queues the pending input that no turn selected, in place of the earlier no-op.
 - `channel-binding-parity`: the text answer guard in the shared flow, prompt lifetime at turn end and turn error, buttons-only child prompts, the prompt-closed redraw, and replay dedupe in channels and the TUI.
 
 ## Impact
