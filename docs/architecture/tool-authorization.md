@@ -478,11 +478,12 @@ The child consent pause (input placement):
   (`LlmSessionActor.RecoverParentClosure`). Live code clears them when the next turn starts. An old row has no flag,
   so it reads as a close that ends the turn.
 - Recovery of a session that was paused (an open request of a run that is still `Accepted`) withdraws the child
-  requests, closes the pending notices, and then queues the held input in admission order
-  (`LlmSessionActor.QueueInputsHeldByThePause`). It starts nothing itself. The restart reminder stays the one resume
-  path for an interrupted input. It comes first in the mailbox, and in a busy session it queues each pending input
-  that no turn selected (`QueueRestartResume`). The held input then runs through the normal drain. With no restart
-  reminder, an idle session starts the held input (`StartHeldInputs`). A crash does not resume a person's input (#2516).
+  requests, closes the pending notices, and sends itself `StartHeldInputs`. The handler
+  (`LlmSessionActor.StartInputsHeldByThePause`) queues the held input that is not queued yet, and it starts the queue
+  in an idle session. The restart reminder stays the one resume path for an interrupted input. When the restart
+  reminder woke the session, it was stashed during recovery, so it runs before `StartHeldInputs` and queues the pending
+  inputs in admission order first. In a busy session it queues each pending input that no turn selected and replies
+  `RestartResumeNotNeeded` (`QueueRestartResume`). A crash does not resume a person's input (#2516).
 - Data: the pause and the queue are actor-local. Each held input is a durable pending `InputAdmitted` record.
 - The last close of the session admits the closing notice. Then the held inputs run through
   `StartWaitingInputAfterApproval`.

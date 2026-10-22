@@ -304,9 +304,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // Akka.Persistence unstashes the commands that arrived during recovery right after this handler.
             // The orphan notices must start their turn here, so a message that woke the session buffers behind them
             // and does not run first.
-            ResumeOrphanNotices();
+            ResumeOrphanNotices(pausedAtRecovery);
             if (pausedAtRecovery)
-                QueueInputsHeldByThePause();
+                Self.Tell(new StartHeldInputs(), ActorRefs.NoSender);
             if (_consentDigest.IsReady)
                 ChildConsentChanged();
         });
@@ -1096,8 +1096,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     }
 
     // Compaction end: a ready approval notice is admitted first, so the drain sees it.
+    // An overflow recovery compaction keeps the turn open: the rolled-back message waits as a replay item.
     private void DrainBufferOrReady()
-        => AdmitConsentNoticeThen(inOpenTurn: _input.ResumesToolLoopAfterCompaction, DrainBufferOrReadyNow);
+        => AdmitConsentNoticeThen(inOpenTurn: _input.ResumesToolLoopAfterCompaction || _input.StartsWithReplay,
+            DrainBufferOrReadyNow);
 
     private void DrainBufferOrReadyNow()
     {
@@ -2321,20 +2323,26 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     // The restart reminder arrives while a turn runs, for example the turn of an orphan notice that recovery started.
     // The one resume path then queues each pending input that no turn selected, and the normal drain runs them after
     // the running turn, in admission order. The queue keeps one copy of an input that recovery queued already.
+    // No turn of this message runs: each queued input runs later under its own recorded source. So the reply is
+    // RestartResumeNotNeeded, and a caller on the Reminder-origin route (#2491) settles at once. A pending input whose
+    // recorded authority does not parse gets a nack, as in an idle session.
     private void QueueRestartResume(SendUserMessage cmd)
     {
         var selected = _input.SelectedInputs.Ids;
-        var queued = _input.RestoreWaitingInputs(
-            _state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId)).ToArray(), _sessionId);
-        if (queued == 0)
+        var pending = _state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId)).ToArray();
+        if (pending.FirstOrDefault(input => !TurnContext.TryFromRecord(input.TurnContext, out _, out _)) is { } damaged)
         {
-            AckRestartResumeNoOp(cmd);
+            _log.Warning("Restart reminder {ReminderId} cannot queue input {InputId}: its stored authority is invalid.",
+                cmd.Source?.ReminderId, damaged.InputId);
+            TryReplyNack("The interrupted input authority is invalid.");
             return;
         }
 
-        _execution.ClearRestartReminderEligibility();
+        var queued = _input.RestoreWaitingInputs(pending, _sessionId);
+        if (queued > 0)
+            _execution.ClearRestartReminderEligibility();
         _log.Info("restart_resume_queued count={QueuedCount} phase={Phase}", queued, _phase.Current);
-        TryReplyAck();
+        ReplyRestartResumeNotNeeded();
     }
 
     // The restart reminder is not an input. It only resumes inputs that the journal already holds.
@@ -2343,9 +2351,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
            && reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
            && string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal);
 
-    // Akka.Reminders can redeliver the restart reminder. This message resumes nothing and no turn runs for it, so the
-    // session acknowledges and the reminder run ends in success. An interrupted input can stay pending (another turn
-    // runs). The session does not resume that input for this message.
+    // Akka.Reminders can redeliver the restart reminder. In an idle session with nothing to resume, this message
+    // resumes nothing and no turn runs for it, so the session acknowledges and the reminder run ends in success.
     private void AckRestartResumeNoOp(SendUserMessage cmd)
     {
         _log.Info(
@@ -2353,10 +2360,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             cmd.Source?.ReminderId,
             _phase.Current,
             _state.PendingInputs.Count);
+        ReplyRestartResumeNotNeeded();
+    }
+
+    // A caller on the Reminder-origin route (#2491) waits for a terminal turn after an ack. No turn of this message runs.
+    private void ReplyRestartResumeNotNeeded()
+    {
         if (Sender.IsNobody() || Equals(Sender, Context.System.DeadLetters))
             return;
-
-        // A caller on the Reminder-origin route (#2491) waits for a terminal turn after an ack. No turn will run here.
         Sender.Tell(new RestartResumeNotNeeded(_sessionId));
     }
 
@@ -2677,9 +2688,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         // Base only logs a rejection; the actor keeps running. A turn that nothing ends would hold
         // the session until the processing watchdog fires, so fail the turn here.
         // A rejected approval notice stops the session, as a persist failure does: the boundary that admitted it cannot
-        // continue, and a pause with no notice would hold automated input. Recovery closes the notices, withdraws the
-        // child requests, and runs the held input. A close of a waiting input names no selected input: the waiting
-        // input stays pending, and the running turn continues.
+        // continue, and a pause with no notice would hold automated input. Recovery withdraws the child requests,
+        // closes the notices, and queues the held input. A close of a waiting input names no selected input: the
+        // waiting input stays pending, and the running turn continues.
         if (@event is InputAdmitted notice && IsConsentNotice(notice))
         {
             _log.Error(cause, "The journal rejected approval notice {InputId}. The session stops.", notice.InputId);

@@ -368,31 +368,32 @@ replayed request alone. Recovery then runs in this order:
    empty, and recovery admits no notice.
 4. It resumes the orphan child result notices at the head of the pending inputs (`ResumeOrphanNotices`, existing).
    This step starts only those notices. It does not start the input that the pause held.
-5. When the session was paused at the crash, recovery queues the input that the pause held: automated input and child
-   result notices that no turn selected (`QueueInputsHeldByThePause`). It queues them in admission order and sends
-   itself `StartHeldInputs`. Behind a parked parent approval, this step does nothing.
+5. When the session was paused at the crash, recovery only sends itself `StartHeldInputs`. Behind a parked parent
+   approval, the handler does nothing, because recovery queued every pending input already.
 
-`StartHeldInputs` starts the queued input only in an idle session. A turn that runs drains the queue at its end.
-Akka.Persistence unstashes the commands that arrived during recovery before `StartHeldInputs`. So a stashed restart
-reminder runs first, and the restart reminder stays the one resume path for an interrupted input of a person. The
-held input then runs through the normal drain, in admission order. After a crash, no restart reminder exists, and
-recovery still does not resume a pending input of a person (#2516).
+The `StartHeldInputs` handler (`StartInputsHeldByThePause`) queues the input that the pause held: automated input and
+child result notices that no turn selected and that the queue does not hold yet. Then it starts the queue only in an
+idle session. A turn that runs drains the queue at its end. Akka.Persistence unstashes the commands that arrived during
+recovery before `StartHeldInputs`. So when a restart reminder woke the session, the stashed reminder runs first. It is
+the one resume path for an interrupted input of a person, and it queues the pending inputs in admission order before
+the handler queues the held input. After a crash, no restart reminder exists, and recovery still does not resume a
+pending input of a person (#2516).
 
 A restart reminder that arrives in `Processing` or `Compacting` queues each pending input that no turn selected and
-that the queue does not hold yet (`QueueRestartResume`). It replies with an ordinary `CommandAck` and logs
-`restart_resume_queued`. The normal drain runs those inputs after the running turn, in admission order. When it
-queues nothing, the reminder is a no-op (`RestartResumeNotNeeded`, `restart_resume_noop`). This replaces the earlier
-rule of `d2-reminders-end-at-admission` (#2511): a restart reminder that found another turn running was a no-op, and
-the input stayed pending with no turn.
+that the queue does not hold yet (`QueueRestartResume`). It logs `restart_resume_queued` and replies
+`RestartResumeNotNeeded`, also when it queued nothing, because no turn of this message runs. A caller on the
+Reminder-origin route then settles at once. A pending input whose stored authority does not parse gets a
+`CommandNack`, as in an idle session. The normal drain runs the queued inputs after the running turn, in admission
+order. This replaces the earlier rule of `d2-reminders-end-at-admission` (#2511): a restart reminder that found another
+turn running was a no-op, and the input stayed pending with no turn.
 
 ```text
 schematic: restart of a paused session (graceful drain, admission order [P, F])
   drain: Alice's input P stays pending; fire F waits for the pause; the drain writes a restart reminder R
   recovery: paused := open child request of an Accepted run   -> true
-            withdraw requests; close notices; rebuild digest
-            queue F (held input); Tell StartHeldInputs
-  unstash R (Ready): resume P -> turn of P runs
-  StartHeldInputs: session busy -> no-op; F waits in the queue
+            withdraw requests; close notices; rebuild digest; Tell StartHeldInputs
+  unstash R (Ready): resume P -> turn of P runs; queue F (waiting input)
+  StartHeldInputs: F is queued already; session busy -> no start
   turn of P ends: drain -> turn of F runs
 ```
 
@@ -728,7 +729,7 @@ sequenceDiagram
 | Digest, merge, and rebuild | `LlmSessionActor` (Children partial), `ChildConsentDigest` | actor-local |
 | Replace a waiting notice or fire (one atomic write) | `LlmSessionActor.PersistReplacingInput`; `SessionInputFlow.WaitingConsentNotice` | durable `InputClosed` (`KeepsTurn`) and `InputAdmitted` |
 | Stop on a rejected notice admission | `LlmSessionActor.OnPersistRejected` | durable journal is the recovery source |
-| Queue the input that the pause held at recovery | `LlmSessionActor.QueueInputsHeldByThePause`, `StartHeldInputs` | durable pending inputs; actor-local queue |
+| Queue the input that the pause held at recovery | `LlmSessionActor.StartInputsHeldByThePause` (`StartHeldInputs`) | durable pending inputs; actor-local queue |
 | Queue pending input for a busy restart reminder | `LlmSessionActor.QueueRestartResume` | durable pending inputs; actor-local queue |
 | Render model text | `AgentEventRenderer` (pure) | call-local |
 | Notice kind, principal, and identification (source kind, authenticity, sender) | `SessionInputFlow` admission; `TurnContext` | durable in `TurnContext` |

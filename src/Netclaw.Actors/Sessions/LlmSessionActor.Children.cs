@@ -90,8 +90,7 @@ public sealed partial class LlmSessionActor
         Command<ChildResultWritten>(HandleChildResultWritten);
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
         Command<RecoverChildRuns>(_ => RecoverChildren());
-        // Only an idle session starts the held input. A turn that runs drains it at its end.
-        Command<StartHeldInputs>(_ => StartWaitingInputAfterApproval());
+        Command<StartHeldInputs>(_ => StartInputsHeldByThePause());
     }
 
     private void AcceptChild(AcceptChildStart message)
@@ -462,7 +461,7 @@ public sealed partial class LlmSessionActor
     // session buffers behind the notice turn. A person's pending input is not part of this repair (issue 2516):
     // recovery treats it as before. Behind a parked approval the recovery queued every pending input already, and the
     // answer ends the wait. An input of the running turn is not an orphan.
-    private void ResumeOrphanNotices()
+    private void ResumeOrphanNotices(bool pausedAtRecovery)
     {
         if (_toolWorkflow.HasParkedApprovals())
             return;
@@ -492,8 +491,9 @@ public sealed partial class LlmSessionActor
             }
         }
 
+        // When the session was paused, StartHeldInputs queues such a notice, so it does not wait for that input.
         foreach (var waiting in candidates.SkipWhile(input => input.ChildNotice is not null)
-                     .Where(input => input.ChildNotice is not null))
+                     .Where(input => input.ChildNotice is not null && !pausedAtRecovery))
         {
             _log.Warning(
                 "The notice of child run {RunId} waits behind an older input of a person that has no turn. "
@@ -519,10 +519,11 @@ public sealed partial class LlmSessionActor
             && run.Lifecycle is ChildRunLifecycle.Accepted);
 
     // A restart withdraws every child request, so the pause ends, and the input that it held can run. Recovery only
-    // queues that input, in admission order. The interrupted input of a person keeps its one resume path, the restart
-    // reminder (issue 2516 for a crash). StartHeldInputs reaches the mailbox after a stashed restart reminder, so the
-    // reminder resumes first and the held input then runs through the normal drain.
-    private void QueueInputsHeldByThePause()
+    // sends StartHeldInputs. When a restart reminder woke the session, the stashed reminder runs before this message,
+    // so the one resume path queues the interrupted inputs first, in admission order. The handler then queues the held
+    // input that is not queued yet and starts the queue in an idle session. A crash does not resume a person's input
+    // (issue 2516). Behind a parked parent approval, recovery queued every pending input already.
+    private void StartInputsHeldByThePause()
     {
         if (_toolWorkflow.HasParkedApprovals())
             return;
@@ -530,10 +531,10 @@ public sealed partial class LlmSessionActor
         var held = _state.GetExecutablePendingInputs()
             .Where(input => !selected.Contains(input.InputId) && WasHeldByPause(input))
             .ToArray();
-        if (_input.RestoreWaitingInputs(held, _sessionId) == 0)
-            return;
-        _log.Info("Queued {HeldCount} input(s) that the child consent pause held before the restart", held.Length);
-        Self.Tell(new StartHeldInputs(), ActorRefs.NoSender);
+        var queued = _input.RestoreWaitingInputs(held, _sessionId);
+        if (queued > 0)
+            _log.Info("Queued {HeldCount} input(s) that the child consent pause held before the restart", queued);
+        StartWaitingInputAfterApproval();
     }
 
     // The pause holds automated input and child result notices (SessionInputFlow, design D5).
