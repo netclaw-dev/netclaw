@@ -16,7 +16,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <summary>
 /// Executable specs for issue 2602. A child run is live when its session owner stops. When the owner starts again,
 /// recovery records the run as lost. The lost record must name the cause, must not count as a success, and must tell
-/// the parent model that nothing re-runs the child and that its later effects are uncertain.
+/// the parent model that the runtime does not start the child again and that its later effects are uncertain.
 /// <para>
 /// Recovery cannot tell a daemon restart drain from a daemon crash or from a stop of the session actor in a live
 /// daemon. The drain keeps its restart facts in actor-local state and in the reminder store, and the journal of the
@@ -39,7 +39,7 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
     /// The live case of issue 2602. A child completes one tool round, and the session records a checkpoint. A daemon
     /// restart drain stops the session while the child waits for its next model call. After the restart the reminder
     /// wakes the session, and recovery records the run as lost. The result file names the reason, says that the child
-    /// did not survive a restart of its owner, says that nothing re-runs the child, and says that the effects after the
+    /// did not survive when its session restarted, says that the runtime does not start the child again, and says that the effects after the
     /// last checkpoint are uncertain.
     /// Planted bug: recovery records the run with the reason <c>actor_stopped</c> and the old text (today).
     /// </summary>
@@ -69,7 +69,7 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
             Note(result);
             Assert.Contains($"- reason: {OwnerRestarted.Value}", result, StringComparison.Ordinal);
             Assert.DoesNotContain(SubAgentOutcomeReason.ActorStopped.Value, result, StringComparison.Ordinal);
-            AssertSaysTheOwnerRestarted(result, "result.md");
+            AssertSaysTheSessionRestarted(result, "result.md");
             Assert.Contains("after the last checkpoint are uncertain", result, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -81,7 +81,7 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
     /// <summary>
     /// The session actor stops with no drain while a child waits in its first model call. No checkpoint exists. The next
     /// join recovers the session. The notice that the parent model reads names the same reason as the result file, and it
-    /// says plainly that the child did not survive a restart of its owner and that nothing re-runs it.
+    /// says plainly that the child did not survive when its session restarted and that the runtime does not start it again.
     /// Planted bug: the notice carries <c>reason=actor_stopped</c> and no text about the restart (today).
     /// </summary>
     [Fact]
@@ -107,7 +107,7 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
             Note(notice);
             Assert.Contains($"reason={OwnerRestarted.Value}", notice, StringComparison.Ordinal);
             Assert.DoesNotContain(SubAgentOutcomeReason.ActorStopped.Value, notice, StringComparison.Ordinal);
-            AssertSaysTheOwnerRestarted(notice, "the notice");
+            AssertSaysTheSessionRestarted(notice, "the notice");
             Assert.Contains("uncertain", notice, StringComparison.OrdinalIgnoreCase);
 
             // The parent model reads the same reason in its request.
@@ -119,7 +119,7 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
 
             var result = await File.ReadAllTextAsync(ResultPath(sessionId, accepted), Cancellation);
             Assert.Contains($"- reason: {OwnerRestarted.Value}", result, StringComparison.Ordinal);
-            AssertSaysTheOwnerRestarted(result, "result.md");
+            AssertSaysTheSessionRestarted(result, "result.md");
             Assert.Contains("uncertain", result, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -159,6 +159,207 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
             Assert.False(terminal.Terminal.Result.Success, "The terminal record of a lost run must not be a success.");
             Assert.Equal(OwnerRestarted, terminal.Terminal.Result.OutcomeReason);
             Assert.Equal(OwnerRestarted, completed.OutcomeReason);
+        }
+        finally
+        {
+            secondCall.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Review of the fix (option B). A child that a restart lost has a checkpoint. The notice that the parent model reads
+    /// limits the uncertainty to the effects after the last checkpoint, as <c>result.md</c> does. It must not say that all
+    /// effects of the child are uncertain, because the checkpoint confirmed the effects before it.
+    /// Planted bug: the notice says "Its external effects are uncertain" for each lost run.
+    /// </summary>
+    [Fact]
+    public async Task The_notice_of_a_checkpointed_child_lost_to_a_restart_limits_the_uncertainty_to_after_the_checkpoint()
+    {
+        // Arrange
+        var sessionId = new SessionId("lost-reason/crash-notice-checkpoint");
+        var journal = await JournalAsync();
+        ScriptParent();
+        var subscriber = await JoinAsync(sessionId);
+        var (accepted, secondCall) = await StartCheckpointedChildAsync(journal, sessionId, subscriber);
+
+        try
+        {
+            // Act
+            await RestartSessionAsync(sessionId);
+
+            // Assert
+            await AwaitAssertAsync(() => Assert.Single(NoticesFor(journal, accepted.Run.RunId)),
+                Deadline, cancellationToken: Cancellation);
+            var notice = Assert.Single(NoticesFor(journal, accepted.Run.RunId)).UserMessage.Content!;
+            Note(notice);
+            Assert.True(notice.Contains("effects after the last checkpoint are uncertain", StringComparison.OrdinalIgnoreCase),
+                $"The notice of a checkpointed run must say that the effects after the last checkpoint are uncertain. Text: {notice}");
+            Assert.False(notice.Contains("effects are uncertain", StringComparison.OrdinalIgnoreCase),
+                $"The notice of a checkpointed run must not say that all of its effects are uncertain. Text: {notice}");
+        }
+        finally
+        {
+            secondCall.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Review of the fix (option B). A lost run keeps the merge of its checkpoint into the parent working context. The
+    /// child confirmed a changed file before the restart. After the notice turn, the next parent model request lists that
+    /// file in its recent files.
+    /// Planted bug: the session drops the reviewed context of each run that is not a success.
+    /// </summary>
+    [Fact]
+    public async Task A_checkpointed_child_lost_to_a_restart_merges_its_confirmed_changes_into_the_parent()
+    {
+        // Arrange
+        var sessionId = new SessionId("lost-reason/crash-merge");
+        var journal = await JournalAsync();
+        ScriptParent();
+        var subscriber = await JoinAsync(sessionId);
+        var (accepted, secondCall) = await StartCheckpointedChildAsync(journal, sessionId, subscriber);
+
+        try
+        {
+            // Act: the recovered session runs the notice turn. Then a person sends one more message.
+            await RestartSessionAsync(sessionId);
+            await AwaitAssertAsync(() => Assert.Single(NoticesFor(journal, accepted.Run.RunId)),
+                Deadline, cancellationToken: Cancellation);
+            var notice = Assert.Single(NoticesFor(journal, accepted.Run.RunId));
+            await AwaitAssertAsync(() => Assert.True(ConsumptionCount(journal, notice.InputId) > 0,
+                "The recovered session must run the notice turn."), Deadline, cancellationToken: Cancellation);
+            await SendAsync(sessionId, "ping", Operator(Alice));
+            await AwaitAssertAsync(() => Assert.Contains(journal.Committed.OfType<TurnRecorded>(),
+                evt => evt.UserMessage.Content == "ping"), Deadline, cancellationToken: Cancellation);
+
+            // Assert
+            Assert.True(notice.ChildNotice?.ReviewedWorkingContext is not null,
+                "The notice of a lost run with a checkpoint must carry the reviewed context of the checkpoint.");
+            // The ping turn runs after the notice turn, so the last parent request belongs to the ping turn.
+            var recentFiles = RecentFilesOf(Clients.Parent.ReceivedMessages.Last());
+            Assert.True(recentFiles.Contains(CheckpointedFile),
+                $"recent_files: [{string.Join(", ", recentFiles)}]. Expected: {CheckpointedFile}");
+        }
+        finally
+        {
+            secondCall.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Review of the fix (option B). The live child actor stops while its owner runs, after one checkpoint. The run is not
+    /// a restart, so the stored completion stays a partial run with the reason <c>actor_stopped</c>. The run is lost, so
+    /// the session log line must say <c>success=False</c>.
+    /// Planted bug: a partial completion reports success for each reason except <c>owner_restarted</c>.
+    /// </summary>
+    [Fact]
+    public async Task A_checkpointed_live_child_that_stops_while_its_owner_runs_is_not_a_success()
+    {
+        // Arrange
+        var sessionId = new SessionId("lost-reason/child-actor-stop-checkpoint");
+        var journal = await JournalAsync();
+        ScriptParent();
+        var subscriber = await JoinAsync(sessionId);
+        var (accepted, secondCall) = await StartCheckpointedChildAsync(journal, sessionId, subscriber);
+
+        try
+        {
+            // Act
+            var childPath = $"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}/subagent-{Agent}-{accepted.Run.RunId.Value}";
+            Sys.Stop(await Sys.ActorSelection(childPath).ResolveOne(Deadline, Cancellation));
+
+            // Assert
+            var completed = await subscriber.FishForMessageAsync<SubAgentOutput>(
+                output => output.Phase == SubAgentPhase.Completed, Deadline, cancellationToken: Cancellation);
+            var terminal = await AwaitTerminalAsync(journal, accepted);
+            Note($"SubAgentOutput success={completed.Success} outcome={completed.Outcome} reason={completed.OutcomeReason?.Value ?? "-"}");
+            Assert.True(terminal.Terminal.Lost);
+            var partial = Assert.IsType<ChildRunCompletion.Partial>(terminal.Terminal.Result.Completion);
+            Assert.Equal(SubAgentOutcomeReason.ActorStopped, partial.PartialReason);
+            Assert.False(completed.Success, "The session log line of a lost run must say success=False.");
+            Assert.Equal(SubAgentOutcomeReason.ActorStopped, completed.OutcomeReason);
+        }
+        finally
+        {
+            secondCall.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Review of the fix (option B). Versions run in the order new, old, new. The new binary records the lost run as a
+    /// partial run with the reason <c>owner_restarted</c>, and the daemon stops before the notice. The old binary reads
+    /// that partial run as a success, so it admits a notice that carries a reviewed context. The spec writes those two
+    /// records into the journal directly. The new binary must replay them with no error, run the notice turn, and merge
+    /// the reviewed context.
+    /// Planted bug: the reducer refuses a reviewed context on each run that is not a success, so the recovery throws.
+    /// </summary>
+    [Fact]
+    public async Task A_notice_with_a_reviewed_context_that_an_older_binary_wrote_for_a_lost_run_replays()
+    {
+        // Arrange: a live child with one checkpoint. The session actor stops with no drain, and nothing recovers it yet.
+        var sessionId = new SessionId("lost-reason/cross-version-replay");
+        var journal = await JournalAsync();
+        ScriptParent();
+        var subscriber = await JoinAsync(sessionId);
+        var (accepted, secondCall) = await StartCheckpointedChildAsync(journal, sessionId, subscriber);
+
+        try
+        {
+            await StopAsync(await ResolveSessionAsync(sessionId));
+            var checkpoint = journal.Committed.OfType<ChildRunEvent.Checkpointed>()
+                .Last(evt => evt.RunId == accepted.Run.RunId).Checkpoint;
+            Assert.Contains(CheckpointedFile, checkpoint.ConfirmedActivity.ConfirmedChangedFiles);
+
+            // The records of the new binary and then of the old binary.
+            var lost = new SubAgentProtocol.SubAgentResult
+            {
+                AgentName = accepted.Run.AgentName,
+                RunId = accepted.Run.RunId,
+                ScopeId = accepted.Run.ScopeId,
+                Completion = new ChildRunCompletion.Partial(OwnerRestarted, checkpoint.ConfirmedActivity),
+                Output = $"The child did not survive a restart. {checkpoint.Summary}"
+            };
+            var terminal = new ChildRunEvent.TerminalRecorded(
+                new ChildRunTerminal(lost, Lost: true, EvidenceWarning: "Recovery does not relaunch uncertain child work."))
+            {
+                SessionId = sessionId, RunId = accepted.Run.RunId, RecordedAtMs = 10
+            };
+            var oldNotice = new InputAdmitted
+            {
+                SessionId = sessionId,
+                InputId = new InputId("old-binary-notice"),
+                UserMessage = new SerializableChatMessage
+                {
+                    Role = ChatRole.User,
+                    Content = $"Child run ended. agent={accepted.Run.AgentName.Value} run={accepted.Run.RunId.Value} "
+                              + $"outcome=partial reason={OwnerRestarted.Value} result_file={ResultPath(sessionId, accepted)}"
+                },
+                TurnContext = accepted.Run.OriginalContext with { TurnId = "old-binary-notice-turn" },
+                ChildNotice = new ChildNotice(accepted.Run.RunId, checkpoint.ConfirmedActivity),
+                AdmittedAtMs = 11
+            };
+            await AppendToJournalAsync(sessionId, terminal, oldNotice);
+
+            // Act: a join starts the session, and the session replays the journal.
+            var recovered = CreateTestProbe();
+            Sys.EventStream.Subscribe(recovered.Ref, typeof(Akka.Event.Error));
+            SessionManager.Tell(new JoinSession(recovered) { SessionId = sessionId, Filter = OutputFilter.Full });
+            var first = await recovered.FishForMessageAsync<object>(message => message is SessionJoined
+                    || (message is Akka.Event.Error error && IsRecoveryFailure(error)),
+                ColdRecoveryCeiling, cancellationToken: Cancellation);
+            Sys.EventStream.Unsubscribe(recovered.Ref, typeof(Akka.Event.Error));
+
+            // Assert
+            if (first is Akka.Event.Error failure)
+                Assert.Fail($"The replay of the old notice failed: {failure.Cause?.Message ?? failure.Message}");
+            await AwaitAssertAsync(() => Assert.True(ConsumptionCount(journal, oldNotice.InputId) > 0,
+                "The recovered session must run the notice turn of the old notice."), Deadline, cancellationToken: Cancellation);
+            await SendAsync(sessionId, "ping", Operator(Alice));
+            await AwaitAssertAsync(() => Assert.Contains(journal.Committed.OfType<TurnRecorded>(),
+                evt => evt.UserMessage.Content == "ping"), Deadline, cancellationToken: Cancellation);
+            var recentFiles = RecentFilesOf(Clients.Parent.ReceivedMessages.Last());
+            Assert.True(recentFiles.Contains(CheckpointedFile),
+                $"recent_files: [{string.Join(", ", recentFiles)}]. Expected: {CheckpointedFile}");
         }
         finally
         {
@@ -316,16 +517,70 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
         }
     }
 
-    // Says that the owner of the child restarted, that the child did not survive, and that nothing re-runs the child.
-    // The words are a contract with the parent model. The model must not read a restart loss as a platform fault.
-    private static void AssertSaysTheOwnerRestarted(string text, string where)
+    // Says that the session of the child restarted, that the child did not survive, and that the runtime does not start
+    // the child again. The words are a contract with the parent model. The model must not read a restart loss as a
+    // platform fault. Example wording: "The session of the child restarted (for example, a daemon restart). The child
+    // did not survive. The runtime does not start the child again."
+    private static void AssertSaysTheSessionRestarted(string text, string where)
     {
         Assert.True(text.Contains("did not survive", StringComparison.OrdinalIgnoreCase)
-                    && text.Contains("restart", StringComparison.OrdinalIgnoreCase),
-            $"{where} must say that the child did not survive a restart of its owner. Text: {text}");
-        Assert.True(text.Contains("nothing re-runs", StringComparison.OrdinalIgnoreCase),
-            $"{where} must say that nothing re-runs the child. Text: {text}");
+                    && text.Contains("restarted", StringComparison.OrdinalIgnoreCase),
+            $"{where} must say that the session of the child restarted and that the child did not survive. Text: {text}");
+        Assert.True(text.Contains("does not start the child again", StringComparison.OrdinalIgnoreCase),
+            $"{where} must say that the runtime does not start the child again. Text: {text}");
     }
+
+    // A failure in the replay of the session journal. Akka.Persistence logs it as an error with the cause, and then it
+    // stops the actor.
+    private static bool IsRecoveryFailure(Akka.Event.Error error)
+        => error.Cause is not null
+           && (error.Message?.ToString()?.Contains("receiveRecover", StringComparison.OrdinalIgnoreCase) == true
+               || error.Cause.ToString().Contains("reviewed working context", StringComparison.Ordinal));
+
+    // Writes records into the journal of a stopped session, as an earlier binary did. The writer recovers the journal
+    // first, so its records take the next sequence numbers.
+    private async Task AppendToJournalAsync(SessionId sessionId, params object[] events)
+    {
+        var writer = Sys.ActorOf(Props.Create(() => new JournalAppender($"session-{sessionId.Value}")));
+        await writer.Ask<Akka.Done>(new JournalAppender.Append(events), Deadline, Cancellation);
+        await StopAsync(writer);
+    }
+
+    private sealed class JournalAppender : Akka.Persistence.ReceivePersistentActor
+    {
+        public sealed record Append(object[] Events);
+
+        public JournalAppender(string persistenceId)
+        {
+            PersistenceId = persistenceId;
+            RecoverAny(_ => { });
+            Command<Append>(append =>
+            {
+                var replyTo = Sender;
+                var remaining = append.Events.Length;
+                PersistAll(append.Events, _ =>
+                {
+                    if (--remaining == 0)
+                        replyTo.Tell(Akka.Done.Instance);
+                });
+            });
+        }
+
+        public override string PersistenceId { get; }
+    }
+
+    // The file that the checkpointed child changes in its first round.
+    private string CheckpointedFile => Path.Combine(TestPaths.WorkspacesDirectory, "project", "ChangedBeforeRestart.cs");
+
+    // The recent files in the working context block of one parent model request.
+    private static string[] RecentFilesOf(IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> request)
+        => request
+            .Where(message => message.Text.Contains("[working-context]", StringComparison.Ordinal))
+            .SelectMany(message => message.Text.Split('\n'))
+            .Where(line => line.StartsWith("  - ", StringComparison.Ordinal))
+            // The volatile block sits in brackets, so its last line ends with the closing bracket.
+            .Select(line => line["  - ".Length..].Trim().TrimEnd(']'))
+            .ToArray();
 
     private async Task<ChildRunEvent.TerminalRecorded> AwaitTerminalAsync(AcceptanceFault journal, ChildRunAccepted accepted)
     {
@@ -356,8 +611,7 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
     private async Task<(ChildRunAccepted Accepted, TaskCompletionSource SecondCall)> StartCheckpointedChildAsync(
         AcceptanceFault journal, SessionId sessionId, Akka.TestKit.TestProbe subscriber)
     {
-        var changed = Path.Combine(TestPaths.WorkspacesDirectory, "project", "ChangedBeforeRestart.cs");
-        var (accepted, firstCall) = await StartChildAsync(sessionId, Alice, "one", changedFile: changed);
+        var (accepted, firstCall) = await StartChildAsync(sessionId, Alice, "one", changedFile: CheckpointedFile);
         await ExpectTurnsAsync(subscriber, 1);
 
         // The first call took its gate. Only then can the second call get a gate of its own.
