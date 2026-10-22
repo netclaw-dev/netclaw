@@ -273,6 +273,39 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(inputId, Assert.Single(toolStarted.ConsumedInputIds));
     }
 
+    /// <summary>
+    /// Round 4 nit 3. InputClosed.KeepsTurn (proto field 8) round-trips as true and as false. A row from an older binary
+    /// has no field 8, and it reads false.
+    /// </summary>
+    [Fact]
+    public void InputClosed_keeps_turn_round_trips_and_an_old_row_reads_false()
+    {
+        // Arrange
+        var sessionId = new SessionId("slack/C1/1700.2");
+        var inputId = InputId.New();
+        var keeps = new InputClosed { SessionId = sessionId, InputIds = [inputId], ClosedAtMs = 42, KeepsTurn = true };
+        var ends = keeps with { KeepsTurn = false };
+        var oldRow = new Netclaw.Actors.Serialization.Proto.InputClosedProto
+        {
+            SessionId = new Netclaw.Actors.Serialization.Proto.SessionIdProto { Value = sessionId.Value },
+            ClosedAtMs = 42
+        };
+        oldRow.InputIds.Add(inputId.Value);
+
+        // Act
+        var keepsBack = RoundTrip(keeps);
+        var endsBack = RoundTrip(ends);
+        var oldBack = Deserialize(oldRow.ToByteArray(), keeps);
+
+        // Assert
+        Assert.True(keepsBack.KeepsTurn);
+        Assert.Equal(inputId, Assert.Single(keepsBack.InputIds));
+        Assert.False(endsBack.KeepsTurn);
+        Assert.False(oldRow.HasKeepsTurn);
+        Assert.False(oldBack.KeepsTurn);
+        Assert.Equal(inputId, Assert.Single(oldBack.InputIds));
+    }
+
     [Fact]
     public void TurnRecorded_round_trips_preserving_value_object_source_ids()
     {
