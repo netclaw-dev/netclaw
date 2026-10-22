@@ -185,6 +185,57 @@ public sealed class ToolCallArgumentLogTests(ITestOutputHelper output) : TestKit
         Assert.Equal(content, received["content"]?.ToString());
     }
 
+    [Fact]
+    public async Task Tool_call_with_a_throwing_argument_still_runs_and_its_sibling_succeeds()
+    {
+        // Review finding 3: the log line comes before the tool runs. An exception
+        // from the formatter must not fail this call or the other calls in the batch.
+        var executor = new RecordingRationaleExecutor();
+        var calls = new List<FunctionCallContent>
+        {
+            new("call-throwing", "probe_list", new Dictionary<string, object?>
+            {
+                ["items"] = new ThrowingArgumentList(),
+                ["_rationale"] = "Read the items."
+            }),
+            new("call-sibling", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "echo ok",
+                ["_rationale"] = "Print ok."
+            })
+        };
+
+        var results = await ToolArgumentLogPipeline.RunBatchAsync(this, executor, calls, "D1/tool-arg-log-throwing");
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal(
+            ["call-sibling", "call-throwing"],
+            executor.Received.Select(static call => call.CallId).Order(StringComparer.Ordinal));
+        Assert.All(results, result =>
+            Assert.Contains($"executed:{result.Message.ToolCallId?.Value}", result.Message.Content, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Info_line_reads_argument_values_when_info_is_enabled()
+    {
+        // Control for ToolCallArgumentLogLevelTests: when Info is on, the
+        // formatter reads the list, so the read counter can see the formatter.
+        var items = new CountingArgumentList("first", "second");
+        var calls = new List<FunctionCallContent>
+        {
+            new("call-1", "probe_list", new Dictionary<string, object?>
+            {
+                ["items"] = items,
+                ["_rationale"] = "Read the items."
+            })
+        };
+
+        await ToolArgumentLogPipeline.RunBatchAsync(
+            this, new RecordingRationaleExecutor(), calls, "D1/tool-arg-log-info-on");
+
+        Assert.True(items.Reads > 0, "The formatter did not read the argument list.");
+    }
+
     private async Task<PipelineRun> RunAsync(
         IToolExecutor executor,
         Dictionary<string, object?> args,
@@ -238,7 +289,7 @@ public sealed class ToolCallArgumentLogTests(ITestOutputHelper output) : TestKit
         return $"<{value.Length} chars, sha256:{hash[..16]}>";
     }
 
-    private static TurnContext InteractiveTurnContext(SessionId sessionId) => new()
+    internal static TurnContext InteractiveTurnContext(SessionId sessionId) => new()
     {
         SessionId = sessionId,
         TurnId = new TurnId("tool-arg-log-turn"),
@@ -259,10 +310,10 @@ public sealed class ToolCallArgumentLogTests(ITestOutputHelper output) : TestKit
         string InvokedLine);
 
     /// <summary>
-    /// Requires _rationale as the real executor does, and records the cleaned
-    /// call that the pipeline gives to the tool.
+    /// Requires _rationale as the real executor does, and records the call that
+    /// the pipeline gives to the executor.
     /// </summary>
-    private sealed class RecordingRationaleExecutor : IToolExecutor
+    internal sealed class RecordingRationaleExecutor : IToolExecutor
     {
         private readonly List<FunctionCallContent> _received = [];
 
@@ -301,4 +352,125 @@ public sealed class ToolCallArgumentLogTests(ITestOutputHelper output) : TestKit
             return Task.FromResult($"executed:{toolCall.CallId}");
         }
     }
+}
+
+/// <summary>
+/// Review finding 5: when Info is off, the pipeline must not format the
+/// arguments. The read counter on an argument list shows whether the formatter
+/// ran. The pipeline itself does not read the list.
+/// </summary>
+public sealed class ToolCallArgumentLogLevelTests(ITestOutputHelper output) : TestKit(output: output)
+{
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
+    {
+        builder.AddHocon("akka.loglevel = WARNING", HoconAddMode.Prepend);
+    }
+
+    [Fact]
+    public async Task Tool_call_does_not_format_arguments_when_info_is_disabled()
+    {
+        Assert.False(Logging.GetLogger(Sys, typeof(ToolCallArgumentLogLevelTests)).IsInfoEnabled);
+        var items = new CountingArgumentList("first", "second");
+        var calls = new List<FunctionCallContent>
+        {
+            new("call-1", "probe_list", new Dictionary<string, object?>
+            {
+                ["items"] = items,
+                ["_rationale"] = "Read the items."
+            })
+        };
+
+        var results = await ToolArgumentLogPipeline.RunBatchAsync(
+            this, new ToolCallArgumentLogTests.RecordingRationaleExecutor(), calls, "D1/tool-arg-log-info-off");
+
+        Assert.Contains("executed:call-1", Assert.Single(results).Message.Content, StringComparison.Ordinal);
+        Assert.Equal(0, items.Reads);
+    }
+}
+
+internal static class ToolArgumentLogPipeline
+{
+    public static async Task<IReadOnlyList<ToolCallResult>> RunBatchAsync(
+        TestKitBase kit,
+        IToolExecutor executor,
+        IReadOnlyList<FunctionCallContent> calls,
+        string sessionName)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var probe = kit.CreateTestProbe();
+        var sessionId = new SessionId(sessionName);
+        var pipeline = new SessionToolPipelineTestFixture(executor, calls, sessionId, probe.Ref)
+            .WithTurnContext(ToolCallArgumentLogTests.InteractiveTurnContext(sessionId))
+            .WithLogger(Logging.GetLogger(kit.Sys, typeof(ToolArgumentLogPipeline)))
+            .ExecuteAsync(cancellationToken);
+        var results = await StreamedToolReplyProbe.ExpectAsync(
+            probe, resultCount: calls.Count, timeout: TimeSpan.FromSeconds(5),
+            cancellationToken: cancellationToken);
+        await pipeline.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        return results;
+    }
+}
+
+/// <summary>An argument list that counts each read of its items.</summary>
+internal sealed class CountingArgumentList : System.Collections.ArrayList
+{
+    private int _reads;
+
+    public CountingArgumentList(params object?[] items)
+    {
+        foreach (var item in items)
+            base.Add(item);
+    }
+
+    public int Reads => Volatile.Read(ref _reads);
+
+    public override System.Collections.IEnumerator GetEnumerator()
+    {
+        Interlocked.Increment(ref _reads);
+        return base.GetEnumerator();
+    }
+
+    public override object? this[int index]
+    {
+        get
+        {
+            Interlocked.Increment(ref _reads);
+            return base[index];
+        }
+        set => base[index] = value;
+    }
+
+    public override void CopyTo(Array array, int arrayIndex)
+    {
+        Interlocked.Increment(ref _reads);
+        base.CopyTo(array, arrayIndex);
+    }
+
+    public override object?[] ToArray()
+    {
+        Interlocked.Increment(ref _reads);
+        return base.ToArray();
+    }
+}
+
+/// <summary>An argument list whose items cannot be read.</summary>
+internal sealed class ThrowingArgumentList : System.Collections.ArrayList
+{
+    public ThrowingArgumentList()
+    {
+        base.Add("throwing-raw-item");
+    }
+
+    public override System.Collections.IEnumerator GetEnumerator()
+        => throw new InvalidOperationException("The enumerator throws.");
+
+    public override object? this[int index]
+    {
+        get => throw new InvalidOperationException("The indexer throws.");
+        set => throw new NotSupportedException();
+    }
+
+    public override void CopyTo(Array array, int arrayIndex) => throw new InvalidOperationException("CopyTo throws.");
+
+    public override object?[] ToArray() => throw new InvalidOperationException("ToArray throws.");
 }
