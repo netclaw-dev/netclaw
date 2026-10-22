@@ -37,12 +37,15 @@ approval, the TUI, and headless output.
 Out of scope: the resume of a running (not parked) child after a restart, nested children, a consent timeout, session
 retention (#2573), the headless exit rule (#2541), and a cross-process router.
 
-Stack:
+Stack (all PRs on `feature/durable-child-consent-wait`):
 
-1. Park and resume in memory. No format change. The existing restart rules apply.
-2. Durable `Parked` and `Resumed`, recovery, passivation, and prompt replay with dedupe in the channels. Needs #2587.
-   Forward-only.
-3. TUI and headless dedupe, and the native smoke run.
+- PR 1a: park and resume in memory: the transcript, the checkpoint, the loop guard, the resume gate, the answer binding,
+  the spawn failures, and the shared re-drive helper. No format change.
+- PR 1b: the receipt facts of finished calls, the pre-batch run scope, and the managed temporary state. No format change.
+  PR 1a must not reach `dev` alone; the feature branch merges to `dev` only after PR 1b lands.
+- PR 2: durable `Parked` and `Resumed`, recovery, passivation, and prompt replay with dedupe in the channels. Needs #2587.
+  Forward-only.
+- PR 3: TUI and headless dedupe, and the native smoke run.
 
 ## Capabilities
 
@@ -75,7 +78,7 @@ None.
   28); six new messages. No new snapshot field. No new persistence ID.
 - Data: child transcripts go into `netclaw.db`, in the same data class as the parent transcript.
 - Configuration: none.
-- CI: two Stryker targets in the `child-consent` group, `child-resume-gate` (PR 1) and `child-park-recovery` (PR 2),
+- CI: two Stryker targets in the `child-consent` group, `child-resume-gate` (PR 1a) and `child-park-recovery` (PR 2),
   about 3 minutes each.
 - Docs: `docs/architecture/tool-authorization.md` sections 3.5, 3.6, 4, 7.5, 8, and 9; `docs/spec/GLOSSARY.md`; the
   `netclaw-operations` skill; release-note text for the downgrade.

@@ -64,11 +64,11 @@ mechanics on `upstream/dev` (1d67c023c). Line numbers are for that commit.
 - Persisted types are proto messages with a manifest and a mapper entry.
 - Tests are deterministic, with no sleep.
 
-### Owner decisions (pending owner confirmation)
+### Owner decisions (confirmed by the owner, 22 Oct 2026)
 
-These defaults change decisions of 21 October 2026. The design uses them until the owner says otherwise.
+These decisions change decisions of 21 October 2026. The owner confirmed each one on 22 October 2026.
 
-| ID | Default |
+| ID | Decision |
 | --- | --- |
 | P7 | Replace the child journal with the park in the run record (D2). |
 | P10 | Resolve the model by role at resume. Log the recorded model and the new model. |
@@ -112,7 +112,7 @@ Trade-off: the prompt appears when the batch ends, not while a slow sibling runs
 
 ### D2. The park
 
-The park is one record, `ChildRunPark`. PR 1 keeps it actor-local in the owner. PR 2 makes it durable as
+The park is one record, `ChildRunPark`. PR 1a and PR 1b keep it actor-local in the owner. PR 2 makes it durable as
 `ChildRunEvent.Parked` in the run record. The content is the same in both PRs.
 
 | Field | Content | Why |
@@ -137,7 +137,7 @@ Rules:
   history (L7).
 - **The open batch follows the parent rule.** No user message comes between two tool results, because a provider
   refuses that history. The nudges come after all results.
-- **The owner numbers the prompts.** The counter `PromptsIssued` is on the run record (actor-local in PR 1). The prompt
+- **The owner numbers the prompts.** The counter `PromptsIssued` is on the run record (actor-local in PR 1a and PR 1b). The prompt
   call ID keeps its form, `{runId}/subagent-approval/{n}`. One shared prompt builder (now inside
   `ParentSessionApprovalBridge.PromptAsync`) makes the request for the parent and for the child.
 - **Size.** The owner logs the size of each park in bytes. A park above a hard cap (the constant `ChildRunPark.MaxBytes`,
@@ -166,7 +166,7 @@ TryResumeParkedRun(r):
   if a restart drain is pending: return              # guard 2: recovery resumes; nothing ran
   plan := SubAgentSpawner.PrepareResume(r, park)     # D4; no side effects
   if plan failed: RecordChildTerminal(r, Failed(reason), "The parked calls did not run.")
-  else Persist ChildRunEvent.Resumed(r)              # PR 2; PR 1 removes the actor-local park instead
+  else Persist ChildRunEvent.Resumed(r)              # PR 2; PR 1a removes the actor-local park instead
     on success: ActorOf(plan.Props, "subagent-{agent}-{runId}-{PromptsIssued}"); Watch; TrackChild; Tell ResumeSubAgent
     on rejection or failure: RecordChildTerminal(r, Failed(resume_not_recorded), "The parked calls did not run.")
 ```
@@ -189,7 +189,7 @@ TryResumeParkedRun(r):
 
 | Write | On rejection or failure | Outcome |
 | --- | --- | --- |
-| Accept a park (PR 1: the requests; PR 2: `Parked`) | the owner replies `Status.Failure` to the child | the child completes `Failed` with `park_not_recorded`; no prompt appears; the result notice says "The child could not wait for consent. The calls that needed consent did not run." |
+| Accept a park (PR 1a: the requests; PR 2: `Parked`) | the owner replies `Status.Failure` to the child | the child completes `Failed` with `park_not_recorded`; no prompt appears; the result notice says "The child could not wait for consent. The calls that needed consent did not run." |
 | `Resumed` (PR 2) | `OnPersistRejected` or `OnPersistFailure` | the run ends `Failed` with `resume_not_recorded` and "The parked calls did not run."; no actor starts. A persist failure stops the session as today; recovery finds the park with all answers and resumes it. |
 
 ### D4. A resume is a spawn from a recorded conversation
@@ -274,8 +274,8 @@ Changes to existing code (H5):
   resume. The parked calls did not run." It never says "uncertain" for a parked run.
 - `HasUnreportedChildren`: a parked run with an open request does not count, so the session can passivate. A parked
   run with all answers counts until it resumes.
-- In PR 1 the park is actor-local, so `HasUnreportedChildren` counts every actor-local park, and the session does not
-  passivate. A restart in PR 1 follows the existing rules: the run is `Accepted` in the journal, recovery records it
+- In PR 1a and PR 1b the park is actor-local, so `HasUnreportedChildren` counts every actor-local park, and the session does not
+  passivate. A restart before PR 2 follows the existing rules: the run is `Accepted` in the journal, recovery records it
   as lost, and the prompt is withdrawn with `DaemonRestarted`.
 
 Other rules:
@@ -441,7 +441,7 @@ Negative examples:
 | Decision | Owner | Data |
 | --- | --- | --- |
 | Park a batch, build the park | `SubAgentActor` | actor-local until sent |
-| Accept a park, number the prompts, size cap | `LlmSessionActor` (Children partial) | PR 1 actor-local; PR 2 durable `ChildRunEvent.Parked` |
+| Accept a park, number the prompts, size cap | `LlmSessionActor` (Children partial) | PR 1a actor-local; PR 2 durable `ChildRunEvent.Parked` |
 | Prompt shape | shared prompt builder | call-local |
 | Answer validity | `SessionToolWorkflow.ValidateResponse` (unchanged) | durable `ToolApprovalResolved` |
 | Resume gate | `LlmSessionActor.TryResumeParkedRun` | PR 2 durable `ChildRunEvent.Resumed` |
@@ -467,22 +467,28 @@ Negative examples:
 
 ### Stack and size
 
-S1 split. Each PR starts with failing tests. `tasks.md` names each test and its assertion.
+S1 split, with PR 1 in two parts (owner approval, 22 October 2026). Each PR starts with failing tests. `tasks.md` names
+each test, its assertion, and its PR. All PRs stack on `feature/durable-child-consent-wait`.
 
 | PR | Content | Format | Estimate (code plus tests) |
 | --- | --- | --- | --- |
-| PR 1 | Park and resume in memory: the park content, the serializable transcript, the receipt facts, the loop guard, the scope facts, the managed temporary facts, the shared plan-entry helper, the fingerprint check, the answer path with no live wait, the spawn rules at resume, cancel of a parked run, journal failure of the park. The existing restart rules apply. | none | 1,600 to 2,300 lines |
+| PR 1a | The child stops and the owner keeps its park in memory. The resume uses the transcript (serializable list, M12), the checkpoint with the round seed (H1), and the loop guard (M10). The resume gate, the answer path with no live wait and its requester binding, the narrower audience (M6), the fingerprint check (M7), the profile and spawn failures, journal failure of the park (H4), cancel of a parked run, the shared plan-entry helper (M11), the shared prompt builder. The existing restart rules apply. | none | 1,200 to 1,700 lines |
+| PR 1b | The receipt facts of the finished calls and their effects in the live order (H2), the pre-batch run scope (H3), and the managed temporary retry target, denial directory, and correction state (M1). | none | 600 to 900 lines |
 | PR 2 | Durable `Parked` and `Resumed`, the proto, recovery, hydration, `AllowsSnapshot`, passivation, restart-reminder eligibility, held input at recovery, the size cap, prompt replay with dedupe and the replay-failure rule in the channel bindings, the downgrade note. Needs #2587. | forward-only | 1,300 to 1,900 lines |
 | PR 3 | TUI and headless dedupe, the typed-key test, the native smoke run. | none | 250 to 400 lines |
 
-PR 1 is the largest because the child gains its own state record. Most of the PR 1 lines are tests: each fact of the
-park needs a test that fails when the fact is lost.
+Caution: PR 1a must not reach `dev` alone. Without PR 1b, a resume can lose the working-directory change of a sibling
+call, run a parked call in the wrong directory, or drop a managed temporary retry. The feature branch merges to `dev`
+only after PR 1b lands.
+
+PR 1a and PR 1b together are larger than the earlier single PR 1 estimate, because each part needs its own stubs and
+review fixes. Most of their lines are tests: each fact of the park needs a test that fails when the fact is lost.
 
 ### Tests and Stryker
 
 - The first tests compile against stub types (`ChildRunPark`, `ChildParkReached`, `ResumeSubAgent`, and an owner handler
   that keeps today's behavior), so they fail on assertions, not on compile errors.
-- Stryker target `child-resume-gate` (PR 1, `child-consent` group, about 3 minutes). Spans with boolean guards only:
+- Stryker target `child-resume-gate` (PR 1a, `child-consent` group, about 3 minutes). Spans with boolean guards only:
   the open-request check and the drain check of `TryResumeParkedRun`, the refusal branch of the plan-entry helper,
   the rule that a park is accepted only for an owned `Accepted` run, and the checkpoint seed.
 - Stryker target `child-park-recovery` (PR 2, same group, about 3 minutes): the decision in `RecoverChildren` for each
@@ -490,6 +496,10 @@ park needs a test that fails when the fact is lost.
   job timeout.
 - The security tests, not Stryker, guard the authority source and the order "persist `Resumed`, then spawn". A mutant
   there changes an object or a call order, which a boolean-guard span does not cover well.
+- PR 1b adds no Stryker target. Its rules choose a data source (the recorded scope, the recorded receipts, the recorded
+  retry target), not a boolean guard. PR 1b reviews the mutation scope, and its H2, H3, and M1 tests guard these
+  rules.
+- PR 3 adds no Stryker target. Its skip rule is a display rule with no authority.
 
 ## Risks / Trade-offs
 
@@ -498,7 +508,7 @@ park needs a test that fails when the fact is lost.
 - [The pause blocks the routine snapshot while it holds a pending input.] → The journal keeps the park events until the
   pause ends or a compaction snapshot runs. The cap bounds each event.
 - [The prompt appears later in a batch with a slow sibling.] → The delay is bounded by that sibling.
-- [Forward-only format from PR 2.] → See the downgrade text. PR 1 has no format change.
+- [Forward-only format from PR 2.] → See the downgrade text. PR 1a and PR 1b have no format change.
 - [The resumed child gets a new system message, and reasoning content is not kept.] → The parent session has the same
   behavior after a restart.
 - [The managed temporary correction state needs care.] → It changes which call the gate sees. The park records the
@@ -516,10 +526,11 @@ park needs a test that fails when the fact is lost.
 
 ## Migration Plan
 
-1. Merge this spec PR. The owner confirms the defaults in Context ("Owner decisions").
+1. Merge this spec PR. The owner confirmed the decisions in Context on 22 October 2026.
 2. Remove the D8 material from `child-approval-events-and-parent-pause` with the OpenSpec skills, then sync and archive
    that change.
-3. PR 1. No format change. Rollback with the binary.
+3. PR 1a, then PR 1b, into `feature/durable-child-consent-wait`. The feature branch merges to `dev` only after PR 1b
+   lands. No format change. Rollback with the binary.
 4. Merge #2587. Then PR 2 (forward-only). Publish the downgrade text in the release notes. Back up `netclaw.db`.
 5. PR 3. Rollback to PR 2 is safe.
 6. Sync this change and archive it.
