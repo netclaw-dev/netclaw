@@ -2349,7 +2349,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
-        var queued = _input.RestoreWaitingInputs(pending, _sessionId);
+        var queued = _input.RestoreWaitingInputs(pending.Select(static pair => pair.Input).ToArray(), _sessionId);
         if (queued > 0)
             _execution.ClearRestartReminderEligibility();
         _log.Info("restart_resume_queued count={QueuedCount} phase={Phase}", queued, _phase.Current);

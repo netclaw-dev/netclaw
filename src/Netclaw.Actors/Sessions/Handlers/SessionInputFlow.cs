@@ -349,24 +349,25 @@ internal sealed class SessionInputFlow
     /// Separates the pending inputs whose recorded authority parses from the damaged ones. The queue takes only valid
     /// inputs (<see cref="RestoreWaitingInputs"/> throws for a damaged one). Each caller decides what a damaged input
     /// means for its message. The idle restart resume uses it only after a slash command (#2587). The other idle
-    /// restart resume and the recovery queue behind a parked approval do not use it yet (#2576).
+    /// restart resume and the recovery queue behind a parked approval do not use it yet (#2576). Each valid input comes
+    /// with its parsed authority, so a caller that decides on the authority (for example
+    /// <see cref="ChildConsentPause.Holds"/>) does not parse the record again.
     /// </summary>
-    public static (IReadOnlyList<InputAdmitted> Valid, IReadOnlyList<InputAdmitted> Damaged) SplitByAuthority(
-        IEnumerable<InputAdmitted> inputs)
+    public static (IReadOnlyList<(InputAdmitted Input, TurnContext Authority)> Valid, IReadOnlyList<InputAdmitted> Damaged)
+        SplitByAuthority(IEnumerable<InputAdmitted> inputs)
     {
-        var valid = new List<InputAdmitted>();
+        var valid = new List<(InputAdmitted Input, TurnContext Authority)>();
         var damaged = new List<InputAdmitted>();
         foreach (var input in inputs)
-            (TurnContext.TryFromRecord(input.TurnContext, out _, out _) ? valid : damaged).Add(input);
+        {
+            if (TurnContext.TryFromRecord(input.TurnContext, out var authority, out _) && authority is not null)
+                valid.Add((input, authority));
+            else
+                damaged.Add(input);
+        }
+
         return (valid, damaged);
     }
-
-    // STUB (PR 0 test author, review fix): the pause test calls the split with the new shape, the valid inputs as
-    // pairs with their parsed authority. The implementer gives SplitByAuthority this shape, updates its callers, and
-    // removes this overload. Each production caller passes a LINQ sequence, so it does not bind to this overload.
-    public static (IReadOnlyList<(InputAdmitted Input, TurnContext Authority)> Valid, IReadOnlyList<InputAdmitted> Damaged)
-        SplitByAuthority(IReadOnlyList<InputAdmitted> inputs)
-        => throw new NotImplementedException("STUB: SplitByAuthority does not return the parsed authority yet.");
 
     /// <summary>
     /// Rebuilds the waiting queue from the journal after recovery. The session acknowledged each pending input, and the
@@ -639,7 +640,7 @@ internal sealed class SessionInputFlow
            ?? throw new InvalidOperationException(
                $"Buffered input {message.AdmittedInputId?.ToString() ?? "(no admission ID)"} has no recorded authority.");
 
-    internal static TurnContext RecordedAuthority(InputAdmitted admitted)
+    private static TurnContext RecordedAuthority(InputAdmitted admitted)
         => TurnContext.TryFromRecord(admitted.TurnContext, out var context, out var reason) && context is not null
             ? context
             : throw new InvalidOperationException($"Journal input {admitted.InputId} has invalid authority: {reason}");

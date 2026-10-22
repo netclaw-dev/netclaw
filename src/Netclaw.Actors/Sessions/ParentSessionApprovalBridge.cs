@@ -68,7 +68,7 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
     private readonly Action<ToolInteractionRequestDispatch> _emitRequest;
     private readonly ToolExecutionTimeout _timeout;
     private readonly string _approvalScopeId;
-    private readonly ApprovalPromptBuilder _prompts;
+    private readonly ApprovalRequestBuilder _requests;
     private int _nextApprovalRequestId;
 
     public ParentSessionApprovalBridge(
@@ -90,7 +90,7 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
         _emitRequest = emitRequest;
         _timeout = timeout;
         _approvalScopeId = approvalScopeId;
-        _prompts = new ApprovalPromptBuilder(
+        _requests = new ApprovalRequestBuilder(
             sessionId,
             requesterSenderId,
             requesterPrincipal,
@@ -107,7 +107,7 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
     public Task<ConsentStep> RequestSessionConsentAsync(
         ParentApprovalRequest request,
         CancellationToken ct)
-        => PromptAsync(request.CallId, request, persistApprovalState: true, ct);
+        => PromptAsync(_requests.ForSessionCall(request), request, ct);
 
     /// <summary>
     /// Asks for consent for a call of a sub-agent. The prompt gets a call id in
@@ -117,19 +117,17 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
     public Task<ConsentStep> RequestConsentAsync(
         ParentApprovalRequest request,
         CancellationToken ct)
-    {
-        EnsureAuthorityContext();
-        return PromptAsync(CreateParentCallId(), request, persistApprovalState: false, ct);
-    }
+        // The builder checks the requester binding before the channel registers a wait. A failed check throws here,
+        // before any prompt or wait exists.
+        => PromptAsync(_requests.ForChildCall(CreateParentCallId(), request), request, ct);
 
     private async Task<ConsentStep> PromptAsync(
-        ToolCallId promptCallId,
+        ToolInteractionRequestDispatch dispatch,
         ParentApprovalRequest request,
-        bool persistApprovalState,
         CancellationToken ct)
     {
-        var waitTask = _channel.WaitForApprovalAsync(promptCallId, _timeout.Value, ct);
-        _emitRequest(_prompts.Build(promptCallId, request, persistApprovalState));
+        var waitTask = _channel.WaitForApprovalAsync(dispatch.Request.CallId, _timeout.Value, ct);
+        _emitRequest(dispatch);
         return ConsentStep.From(await waitTask, request.CallName, request.Approval);
     }
 
@@ -146,38 +144,23 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
         // button payloads are capped by the most restrictive channel adapter.
         return ChildApprovalPrompt.CreateCallId(_approvalScopeId, requestId);
     }
-
-    private void EnsureAuthorityContext()
-    {
-        // Approval responses are authorized against the parent requester. If we
-        // cannot reconstruct that authority context, emitting a prompt would let
-        // the channel decide without a safe requester binding.
-        if (_prompts.RequesterPrincipal is null)
-            throw new ParentApprovalUnavailableException(
-                "Sub-agent approval requires parent requester principal context.");
-
-        if (_prompts.RequesterPrincipal is not PrincipalClassification.VerifiedAutomation
-            && _prompts.RequesterSenderId is null)
-        {
-            throw new ParentApprovalUnavailableException(
-                "Sub-agent approval requires parent requester sender context.");
-        }
-    }
 }
 
 /// <summary>
-/// Makes the approval prompt of one session. The prompt of a session call and the prompt of a child call have one
-/// shape (durable-child-consent-wait, design D2). The builder copies the gate facts of the request to the prompt
-/// without change, and it binds the prompt to the requester of the session turn.
+/// Makes the approval request of one session. The request of a session call and the request of a child call have one
+/// shape (durable-child-consent-wait, design D2). The builder copies the gate facts of the call to the request without
+/// change, and it binds the request to the requester of the session turn.
 /// </summary>
-internal sealed class ApprovalPromptBuilder
+internal sealed class ApprovalRequestBuilder
 {
     private readonly SessionId _sessionId;
+    private readonly SenderId? _requesterSenderId;
+    private readonly PrincipalClassification? _requesterPrincipal;
     private readonly bool _hasAdoptedContext;
     private readonly bool _hasThirdPartyAdoptedContext;
     private readonly IReadOnlyList<string> _adoptedSpeakerIds;
 
-    public ApprovalPromptBuilder(
+    public ApprovalRequestBuilder(
         SessionId sessionId,
         SenderId? requesterSenderId,
         PrincipalClassification? requesterPrincipal,
@@ -186,25 +169,51 @@ internal sealed class ApprovalPromptBuilder
         IReadOnlyList<string> adoptedSpeakerIds)
     {
         _sessionId = sessionId;
-        RequesterSenderId = requesterSenderId;
-        RequesterPrincipal = requesterPrincipal;
+        _requesterSenderId = requesterSenderId;
+        _requesterPrincipal = requesterPrincipal;
         _hasAdoptedContext = hasAdoptedContext;
         _hasThirdPartyAdoptedContext = hasThirdPartyAdoptedContext;
         _adoptedSpeakerIds = adoptedSpeakerIds;
     }
 
-    /// <summary>The sender that can answer the prompt.</summary>
-    public SenderId? RequesterSenderId { get; }
-
-    /// <summary>The principal of the sender that can answer the prompt.</summary>
-    public PrincipalClassification? RequesterPrincipal { get; }
+    /// <summary>
+    /// Makes the request for a call of the session itself. The request uses the call ID of the call, and the session
+    /// journals the wait.
+    /// </summary>
+    public ToolInteractionRequestDispatch ForSessionCall(ParentApprovalRequest request)
+        => Build(request.CallId, request, persistApprovalState: true);
 
     /// <summary>
-    /// Makes the prompt for <paramref name="request"/> with the call ID <paramref name="promptCallId"/>. A journaled
-    /// prompt (<paramref name="persistApprovalState"/>) is a prompt for a session call. Any other prompt is for a child
-    /// call, and it keeps the call ID of the child.
+    /// Makes the request for a call of a child run, with the call ID <paramref name="promptCallId"/>. The request
+    /// keeps the call ID of the child. The session does not journal the wait.
     /// </summary>
-    public ToolInteractionRequestDispatch Build(
+    /// <exception cref="ParentApprovalUnavailableException">
+    /// The builder has no requester that can answer the request.
+    /// </exception>
+    public ToolInteractionRequestDispatch ForChildCall(ToolCallId promptCallId, ParentApprovalRequest request)
+    {
+        EnsureAuthorityContext();
+        return Build(promptCallId, request, persistApprovalState: false);
+    }
+
+    private void EnsureAuthorityContext()
+    {
+        // Approval responses are authorized against the parent requester. If we
+        // cannot reconstruct that authority context, emitting a prompt would let
+        // the channel decide without a safe requester binding.
+        if (_requesterPrincipal is null)
+            throw new ParentApprovalUnavailableException(
+                "Sub-agent approval requires parent requester principal context.");
+
+        if (_requesterPrincipal is not PrincipalClassification.VerifiedAutomation
+            && _requesterSenderId is null)
+        {
+            throw new ParentApprovalUnavailableException(
+                "Sub-agent approval requires parent requester sender context.");
+        }
+    }
+
+    private ToolInteractionRequestDispatch Build(
         ToolCallId promptCallId,
         ParentApprovalRequest request,
         bool persistApprovalState)
@@ -222,8 +231,8 @@ internal sealed class ApprovalPromptBuilder
             AuthorizationAttemptId = request.AuthorizationAttemptId.Value,
             ToolName = new ToolName(approval.ToolName),
             DisplayText = approval.DisplayText,
-            RequesterSenderId = RequesterSenderId,
-            RequesterPrincipal = RequesterPrincipal,
+            RequesterSenderId = _requesterSenderId,
+            RequesterPrincipal = _requesterPrincipal,
             HasAdoptedContext = _hasAdoptedContext,
             HasThirdPartyAdoptedContext = _hasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = _adoptedSpeakerIds,

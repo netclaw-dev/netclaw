@@ -562,8 +562,7 @@ The script selects five spans by marker pairs: `// <child-consent-pause>` in `Se
 mutants), `// <child-consent-hold>` in `SessionToolWorkflow.Recovery.cs` (3), `// <child-consent-drain>` in
 `SessionInputFlow.cs` (19), `// <child-consent-predicate>` in `ChildConsentPause.cs` (3), and
 `// <child-consent-notice>` in `TurnContext.cs` (7). The drain and the recovery call one hold rule,
-`ChildConsentPause.Holds` (durable-child-consent-wait, design D5). PR 0 of that change moved the rule out of the drain
-span, so the total stays 36. The selector rejects a missing or
+`ChildConsentPause.Holds` (durable-child-consent-wait, design D5). The selector rejects a missing or
 repeated marker before Stryker starts. The gate fails for a survivor, a changed count in a span, or a changed total.
 
 The pause is actor-local and derived: an open child consent request in the approval table of the session. The actor
