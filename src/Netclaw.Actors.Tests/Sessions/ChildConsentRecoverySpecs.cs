@@ -143,4 +143,117 @@ public sealed class ChildConsentRecoverySpecs(ITestOutputHelper output) : ChildC
         Assert.Equal(written.UserMessage.Content, row.UserMessage.Content);
         await SettleNoticesAsync(journal, sessionId);
     }
+
+    /// <summary>
+    /// Round 3 review. The journal rejects the admission of an approval notice at the end of a turn that succeeded.
+    /// The session stops, as after a persist failure, so recovery can close the notices and withdraw the children. It
+    /// does not post a failure for the finished turn.
+    /// Planted bug: the rejection fails "the running turn". The session posts "this turn failed" for a turn that it
+    /// recorded as complete, and it keeps running with an open child request and no notice.
+    /// </summary>
+    [Fact]
+    public async Task A_rejected_notice_at_turn_end_stops_the_session_with_no_failure_for_the_finished_turn()
+    {
+        // Arrange: a held child of Alice. Alice's model call waits at a gate, and the child asks during it.
+        var sessionId = new SessionId("consent/rejected-notice-turn-end");
+        var journal = await JournalAsync();
+        ScriptParent();
+        ScriptChildren();
+        var subscriber = await JoinAsync(sessionId);
+        var (asking, gate) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-reject-end");
+        subscriber.Watch(await ResolveSessionAsync(sessionId));
+        var hold = NewGate();
+        var entered = ParentGate.Arm(request => FreshUserTexts(request).Contains("Finish the turn."), hold);
+
+        try
+        {
+            await SendAsync(sessionId, "Finish the turn.", Operator(Alice));
+            var aliceInput = await AwaitInputAdmittedAsync(journal, "Finish the turn.");
+            await entered.WaitAsync(Deadline, Cancellation);
+            gate.TrySetResult();
+            await FishChildPromptAsync(subscriber, asking.Run.RunId);
+            await BarrierAsync(sessionId, asking);
+            Assert.Empty(ConsentNotices(journal, sessionId));
+
+            // Act: the turn ends, and the journal rejects the notice that the turn end admits.
+            journal.RejectNextConsentNotice();
+            hold.TrySetResult();
+            await journal.ConsentNoticeRejected.Task.WaitAsync(Deadline, Cancellation);
+
+            // Assert: the session stops before it posts any failure.
+            var outcome = await subscriber.FishForMessageAsync(message => message is ErrorOutput or Akka.Actor.Terminated
+                    or TurnCompleted { Outcome: TurnOutcome.Failed }, Deadline, cancellationToken: Cancellation);
+            Assert.True(outcome is Akka.Actor.Terminated,
+                $"The session must stop with no failure for the finished turn, but it posted {Describe(outcome)}.");
+            Assert.Contains(journal.Committed.OfType<TurnRecorded>(), turn => turn.ConsumedInputIds.Contains(aliceInput.InputId));
+        }
+        finally
+        {
+            hold.TrySetResult();
+            gate.TrySetResult();
+            ParentGate.Disarm();
+        }
+    }
+
+    /// <summary>
+    /// Round 3 review. The journal rejects the admission of an approval notice while the session is idle and paused,
+    /// and a reminder fire waits for the pause. The session stops. The next join recovers it: recovery withdraws the
+    /// child requests, the pause ends, and the held fire runs.
+    /// Planted bug: in Ready the rejection only writes a log line. The session keeps the pause with no notice, so the
+    /// held fire never runs.
+    /// </summary>
+    [Fact]
+    public async Task A_rejected_notice_in_an_idle_session_stops_it_and_recovery_runs_the_held_fire()
+    {
+        // Arrange: child A asks, and its notice runs. A reminder fire then waits for the pause.
+        var sessionId = new SessionId("consent/rejected-notice-held-fire");
+        var journal = await JournalAsync();
+        ScriptParent();
+        ScriptChildren();
+        var subscriber = await JoinAsync(sessionId);
+        var (first, firstGate) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-reject-a");
+        var (second, secondGate) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-reject-b");
+        var session = await ResolveSessionAsync(sessionId);
+        var watcher = CreateTestProbe();
+        watcher.Watch(session);
+        const long fireMs = 1_761_055_200_000;
+
+        try
+        {
+            firstGate.TrySetResult();
+            await FishChildPromptAsync(subscriber, first.Run.RunId);
+            await SettleAfterRequestAsync(journal, sessionId, first);
+            AssertAck(await AskManagerAsync<ISessionResponse>(new SendUserMessage
+            {
+                SessionId = sessionId, Content = "Sweep the open pull requests.", Source = Fire("daily-pr-sweep", fireMs)
+            }));
+            await BarrierAsync(sessionId, first);
+            var fire = Assert.Single(FireAdmissions(journal, sessionId, FireKey("daily-pr-sweep", fireMs)));
+            Assert.Equal(-1, ConsumedAt(journal, fire.InputId));
+
+            // Act: child B asks while the session is idle, and the journal rejects its notice.
+            journal.RejectNextConsentNotice();
+            secondGate.TrySetResult();
+            await journal.ConsentNoticeRejected.Task.WaitAsync(Deadline, Cancellation);
+
+            // Assert: the session stops. The next join recovers it, and the held fire runs.
+            await watcher.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
+            await JoinAsync(sessionId);
+            await AwaitAssertAsync(() => Assert.Contains(journal.Committed.OfType<TurnRecorded>(),
+                    turn => turn.ConsumedInputIds.Contains(fire.InputId)),
+                Deadline, cancellationToken: Cancellation);
+        }
+        finally
+        {
+            firstGate.TrySetResult();
+            secondGate.TrySetResult();
+        }
+    }
+
+    private static string Describe(object message) => message switch
+    {
+        ErrorOutput error => $"an error: {error.Message}",
+        TurnCompleted completed => $"a {completed.Outcome} turn completion",
+        _ => message.GetType().Name
+    };
 }

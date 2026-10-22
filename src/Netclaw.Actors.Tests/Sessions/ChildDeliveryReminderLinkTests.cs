@@ -648,6 +648,18 @@ public sealed class NoticedRunReplayTests : ChildDeliveryReminderLinkTestBase
 
     protected override int SnapshotInterval => 0;
 
+    private const string LaterPulseFire = "pulse:1712000003000";
+    private const string LaterPulseText = "Pulse run, later fire.";
+    private int _failed;
+
+    // A reminder turn runs under the Team audience. The first probe tool asks for an approval there too, so a later
+    // reminder turn can park.
+    protected override void ConfigureTools(ToolConfig toolConfig)
+        => toolConfig.AudienceProfiles.Team.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode> { [FirstTool] = ToolApprovalMode.Approval }
+        };
+
     /// <summary>
     /// Planted bug: a close that names only a fire keeps the noticed runs on replay, and the replay of the next tool
     /// batch only adds runs. The re-driven person turn then takes the reminder link of X. The live control shows the
@@ -658,85 +670,158 @@ public sealed class NoticedRunReplayTests : ChildDeliveryReminderLinkTestBase
     [InlineData("restart")]
     public async Task A_failed_reminder_turn_leaves_no_noticed_run_for_a_re_driven_person_turn(string stop)
     {
-        // Arrange: a reminder turn starts child X, so X keeps the reminder link of that fire.
+        // Arrange: a reminder turn starts child X, and a later reminder turn takes the notice of X and fails.
         var sessionId = new SessionId($"boundary/noticed-run-replay-{stop}");
         var (subscriber, _, childGate) = await StartChildFromReminderAsync(sessionId);
-        var failed = 0;
-        FakeChat.ResponseContentsSelector = request =>
-        {
-            if (LastUserText(request) == SweepText && !HasCallId(request, "sweep-1"))
-                return [Probe("sweep-1", SecondTool)];
-            if (HasResultId(request, "sweep-1") && !HasCallId(request, "sweep-2"))
-                return [Probe("sweep-2", SecondTool)];
-            if (HasResultId(request, "sweep-2") && Interlocked.Exchange(ref failed, 1) == 0)
-                throw new IOException("The model call after tool batch 2 fails.");
-            if (LastUserText(request) == PersonText && !HasCallId(request, "person-probe"))
-                return [Probe("person-probe", FirstTool)];
-            return null;
-        };
+        ScriptReplayTurns();
 
         try
         {
-            // Act 1: a sweep fire starts a reminder turn. X ends during model call 1, so its result notice waits and
-            // joins at the end of tool batch 1. A pulse fire arrives during model call 2 and joins at the end of tool
-            // batch 2. Model call 3 fails.
-            var firstCall = NewGate();
-            FakeChat.NextResponseGate = firstCall;
-            await SendAsync(sessionId, SweepText, ReminderSource(SweepFire));
-            await AwaitAssertAsync(() => Assert.Null(FakeChat.NextResponseGate), Deadline, cancellationToken: Cancellation);
-            childGate.TrySetResult();
-            await AwaitAssertAsync(async () => Assert.NotNull(ResultNotice(await ReadJournalAsync(sessionId))),
-                Deadline, cancellationToken: Cancellation);
-            var secondCall = NewGate();
-            FakeChat.NextResponseGate = secondCall;
-            firstCall.TrySetResult();
-            await AwaitAssertAsync(() => Assert.Null(FakeChat.NextResponseGate), Deadline, cancellationToken: Cancellation);
-            await SendAsync(sessionId, PulseText, ReminderSource(PulseFire));
-            secondCall.TrySetResult();
-            await subscriber.FishForMessageAsync<ErrorOutput>(_ => true, Deadline, cancellationToken: Cancellation);
+            await FailSweepTurnAfterTheNoticeOfXAsync(sessionId, subscriber, childGate);
 
-            // Preconditions: tool batch 2 consumed the result notice of X, and the close of the failed turn names
-            // only the pulse fire.
-            var afterFailure = await ReadJournalAsync(sessionId);
-            var notice = ResultNotice(afterFailure)!;
-            var pulse = Admitted(afterFailure, PulseText);
-            Assert.Contains(afterFailure.Select(static entry => entry.Payload).OfType<ToolBatchStarted>(),
-                batch => batch.ConsumedInputIds.Contains(notice.InputId));
-            var close = Assert.Single(afterFailure.Select(static entry => entry.Payload).OfType<InputClosed>(),
-                evt => evt.InputIds.Contains(pulse.InputId));
-            Assert.Equal([pulse.InputId], close.InputIds);
-
-            // Act 2: a person turn parks an approval. The session restarts, or not, and the person approves.
+            // Act: a person turn parks an approval. The session restarts, or not, and the person approves.
             await SendRequesterAsync(sessionId, PersonText);
             var approval = await subscriber.FishForMessageAsync<ToolInteractionRequest>(
                 request => request.CallId.Value == "person-probe", Deadline, cancellationToken: Cancellation);
-            var recovered = subscriber;
-            if (stop == "restart")
-            {
-                await StopSessionAsync(sessionId);
-                recovered = await JoinFullAsync(sessionId);
-            }
-
+            await RestartIfAsync(stop, sessionId);
             Assert.IsType<CommandAck>(await ApproveAsync(sessionId, approval.CallId));
             await AwaitAssertAsync(() => Assert.Equal(1, First.Runs), Deadline, cancellationToken: Cancellation);
 
-            // Assert: the person turn records no reminder link, as on the live path. No other turn runs after the
-            // admission of the person input, so the first turn record after it belongs to the person turn.
-            TurnRecorded? personTurn = null;
-            await AwaitAssertAsync(async () =>
-            {
-                var events = await ReadJournalAsync(sessionId);
-                var admittedAt = events.Single(entry => entry.Payload is InputAdmitted { UserMessage.Content: PersonText }).SequenceNr;
-                var after = events.Where(entry => entry.SequenceNr > admittedAt && entry.Payload is TurnRecorded).ToArray();
-                Assert.NotEmpty(after);
-                personTurn = (TurnRecorded)after[0].Payload;
-            }, Deadline, cancellationToken: Cancellation);
-            Assert.Null(personTurn!.SourceReminderId);
+            // Assert: the person turn records no reminder link, as on the live path.
+            var personTurn = await FirstTurnRecordedAfterAsync(sessionId, PersonText);
+            Assert.Null(personTurn.SourceReminderId);
         }
         finally
         {
             childGate.TrySetResult();
         }
+    }
+
+    /// <summary>
+    /// Round 3 review, case A. The failed reminder turn closes fire P1 of the pulse reminder. Later, fire P2 of the same
+    /// reminder comes as a plain admission, not as a replacement: the session is idle and admits P2 in its own write.
+    /// No other admission and no other close comes between the two events. P2 starts its own turn, and that turn
+    /// parks an approval. After a restart, the re-driven turn of P2 must not take the reminder link of X.
+    /// The person admission of the spec above ends the replay lookahead, so the turn of P2 is the next turn here.
+    /// Planted bug: replay reads "close of a fire of R, then an admission of a fire of R" as one replacement. It then
+    /// keeps X as a noticed run of the turn of P2, and the re-drive records the reminder link of X.
+    /// </summary>
+    [Theory]
+    [InlineData("live")]
+    [InlineData("restart")]
+    public async Task A_later_plain_fire_of_the_closed_reminder_does_not_keep_the_noticed_run(string stop)
+    {
+        // Arrange: a reminder turn starts child X, and a later reminder turn takes the notice of X and fails.
+        var sessionId = new SessionId($"boundary/noticed-run-later-fire-{stop}");
+        var (subscriber, _, childGate) = await StartChildFromReminderAsync(sessionId);
+        ScriptReplayTurns();
+
+        try
+        {
+            var pulse = await FailSweepTurnAfterTheNoticeOfXAsync(sessionId, subscriber, childGate);
+
+            // Act: P2 of the pulse reminder arrives at an idle session. Its turn parks an approval. The session
+            // restarts, or not, and the person approves.
+            await SendAsync(sessionId, LaterPulseText, ReminderSource(LaterPulseFire));
+            var approval = await subscriber.FishForMessageAsync<ToolInteractionRequest>(
+                request => request.CallId.Value == "later-pulse-probe", Deadline, cancellationToken: Cancellation);
+
+            // Precondition: the admission of P2 is the next admission or close after the close of P1. It is a plain
+            // admission, because the close of P1 is in an earlier write.
+            var events = await ReadJournalAsync(sessionId);
+            var closeAt = events.Single(entry => entry.Payload is InputClosed closed && closed.InputIds.Contains(pulse.InputId)).SequenceNr;
+            var next = events.First(entry => entry.SequenceNr > closeAt && entry.Payload is InputAdmitted or InputClosed);
+            var later = Assert.IsType<InputAdmitted>(next.Payload);
+            Assert.Equal(LaterPulseText, later.UserMessage.Content);
+            Assert.Equal(LaterPulseFire, later.SourceMessageId);
+
+            await RestartIfAsync(stop, sessionId);
+            Assert.IsType<CommandAck>(await ApproveAsync(sessionId, approval.CallId));
+            await AwaitAssertAsync(() => Assert.Equal(1, First.Runs), Deadline, cancellationToken: Cancellation);
+
+            // Assert: the turn of P2 does not take the reminder link of X.
+            var laterTurn = await FirstTurnRecordedAfterAsync(sessionId, LaterPulseText);
+            Assert.NotEqual(new ReminderId(FireKey), laterTurn.SourceReminderId);
+        }
+        finally
+        {
+            childGate.TrySetResult();
+        }
+    }
+
+    private void ScriptReplayTurns()
+        => FakeChat.ResponseContentsSelector = request =>
+        {
+            if (LastUserText(request) == SweepText && !HasCallId(request, "sweep-1"))
+                return [Probe("sweep-1", SecondTool)];
+            if (HasResultId(request, "sweep-1") && !HasCallId(request, "sweep-2"))
+                return [Probe("sweep-2", SecondTool)];
+            if (HasResultId(request, "sweep-2") && Interlocked.Exchange(ref _failed, 1) == 0)
+                throw new IOException("The model call after tool batch 2 fails.");
+            if (LastUserText(request) == PersonText && !HasCallId(request, "person-probe"))
+                return [Probe("person-probe", FirstTool)];
+            if (LastUserText(request) == LaterPulseText && !HasCallId(request, "later-pulse-probe"))
+                return [Probe("later-pulse-probe", FirstTool)];
+            return null;
+        };
+
+    /// <summary>
+    /// A sweep fire starts a reminder turn. X ends during model call 1, so its result notice waits and joins at the end
+    /// of tool batch 1. Fire P1 of the pulse reminder arrives during model call 2 and joins at the end of tool batch 2.
+    /// Model call 3 fails. The method checks that tool batch 2 consumed the notice of X and that the close of the
+    /// failed turn names only P1. It returns the admission of P1.
+    /// </summary>
+    private async Task<InputAdmitted> FailSweepTurnAfterTheNoticeOfXAsync(
+        SessionId sessionId, Akka.TestKit.TestProbe subscriber, TaskCompletionSource childGate)
+    {
+        var firstCall = NewGate();
+        FakeChat.NextResponseGate = firstCall;
+        await SendAsync(sessionId, SweepText, ReminderSource(SweepFire));
+        await AwaitAssertAsync(() => Assert.Null(FakeChat.NextResponseGate), Deadline, cancellationToken: Cancellation);
+        childGate.TrySetResult();
+        await AwaitAssertAsync(async () => Assert.NotNull(ResultNotice(await ReadJournalAsync(sessionId))),
+            Deadline, cancellationToken: Cancellation);
+        var secondCall = NewGate();
+        FakeChat.NextResponseGate = secondCall;
+        firstCall.TrySetResult();
+        await AwaitAssertAsync(() => Assert.Null(FakeChat.NextResponseGate), Deadline, cancellationToken: Cancellation);
+        await SendAsync(sessionId, PulseText, ReminderSource(PulseFire));
+        secondCall.TrySetResult();
+        await subscriber.FishForMessageAsync<ErrorOutput>(_ => true, Deadline, cancellationToken: Cancellation);
+
+        var afterFailure = await ReadJournalAsync(sessionId);
+        var notice = ResultNotice(afterFailure)!;
+        var pulse = Admitted(afterFailure, PulseText);
+        Assert.Contains(afterFailure.Select(static entry => entry.Payload).OfType<ToolBatchStarted>(),
+            batch => batch.ConsumedInputIds.Contains(notice.InputId));
+        var close = Assert.Single(afterFailure.Select(static entry => entry.Payload).OfType<InputClosed>(),
+            evt => evt.InputIds.Contains(pulse.InputId));
+        Assert.Equal([pulse.InputId], close.InputIds);
+        return pulse;
+    }
+
+    private async Task RestartIfAsync(string stop, SessionId sessionId)
+    {
+        if (stop != "restart")
+            return;
+        await StopSessionAsync(sessionId);
+        await JoinFullAsync(sessionId);
+    }
+
+    // No other turn runs after the admission of the input, so the first turn record after it belongs to its turn.
+    private async Task<TurnRecorded> FirstTurnRecordedAfterAsync(SessionId sessionId, string inputText)
+    {
+        TurnRecorded? turn = null;
+        await AwaitAssertAsync(async () =>
+        {
+            var events = await ReadJournalAsync(sessionId);
+            var admittedAt = events.Single(entry => entry.Payload is InputAdmitted admitted
+                                                    && admitted.UserMessage.Content == inputText).SequenceNr;
+            var after = events.Where(entry => entry.SequenceNr > admittedAt && entry.Payload is TurnRecorded).ToArray();
+            Assert.NotEmpty(after);
+            turn = (TurnRecorded)after[0].Payload;
+        }, Deadline, cancellationToken: Cancellation);
+        return turn!;
     }
 
     private static InputAdmitted? ResultNotice(IReadOnlyList<JournalEntry> events)
