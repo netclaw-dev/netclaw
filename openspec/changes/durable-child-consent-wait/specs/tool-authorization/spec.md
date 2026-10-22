@@ -15,14 +15,15 @@ parent.
   SHALL stay valid across a daemon restart, a config reload, a snapshot, and
   passivation. An answer after a restart SHALL resume the parked call.
 - The resumed call SHALL run under the requester, boundary, channel, and
-  delivery targets of the run record, and with the path facts that its batch
-  ran with. It SHALL NOT take them from the current turn or the current parent.
+  delivery targets of the run record, and in the working directories that its
+  batch ran with. It SHALL NOT take them from the current turn or the current parent.
 - The audience of the resumed call SHALL be the narrower of the recorded
   audience and the audience that the session derives at resume for the
   recorded requester and channel. A resume SHALL NOT widen trust.
 - The resumed call SHALL pass every gate check again under the current policy
   at call time. A deny rule that applies at resume SHALL win over the answer.
-  A call whose tool fingerprint changed SHALL NOT run on the old answer.
+  The answer SHALL stay bound to the exact tool name and candidate keys of the
+  prompted call, as in the parent re-drive.
 - The resumed call SHALL run at most once. The session SHALL record the resume
   before the call runs. Recovery SHALL report uncertain child work after a
   recorded resume without a new child dispatch.
