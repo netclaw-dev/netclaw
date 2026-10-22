@@ -187,10 +187,12 @@ internal static class AgentEventRenderer
 {
     public const string OpenHeading = "Child consent requests wait for the operator.";
     public const string ClosedHeading = "Child consent requests are closed. None is open in this session.";
+    public const string AnswersHeading = "Answers since the last notice:";
 
     /// <summary>
     /// Renders the digest of one session. A request with no later resolution is open. With an open request the text
-    /// lists the open requests and the rules of the pause. With none open, the text lists each answer.
+    /// lists the open requests, the answers that no earlier notice gave, and the rules of the pause. With none open,
+    /// the text lists each answer.
     /// </summary>
     public static string Render(IReadOnlyList<AgentEvent> events) => Render(events, []);
 
@@ -215,6 +217,14 @@ internal static class AgentEventRenderer
             {
                 text.AppendLine(CultureInfo.InvariantCulture,
                     $"- {Sender(request)} tool={request.Tool.Value} open_since={Clock(request.Envelope.SentAt)}");
+            }
+
+            var answers = events.OfType<AgentEvent.ChildApprovalResolved>().ToArray();
+            if (answers.Length > 0)
+            {
+                text.AppendLine(AnswersHeading);
+                foreach (var resolution in answers)
+                    text.AppendLine(CultureInfo.InvariantCulture, $"- {Sender(resolution)} answer={Answer(resolution.Resolution)}");
             }
 
             text.AppendLine("The operator answers these prompts in the channel. You cannot answer them.");

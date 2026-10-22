@@ -552,13 +552,14 @@ public sealed partial class LlmSessionActor
             return;
         }
 
-        var events = _consentDigest.Take();
+        // At most one notice waits. The newer notice replaces the waiting one, and it keeps every open request and
+        // every answer that the model did not read, so the model never reads a stale state of the pause.
+        var waiting = _input.WaitingConsentNotice();
+        var events = _consentDigest.Take(replacesUnreadNotice: waiting is not null);
         var text = AgentEventRenderer.Render(events, _input.WaitingFires(_state));
         var notice = SessionInputFlow.PrepareConsentNotice(_sessionId, NoticeOwner(events).OriginalContext, text, NowMs());
         _ = _state.Apply(notice);
-        // At most one notice waits. The digest still holds every open request, so the newer notice replaces the
-        // waiting one, and the model never reads a stale state of the pause.
-        PersistReplacingInput(_input.WaitingConsentNotice(), notice, admitted =>
+        PersistReplacingInput(waiting, notice, "consent_notice_replaced", admitted =>
         {
             _state = _state.Apply(admitted);
             _input.ConsentNoticeCommitted(admitted);
@@ -624,41 +625,51 @@ public sealed partial class LlmSessionActor
 }
 
 /// <summary>
-/// The one actor-local digest of approval events of a session (design D4, N2). It holds each request of the pause and
-/// each answer since the last closing notice. It is ready on a new request and on the last close of the session.
+/// The one actor-local digest of approval events of a session (design D4, N2). It holds the open requests, the
+/// answers that no notice gave yet, and the answers of the notice that waits now. It is ready on a new request and on
+/// the last close of the session.
 /// </summary>
 internal sealed class ChildConsentDigest
 {
-    private readonly List<AgentEvent> _events = [];
+    private readonly List<AgentEvent.ChildApprovalRequested> _open = [];
+    private readonly List<AgentEvent.ChildApprovalResolved> _answers = [];
+    private readonly List<AgentEvent.ChildApprovalResolved> _waitingAnswers = [];
 
     public bool IsReady { get; private set; }
 
     public void Requested(AgentEvent.ChildApprovalRequested request)
     {
-        _events.Add(request);
+        _open.Add(request);
         IsReady = true;
     }
 
-    public void Resolved(AgentEvent.ChildApprovalResolved resolution) => _events.Add(resolution);
+    public void Resolved(AgentEvent.ChildApprovalResolved resolution)
+    {
+        _open.RemoveAll(request => request.PromptCallId == resolution.PromptCallId);
+        _answers.Add(resolution);
+    }
 
     public void MarkClosed() => IsReady = true;
 
-    // A notice consumes the digest. The requests of an open notice stay, so a later notice lists them again. The
-    // closing notice ends the pause and clears the digest.
-    public IReadOnlyList<AgentEvent> Take()
+    // A notice gives each answer once. When the new notice replaces a notice that still waits, the model did not read
+    // that notice, so the new notice gives its answers again. When the earlier notice ran, its answers are read. The
+    // open requests stay until they close, so each notice lists all of them.
+    public IReadOnlyList<AgentEvent> Take(bool replacesUnreadNotice)
     {
-        var events = _events.ToArray();
-        var resolved = events.OfType<AgentEvent.ChildApprovalResolved>().Select(static evt => evt.PromptCallId).ToHashSet();
-        if (events.OfType<AgentEvent.ChildApprovalRequested>().All(request => resolved.Contains(request.PromptCallId)))
-            _events.Clear();
+        if (!replacesUnreadNotice)
+            _waitingAnswers.Clear();
+        _waitingAnswers.AddRange(_answers);
+        _answers.Clear();
         IsReady = false;
-        return events;
+        return [.. _open, .. _waitingAnswers];
     }
 
     public void Rebuild(IReadOnlyList<AgentEvent.ChildApprovalRequested> open, bool ready)
     {
-        _events.Clear();
-        _events.AddRange(open);
+        _open.Clear();
+        _answers.Clear();
+        _waitingAnswers.Clear();
+        _open.AddRange(open);
         IsReady = ready && open.Count > 0;
     }
 }

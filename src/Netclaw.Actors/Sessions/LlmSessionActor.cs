@@ -209,6 +209,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Recover<InputAdmitted>(evt =>
         {
             _state = _state.Apply(evt);
+            _input.RecoveredAdmission(evt);
             // Live admission of a new input clears the delivery state of the earlier turn. Replay does the same.
             _deliveryRetry.Clear();
         });
@@ -2124,7 +2125,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 return;
             case AdmissionDecision.ReplaceWaitingFire replace:
                 // The waiting fire never ran, so the close consumes it with no turn. Then the newer fire waits.
-                TurnLog().Info("reminder_fire_replaced waiting={InputId}", replace.Waiting);
                 PersistAdmission(replace.Event, cmd, placement, replace.Waiting);
                 return;
         }
@@ -2133,7 +2133,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     }
 
     private void PersistAdmission(InputAdmitted evt, SendUserMessage cmd, InputPlacement placement, InputId? replaces = null)
-        => PersistReplacingInput(replaces, evt, admitted =>
+        => PersistReplacingInput(replaces, evt, "reminder_fire_replaced", admitted =>
         {
             // The review reads the ended run, which the notice turns into a reported run.
             var endedRun = admitted.ChildNotice is { } notice ? _state.ChildRuns[notice.RunId] : null;
@@ -2145,7 +2145,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     // The replace rule of a waiting input (a reminder fire while paused, an approval notice). One atomic write holds the
     // close of the waiting input and the admission of the newer input, so a crash keeps both or neither.
-    private void PersistReplacingInput(InputId? waiting, InputAdmitted admitted, Action<InputAdmitted> onAdmitted)
+    private void PersistReplacingInput(
+        InputId? waiting, InputAdmitted admitted, string replacedLogEvent, Action<InputAdmitted> onAdmitted)
     {
         if (waiting is not { } waitingId)
         {
@@ -2158,19 +2159,21 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         PersistAll<ISessionEvent>([closed, admitted], committed =>
         {
             if (committed is InputClosed close)
+            {
                 ApplyInputClosed(close);
+                TurnLog().Info("{ReplacedEvent} waiting={Waiting} replacement={Replacement}",
+                    replacedLogEvent, waitingId, admitted.InputId);
+            }
             else
                 onAdmitted((InputAdmitted)committed);
         });
     }
 
+    // Live code keeps the noticed runs at a close. The activation of the next turn clears them.
     private void ApplyInputClosed(InputClosed closed)
     {
-        var closesNoticedTurn = SessionInputFlow.ClosesNoticedTurn(closed, _state);
         _state = _state.Apply(closed);
         _input.InputsClosed(closed);
-        if (closesNoticedTurn)
-            _input.ClearNoticeRuns();
     }
 
     private void CompleteAcceptedInput(SendUserMessage command, InputPlacement placement)
@@ -2240,15 +2243,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         ApplyToolBatchStarted(evt);
     }
 
-    // A closure ends a failed turn, or a turn with no reply. A close of a waiting input does not end the open turn, so
-    // replay keeps its noticed runs, as live code does (SessionInputFlow.ClosesNoticedTurn).
+    // A closure ends a failed turn, or a turn with no reply, or it closes a waiting input. Replay cannot see the
+    // activation of the next turn, so the input flow decides at the next tool batch (RecoveredClose).
     private void RecoverParentClosure(InputClosed recorded)
     {
         var closed = LegacyCoordinationReplay.TranslateParentDecision(_state, recorded);
-        var closesNoticedTurn = SessionInputFlow.ClosesNoticedTurn(closed, _state);
+        _input.RecoveredClose(closed, _state);
         _state = _state.Apply(closed);
-        if (closesNoticedTurn)
-            _input.ClearNoticeRuns();
     }
 
     private void RestoreConsumedInputs(IReadOnlyList<InputId> inputIds, SerializableChatMessage lastUserMessage)
@@ -2653,8 +2654,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     {
         // Base only logs a rejection; the actor keeps running. A turn that nothing ends would hold
         // the session until the processing watchdog fires, so fail the turn here.
-        if (@event is InputAdmitted)
+        // An approval notice has no sender, so no nack goes back. In a turn, the turn fails, because the boundary
+        // that admitted the notice cannot continue. A close of a waiting input names no selected input: the waiting
+        // input stays pending, and the running turn continues.
+        if (@event is InputAdmitted admitted && !IsConsentNotice(admitted))
             TryReplyNack("The input journal rejected the message. The session did not start a model call.");
+        else if (@event is InputClosed waitingClose && !waitingClose.InputIds.Any(_input.SelectedInputs.Ids.Contains))
+            _log.Error(cause, "The journal rejected the close of waiting input(s) {InputIds}", string.Join(",", waitingClose.InputIds));
         else if (_phase.Current == SessionPhase.Processing)
         {
             // A rejected InputClosed cannot close itself: a second close would be rejected the same way.
@@ -2673,6 +2679,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         base.OnPersistRejected(cause, @event, sequenceNr);
     }
+
+    private static bool IsConsentNotice(InputAdmitted admitted)
+        => TurnContext.TryFromRecord(admitted.TurnContext, out var context, out _) && context is { IsChildConsentNotice: true };
 
     private sealed record PersistRejectedTurnFailure(Exception Cause, TurnId? TurnId) : INoSerializationVerificationNeeded;
 
