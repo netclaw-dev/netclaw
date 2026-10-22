@@ -120,6 +120,12 @@ public static partial class SessionProtocol
 
         public long ClosedAtMs { get; init; }
 
+        /// <summary>
+        /// True when the close keeps the open turn and its noticed runs: it closes a waiting input that a newer input
+        /// replaced, or an approval notice that recovery closed. A close that ends a turn leaves it false.
+        /// </summary>
+        public bool KeepsTurn { get; init; }
+
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(ClosedAtMs);
     }
 

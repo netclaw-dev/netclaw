@@ -242,6 +242,8 @@ internal static partial class NetclawProtoMapper
             proto.SourceBackgroundJobId = sourceBackgroundJobId.Value;
         if (evt.RejectedJobReport is not null)
             proto.RejectedJobReport = ToProto(evt.RejectedJobReport);
+        if (evt.KeepsTurn)
+            proto.KeepsTurn = true;
         RejectLegacyContinuation(evt.ChildContinuation);
         return proto;
     }
@@ -253,7 +255,8 @@ internal static partial class NetclawProtoMapper
         SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
         RejectedJobReport = proto.RejectedJobReport is null ? null : FromProto(proto.RejectedJobReport),
         ClosedAtMs = proto.ClosedAtMs,
-        ChildContinuation = proto.ChildContinuation is null ? null : FromProto(proto.ChildContinuation)
+        ChildContinuation = proto.ChildContinuation is null ? null : FromProto(proto.ChildContinuation),
+        KeepsTurn = proto.HasKeepsTurn && proto.KeepsTurn
     };
 
     // ── SessionTitleSet ──

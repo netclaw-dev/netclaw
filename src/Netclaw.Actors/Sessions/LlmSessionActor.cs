@@ -209,7 +209,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Recover<InputAdmitted>(evt =>
         {
             _state = _state.Apply(evt);
-            _input.RecoveredAdmission(evt);
             // Live admission of a new input clears the delivery state of the earlier turn. Replay does the same.
             _deliveryRetry.Clear();
         });
@@ -260,6 +259,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             // A child owner never survives a restart. Close the child entries that remain before a stashed command
             // runs, then log the approvals that stay open. Replay itself logs none (see ApplyToolApprovalRequested).
+            // An open child request at the crash means that the session was paused, so automated input waits.
+            var wasPaused = _toolWorkflow.IsChildConsentPaused;
             _toolWorkflow.ExpireRecoveredChildApprovals();
             CloseRecoveredConsentNotices();
             foreach (var open in _toolWorkflow.OpenApprovals())
@@ -304,7 +305,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // Akka.Persistence unstashes the commands that arrived during recovery right after this handler.
             // The orphan notices must start their turn here, so a message that woke the session buffers behind them
             // and does not run first.
-            ResumeOrphanNotices();
+            ResumeOrphanNotices(wasPaused);
             if (_consentDigest.IsReady)
                 ChildConsentChanged();
         });
@@ -2154,7 +2155,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
-        var closed = new InputClosed { SessionId = _sessionId, InputIds = [waitingId], ClosedAtMs = NowMs() };
+        var closed = new InputClosed { SessionId = _sessionId, InputIds = [waitingId], ClosedAtMs = NowMs(), KeepsTurn = true };
         _ = _state.Apply(closed);
         PersistAll<ISessionEvent>([closed, admitted], committed =>
         {
@@ -2243,13 +2244,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         ApplyToolBatchStarted(evt);
     }
 
-    // A closure ends a failed turn, or a turn with no reply, or it closes a waiting input. Replay cannot see the
-    // activation of the next turn, so the input flow decides at the next tool batch (RecoveredClose).
+    // A closure ends a failed turn, or a turn with no reply. A close that keeps the turn closes a waiting input, so
+    // the noticed runs of the open turn stay.
     private void RecoverParentClosure(InputClosed recorded)
     {
         var closed = LegacyCoordinationReplay.TranslateParentDecision(_state, recorded);
-        _input.RecoveredClose(closed, _state);
         _state = _state.Apply(closed);
+        if (!closed.KeepsTurn)
+            _input.ClearNoticeRuns();
     }
 
     private void RestoreConsumedInputs(IReadOnlyList<InputId> inputIds, SerializableChatMessage lastUserMessage)
@@ -2654,10 +2656,19 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     {
         // Base only logs a rejection; the actor keeps running. A turn that nothing ends would hold
         // the session until the processing watchdog fires, so fail the turn here.
-        // An approval notice has no sender, so no nack goes back. In a turn, the turn fails, because the boundary
-        // that admitted the notice cannot continue. A close of a waiting input names no selected input: the waiting
+        // A rejected approval notice stops the session, as a persist failure does: the boundary that admitted it cannot
+        // continue, and a pause with no notice would hold automated input. Recovery closes the notices, withdraws the
+        // child requests, and runs the held input. A close of a waiting input names no selected input: the waiting
         // input stays pending, and the running turn continues.
-        if (@event is InputAdmitted admitted && !IsConsentNotice(admitted))
+        if (@event is InputAdmitted notice && IsConsentNotice(notice))
+        {
+            _log.Error(cause, "The journal rejected approval notice {InputId}. The session stops.", notice.InputId);
+            base.OnPersistRejected(cause, @event, sequenceNr);
+            Context.Stop(Self);
+            return;
+        }
+
+        if (@event is InputAdmitted)
             TryReplyNack("The input journal rejected the message. The session did not start a model call.");
         else if (@event is InputClosed waitingClose && !waitingClose.InputIds.Any(_input.SelectedInputs.Ids.Contains))
             _log.Error(cause, "The journal rejected the close of waiting input(s) {InputIds}", string.Join(",", waitingClose.InputIds));

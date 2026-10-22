@@ -473,10 +473,12 @@ The child consent pause (input placement):
   parent prompt is open at the same time. A fire that waits only behind a parent prompt keeps the drop rule
   (`SessionInputFlow.PrepareAdmission`, `AdmissionDecision.ReplaceWaitingFire`). One atomic write holds the close and
   the newer admission (`LlmSessionActor.PersistReplacingInput`), so a crash keeps both or neither.
-- A close of a waiting input does not end the open turn, so it keeps the noticed runs of that turn. Live code clears
-  the noticed runs when the next turn starts. Replay clears them at the first tool batch after a close that ended
-  the turn (`SessionInputFlow.RecoveredClose`). A close of a reminder fire is a replacement when the next event admits
-  a fire of the same reminder.
+- A close of a waiting input does not end the open turn. `PersistReplacingInput` and the recovery close of pending
+  notices set `InputClosed.KeepsTurn`. Replay clears the noticed runs at each close without that flag
+  (`LlmSessionActor.RecoverParentClosure`). Live code clears them when the next turn starts. An old row has no flag,
+  so it reads as a close that ends the turn.
+- After a restart of a paused session, recovery runs the held input in admission order
+  (`LlmSessionActor.ResumeOrphanNotices`), because the restart withdrew every child request.
 - Data: the pause and the queue are actor-local. Each held input is a durable pending `InputAdmitted` record.
 - The last close of the session admits the closing notice. Then the held inputs run through
   `StartWaitingInputAfterApproval`.
@@ -870,15 +872,18 @@ The agent event channel (see [agent event](../spec/GLOSSARY.md#agent-event)):
   of the session makes it ready. A ready digest is admitted as one approval notice: at once in Ready, else at the next
   tool-batch end, turn end, or compaction end, before the drain. A turn that waits for a parent prompt runs no model
   call, so the notice is admitted at once and waits for its own turn. At most one notice waits: a newer notice
-  closes the waiting notice with `InputClosed` in the same atomic write. The newer notice lists every open request.
-  It also gives each answer that no notice turn gave yet, also the answers of the notice that it replaces. An open
-  notice gives them under "Answers since the last notice:". An answer that a notice turn gave does not come again.
+  closes the waiting notice with `InputClosed` (`KeepsTurn = true`) in the same atomic write. The newer notice lists
+  every open request. It also gives each answer that no notice turn took yet, also the answers of the notice that it
+  replaces. An open notice gives them under "Answers since the last notice:".
   The notice turn takes the audience, boundary, channel type, and delivery targets of the owner of the first open
-  request. It lists the runs of every owner. A
-  notice turn with no text ends quietly (`TurnCompleted.QuietEnd`), with no empty-reply retry.
-- At most once: recovery closes every pending approval notice with `InputClosed` and rebuilds the digest from the open
-  child requests. A restart withdraws every child request today, so the rebuilt digest is empty and recovery admits no
-  notice.
+  request. It lists the runs of every owner. A notice turn with no text ends quietly (`TurnCompleted.QuietEnd`), with
+  no empty-reply retry.
+- At most once: a notice turn that starts gives its answers, also when the turn fails, so they do not come again.
+  Recovery closes every pending approval notice with `InputClosed` (`KeepsTurn = true`) and rebuilds the digest from
+  the open child requests. A restart withdraws every child request today, so the rebuilt digest is empty and recovery
+  admits no notice.
+- When the journal rejects a notice admission, the session logs an error and stops, as after a persist failure.
+  Recovery then closes the notices, withdraws the child requests, and runs the held input.
 - The parent cannot approve. No event carries consent. Consent goes only through the bridge.
 
 | | Bridge (`ParentSessionApprovalBridge`) | Channel (`AgentEvent`) |

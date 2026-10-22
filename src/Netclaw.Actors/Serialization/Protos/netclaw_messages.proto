@@ -143,6 +143,9 @@ message InputClosedProto {
   optional string source_background_job_id = 5;
   SerializableChatMessageProto rejected_job_report = 6;
   ChildContinuationProto child_continuation = 7;
+  // True when the close keeps the open turn: it closes a waiting input that a newer input replaced, or an approval
+  // notice that recovery closed. Written only when true. An old row reads false, and an old binary ignores the field.
+  optional bool keeps_turn = 8;
 }
 
 message SessionTitleSetProto {

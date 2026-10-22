@@ -459,7 +459,9 @@ public sealed partial class LlmSessionActor
     // session buffers behind the notice turn. A person's pending input is not part of this repair (issue 2516):
     // recovery treats it as before. Behind a parked approval the recovery queued every pending input already, and the
     // answer ends the wait. An input of the running turn is not an orphan.
-    private void ResumeOrphanNotices()
+    // When the previous run was paused (wasPaused), the pause held automated input and child result notices. A restart
+    // withdraws every child request, so the pause ends, and the held input also runs now, in admission order.
+    private void ResumeOrphanNotices(bool wasPaused)
     {
         if (_toolWorkflow.HasParkedApprovals())
             return;
@@ -472,8 +474,11 @@ public sealed partial class LlmSessionActor
         var candidates = _state.GetExecutablePendingInputs()
             .Where(input => !selected.Contains(input.InputId))
             .ToList();
+        var orphans = candidates.TakeWhile(input => input.ChildNotice is not null).ToList();
+        if (wasPaused)
+            orphans.AddRange(candidates.Where(input => !orphans.Contains(input) && WasHeldByPause(input)));
         var restored = 0;
-        foreach (var orphan in candidates.TakeWhile(input => input.ChildNotice is not null))
+        foreach (var orphan in orphans)
         {
             try
             {
@@ -484,13 +489,13 @@ public sealed partial class LlmSessionActor
                 // One damaged record must not stop the recovery of the other notices and of the lost children. The
                 // input stays pending in the journal, so the loss is visible and the next start tries it again.
                 _log.Error(error,
-                    "Cannot resume the notice of child run {RunId}: {Reason}. The notice stays unconsumed.",
-                    orphan.ChildNotice!.RunId, error.Message);
+                    "Cannot resume input {InputId}: {Reason}. The input stays unconsumed.",
+                    orphan.InputId, error.Message);
             }
         }
 
         foreach (var waiting in candidates.SkipWhile(input => input.ChildNotice is not null)
-                     .Where(input => input.ChildNotice is not null))
+                     .Where(input => input.ChildNotice is not null && !orphans.Contains(input)))
         {
             _log.Warning(
                 "The notice of child run {RunId} waits behind an older input of a person that has no turn. "
@@ -501,12 +506,18 @@ public sealed partial class LlmSessionActor
         if (restored == 0)
             return;
 
-        _log.Info("Resuming {RestoredCount} child notice(s) that the previous run left unconsumed", restored);
+        _log.Info("Resuming {RestoredCount} input(s) that the previous run left unconsumed", restored);
         // A crash inside a tool batch leaves a tool_use with no result, and a provider refuses that history. Close the
         // interrupted batch first. Its journal callback then starts the notice turn.
         if (!AbandonInterruptedToolBatchAfterRecovery())
             StartWaitingInputAfterApproval();
     }
+
+    // The pause holds automated input and child result notices (SessionInputFlow, design D5).
+    private static bool WasHeldByPause(InputAdmitted input)
+        => input.ChildNotice is not null
+           || (TurnContext.TryFromRecord(input.TurnContext, out var context, out _) && context is not null
+               && SessionToolWorkflow.IsAutomation(context.RequesterPrincipal) && !context.IsChildConsentNotice);
 
     // ── Approval notices (design D4) ──
 
@@ -601,7 +612,7 @@ public sealed partial class LlmSessionActor
         if (pending.Length == 0)
             return;
 
-        var closed = new InputClosed { SessionId = _sessionId, InputIds = pending, ClosedAtMs = NowMs() };
+        var closed = new InputClosed { SessionId = _sessionId, InputIds = pending, ClosedAtMs = NowMs(), KeepsTurn = true };
         // The rest of recovery must not see these inputs as pending, so the state changes now.
         _state = _state.Apply(closed);
         Persist(closed, committed =>

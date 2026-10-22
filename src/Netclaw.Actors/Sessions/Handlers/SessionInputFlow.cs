@@ -81,10 +81,6 @@ internal sealed class SessionInputFlow
     private readonly List<(SendUserMessage Message, bool IsReplay)> _buffer = [];
     private readonly List<InputId> _selectedIds = [];
     private readonly List<SubAgentRunId> _noticeRunIds = [];
-    // Replay only. Live code clears the noticed runs when the next turn starts. Replay sees no activation, so it
-    // clears them at the first tool batch after a close that ended the turn.
-    private bool _replayTurnEnded;
-    private HashSet<ReminderId>? _replayReplacedFires;
     private readonly InFlightTurnDedup _inFlightDedup = new();
     // The executable context can clear while source attribution and telemetry remain for late diagnostics.
     private MessageSource? _source;
@@ -620,61 +616,13 @@ internal sealed class SessionInputFlow
 
     // Replay rebuilds the noticed runs of the open journal turn from the inputs that its tool batches consumed. An
     // approval re-drive on a new actor instance then keeps the reminder link of the noticed run, as the live actor does.
-    // The first tool batch after a close that ended the turn starts a new turn, so it clears the runs first, as the
-    // live activation does.
     public void RestoreNoticeRuns(IEnumerable<SubAgentRunId> runIds)
     {
-        if (_replayTurnEnded || _replayReplacedFires is not null)
-            ClearNoticeRuns();
         foreach (var runId in runIds)
             AddNoticeRun(runId);
     }
 
-    public void ClearNoticeRuns()
-    {
-        _noticeRunIds.Clear();
-        _replayTurnEnded = false;
-        _replayReplacedFires = null;
-    }
-
-    // Replay of an InputClosed. A close of only approval notices never ends a turn with noticed runs: a newer notice or
-    // a recovery closed it, or it ended a notice turn, which has no noticed runs. A close of a reminder fire is a
-    // replacement when the next admission is a fire of the same reminder (the two events are one atomic write).
-    // Otherwise it ended a failed reminder turn. Any other close ended the turn.
-    public void RecoveredClose(InputClosed closed, SessionState before)
-    {
-        ResolveReplacedFires(replacedBy: null);
-        var inputs = before.PendingInputs.Where(input => closed.InputIds.Contains(input.InputId)).ToArray();
-        var fires = new HashSet<ReminderId>();
-        foreach (var input in inputs)
-        {
-            if (TryReadFireKey(input, out var fire))
-                fires.Add(fire.DefinitionId);
-            else if (!(TurnContext.TryFromRecord(input.TurnContext, out var context, out _) && context is { IsChildConsentNotice: true }))
-            {
-                _replayTurnEnded = true;
-                return;
-            }
-        }
-
-        if (inputs.Length == 0)
-            _replayTurnEnded = true;
-        else if (fires.Count > 0)
-            _replayReplacedFires = fires;
-    }
-
-    // Replay of an InputAdmitted. A fire of a reminder whose fire a close named just before replaced that fire.
-    public void RecoveredAdmission(InputAdmitted admitted) => ResolveReplacedFires(admitted);
-
-    // A replacement writes the close and the newer fire in one atomic write, so the event after the close decides.
-    private void ResolveReplacedFires(InputAdmitted? replacedBy)
-    {
-        if (_replayReplacedFires is not { } replaced)
-            return;
-        if (replacedBy is null || !TryReadFireKey(replacedBy, out var fire) || !replaced.Contains(fire.DefinitionId))
-            _replayTurnEnded = true;
-        _replayReplacedFires = null;
-    }
+    public void ClearNoticeRuns() => _noticeRunIds.Clear();
 
     public void DeriveAdoptedTrust(TrustContextDeriver? deriver)
         => _trust = _context is { } context ? deriver?.DeriveFromTurnContext(context) : null;
