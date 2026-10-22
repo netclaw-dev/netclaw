@@ -57,6 +57,9 @@ public sealed class HeadlessChannel : IChannel
     private readonly TaskCompletionSource _runEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _ended;
 
+    // The run thread. RunHeadlessAsync catches every exception, so this task does not fault.
+    private Task _run = Task.CompletedTask;
+
     // True once the run thread is about to send the prompt. Only then can the hub hold output for this run.
     // A connection state before that point does not end the run: the request that the run thread waits for
     // fails with its own reason when the connection cannot be restored.
@@ -120,14 +123,17 @@ public sealed class HeadlessChannel : IChannel
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _ = Task.Run(() => RunHeadlessAsync(_lifetime.ApplicationStopping), CancellationToken.None);
+        _run = Task.Run(() => RunHeadlessAsync(_lifetime.ApplicationStopping), CancellationToken.None);
         return Task.CompletedTask;
     }
 
+    // The run thread owns the session log writer. It calls StopApplication first and closes the writer after that.
+    // StopAsync waits for the run thread, so the writer is closed when StopAsync returns. Windows cannot delete an
+    // open file, so a caller that deletes the logs folder after the stop needs this order (#2597).
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _isConnected = false;
-        await Task.CompletedTask;
+        await _run.WaitAsync(cancellationToken);
     }
 
     private async Task RunHeadlessAsync(CancellationToken stopping)

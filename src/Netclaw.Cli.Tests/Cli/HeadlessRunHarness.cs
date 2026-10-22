@@ -120,9 +120,9 @@ internal static class HeadlessRunHarness
                 ? Task.CompletedTask
                 : Task.Run(() => drive(new HeadlessDrive(stdout, stopped.Task, paths)), CancellationToken.None);
 
-            // The channel calls StopApplication as its last act on every path. It writes the console
-            // output and sets the exit code first. So this signal means that the channel finished its
-            // own writes. StopAsync only marks the channel as disconnected. It does not drain output.
+            // The channel writes the console output and sets the exit code before it calls
+            // StopApplication. So this signal means that the channel finished its console writes.
+            // StopAsync waits until the run thread closed the session log writer.
             await stopped.Task.WaitAsync(StopCeiling, TestContext.Current.CancellationToken);
             await channel.StopAsync(CancellationToken.None);
             await driver.WaitAsync(StopCeiling, TestContext.Current.CancellationToken);
