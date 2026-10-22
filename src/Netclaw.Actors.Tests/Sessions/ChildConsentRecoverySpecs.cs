@@ -585,23 +585,20 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
 
     /// <summary>
     /// Round 6, N3. A restart message finds a pending input whose authority record is damaged. The session answers
-    /// with a CommandNack and does not throw. The spec covers an idle session and a session that runs another turn.
-    /// Planted bug: the busy resume queues the pending input with no check, so the damaged record throws, and the
-    /// restart message gets no answer.
+    /// with a CommandNack and does not throw. The spec covers an idle session, where the damaged input is the first
+    /// input that the restart message resumes. In Processing, the restart message resumes no leading inputs, so it
+    /// sends no nack (#2576). RestartSlashResumeQueueTests covers that path.
     /// </summary>
-    [Theory]
-    [InlineData("ready")]
-    [InlineData("busy")]
-    public async Task A_restart_message_with_a_damaged_pending_input_gets_a_nack(string state)
+    [Fact]
+    public async Task A_restart_message_with_a_damaged_pending_input_gets_a_nack()
     {
         // Arrange: the journal stores Alice's input with a damaged authority record. The daemon drains for a restart.
-        var sessionId = new SessionId($"consent/restart-damaged-input-{state}");
+        var sessionId = new SessionId("consent/restart-damaged-input-ready");
         var journal = await JournalAsync();
         ScriptParent();
         ScriptChildren();
         await JoinAsync(sessionId);
         var busy = NewGate();
-        var other = NewGate();
 
         try
         {
@@ -610,12 +607,6 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
             await journal.AdmissionDamaged.Task.WaitAsync(Deadline, Cancellation);
             var reminder = await DrainAsync(sessionId);
             await JoinAsync(sessionId);
-            if (state == "busy")
-            {
-                Clients.Parent.NextResponseGate = other;
-                await SendAsync(sessionId, "Bob's new work.", Operator(Bob));
-                await AwaitAssertAsync(() => Assert.Null(Clients.Parent.NextResponseGate), Deadline, cancellationToken: Cancellation);
-            }
 
             // Act
             var reply = await SendRestartReminderAsync(sessionId, reminder);
@@ -626,7 +617,6 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
         finally
         {
             busy.TrySetResult();
-            other.TrySetResult();
         }
     }
 
