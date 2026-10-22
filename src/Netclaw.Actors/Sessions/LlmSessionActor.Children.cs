@@ -310,7 +310,8 @@ public sealed partial class LlmSessionActor
             EmitOutput(new SubAgentOutput
             {
                 SessionId = _sessionId, AgentName = run.AgentName, Phase = SubAgentPhase.Completed,
-                Success = result.Success, Outcome = result.Outcome, OutcomeReason = result.OutcomeReason,
+                // A lost run is never a success in the report. Its stored completion can still be a partial run.
+                Success = result.Success && !lost, Outcome = result.Outcome, OutcomeReason = result.OutcomeReason,
                 TimestampMs = NowMs(), Duration = TimeSpan.FromMilliseconds(Math.Max(0, NowMs() - run.AcceptedAtMs)),
                 FindingsCount = result.FindingsCount
             }, OutputFilter.ToolCalls);
@@ -350,9 +351,7 @@ public sealed partial class LlmSessionActor
                     {
                         result = await spawner.EnrichWorkingContextResultAsync(terminal.Result,
                             initialSnapshot!, run.OriginalContext.Audience, CancellationToken.None);
-                        // The reducer accepts a reviewed context only from a successful run. A run that a restart
-                        // lost keeps its delta in result.md, but the delta does not go into the parent context.
-                        reviewed = result.Success ? result.WorkingContext : null;
+                        reviewed = result.WorkingContext;
                     }
                     catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
                     {
@@ -449,10 +448,10 @@ public sealed partial class LlmSessionActor
                 : new ChildRunCompletion.Partial(reason, checkpoint.ConfirmedActivity),
             Output = (checkpoint, restarted) switch
             {
-                (null, true) => "The child did not survive a restart of its owner. Nothing re-runs the child. Its external effects are uncertain.",
+                (null, true) => $"{ChildRunDocuments.RestartLoss} Its external effects are uncertain.",
                 (null, false) => "The child owner was lost. External effects are uncertain; the child will not restart.",
-                ({ } last, true) => $"The child did not survive a restart of its owner after round {last.CompletedRound}. {last.Summary} "
-                                    + "Nothing re-runs the child. External effects after the last checkpoint are uncertain.",
+                ({ } last, true) => $"{ChildRunDocuments.RestartLoss} The last checkpoint is round {last.CompletedRound}. {last.Summary} "
+                                    + "External effects after the last checkpoint are uncertain.",
                 ({ } last, false) => $"The child owner was lost after round {last.CompletedRound}. {last.Summary} External effects after that checkpoint are uncertain."
             }
         };

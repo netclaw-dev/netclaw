@@ -44,7 +44,7 @@ read -r span_start span_end first_line last_line < <(
 read -r notice_start notice_end notice_first notice_last < <(
   perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
     $start_marker = "var run = ChildRuns.GetValueOrDefault(notice.RunId);";
-    $end_marker = "Only a successful child run can carry a reviewed working context.\");";
+    $end_marker = "Only a child run with a working-context delta can carry a reviewed working context.\");";
     $start = index($_, $start_marker);
     die "The notice guard marker is missing or duplicated.\n"
       if $start < 0 || index($_, $start_marker, $start + 1) >= 0;

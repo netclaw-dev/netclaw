@@ -360,7 +360,7 @@ public sealed class SubAgentSpawner
             {
                 ChildRunCompletion.Completed => new ChildRunCompletion.Completed(delta),
                 ChildRunCompletion.Partial partial => new ChildRunCompletion.Partial(partial.PartialReason, delta),
-                _ => throw new InvalidOperationException("Only successful child runs can carry a working-context delta.")
+                _ => throw new InvalidOperationException("Only a completed or a partial child run can carry a working-context delta.")
             }
         };
     }

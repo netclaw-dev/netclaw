@@ -207,7 +207,7 @@ public abstract record ChildRunCompletion
     {
         // A run that a restart lost keeps its checkpoint activity, but it is not a success. The journal stores only
         // the outcome, the reason, and the delta, so this rule adds no persisted field. An older binary reads the same
-        // record as a success.
+        // record as a success. The session reducer gates a reviewed context on the delta, not on this flag.
         public override bool Success => PartialReason != SubAgentOutcomeReason.OwnerRestarted;
         public override SubAgentRunOutcome Outcome => SubAgentRunOutcome.Partial;
         public override SubAgentOutcomeReason? Reason => PartialReason;

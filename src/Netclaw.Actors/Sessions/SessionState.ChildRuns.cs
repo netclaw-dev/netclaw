@@ -84,7 +84,7 @@ public sealed partial record SessionState
                 => new ChildRunLifecycle.Terminal(terminal.Terminal),
             (ChildRunLifecycle.Terminal { LegacyPrepared: null } terminal, ChildRunEvent.ResultPrepared prepared)
                 when IsCanonicalChildPair(run, prepared.Call, prepared.Result) &&
-                     (terminal.Result.Result.Success || prepared.ReviewedWorkingContext is null)
+                     (terminal.Result.Result.WorkingContext is not null || prepared.ReviewedWorkingContext is null)
                 => terminal with
                 {
                     LegacyPrepared = new LegacyPreparedResult(prepared.Call, prepared.Result, prepared.ReviewedWorkingContext)
@@ -141,8 +141,10 @@ public sealed partial record SessionState
             throw new InvalidOperationException("A child notice requires an ended run that has no notice yet.");
         if (evt.UserMessage.Role != ChatRole.User || !LegacyCoordinationReplay.SameAuthority(run.OriginalContext, evt.TurnContext))
             throw new InvalidOperationException("A child notice must carry the recorded authority of its run owner.");
-        if (notice.ReviewedWorkingContext is not null && !((ChildRunLifecycle.Terminal)run.Lifecycle).Result.Result.Success)
-            throw new InvalidOperationException("Only a successful child run can carry a reviewed working context.");
+        // A run with a delta can carry a reviewed context, also when it is not a success: a run that a restart lost
+        // keeps the merge of its checkpoint. An older binary reads that run as a success and writes the same notice.
+        if (notice.ReviewedWorkingContext is not null && ((ChildRunLifecycle.Terminal)run.Lifecycle).Result.Result.WorkingContext is null)
+            throw new InvalidOperationException("Only a child run with a working-context delta can carry a reviewed working context.");
         return run;
     }
 
