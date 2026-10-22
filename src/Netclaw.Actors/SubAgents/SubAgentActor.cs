@@ -1535,10 +1535,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             {
                 // Same execution-preflight seam as the main pipeline: validate +
                 // extract in one step (the sub-agent previously skipped extraction
-                // entirely, silently dropping timeout hints). meta.Background and
-                // meta.Rationale are intentionally not consumed here — sub-agents
-                // have no background-job manager or audit logger; only the timeout
-                // hint is materialized into the immutable per-tool context.
+                // entirely, silently dropping timeout hints). meta.Background is
+                // intentionally not consumed here — sub-agents have no
+                // background-job manager. meta.Rationale goes only to the
+                // "Invoking tool" log line. Only the timeout hint is materialized
+                // into the immutable per-tool context.
                 var interpretation = executor.InterpretToolCall(tc);
                 var toolContext = CreatePerToolExecutionContext(executionContext, interpretation.Meta);
                 logger.Info(
@@ -1551,6 +1552,17 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     subSessionId,
                     tc.CallId,
                     tc.Name);
+                // Same line and same redaction helper as SessionToolExecutionPipeline.
+                // The OTLP exporter sends it off the host.
+                logger.Info(
+                    "Invoking tool [{ToolName}] (call={CallId}) args={Args} rationale={Rationale} " +
+                    "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId}",
+                    tc.Name,
+                    tc.CallId,
+                    ToolCallLogFormatter.FormatArguments(tc.Arguments),
+                    ToolCallLogFormatter.FormatRationale(interpretation.Meta?.Rationale),
+                    toolContext.Approval.AuthorizationAttemptId.Value,
+                    parentSessionId);
                 if (interpretation.Rejection is { } rejection)
                 {
                     var refused = refusedCallIds.Contains(tc.CallId);

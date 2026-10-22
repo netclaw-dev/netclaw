@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.127.0"
+  version: "2.128.0"
 ---
 
 # Netclaw Operations
@@ -812,6 +812,13 @@ the daemon prompts despite a same-verb saved grant, the `StoredGrantMatch` row
 gives the near-miss reason (`TokenMismatch`, `ShellMismatch`,
 `OutsideDirectory`, or `Symlink`) and the grant creation time. The trace never
 holds raw paths or arguments.
+
+Each tool call also logs `Invoking tool [<tool>] (call=<id>) args=<json>
+rationale=<text>` with the same `authorizationAttemptId` and the `sessionId`.
+Use this line to see what the agent sent. `args` is redacted: a secret-named
+key or a known token shape shows `***REDACTED***`. A string longer than 256
+characters shows `<N chars, sha256:...>`, and `args` stops at 4,096
+characters. The rationale stops at 500 characters.
 
 ### Inspecting, revoking, and pre-approving grants
 

@@ -385,6 +385,21 @@ internal sealed class SessionToolExecutionPipeline
         // sentinel, invalid/ambiguous meta values, unrecognized keys) and, on
         // success, extract meta + strip meta keys.
         var interpretation = _executor.InterpretToolCall(tc);
+
+        // The OTLP exporter sends this line off the host. ToolCallLogFormatter
+        // redacts and bounds the original arguments (meta keys included) and the
+        // rationale. The line comes before the rejection branch, so a rejected
+        // call also has its arguments in the log.
+        _logger.Info(
+            "Invoking tool [{ToolName}] (call={CallId}) args={Args} rationale={Rationale} " +
+            "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId}",
+            tc.Name,
+            tc.CallId,
+            ToolCallLogFormatter.FormatArguments(tc.Arguments),
+            ToolCallLogFormatter.FormatRationale(interpretation.Meta?.Rationale),
+            authorizationAttemptId.Value,
+            batch.SessionId.Value);
+
         if (interpretation.Rejection is { } rejection)
         {
             return new ToolCallResult(new SerializableChatMessage

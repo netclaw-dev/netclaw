@@ -112,8 +112,58 @@ Current instrumentation emits:
   - events received, dropped, routed
   - messages enqueued
   - replies posted/failed and reply latency histogram
+- log lines, which include one Info line for each tool call (see below)
 
 Export target can be LocalTelemetry (or any OTLP collector).
+
+### Tool call log line
+
+The daemon writes one Info line for each tool call, before the call runs. A
+sub-agent tool call writes the same line. A call that the argument check
+rejects also writes the line.
+
+```text
+Invoking tool [{ToolName}] (call={CallId}) args={Args} rationale={Rationale} authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId}
+```
+
+The exporter sends each field as a separate attribute:
+
+- `ToolName`: the tool name.
+- `CallId`: the model's tool call ID.
+- `Args`: the call arguments as compact JSON. Meta keys such as `_rationale`
+  stay in this field.
+- `Rationale`: the `_rationale` text. It is empty when the call has no valid
+  rationale.
+- `AuthorizationAttemptId`: the same ID as the
+  `Tool authorization attempt started` line. Use it to find the authorization
+  decision for the call.
+- `SessionId`: the session ID. For a sub-agent, this is the parent session ID.
+
+These lines leave the host, so `Args` is redacted and limited. The rules apply
+in this order:
+
+1. The daemon examines the argument JSON at every depth.
+2. A value under a secret key name (for example `api_key`, `Authorization`, or
+   `github_token`) becomes `***REDACTED***`. A `SensitiveString` value also
+   becomes `***REDACTED***`.
+3. A string value longer than 256 characters becomes
+   `<N chars, sha256:XXXXXXXXXXXXXXXX>`. The hex text is the first 16
+   characters of the SHA-256 hash of the original value. To match a call to a
+   file, compare this hash prefix with `sha256sum` of the file.
+4. The secret-pattern redactor runs on the JSON text. It removes known token
+   shapes, such as `ghp_...`, JWTs, and `Bearer` headers.
+5. The daemon cuts `Args` at 4,096 characters and adds `...`.
+
+Other limits:
+
+- An object or an array deeper than 64 levels becomes `"<nested>"`.
+- A JSON string or key that is not valid UTF-16 becomes
+  `"<invalid UTF-16 text>"`. The value under such a key becomes
+  `***REDACTED***`.
+- `Rationale` gets the secret-pattern redactor and a cut at 500 characters.
+
+The line does not hold the tool result. The local `session.log` file holds the
+result preview.
 
 If exporting to Seq through `otlphttp`, use Seq's OTLP ingest path as the
 exporter endpoint base:

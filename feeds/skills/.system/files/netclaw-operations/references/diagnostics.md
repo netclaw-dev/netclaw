@@ -68,7 +68,15 @@ What to expect inside `session.log`:
   per file.
 - Because the partition is by session id, you usually do **not** need to grep — open
   the one file for the session and read top to bottom. To correlate across sessions
-  or globally, use Seq/OTLP (every line is there with `SessionId` as a field).
+  or globally, use Seq/OTLP. The operational lines are there with `SessionId` as a
+  field. The conversation audit lines (`User:`, `Assistant:`, `Tool result:`) stay
+  only in `session.log`.
+- For tool calls, OTLP has the `Invoking tool [...]` line with the fields
+  `ToolName`, `CallId`, `Args`, `Rationale`, `AuthorizationAttemptId`, and
+  `SessionId`. `Args` is redacted JSON: secret-named keys and known token shapes
+  show `***REDACTED***`, a string longer than 256 characters shows
+  `<N chars, sha256:...>`, and the text stops at 4,096 characters. `Rationale`
+  stops at 500 characters. OTLP does not have the tool result.
 - The session-log writer's own failure lines are the one exception: they go to
   `daemon.log`, never routed back into the file that just failed.
 - Writes are split by kind. The **conversation audit** (User/Assistant/Tool/Usage

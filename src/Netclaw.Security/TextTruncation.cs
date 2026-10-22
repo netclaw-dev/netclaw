@@ -3,16 +3,17 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-namespace Netclaw.Actors.Sessions;
+namespace Netclaw.Security;
 
 /// <summary>
-/// Shared text-truncation helpers for session-side log previews and prompt
-/// snippets. <see cref="Netclaw.Actors.Skills.SkillScanner"/> has its own
-/// truncation that fits an ellipsis *within* the byte budget; this helper
-/// instead appends an ellipsis after the budget. The two semantics are
-/// intentionally distinct, which is why this helper is not a global utility.
+/// Shared text-truncation helpers for log previews and prompt snippets.
+/// <c>Netclaw.Actors.Skills.SkillScanner</c> has its own truncation that fits
+/// an ellipsis *within* the byte budget; this helper instead appends an
+/// ellipsis after the budget. The two semantics are intentionally distinct.
+/// This type lives in Netclaw.Security so that <see cref="ToolCallLogFormatter"/>
+/// and the session log actors use one cap rule.
 /// </summary>
-internal static class TextTruncation
+public static class TextTruncation
 {
     /// <summary>
     /// Returns <paramref name="text"/> unchanged when it fits within
