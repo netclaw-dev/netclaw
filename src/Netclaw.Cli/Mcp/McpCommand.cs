@@ -547,6 +547,15 @@ internal static class McpCommand
         if (TryEmitOsc52Copy(writer, authUrl))
             writer.WriteLine("Copied authorization URL to clipboard via OSC 52.");
         writer.WriteLine();
+        // A provider rejects a pre-registered client when the redirect URI does not match its
+        // registered value exactly, and it usually shows only a generic error page. The daemon
+        // builds this URI, so read it back from the authorization URL instead of rebuilding it.
+        if (TryReadRedirectUri(authUrl, out var redirectUri))
+        {
+            writer.WriteLine($"Redirect URI: {redirectUri}");
+            writer.WriteLine("  A pre-registered OAuth client must list this exact URI at the provider.");
+            writer.WriteLine();
+        }
         writer.WriteLine("Complete the authorization in your browser, then either:");
         writer.WriteLine("  1. Wait for the callback to be received automatically");
         writer.WriteLine("  2. Paste the redirect URL below if the callback can't reach this machine");
@@ -584,6 +593,20 @@ internal static class McpCommand
         writer.WriteLine($"Authorization failed or timed out for '{serverName.Value}'.");
         writer.WriteLine("Try again with: netclaw mcp auth " + serverName.Value);
         return 1;
+    }
+
+    internal static bool TryReadRedirectUri(string authorizationUrl, out string redirectUri)
+    {
+        redirectUri = "";
+        if (!Uri.TryCreate(authorizationUrl, UriKind.Absolute, out var uri))
+            return false;
+
+        var value = System.Web.HttpUtility.ParseQueryString(uri.Query)["redirect_uri"];
+        if (string.IsNullOrEmpty(value))
+            return false;
+
+        redirectUri = value;
+        return true;
     }
 
     private static async Task<bool> PollMcpOAuthStatusAsync(
@@ -1933,9 +1956,20 @@ internal static class McpCommand
         writer.WriteLine("                   This option requires --client-id.");
         writer.WriteLine("                   Caution: shell history and process inspection can expose");
         writer.WriteLine("                   this value. Use this option only on a trusted host.");
+        writer.WriteLine("  --scope      Space-separated OAuth scopes to request instead of the server default.");
+        writer.WriteLine("  --header     HTTP header for HTTP/SSE servers (\"Name: value\"). Repeatable.");
+        writer.WriteLine("  --env        Environment variable for stdio servers (KEY=VALUE). Repeatable.");
         writer.WriteLine();
         writer.WriteLine("On add, HTTP/SSE servers without an Authorization header print a hint to run");
         writer.WriteLine("`netclaw mcp auth` first. The daemon detects OAuth requirements at auth time.");
+        writer.WriteLine();
+        writer.WriteLine("OAuth redirect URI:");
+        writer.WriteLine("  The daemon receives the OAuth callback at this URI:");
+        writer.WriteLine("    http://127.0.0.1:<Daemon.Port>/api/mcp/oauth/callback   (default port 5199)");
+        writer.WriteLine("  A pre-registered client (--client-id) must list this exact URI at the provider.");
+        writer.WriteLine("  Use 127.0.0.1, not localhost. `netclaw mcp auth` prints the URI that it sends.");
+        writer.WriteLine("  On a remote host, the browser cannot load the callback. Copy the URL from the");
+        writer.WriteLine("  address bar and paste it at the `netclaw mcp auth` prompt.");
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");

@@ -881,6 +881,25 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
+    public void TryReadRedirectUri_DecodesTheUriThatTheDaemonSent()
+    {
+        const string authorizationUrl =
+            "https://provider.example/oauth2/authorize?client_id=public-client"
+            + "&redirect_uri=http%3a%2f%2f127.0.0.1%3a5199%2fapi%2fmcp%2foauth%2fcallback&state=abc";
+
+        Assert.True(McpCommand.TryReadRedirectUri(authorizationUrl, out var redirectUri));
+        Assert.Equal("http://127.0.0.1:5199/api/mcp/oauth/callback", redirectUri);
+    }
+
+    [Theory]
+    [InlineData("https://provider.example/oauth2/authorize?client_id=public-client&state=abc")]
+    [InlineData("not a url")]
+    public void TryReadRedirectUri_NoRedirectParameter_ReturnsFalse(string authorizationUrl)
+    {
+        Assert.False(McpCommand.TryReadRedirectUri(authorizationUrl, out _));
+    }
+
+    [Fact]
     public void TryEmitOsc52Copy_StringWriter_ReturnsFalse()
     {
         var output = new StringWriter();
