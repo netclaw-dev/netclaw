@@ -106,6 +106,7 @@ public sealed class ChannelOutputEnginePromptLifetimeTests
                 _ => Task.FromResult<long?>(Interlocked.Increment(ref _nextPromptId)),
                 promptId => promptId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 _ => Task.CompletedTask,
+                (_, _) => Task.CompletedTask,
                 Tracked.Add,
                 _ => Task.CompletedTask,
                 _ => { },

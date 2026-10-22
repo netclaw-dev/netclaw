@@ -260,7 +260,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // A child owner never survives a restart. Close the child entries that remain before a stashed command
             // runs, then log the approvals that stay open. Replay itself logs none (see ApplyToolApprovalRequested).
             var pausedAtRecovery = WasPausedAtRecovery();
-            _toolWorkflow.ExpireRecoveredChildApprovals();
+            // Recovery runs before any subscriber joins, so each new subscriber also gets these closes at its join.
+            // A channel that restored a tracked child prompt from its own journal then redraws and clears it.
+            _restartWithdrawals = _toolWorkflow.WithdrawRecoveredChildApprovals(_state)
+                .Select(closed => new ToolInteractionClosed(closed.CallId,
+                    new ToolInteractionCloseReason.Withdrawn(closed.Reason)) { SessionId = _sessionId })
+                .ToArray();
             CloseRecoveredConsentNotices();
             foreach (var open in _toolWorkflow.OpenApprovals())
                 LogToolApprovalRequested(open.AuthorizationAttemptId.Value, open.Request.CallId, open.Request.ToolName, recovered: true);
@@ -278,6 +283,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             var registry = ActorRegistry.For(Context.System);
             if (registry.TryGet<SessionLogDispatcherActorKey>(out var dispatcher))
                 _logActor = dispatcher;
+            // After the log actor is known, so the session log records the restart closes.
+            foreach (var closed in _restartWithdrawals)
+                EmitOutput(closed);
 
             if (_memoryStore is not null)
             {
@@ -2586,6 +2594,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             }
 
             cmd.Subscriber.Tell(joined);
+            foreach (var closed in _restartWithdrawals)
+                cmd.Subscriber.Tell(closed);
 
             // Also reply to Sender so callers can use Ask<SessionJoined> for
             // deterministic confirmation that the join was processed.
@@ -2631,6 +2641,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Command<SaveSnapshotSuccess>(msg =>
         {
             _log.Info("Snapshot saved (seqNr={SequenceNr})", msg.Metadata.SequenceNr);
+            // The snapshot drops the approval events of the closed child prompts, so replay cannot rebuild their closes.
+            // Forget them here too, so a late click gets the same reply before and after a restart.
+            _toolWorkflow.ForgetClosedChildCalls();
+            _restartWithdrawals = [];
 
             DeleteMessages(msg.Metadata.SequenceNr); // delete all messages in journal up until snapshot was taken
             DeleteSnapshots(new SnapshotSelectionCriteria(msg.Metadata.SequenceNr - 1)); // delete all old snapshots
@@ -3628,6 +3642,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SessionId = _sessionId
         }, OutputFilter.Text);
 
+    private void EmitApprovalNotice(string text)
+        => EmitOutput(new TextOutput(text) { SessionId = _sessionId }, OutputFilter.Text);
+
     private void EmitApprovalRejection(ApprovalResponseResult.Rejected rejection, ToolCallId callId)
     {
         _log.Warning(
@@ -3646,6 +3663,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 break;
             case ApprovalNoticeKind.OptionUnavailable:
                 EmitUnavailableApprovalOptionNotice();
+                break;
+            case ApprovalNoticeKind.Withdrawn:
+                EmitApprovalNotice(ChildApprovalPrompt.WithdrawnText(rejection.Withdrawal
+                    ?? throw new InvalidOperationException("A withdrawn approval rejection has no reason.")));
                 break;
         }
         TryReplyNack(rejection.NackReason);
@@ -3672,6 +3693,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             case ApprovalNackReasons.OptionUnavailable:
                 _log.Warning("Ignoring unparseable text tool interaction response '{Text}'", msg.Text);
                 EmitUnavailableApprovalOptionNotice();
+                break;
+            case ApprovalNackReasons.UseButtons:
+                var openCount = _toolWorkflow.AnswerablePrompts(msg.SenderId).Count;
+                _log.Warning("Ignoring text tool interaction response from {SenderId}: {OpenCount} prompts are open",
+                    msg.SenderId, openCount);
+                EmitApprovalNotice(ChildApprovalPrompt.UseButtonsText(openCount));
                 break;
         }
         return false;
@@ -3729,7 +3756,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                         if (evt.SourceChildRunId is { } answeredRun)
                         {
                             var run = _state.ChildRuns[answeredRun];
-                            ChildApprovalsClosed([_toolWorkflow.CreateChildResolution(evt, run, _sessionId, _timeProvider.GetUtcNow())]);
+                            IReadOnlyList<AgentEvent.ChildApprovalResolved> closed =
+                                [_toolWorkflow.CreateChildResolution(evt, run, _sessionId, _timeProvider.GetUtcNow())];
+                            EmitClosedPrompts(closed);
+                            ChildApprovalsClosed(closed);
                         }
                     });
                     return;

@@ -18,9 +18,11 @@ parent.
   run ID in its notice.
 - The parent model SHALL NOT answer, approve, or change a consent request.
   Only an operator answer that the requester check accepts SHALL resolve it.
-- A text answer SHALL resolve a prompt only when the sender can answer exactly
-  one open prompt. With two or more, the session SHALL resolve none and SHALL
-  tell the sender to use the buttons.
+- When a child prompt is among two or more open prompts that the sender can
+  answer, a text answer SHALL resolve none, and the session SHALL tell the
+  sender to use the buttons. Text that answers no prompt SHALL get the
+  option-unavailable reply. With parent prompts only, the session SHALL resolve
+  the latest prompt by its durable request time.
 - When a child run is cancelled, ends, or is lost, when a child prompt cannot
   be posted, or when a child run that is not parked is lost at restart,
   Netclaw SHALL withdraw its open prompts. An answer to a withdrawn prompt
@@ -80,12 +82,18 @@ parent.
 - **THEN** the session withdraws the request with the reason that Netclaw could not show it
 - **AND** no "reply with" text prompt is posted for it
 
-#### Scenario: Text answer with two open prompts
+#### Scenario: Text answer with a parent prompt and a child prompt
 
-- **GIVEN** two open consent requests that Alice can answer
+- **GIVEN** an open parent consent request and an open child consent request that Alice can answer
 - **WHEN** Alice sends the text "A"
 - **THEN** the session resolves neither request
 - **AND** Alice gets a reply that tells her to use the buttons
+
+#### Scenario: Text answer with two parent prompts
+
+- **GIVEN** two open parent consent requests that Alice can answer
+- **WHEN** Alice sends the text "A"
+- **THEN** the session resolves the latest request by its durable request time
 
 #### Scenario: Parent model cannot approve
 

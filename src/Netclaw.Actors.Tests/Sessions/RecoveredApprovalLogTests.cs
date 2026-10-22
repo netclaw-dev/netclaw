@@ -107,8 +107,10 @@ public sealed class RecoveredApprovalLogTests : ApprovalWaitTestBase
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var nack = Assert.IsType<CommandNack>(reply);
-        Assert.True(nack.Reason is ApprovalNackReasons.PromptExpired or ApprovalNackReasons.AlreadyAnswered,
-            $"late answer {callId}: nack={nack.Reason}");
+        // The reason of a child call is the withdrawal reason (PR 2, design D6). The specs below pin each text.
+        if (callId == AnsweredCall)
+            Assert.True(nack.Reason is ApprovalNackReasons.PromptExpired or ApprovalNackReasons.AlreadyAnswered,
+                $"late answer {callId}: nack={nack.Reason}");
         Assert.Equal(0, ToolExecutor.SuccessfulExecutions);
     }
 
@@ -154,32 +156,104 @@ public sealed class RecoveredApprovalLogTests : ApprovalWaitTestBase
     }
 
     // The stashed answer runs right after RecoveryCompleted, before the RecoverChildRuns self message. The child entry
-    // must already be closed then. Before the fix, the entry is still open, the answer passes validation, and only
-    // the per-incarnation approval channel stops it ("no_live_wait"). That is a second gate and not the first.
+    // must already be closed then. If the entry were still open, the answer would pass validation, and only the
+    // per-incarnation approval channel would stop it ("no_live_wait") with the expired text.
+    // PR 2 of child-approval-events-and-parent-pause (design D6): the closed child call gets the true withdrawal text.
+    // The session reads the reason from the run lifecycle and the run ID prefix of the call ID:
+    // - a run that the parent cancelled before the restart: "cancelled by parent";
+    // - a run that was live at the restart: "daemon restarted", also before RecoverChildRuns records it as lost;
+    // - a run that ended with its prompt open: "child ended". Only a journal can show this case, because a live child
+    //   waits for its prompt and cannot end first.
+    // No text names the run or the agent, and the nack is not the "expired" nack.
+    // Planted bug: the click gets "That approval prompt has expired" (today), or a reason that does not match the run.
     [Theory]
-    [InlineData(CancelledChildCall)]
-    [InlineData(LostChildCall)]
-    public async Task A_late_answer_to_a_closed_child_call_finds_no_entry(string callId)
+    [InlineData("cancelled")]
+    [InlineData("lost-at-restart")]
+    [InlineData("ended")]
+    public async Task A_late_answer_to_a_closed_child_call_gets_the_withdrawal_reason_of_its_run(string scenario)
     {
-        var sessionId = new SessionId("test-channel/late-child-answer-" + callId.Replace('/', '-'));
-        await SeedFourCallsAsync(sessionId);
-
-        await EventFilter.Warning(contains: $"Ignoring tool interaction response for call {callId}: unknown")
-            .ExpectAsync(1, async () =>
+        var sessionId = new SessionId("test-channel/late-child-answer-" + scenario);
+        if (scenario != "ended")
+            await SeedFourCallsAsync(sessionId);
+        var (callId, reason) = scenario switch
+        {
+            "cancelled" => (CancelledChildCall, WithdrawReason.CancelledByParent),
+            "lost-at-restart" => (LostChildCall, WithdrawReason.DaemonRestarted),
+            _ => (await SeedEndedChildCallAsync(sessionId, answered: false), WithdrawReason.ChildEnded)
+        };
+        var noticeTurn = HoldTheNoticeTurnOfTheEndedRun();
+        try
+        {
+            var subscriber = CreateTestProbe("late-child-answer-subscriber");
+            SessionManager.Tell(new JoinSession(subscriber) { SessionId = sessionId, Filter = OutputFilter.Full });
+            var reply = await SessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
             {
-                var subscriber = CreateTestProbe("late-child-answer-subscriber");
-                SessionManager.Tell(new JoinSession(subscriber) { SessionId = sessionId, Filter = OutputFilter.Full });
-                var reply = await SessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
-                {
-                    SessionId = sessionId,
-                    CallId = new ToolCallId(callId),
-                    SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
-                    SenderId = new SenderId(Requester)
-                }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-                Assert.Equal(ApprovalNackReasons.PromptExpired, Assert.IsType<CommandNack>(reply).Reason);
+                SessionId = sessionId,
+                CallId = new ToolCallId(callId),
+                SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+                SenderId = new SenderId(Requester)
             }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        Assert.Equal(0, ToolExecutor.SuccessfulExecutions);
+            var notice = await subscriber.FishForMessageAsync<TextOutput>(
+                output => ChildWithdrawalTexts.IsApprovalReply(output.Text), TimeSpan.FromSeconds(10),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(ChildWithdrawalTexts.For(reason), notice.Text);
+            Assert.NotEqual(ApprovalNackReasons.PromptExpired, Assert.IsType<CommandNack>(reply).Reason);
+            Assert.DoesNotContain(callId.Split('/')[0], notice.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("worker", notice.Text, StringComparison.Ordinal);
+            Assert.Equal(0, ToolExecutor.SuccessfulExecutions);
+        }
+        finally
+        {
+            noticeTurn.TrySetResult();
+        }
+    }
+
+    // The withdrawal text says "Nothing ran". A prompt that has a recorded answer did not close with no answer, so a
+    // second click on it after its run ended gets the "already has an answer" reply and never a withdrawal text.
+    // Planted bug: the new withdrawal case reads only the run lifecycle and tells the operator that nothing ran for a
+    // call that the operator approved and that ran; or the click gets the expired text (today).
+    [Fact]
+    public async Task A_late_answer_to_an_answered_call_of_an_ended_child_says_that_the_prompt_has_an_answer()
+    {
+        var sessionId = new SessionId("test-channel/late-child-answer-answered");
+        var callId = await SeedEndedChildCallAsync(sessionId, answered: true);
+        var noticeTurn = HoldTheNoticeTurnOfTheEndedRun();
+        try
+        {
+            var subscriber = await JoinNewSubscriberAsync(sessionId);
+            var reply = await SessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
+            {
+                SessionId = sessionId,
+                CallId = new ToolCallId(callId),
+                SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+                SenderId = new SenderId(Requester)
+            }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+            var notice = await subscriber.FishForMessageAsync<TextOutput>(
+                output => ChildWithdrawalTexts.IsApprovalReply(output.Text), TimeSpan.FromSeconds(10),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal("Approval response ignored: that approval prompt already has an answer.", notice.Text);
+            Assert.Equal(ApprovalNackReasons.AlreadyAnswered, Assert.IsType<CommandNack>(reply).Reason);
+            Assert.Equal(0, ToolExecutor.SuccessfulExecutions);
+        }
+        finally
+        {
+            noticeTurn.TrySetResult();
+        }
+    }
+
+    // The journal of an ended run holds no consumed result notice. The recovered session admits the notice and runs a
+    // notice turn. With SnapshotInterval = 1, the end of that turn saves a snapshot, and the snapshot forgets the closed
+    // child calls (LlmSessionActor, SaveSnapshotSuccess). An answer that the session handles after that snapshot gets the
+    // "expired" reply by design. These specs check the reply while the session still knows the closed call, so they hold
+    // the model call of the notice turn until the session has replied. Only the notice turn calls the model.
+    // Without the hold, a loaded test run sometimes handled the answer after the snapshot.
+    private TaskCompletionSource HoldTheNoticeTurnOfTheEndedRun()
+    {
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        FakeChat.NextResponseGate = hold;
+        return hold;
     }
 
     // Regression guard (passes before the fix): an old journal with answered, cancelled, and lost calls and no open
@@ -217,6 +291,25 @@ public sealed class RecoveredApprovalLogTests : ApprovalWaitTestBase
             ChildApproval(pending, lostRun.RunId));
         if (includeOpenParentCall)
             await SeedJournalAsync(sessionId, pending);
+    }
+
+    // A child run that ended normally while its prompt was open (answered: false), or after its prompt had an answer
+    // (answered: true). Returns the call ID of the prompt.
+    private async Task<string> SeedEndedChildCallAsync(SessionId sessionId, bool answered)
+    {
+        var (pending, context) = await ParentRequestAsync(sessionId);
+        var endedRun = ChildRun("run-ended", context);
+        var request = ChildApproval(pending, endedRun.RunId);
+        var events = new List<ISessionEvent>
+        {
+            new ChildRunAccepted { SessionId = sessionId, Run = endedRun, RecordedAtMs = 3 },
+            request
+        };
+        if (answered)
+            events.Add(Resolved(request));
+        events.Add(Terminal(sessionId, endedRun, lost: false, new ChildRunCompletion.Completed(new WorkingContextDelta())));
+        await SeedJournalAsync(sessionId, events.ToArray());
+        return request.CallId;
     }
 
     // Copies a real parent approval request, so the seeded events carry a valid turn authority.

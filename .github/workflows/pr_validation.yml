@@ -189,7 +189,7 @@ jobs:
           - group: child-owner-and-report
             gates: child-owner child-control reminder-report-once child-approval-close loopback-host-origin
           - group: child-consent
-            gates: child-consent
+            gates: child-consent text-answer-guard
 
     steps:
       - name: "Checkout"

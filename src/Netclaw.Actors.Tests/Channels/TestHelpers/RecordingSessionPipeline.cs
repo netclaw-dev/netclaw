@@ -25,6 +25,7 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         TaskCreationOptions.RunContinuationsAsynchronously);
     private SessionPipelineOptions? _capturedOptions;
     private SharedKillSwitch? _killSwitch;
+    private Channel<SessionOutput>? _laterOutputs;
 
     /// <summary>
     /// Creates a recording pipeline.
@@ -85,6 +86,20 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         var killSwitch = Volatile.Read(ref _killSwitch)
             ?? throw new InvalidOperationException("The pipeline is not created yet.");
         killSwitch.Shutdown();
+    }
+
+    /// <summary>
+    /// Sends <paramref name="output"/> on the output stream of the most recent
+    /// <see cref="CreateAsync"/> call, after the outputs of the factory. A test
+    /// uses it to send a live output after the binding handled an earlier step.
+    /// Only a pipeline with <c>reactive: false</c> supports it.
+    /// </summary>
+    public void EmitOutput(SessionOutput output)
+    {
+        var laterOutputs = Volatile.Read(ref _laterOutputs)
+            ?? throw new InvalidOperationException("The pipeline is not created yet, or it is reactive.");
+        if (!laterOutputs.Writer.TryWrite(output))
+            throw new InvalidOperationException("The output stream did not accept the output.");
     }
 
     public Task<MaterializedSession> CreateAsync(
@@ -151,8 +166,11 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
             input = Sink.ForEach<ChannelInput>(ci => CapturedInputs.Enqueue(ci))
                 .ObservingFault();
 
+            // The later-output channel never completes, so the stream stays open as Source.Never did.
+            var laterOutputs = Channel.CreateUnbounded<SessionOutput>();
+            Volatile.Write(ref _laterOutputs, laterOutputs);
             output = Source.From(outputs)
-                .Concat(Source.Never<SessionOutput>())
+                .Concat(ChannelSource.FromReader(laterOutputs.Reader))
                 .Via(killSwitch.Flow<SessionOutput>());
         }
 

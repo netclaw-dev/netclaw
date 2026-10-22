@@ -70,13 +70,32 @@ internal abstract record ChildApprovalResolution
     };
 }
 
-internal enum WithdrawReason
+/// <summary>
+/// Why the session closed an open child consent request with no answer. Public because
+/// <see cref="SessionProtocol.ToolInteractionClosed"/> carries it to the channels.
+/// </summary>
+public enum WithdrawReason
 {
     CancelledByParent,
     ChildEnded,
     ChildLost,
     DaemonRestarted,
     PromptUnavailable
+}
+
+/// <summary>
+/// Why an open consent prompt closed: a person answered it, or the session withdrew it with no answer. Public because
+/// <see cref="SessionProtocol.ToolInteractionClosed"/> carries it to the channels.
+/// </summary>
+public abstract record ToolInteractionCloseReason
+{
+    private ToolInteractionCloseReason() { }
+
+    /// <summary>A person answered the prompt, maybe on another surface.</summary>
+    public sealed record Answered : ToolInteractionCloseReason;
+
+    /// <summary>The session withdrew the prompt with no answer. Nothing ran.</summary>
+    public sealed record Withdrawn(WithdrawReason Reason) : ToolInteractionCloseReason;
 }
 
 /// <summary>The runtime-made path of the <c>result.md</c> file of a child run.</summary>

@@ -13,6 +13,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.Sessions;
 using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
@@ -76,7 +77,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private const string BackfillDetectorWarning = ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
     private const string LiveDetectorUnavailableWarning = ":warning: I couldn't safely analyze your message — please try again in a moment.";
     private const string LiveInjectionBlockedWarning = ":warning: Message blocked by prompt-injection policy.";
-    private const string WrongRequesterWarning = ":warning: Only the requesting user can approve this tool action.";
 
     public ITimerScheduler Timers { get; set; } = null!;
 
@@ -122,6 +122,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             postApprovalPromptAsync: HandleApprovalRequestAsync,
             readPromptIdValue: promptMessageTs => promptMessageTs.Value,
             onApprovalPromptFailedAsync: SendApprovalPromptUnavailableAsync,
+            redrawClosedPromptAsync: RedrawClosedApprovalPromptAsync,
             persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
             handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
             advanceCursor: cursor => AdvanceCursor(new SlackEventTs(cursor)),
@@ -154,11 +155,12 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             operationTimeout: OperationTimeout,
             pendingRequests: _pendingApprovalRequests,
             hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
-            postWrongRequesterWarningAsync: () => SafePostAsync(WrongRequesterWarning),
+            postNoticeAsync: text => SafePostAsync(text),
             persistPromptCleared: callId => Persist(
                 new PendingApprovalPromptCleared { CallId = callId.Value },
                 ApplyPendingApprovalPromptCleared),
             renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
+            redrawClosedPromptAsync: RedrawClosedApprovalPromptAsync,
             log: _log);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
@@ -1111,6 +1113,26 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         await SafePostAsync(
             $":warning: Netclaw could not show the approval prompt for `{request.ToolName}` in this channel. The call did not run.");
+    }
+
+    private async Task RedrawClosedApprovalPromptAsync(PendingApprovalRequest pending, string closeText)
+    {
+        var promptTs = pending.PromptId ?? throw new InvalidOperationException("A closed prompt redraw needs its message.");
+        try
+        {
+            using var cts = new CancellationTokenSource(OperationTimeout);
+            await _dependencies.ReplyClient.UpdateThreadMessageAsync(
+                _channelId,
+                promptTs,
+                closeText,
+                SlackApprovalBlockBuilder.BuildClosedApprovalBlocks(closeText),
+                cts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed to redraw closed approval prompt for call {CallId} messageTs={MessageTs}",
+                pending.CallId, promptTs);
+        }
     }
 
     private async Task TryResolveApprovalPromptAsync(

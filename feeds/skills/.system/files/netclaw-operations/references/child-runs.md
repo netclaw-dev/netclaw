@@ -27,8 +27,15 @@ Do not cancel, respawn, or poll a waiting child. Tell the operator to answer the
 `check_agent_run` does not work in a notice turn for a run that a person started. The operator cancels in their own turn.
 A notice turn cannot raise a consent prompt. A call that needs consent is denied there.
 When the last request closes, a closing notice says `spawn_agent is available again.` and lists the answers.
-A child prompt stays in the channel and in the TUI after the parent turn ends or fails. It stays until an answer.
-A restart withdraws every child consent request today. The child run is then lost, and its prompt is expired.
+A child prompt stays in the channel and in the TUI after the parent turn ends or fails. It stays until an answer or a close.
+A child prompt has buttons only. Do not tell the operator to reply with a letter. Tell the operator to use the buttons.
+A text answer such as "A" answers nothing while a child prompt is among two or more prompts that the sender can answer.
+The reply is then `N approval prompts are open. Use the buttons on the prompt you mean.`
+When the operator answers a child prompt in one client, the prompt in every other client shows `This approval request has an answer.`
+A cancel, the end of the child, a lost child, a restart, or a prompt that the channel cannot show withdraws the request.
+The prompt then shows the reason, for example `This approval request was withdrawn because the task that asked for it was cancelled. Nothing ran.`
+A click on a withdrawn prompt gets the same text. Nothing runs, and no grant is written.
+A restart withdraws every child consent request today. The child run is then lost.
 
 Use `Cancel: true` to request cancellation.
 The acknowledgement records intent. Wait for the notice and read `result.md` before you report completion.

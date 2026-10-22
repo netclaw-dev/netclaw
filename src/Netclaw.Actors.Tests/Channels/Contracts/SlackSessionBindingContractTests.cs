@@ -99,6 +99,13 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
 
     protected override ChannelType ExpectedChannelType => ChannelType.Slack;
 
+    protected override IReadOnlyList<RenderedPrompt> GetPromptRedraws()
+        => _replyClient.Updates.Select(update => new RenderedPrompt(
+            string.Join("\n", new[] { update.Text }.Concat((update.Blocks ?? [])
+                .OfType<SlackNet.Blocks.SectionBlock>()
+                .Select(block => block.Text is SlackNet.Blocks.Markdown markdown ? markdown.Text : string.Empty))),
+            (update.Blocks ?? []).Any(block => block is SlackNet.Blocks.ActionsBlock))).ToList();
+
     protected override bool SupportsThreadHydration => true;
 
     private int _hydrationEventCounter;

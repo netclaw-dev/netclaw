@@ -57,7 +57,7 @@ Hosted runs from 2026-10-17 through 2026-10-19 measured these gate times (minute
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4) | 10 to 11 |
 | `child-owner-and-report` | `child-owner` (3.2), `child-control` (2.8), `reminder-report-once` (2.7), `child-approval-close` (2.7), `loopback-host-origin` (two invocations, 4.3) | 16.0 (one run) |
-| `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate) | 3 to 4 (estimate) |
+| `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local) | 7 to 8 (estimate) |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
@@ -69,8 +69,8 @@ The `shell-analysis` group held three gates. A hosted run of 2026-10-18 took 25 
 The `session-reliability` group held five gates and took 18.7 minutes. It now holds three gates, and `child-owner-and-report` holds the other two. The `child-approval-close` gate (#2525) joined that group later.
 The `child-control` gate of #2524 runs in `child-owner-and-report` too. The group holds five gates with `loopback-host-origin`.
 The `child-consent` group is new (child-approval-events-and-parent-pause). The `child-owner-and-report` group is near its
-budget, so the change adds a group. The two later PRs of that change add the text answer guard, the resume gate, and the
-purge order gate to this group. The design estimates about 12 minutes for the four gates.
+budget, so the change adds a group. PR 2 of that change added the text answer guard gate. PR 3 adds the resume gate and
+the purge order gate. The design estimates about 12 minutes for the four gates.
 
 A [hosted run on 2026-10-19](https://github.com/netclaw-dev/netclaw/actions/runs/39340209966/job/118359593287) measured 15 minutes 57 seconds for that group.
 All five gates passed. The total includes checkout, tool restore, and report upload. It excludes queue time. The loopback gate took 4 minutes 15 seconds.
@@ -119,8 +119,9 @@ coverage. They do not replace positive and negative behavior tests.
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that has no notice, or whose notice input is still pending, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
 | `TurnContext.HasSameRequester`, `SessionState.RequireNoticeRun`, and the requester loop of `SessionExecutionLifetime.ValidateRestartResume` | The owner of a child run keeps status and cancel in each later turn, and a requester that differs in session, audience, boundary, channel type, sender, or principal never owns it; a run gets one notice, only an ended run gets one, and a notice carries the recorded authority of the run owner as a user message; a restart resume takes the leading inputs of one requester and leaves the rest waiting | 36 killed | `./scripts/run-child-owner-mutations.sh` |
 | `SecretsFileWriter.IsPlaintextLeaf` and `SecretsFileWriter.ShouldEncrypt` (`// <secrets-plaintext-leaf>`) | secrets.json encrypts every string leaf except `Providers.<name>.OAuthTokenExpiry`, a path of exactly three segments that matches without case. A mutant that encrypts the date stops the daemon at startup. A mutant that skips another leaf leaves a credential unencrypted at rest | 8 killed | `./scripts/run-secrets-plaintext-leaf-mutations.sh` |
-| `SessionToolWorkflow.CloseChildApprovals` and `SessionToolWorkflow.ExpireRecoveredChildApprovals` | Issue 2525: a cancel record or a terminal record (also the lost record that recovery writes) closes every approval entry of its run in live code. A checkpoint, a prepared result, a parent approval, and an entry of another run stay open. Recovery closes each child entry that remains. A stranded entry can block a snapshot. In live code, an entry that closes too soon drops a prompt that a person can still answer (a checkpoint, another run, or a parent call) | 6 killed | `./scripts/run-child-approval-close-mutations.sh` |
+| `SessionToolWorkflow.CloseChildApprovals` and `SessionToolWorkflow.ExpireRecoveredChildApprovals` | Issue 2525: a cancel record or a terminal record (also the lost record that recovery writes) closes every approval entry of its run in live code. A checkpoint, a prepared result, a parent approval, and an entry of another run stay open. Recovery closes each child entry that remains. A stranded entry can block a snapshot. In live code, an entry that closes too soon drops a prompt that a person can still answer (a checkpoint, another run, or a parent call) | 5 killed | `./scripts/run-child-approval-close-mutations.sh` |
 | `SessionToolWorkflow.IsChildConsentPaused`, `SessionToolWorkflow.RefusesChildStart`, the pause hold of `SessionToolWorkflow.PlanNewInputAbandonment`, the pause rules of the `SessionInputFlow.DrainBufferedBatch` drain (`PassesPause`, `IsHeldByPause`, `MoveHeldInputBehind`), and `TurnContext.IsChildConsentNotice` | Design D5 of child-approval-events-and-parent-pause: an open child consent request pauses the session, and an answered request does not. While paused, a `spawn_agent` start is refused and a slash start of a person is accepted; automated input and a child result notice wait in Ready and in the drain, never join a running turn, and run after the last close; a person input runs; a replay continues its turn. An approval notice needs the principal `VerifiedAutomation`, the authenticity `LocalProcess`, and the source kind and sender `child-consent`, so a webhook cannot pose as one; a notice is never held, never joins a turn, and nothing joins a notice turn | 36 killed | `./scripts/run-child-consent-mutations.sh` |
+| The guard of `SessionToolWorkflow.TryResolveTextResponse` and the count rule of `PendingApprovalLookup.Resolve` | Design D7 of child-approval-events-and-parent-pause: when a child prompt is among two or more prompts that the sender can answer, a text answer resolves none, and the session and the channel tell the sender to use the buttons; text that answers no prompt keeps the option-unavailable reply; with parent prompts only, the session resolves the latest prompt and the channels the earliest | 15 killed | `./scripts/run-text-answer-guard-mutations.sh` |
 | `TurnContext.CanControlChildRunOf` and the reminder turn test (`IsReminderTurn`) | Issue #2524: a reminder turn and any other turn of one session manage each other's child runs, and the sender and the principal do not count. The session, audience, boundary, and channel type must still match, so no turn reaches a run of another session. A turn with `VerifiedAutomation` and another source kind, a webhook turn with the reminder source kind (authenticity `Verified`), and a person turn with the reminder source kind, are not reminder turns and keep the six-fact rule | 15 killed | `./scripts/run-child-control-mutations.sh` |
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
 | The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
@@ -530,8 +531,9 @@ The script selects the span in `SessionToolWorkflow.Children.cs` between `// <ch
 `// </child-approval-close>`. The span holds `ExpireRecoveredChildApprovals` and `CloseChildApprovals`. The selector
 rejects a missing or repeated marker before Stryker starts.
 
-Stryker makes six mutants in the span. The gate fails for a survivor, a compile error, a mutant outside the span, or
-a changed mutant count. A different form of the span gives a different count, and the owner of the gate must review it.
+Stryker makes five mutants in the span. The gate fails for a survivor, a compile error, a mutant outside the span, or
+a changed mutant count. The count was six before PR 2 of child-approval-events-and-parent-pause: both methods now return
+the entries that they close, so the early `return []` has no statement mutant. A different form of the span gives a different count, and the owner of the gate must review it.
 
 The approval table of a session holds child approvals, and `AllowsSnapshot` needs an empty table. One rule closes a
 child approval in live code: the cancel record or the terminal record of its run. The live Persist callbacks call
@@ -578,6 +580,37 @@ arrives in Ready. The drain holds it when a turn ends or a tool batch ends. `Chi
 
 The local Stryker run took 3 minutes 13 seconds. CI runs the gate in the `child-consent` group of the `mutation-gates`
 job. Its report directory is `artifacts/stryker/child-consent`.
+
+### Text Answer Guard Gate
+
+Run the text answer guard gate:
+
+```bash
+./scripts/run-text-answer-guard-mutations.sh
+```
+
+The script runs Stryker two times. The first invocation mutates the span `// <text-answer-guard>` in
+`SessionToolWorkflow.Approvals.cs` (`Netclaw.Actors`, 9 mutants). The second invocation mutates the span
+`// <text-answer-lookup>` in `PendingApprovalLookup.cs` (`Netclaw.Channels`, 6 mutants). The selector rejects a
+missing or repeated marker before Stryker starts. The gate fails for a survivor or a changed count.
+
+Design D7 of child-approval-events-and-parent-pause, as the PR 2 review changed it: a text answer names no prompt. When
+a child prompt is among two or more prompts that the sender can answer, the session and the channel resolve none and
+tell the sender to use the buttons. With parent prompts only, the session resolves the latest prompt and the channels
+resolve the earliest. `TextAnswerGuardMutationTests`, `TextAnswerParseOrderMutationTests`, and
+`PendingApprovalLookupTests` (linked into `Netclaw.Actors.MutationTests`) cover these cases with no actor, no timer,
+and no delay:
+
+- a parent prompt and a child prompt, or two child prompts, resolve neither, with the nack `approval_use_buttons`
+- two parent prompts resolve the latest (session) or the earliest (channel)
+- one prompt of the sender resolves it, also one child prompt
+- text that answers no prompt gets the option-unavailable nack, and text that answers one prompt gets
+  `approval_use_buttons`
+- the guard counts only the prompts that the sender can answer
+- a button answer names its call ID, so two prompts do not make it ambiguous
+
+The local Stryker runs took 2 minutes 27 seconds and 1 minute 11 seconds. CI runs the gate in the `child-consent`
+group of the `mutation-gates` job. Its report directory is `artifacts/stryker/text-answer-guard`.
 
 ### Child Control Gate
 

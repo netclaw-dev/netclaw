@@ -186,7 +186,7 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
         // parent approval channel is session-wide, so include the spawning tool
         // call scope plus a per-prompt sequence. Keep this short: approval
         // button payloads are capped by the most restrictive channel adapter.
-        return new ToolCallId($"{_approvalScopeId}/subagent-approval/{requestId}");
+        return ChildApprovalPrompt.CreateCallId(_approvalScopeId, requestId);
     }
 
     private void EnsureAuthorityContext()

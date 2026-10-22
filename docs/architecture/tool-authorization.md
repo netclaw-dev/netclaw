@@ -810,7 +810,7 @@ Leaks today:
 | --- | --- |
 | Question | How does the operator see a request and answer it, now or after a restart? |
 | Classes | Approval part of [`LlmSessionActor`](../../src/Netclaw.Actors/Sessions/LlmSessionActor.cs), [`SessionToolWorkflow`](../../src/Netclaw.Actors/Sessions/SessionToolWorkflow.cs), [`IApprovalChannel`](../../src/Netclaw.Actors/Sessions/IApprovalChannel.cs), [`ParentSessionApprovalBridge`](../../src/Netclaw.Actors/Sessions/ParentSessionApprovalBridge.cs), [`IParentApprovalBridge`](../../src/Netclaw.Tools.Abstractions/IParentApprovalBridge.cs), the approval loop in [`SubAgentActor`](../../src/Netclaw.Actors/SubAgents/SubAgentActor.cs), [`ApprovalResponseFlow`](../../src/Netclaw.Channels/ApprovalResponseFlow.cs), [`PendingApprovalLookup`](../../src/Netclaw.Channels/PendingApprovalLookup.cs), [`ApprovalButtonValueCodec`](../../src/Netclaw.Actors/Protocol/ApprovalButtonValueCodec.cs), [`ApprovalOptionKeys`](../../src/Netclaw.Actors/Protocol/ApprovalOptionKeys.cs), the Slack, Discord, and Mattermost prompt builders |
-| Published contract | Output `ToolInteractionRequest` and input `ToolInteractionResponse` ([`SessionProtocol.Outputs.cs`](../../src/Netclaw.Actors/Sessions/SessionProtocol.Outputs.cs)). Journal events `ToolApprovalRequested` and `ToolApprovalResolved`. Option key strings such as `approve_once`. |
+| Published contract | Outputs `ToolInteractionRequest` and `ToolInteractionClosed(CallId, Reason)` (not persisted), and input `ToolInteractionResponse` ([`SessionProtocol.Outputs.cs`](../../src/Netclaw.Actors/Sessions/SessionProtocol.Outputs.cs)). Journal events `ToolApprovalRequested` and `ToolApprovalResolved`. Option key strings such as `approve_once`. Nack reasons in [`ApprovalNackReasons`](../../src/Netclaw.Actors/Protocol/ApprovalNackReasons.cs), with `approval_withdrawn` and `approval_use_buttons`. |
 | Must not know | Policy rules. It renders the options that Consent offers. |
 | Data | Durable session journal. Actor-local state for an unanswered request. Durable child requests use the same journal events. |
 | Rules | [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-consent-prompts-offer-only-safe-options), [TA-11](../../openspec/specs/tool-authorization/spec.md#requirement-ta-11-an-unanswered-consent-request-survives-restart), [TA-12](../../openspec/specs/tool-authorization/spec.md#requirement-ta-12-subagent-consent-goes-through-the-parent-session) |
@@ -818,7 +818,8 @@ Leaks today:
 Leaks today:
 
 - Two layers check that the person who answers is the requester: the channel
-  (`PendingApprovalLookup`) and the session workflow.
+  (`PendingApprovalLookup`) and the session workflow. The text answer guard has
+  the same two layers.
 
 `SessionToolWorkflow` owns the session-local approval records, live wait channel, active batch tracker, and temporary correction state.
 It validates the original requester and offered answer. It selects which unanswered calls can resume after recovery.
@@ -848,7 +849,8 @@ Prompt lifetime:
 - `ToolInteractionRequest.Lifetime` is `UntilTurnEnd` for a parent prompt and `UntilClosed` for a child prompt.
   `LlmSessionActor.HandleToolInteractionRequestDispatch` sets it. Renderers do not show it.
 - `ChannelOutputEngine.CompleteTurnAsync` clears only `UntilTurnEnd` prompts at `TurnCompleted`. `ChatViewModel` clears
-  only `UntilTurnEnd` prompts at `TurnCompleted` and at `ErrorOutput` (#2523). A child prompt stays until an answer.
+  only `UntilTurnEnd` prompts at `TurnCompleted` and at `ErrorOutput` (#2523). A child prompt stays until an answer or
+  a `ToolInteractionClosed`.
 - `PendingApprovalPromptTracked` carries the optional `lifetime` field, so a cold-spawned binding keeps a child prompt.
   A row without the field reads as `UntilTurnEnd`. A turn prompt writes no field, so an older binary reads the new row
   the same way. The hub DTO carries the lifetime by member name.
@@ -920,12 +922,76 @@ It selects only the nack reason and the notice:
 - During the turn, the answer is actor-local in the workflow table. After the turn ends, and after a restart,
   the durable fact is the tool result of the call in session history.
 - A synthetic abandonment result (text starts with `ParkedToolBatchHistory.AbandonedResultPrefix`) is not an answer.
+- A child prompt that the session withdrew gets reason `approval_withdrawn` and the text of its withdraw reason
+  (see "Withdrawal" below). A child prompt with a recorded answer gets "already has an answer", also after its run
+  ended, because the withdrawal text says "Nothing ran".
 - An answer for a call that never existed, a call that recovery removed, or a call that an abandonment
   closed gets reason `approval_prompt_expired` and the "expired" notice.
-- After a restart, an old child prompt is expired (TA-12), because child calls are not in the parent history.
 
 A valid example: Alice denies a prompt, the turn ends, and her second click on "approve once" gets
 "already has an answer". An invalid example: a forged answer for an unknown call ID gets "expired" and grants nothing.
+
+Close of a child prompt (design D6 of child-approval-events-and-parent-pause):
+
+- Owner of the close: `SessionToolWorkflow`. `WithdrawChildApprovals` closes the open entries of a run at a cancel
+  record (`CancelledByParent`) and at a terminal record (`ChildEnded`, or `ChildLost` when the live child actor
+  stopped with no result). `WithdrawRecoveredChildApprovals` closes the entries that replay left open, with the
+  reason from the run lifecycle: a run that was live at the restart gives `DaemonRestarted`, a cancelled run gives
+  `CancelledByParent`, and a run that ended before the restart gives `ChildEnded`. A `prompt_unavailable` answer for
+  a child prompt is a withdrawal with `PromptUnavailable`: the call is refused, and nothing runs.
+- `LlmSessionActor` emits one `ToolInteractionClosed(CallId, Reason)` for each closed child prompt. The reason is
+  `ToolInteractionCloseReason.Withdrawn(WithdrawReason)` or `ToolInteractionCloseReason.Answered`. An answer from one
+  client closes the prompt on every other subscriber. A terminal record emits its closes before `SubAgentOutput`
+  reports the end of the run. Recovery runs before a subscriber joins, so the session sends the restart closes after
+  the session log is known and to each new subscriber at its join.
+- The workflow keeps how each closed child prompt ended (`_closedChildCalls`, actor-local). Recovery rebuilds it from
+  the replayed approval events and the run lifecycle. `RejectClosedCall` reads it for a late click. A snapshot
+  deletes those approval events, so `SaveSnapshotSuccess` clears the map and the restart closes. A late click after a
+  snapshot then gets "expired", before and after a restart.
+- Each channel finds its prompt by call ID, redraws it with the reason and no buttons, removes it, and journals
+  `PendingApprovalPromptCleared` (`ChannelOutputEngine`). An answered close redraws as "has an answer", never as
+  "withdrawn" or "Nothing ran". The TUI removes the prompt from its queue. Headless output prints the prompt and its
+  close, and only the close of a prompt that it showed.
+- A binding can restore a child prompt from its journal after the session forgot it (a restart and a snapshot, or a
+  passivation). No close then comes. When the session refuses an answer for a prompt that the binding holds as
+  `approval_withdrawn`, `approval_prompt_expired`, or `approval_already_answered`, the binding removes the entry,
+  journals `PendingApprovalPromptCleared`, and redraws the prompt as closed with no buttons (`ApprovalResponseFlow`).
+- No text names the child run or the agent: not the prompt, the redraw, the late-click reply, or headless output.
+  The call ID of a child prompt holds the run ID, so no surface prints it.
+
+| `WithdrawReason` | Text for the redraw and for a late click |
+| --- | --- |
+| `CancelledByParent` | "This approval request was withdrawn because the task that asked for it was cancelled. Nothing ran." |
+| `ChildEnded` | "This approval request was withdrawn because the task that asked for it ended. Nothing ran." |
+| `ChildLost` | "This approval request was withdrawn because the task that asked for it stopped unexpectedly. Nothing ran." |
+| `DaemonRestarted` | "This approval request was withdrawn because Netclaw restarted before the task finished. Nothing ran." |
+| `PromptUnavailable` | "This approval request was withdrawn because Netclaw could not show it in this channel. Nothing ran." |
+
+A valid example: the parent cancels r-8a1, and its prompt redraws with the "cancelled" text. Alice clicks the old
+button in another client and gets the same text. An invalid example: the reply names r-8a1 or its agent.
+
+Buttons-only child prompts (design D3, S7):
+
+- `ToolInteractionRequest.Lifetime == UntilClosed` is the one signal for a child prompt. No channel reads the call ID
+  shape. The Slack, Discord, and Mattermost builders show a child prompt with buttons only: no "reply with A, B" text.
+- A child prompt has no text-only fallback. When the button post fails, the binding reports `prompt_unavailable`, and
+  the session withdraws the request. A text-only Mattermost binding (no `CallbackUrl`) cannot show buttons, so it
+  refuses every child consent request this way. A parent prompt keeps the text-only mode.
+
+Text answer guard (design D7):
+
+- A text answer names no prompt. When a child prompt is among two or more prompts that the sender can answer, the
+  session and the channel resolve none and reply "N approval prompts are open. Use the buttons on the prompt you
+  mean." The nack reason is `approval_use_buttons`. Text that answers no prompt keeps the option-unavailable nack.
+- With parent prompts only, the rule from before the guard holds. The session resolves the latest prompt by durable
+  request time. The channels resolve the earliest prompt, which a text-only channel needs for parallel parent calls.
+- Owners: `SessionToolWorkflow.TryResolveTextResponse` (child: `SourceChildRunId`) and
+  `PendingApprovalLookup.Resolve` (child: `Lifetime == UntilClosed`, result `Ambiguous`). The guard counts only the
+  prompts that the sender can answer. A button names its call ID, so the guard does not apply to it.
+
+A valid example: Alice has two parent prompts open in text-only Mattermost. Her "A" approves the earliest prompt. An
+invalid example: the model writes "Reply A to approve `gh pr view`" while a parent prompt and a child prompt of Alice
+are open, one of them `rm -rf build`. Alice types "A". The session resolves neither.
 
 Child ownership (status and cancel):
 
@@ -1235,12 +1301,13 @@ Facts behind the diagram (current code):
   An invalid example: the reminder fire closes Alice's prompt with the
   "superseded by a new message" result. The session must not do this.
 - A subagent request goes to the parent through `ParentSessionApprovalBridge`.
-  It is live-only. After a restart, Netclaw rejects the old prompt as expired.
+  It is live-only. A restart withdraws the old prompt with `DaemonRestarted`, and a late click gets that text.
   A subagent without a parent bridge cannot ask. Its whole run fails with
   `ToolExecutionFailed`; it does not return a per-tool denial.
-- A channel that cannot post a prompt sends `Deny` for that call
-  (`ChannelOutputEngine`, `SlackThreadBindingActor`). This is the only
-  automatic denial of a consent request.
+- A channel that cannot post a prompt sends `prompt_unavailable` for that call
+  (`ChannelOutputEngine`, `SlackThreadBindingActor`). The call is refused. For a
+  child prompt the session also withdraws the request with `PromptUnavailable`.
+  This is the only automatic denial of a consent request.
 
 A non-shell call follows the same path, with two differences. `ToolAuthorizer`
 applies the rules for other tools and one `StoredGrantCheck` in place of the
@@ -1737,7 +1804,11 @@ service calls, a compound or pipeline form of the same command, and a
 2. Route the answer as a `ToolInteractionResponse` with the selected key.
 3. Check the requester through `ApprovalButtonValueCodec`. Do not invent a
    second rule.
-4. Add the channel type to `ChannelType.SupportsInteractiveApproval()` in
+4. Honor `ToolInteractionRequest.Lifetime`: clear an `UntilTurnEnd` prompt at the turn end, and keep an
+   `UntilClosed` prompt until an answer or a close. Handle `ToolInteractionClosed`: find the prompt by call ID,
+   redraw it with the reason and no buttons, and remove it. Show a child prompt with buttons only, with no
+   text-only fallback. Use `ChannelOutputEngine`, which does these steps.
+5. Add the channel type to `ChannelType.SupportsInteractiveApproval()` in
    [`ChannelType.cs`](../../src/Netclaw.Actors/Channels/ChannelType.cs) only
    when it can show a prompt and route the answer. A channel type that is not
    in that list fails closed for uncovered calls.
@@ -1774,7 +1845,6 @@ change is small.
 | Close the `skill_manage` parent-directory check-to-use window | Not supported today | The temp file uses create-new semantics, so a link at the temp name fails. A same-user process that can already write where the daemon writes can still swap a parent directory. That gives no new authority today. With a sandboxed executor, fix it in Filesystem authority with directory-handle operations. |
 | A missing or unreadable audience becomes an error (owner decision, September 29) | Planned | Today some components fall back to `Public` (TA-1). A follow-up code PR makes each such fallback fail loudly. Until that PR merges, the fallback stays as TA-1 describes it. |
 | A consent for repository A that covers repository B | Not supported, by design | This is an invariant. A repository grant covers only registered worktrees of one Git common directory (TA-8). |
-| Withdrawal redraw, true late-click texts, buttons-only child prompts, and the text answer guard | Planned | PR 2 of child-approval-events-and-parent-pause. Today a closed child prompt keeps its buttons, a late click gets the "expired" text, and a text answer resolves the latest prompt that the sender can answer. |
 | A child that waits for consent survives a restart (#2572) | Planned | PR 3 of child-approval-events-and-parent-pause: a parked child run, a child journal, and parked prompt entries in the parent snapshot. Today a restart withdraws every child request, and the run is lost. |
 | Messages between agents (`notify_parent`, `message_child`, sibling messages) | Needs a contract | One `AgentEvent` subtype, one renderer case, and one tool each. A message body is agent text, so it goes to a run file, and the event carries the path. The envelope gets event, correlation, and causation IDs. |
 | One answer for many child prompts ("approve for all") | Not supported, by design | Each prompt binds one-time consent to one exact call (owner decision Q2). |
@@ -1807,6 +1877,8 @@ and the approval tooling is in
 | A command that runs no program gets the decision of the file tool for each redirect. A prompt always names what it asks for. | `ShellNoProgramAuthorizationTests`; catalog `no-program-*` rows; the harness check in `ShellApprovalHarness.ObservePrompt`; the no program mutation gate ([TOOLING.md § No Program Gate](../../TOOLING.md#no-program-gate)) |
 | No `ToolAuthorizer` rule can move ahead of an earlier rule. | The tool authorizer order mutation gate ([TOOLING.md § Tool Authorizer Order Gate](../../TOOLING.md#tool-authorizer-order-gate)) |
 | An open child consent request pauses the session: no model start of a child, automated input waits and never joins a running turn, a person runs, and an approval notice passes the pause and runs alone. | `ChildConsentPauseSpecs`, `ChildConsentNoticeSpecs`, `ChildConsentReminderSpecs`; the child consent mutation gate ([TOOLING.md § Child Consent Gate](../../TOOLING.md#child-consent-gate)) |
+| A text answer resolves no prompt when a child prompt is among two or more prompts that the sender can answer. | `ChildApprovalWithdrawalSpecs`, `PendingApprovalLookupTests`, the channel contract tests; the text answer guard mutation gate ([TOOLING.md § Text Answer Guard Gate](../../TOOLING.md#text-answer-guard-gate)) |
+| A closed child prompt closes on every surface with its true reason (answered or withdrawn), and a late click gets that reason with no child identity. | `ChildApprovalWithdrawalSpecs`, `RecoveredApprovalLogTests`, the channel contract tests, `ChatPageTests`, `HeadlessChildPromptTests` |
 
 Model guidance (which tool the model should choose, and how it should declare
 a project directory) is not an authorization rule, and no spec owns it. The

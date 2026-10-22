@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj" />
+    <ProjectReference Include="../Netclaw.Channels/Netclaw.Channels.csproj" />
     <ProjectReference Include="../Netclaw.Cli/Netclaw.Cli.csproj" />
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <ProjectReference Include="../Netclaw.Daemon/Netclaw.Daemon.csproj" />
@@ -62,6 +63,9 @@
     <!-- child-approval-events-and-parent-pause: the identification of an approval notice (child-consent gate). -->
     <Compile Include="../Netclaw.Actors.Tests/Channels/TurnContextChildConsentNoticeTests.cs"
              Link="Channels/TurnContextChildConsentNoticeTests.cs" />
+    <!-- child-approval-events-and-parent-pause: the text answer guard of the channel lookup (text-answer-guard gate). -->
+    <Compile Include="../Netclaw.Actors.Tests/Channels/PendingApprovalLookupTests.cs"
+             Link="Channels/PendingApprovalLookupTests.cs" />
     <!-- Issue #2554: the private-folder checks of the managed temporary folder (path-access gate). -->
     <Compile Include="../Netclaw.Actors.Tests/Tools/ManagedTemporaryFolderCheckTests.cs"
              Link="Tools/ManagedTemporaryFolderCheckTests.cs" />

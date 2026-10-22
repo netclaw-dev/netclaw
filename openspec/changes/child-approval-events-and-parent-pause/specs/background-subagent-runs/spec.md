@@ -158,7 +158,9 @@ When a child run is cancelled, ends, or is lost while its consent request is ope
 posted, the session SHALL close the request as withdrawn with a reason: cancelled by parent, child ended, child lost,
 daemon restarted, or prompt unavailable. The session SHALL emit a prompt-closed output for each closed request. An
 answer to a withdrawn request SHALL get the reason text and SHALL run nothing and grant nothing. No text SHALL name the
-child run or the agent. A park that the owner refuses because the run was cancelled SHALL record the run as cancelled.
+child run or the agent. When a person answers a child request, the session SHALL emit a prompt-closed output with the
+reason "answered" to every subscriber. A park that the owner refuses because the run was cancelled SHALL record the
+run as cancelled.
 
 #### Scenario: Cancel withdraws the prompts
 
@@ -173,6 +175,13 @@ child run or the agent. A park that the owner refuses because the run was cancel
 - **WHEN** the child actor stops with no terminal result
 - **THEN** the request is withdrawn with the reason "child lost"
 - **AND** the reply text says that the task stopped unexpectedly
+
+#### Scenario: An answer closes the prompt on another subscriber
+
+- **GIVEN** two subscribers show the same open child request
+- **WHEN** the operator approves it from the first subscriber
+- **THEN** the second subscriber gets a prompt-closed output with the reason "answered"
+- **AND** no text says that the request was withdrawn or that nothing ran
 
 ### Requirement: A child run parks at consent and resumes from its journal
 

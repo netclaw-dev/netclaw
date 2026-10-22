@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # Agent Coordination
@@ -113,6 +113,8 @@ Load `netclaw-operations` and read `references/child-runs.md` for the full diagn
 A child can wait for the operator to answer a consent prompt. You cannot answer it.
 An approval notice then tells you about the request, and `spawn_agent` is refused until the last request closes.
 Do not cancel, respawn, or poll a waiting child. Tell the operator to answer the prompt.
+A child prompt has buttons only. Tell the operator to use the buttons. Do not ask for a text reply such as "A".
+A cancel or the end of a child withdraws its open prompts. The prompt then states the reason, and nothing runs.
 Load `netclaw-operations` and read `references/child-runs.md` for the notice and pause rules.
 
 ### Cancellation

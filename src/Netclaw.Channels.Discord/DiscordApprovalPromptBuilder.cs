@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Channels;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -76,8 +77,13 @@ internal static class DiscordApprovalPromptBuilder
             .AppendLine("**");
         AppendToolSummary(sb, request);
 
-        sb.AppendLine();
-        sb.Append("You can also reply with ").Append(FormatReplyLetters(request.Options)).Append(" in this thread.");
+        // A child prompt has buttons only (design D3, S7): a text answer could approve a command that the model text
+        // did not describe, because parallel child prompts do not name the child.
+        if (request.Lifetime != ToolInteractionLifetime.UntilClosed)
+        {
+            sb.AppendLine();
+            sb.Append("You can also reply with ").Append(FormatReplyLetters(request.Options)).Append(" in this thread.");
+        }
 
         // Discord hard-caps button labels at 80 characters. Labels MUST come from the
         // fixed `ApprovalOptionKeys` constants — do not interpolate runtime values

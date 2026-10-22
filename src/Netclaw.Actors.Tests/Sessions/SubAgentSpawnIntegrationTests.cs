@@ -1382,7 +1382,10 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Spawn_agent_subagent_approval_expires_after_parent_session_recovery()
+    // PR 2 of child-approval-events-and-parent-pause (design D6): recovery withdraws the open prompt of a child that
+    // was live at the restart, and a later click gets the restart text. The text names no run and no agent. The nack is
+    // not the "expired" nack, so the Mattermost synchronous reply does not say "expired" either.
+    public async Task Spawn_agent_subagent_approval_is_withdrawn_after_parent_session_recovery()
     {
         _clientProvider.Main.ToolCallsOnFirstCall =
         [
@@ -1476,12 +1479,15 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 SenderId = source.SenderId!
             }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-            var nack = Assert.IsType<CommandNack>(reply);
-            Assert.Equal(ApprovalNackReasons.PromptExpired, nack.Reason);
-            await subscriberB.FishForMessageAsync<TextOutput>(
-                output => output.Text.Contains("expired", StringComparison.OrdinalIgnoreCase),
+            var withdrawn = await subscriberB.FishForMessageAsync<TextOutput>(
+                output => ChildWithdrawalTexts.IsApprovalReply(output.Text),
                 TimeSpan.FromSeconds(15),
                 cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(ChildWithdrawalTexts.For(WithdrawReason.DaemonRestarted), withdrawn.Text);
+            var nack = Assert.IsType<CommandNack>(reply);
+            Assert.NotEqual(ApprovalNackReasons.PromptExpired, nack.Reason);
+            Assert.DoesNotContain(runId, withdrawn.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("approval-tester", withdrawn.Text, StringComparison.Ordinal);
             Assert.False(_recordingApprovalTool.WasCalled);
 
             await AwaitAssertAsync(() =>

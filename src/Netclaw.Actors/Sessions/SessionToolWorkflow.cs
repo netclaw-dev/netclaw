@@ -100,6 +100,8 @@ internal sealed record ResolvedToolApproval(
 internal sealed partial class SessionToolWorkflow
 {
     private readonly Dictionary<string, ToolApprovalCallState> _calls = new(StringComparer.Ordinal);
+    // How each closed child prompt ended (see RememberClosedChildCalls). A late click reads it.
+    private readonly Dictionary<string, ChildApprovalResolution> _closedChildCalls = new(StringComparer.Ordinal);
     private readonly ActiveToolBatchTracker _activeBatch = new();
     private readonly ApprovalChannel _approvalChannel = new();
     private readonly ManagedTemporaryCorrectionState _corrections = new();
@@ -338,15 +340,6 @@ internal sealed partial class SessionToolWorkflow
 
         return true;
     }
-
-    private PendingToolInteraction? FindLatestPending(
-        Func<PendingToolInteraction, bool> predicate)
-        => _calls.Values
-            .OfType<PendingToolApproval>()
-            .Select(static call => call.Pending)
-            .Where(predicate)
-            .OrderBy(static pending => pending.Request.RequestedAtMs)
-            .LastOrDefault();
 
     public void StartTurn() => TurnPhase = ApprovalTurnPhase.Running;
 

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.126.0"
+  version: "2.127.0"
 ---
 
 # Netclaw Operations
@@ -221,7 +221,8 @@ Read `result.md` with `file_read`. The result never arrives as tool output.
 Another child's unfinished work does not delay a ready notice.
 A child consent request pauses the session until the operator answers: `spawn_agent` is refused, and automated turns
 and child result notices wait. An approval notice tells you about the request. Tell the operator to answer the prompt.
-Do not cancel or respawn a waiting child. Read `references/child-runs.md` for the notice and the pause rules.
+Do not cancel or respawn a waiting child. A child prompt has buttons only, so tell the operator to use the buttons.
+Read `references/child-runs.md` for the notice, the pause, and the withdrawal rules.
 Use `check_agent_run` with the returned `run_id` for a status check.
 The original owner can see `pending_approval_count` and request cancellation with `cancel: true`.
 A cancellation acknowledgement reports intent. Wait for the terminal result before you report that the child stopped.

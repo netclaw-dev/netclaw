@@ -45,24 +45,23 @@ describe the state after PR 3, and the change syncs after PR 3 (task 10.2). No t
 
 ## 4. PR 2 tests first
 
-- [ ] 4.1 Add withdrawal actor specs: a cancel emits one `ToolInteractionClosed` for each open call; an unexpected stop of a live child withdraws with `ChildLost`; a recovery withdrawal uses `DaemonRestarted`; for each `WithdrawReason`, a late click gets the table text with no run ID and no agent name, and nothing runs or is granted. Verify that they fail on PR 1.
-- [ ] 4.2 Add a refused-park-after-cancel spec: the run is recorded as `Cancelled`, not lost. Verify that it fails on PR 1.
-- [ ] 4.3 Add text answer guard tests on the session and in `PendingApprovalLookup`: two open prompts resolve neither and reply "use the buttons"; one open prompt keeps the current behavior; the earliest is resolved when the sender can answer only that one. Verify that they fail on PR 1.
-- [ ] 4.4 Add builder snapshot tests for Slack, Discord, and Mattermost: a child prompt has buttons only, no "reply with" text, and no child identity; the closed redraw of each reason has no child identity. Add a binding test: a failed child prompt post posts no text prompt and the session withdraws with `PromptUnavailable`. Verify that they fail on PR 1.
-- [ ] 4.5 Add `ChannelOutputEngine` and TUI tests: `ToolInteractionClosed` finds the prompt by call ID, redraws, removes, and returns `PendingApprovalPromptCleared`; the TUI removes the prompt. Add a headless test: the headless client prints a prompt and its close with no child identity. Verify that they fail on PR 1.
+- [x] 4.1 Add withdrawal actor specs: a cancel emits one `ToolInteractionClosed` for each open call; an unexpected stop of a live child withdraws with `ChildLost`; a recovery withdrawal uses `DaemonRestarted`; for each `WithdrawReason`, a late click gets the table text with no run ID and no agent name, and nothing runs or is granted. Verify that they fail on PR 1.
+- [x] 4.3 Add text answer guard tests on the session and in `PendingApprovalLookup`: two open prompts resolve neither and reply "use the buttons"; one open prompt keeps the current behavior; the earliest is resolved when the sender can answer only that one. Verify that they fail on PR 1.
+- [x] 4.4 Add builder snapshot tests for Slack, Discord, and Mattermost: a child prompt has buttons only, no "reply with" text, and no child identity; the closed redraw of each reason has no child identity. Add a binding test: a failed child prompt post posts no text prompt and the session withdraws with `PromptUnavailable`. Verify that they fail on PR 1.
+- [x] 4.5 Add `ChannelOutputEngine` and TUI tests: `ToolInteractionClosed` finds the prompt by call ID, redraws, removes, and returns `PendingApprovalPromptCleared`; the TUI removes the prompt. Add a headless test: the headless client prints a prompt and its close with no child identity. Verify that they fail on PR 1.
 
 ## 5. PR 2 implementation
 
-- [ ] 5.1 Add `ToolInteractionClosed(CallId, Reason)` to the session outputs and the DTO mapper (output only, not persisted). Verify task 4.5 compiles.
-- [ ] 5.2 Emit `ToolInteractionClosed` from `CloseChildApprovals`, from recovery, and from a failed child prompt post; add the `Withdrawn` case to `RejectClosedCall` with the reason from the run lifecycle and the call ID prefix; add the five reason texts; record `Cancelled` for a park refused after a cancel. Verify tasks 4.1 and 4.2 pass.
-- [ ] 5.3 Apply the text answer guard in `TryResolveTextResponse` and `PendingApprovalLookup.Resolve`. Verify task 4.3 passes.
-- [ ] 5.4 Render child prompts with buttons only in the three builders; handle `ToolInteractionClosed` in the engine, the builders, the TUI, and the headless client. Verify tasks 4.4 and 4.5 pass.
+- [x] 5.1 Add `ToolInteractionClosed(CallId, Reason)` to the session outputs and the DTO mapper (output only, not persisted). Verify task 4.5 compiles.
+- [x] 5.2 Emit `ToolInteractionClosed` from `CloseChildApprovals`, from recovery, from a failed child prompt post, and (with `Answered`) from an answer; add the `Withdrawn` case to `RejectClosedCall` with the reason that the workflow recorded at the close; add the five reason texts. Verify task 4.1 passes.
+- [x] 5.3 Apply the text answer guard in `TryResolveTextResponse` and `PendingApprovalLookup.Resolve`. Verify task 4.3 passes.
+- [x] 5.4 Render child prompts with buttons only in the three builders; handle `ToolInteractionClosed` in the engine, the builders, the TUI, and the headless client. Verify tasks 4.4 and 4.5 pass.
 
 ## 6. PR 2 docs and gates
 
-- [ ] 6.1 Update `docs/architecture/tool-authorization.md` 3.6 (published contract, withdrawal texts, `RejectClosedCall` list, buttons-only child prompts, text answer guard), 7.5 (honor `Lifetime`, handle `ToolInteractionClosed`), and 9 (text guard gate row). Verify the doc links resolve.
-- [ ] 6.2 Add the text answer guard gate to the `child-consent` group with a `TOOLING.md` row (about 3 minutes). Verify all mutants are killed.
-- [ ] 6.3 Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify`. Verify both pass.
+- [x] 6.1 Update `docs/architecture/tool-authorization.md` 3.6 (published contract, withdrawal texts, `RejectClosedCall` list, buttons-only child prompts, text answer guard), 7.5 (honor `Lifetime`, handle `ToolInteractionClosed`), and 9 (text guard gate row). Verify the doc links resolve.
+- [x] 6.2 Add the text answer guard gate to the `child-consent` group with a `TOOLING.md` row (about 3 minutes). Verify all mutants are killed.
+- [x] 6.3 Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify`. Verify both pass.
 
 # PR 3: durable child wait across a restart (#2572)
 
@@ -79,6 +78,8 @@ describe the state after PR 3, and the change syncs after PR 3 (task 10.2). No t
 - [ ] 7.9 Add purge specs: no purge before the notice is admitted; the delete runs inside the tombstone's persist callback; `JournalPurged` is persisted only after `DeleteMessagesSuccess`; a `DeleteMessagesFailure` logs an error, records no `JournalPurged`, and the next recovery purges again; an empty journal (`LastSequenceNr == 0`) gets no tombstone and no delete; every lost run runs the purge actor, and an orphan journal left by a drain between the child `PersistAll` and the parent `Parked` is removed; for such an orphan (`LastSequenceNr > 0`, `HasChildJournal = false`) the session persists `HasChildJournal = true` before the delete, and after a failed delete the next recovery purges it again; recovery purges an ended run with `HasChildJournal`; a second purge is harmless; `task.md`, `result.md`, and `logs/session.log` stay. Add a SQLite-backed journal test: after the purge, the only row for the child persistence ID is `ChildJournalClosed`. The in-memory journal cannot prove this. Verify that they fail on PR 2.
 - [ ] 7.10 Add recovery and replay specs: a parked request stays open and the session is paused; a non-parked request is withdrawn with `DaemonRestarted`; a new subscriber gets each open child prompt again; Slack, Discord, Mattermost, and the TUI skip a tracked call ID; a session with only parked children passivates and a click wakes it. Verify that they fail on PR 2.
 
+- [ ] 7.11 Add a refused-park-after-cancel spec (moved from PR 2 task 4.2): the run is recorded as `Cancelled`, not lost. Verify that it fails on PR 2.
+
 ## 8. PR 3 implementation
 
 - [ ] 8.1 Add `SubAgentRunProtocol` with `IWithSubAgentRunId` and `ISubAgentRunEvent : INetclawSerializableMessage`, the five child events, the proto messages, manifests, and mapper entries. Verify task 7.1 passes for the child types.
@@ -89,6 +90,8 @@ describe the state after PR 3, and the change syncs after PR 3 (task 10.2). No t
 - [ ] 8.6 Route every child answer to the durable path; wait for siblings; hold the resume during a restart drain; persist `Resumed`; wait for `Terminated`; prepare off the actor thread with the agent definition, provider, and model checks; discard on cancel; recreate the child with the authority of `run.OriginalContext`, the frozen facts, the tool set intersected with the current agent definition and audience policy, and the project directory of the last park; send `ResumeParkedChild` with the redrive plan; seed the bridge prompt number. Verify tasks 7.3, 7.6, and 7.7 pass.
 - [ ] 8.7 Add the end and purge order: child `ChildRunFinished`; parent `TerminalRecorded`, `result.md`, notice; after `Terminated`, a purge actor that recovers only the sequence number; when `LastSequenceNr > 0` it persists `ChildJournalClosed` and calls `DeleteMessages(long.MaxValue)` in that persist callback; the parent persists `JournalPurged` only after `DeleteMessagesSuccess` and logs an error on failure. Run it for every lost run, also without `HasChildJournal`, and for cancelled runs; when it finds an orphan journal, persist `HasChildJournal = true` with the run state before the delete. Verify task 7.9 passes.
 - [ ] 8.8 Change `RecoveryCompleted` and `RecoverChildren` to the D8.8 rules; replay open child prompts to a new subscriber; skip tracked call IDs in `ChannelOutputEngine` and `ChatViewModel`; let a session with only parked children passivate. Verify tasks 7.8 and 7.10 pass.
+
+- [ ] 8.9 Record `Cancelled` for a park that the owner refuses after a cancel (moved from PR 2 task 5.2). Verify task 7.11 passes.
 
 ## 9. PR 3 docs, gates, and rollout
 

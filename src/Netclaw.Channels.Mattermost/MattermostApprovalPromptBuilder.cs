@@ -6,6 +6,7 @@
 using System.Globalization;
 using System.Text;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Channels;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -47,8 +48,14 @@ internal static class MattermostApprovalPromptBuilder
         var sb = new StringBuilder();
         AppendApprovalTitle(sb, request);
         AppendToolSummary(sb, request, includeApprovalQuestion: true);
-        sb.AppendLine();
-        sb.Append("You can also reply with ").Append(FormatReplyLetters(request.Options)).Append(" in this thread.");
+        // A child prompt has buttons only (design D3, S7): a text answer could approve a command that the model text
+        // did not describe, because parallel child prompts do not name the child.
+        var textAnswers = request.Lifetime != ToolInteractionLifetime.UntilClosed;
+        if (textAnswers)
+        {
+            sb.AppendLine();
+            sb.Append("You can also reply with ").Append(FormatReplyLetters(request.Options)).Append(" in this thread.");
+        }
 
         var requesterSenderId = request.RequesterSenderId?.Value ?? string.Empty;
         var actions = request.Options
@@ -80,13 +87,20 @@ internal static class MattermostApprovalPromptBuilder
             })
             .ToList();
 
+        var title = request.ToolName.IsMcp ? "MCP tool approval required" : "Tool approval required";
         var attachment = new MattermostAttachment(
-            Fallback: $"{(request.ToolName.IsMcp ? "MCP tool approval required" : "Tool approval required")} — reply with {string.Join(", ", Enumerable.Range(0, actions.Count).Select(GetReplyLetter))}",
+            Fallback: textAnswers
+                ? $"{title} — reply with {string.Join(", ", Enumerable.Range(0, actions.Count).Select(GetReplyLetter))}"
+                : title,
             Color: "#3AA3E3",
             Actions: actions);
 
         return (FitMessage(sb.ToString().TrimEnd()), [attachment]);
     }
+
+    /// <summary>The redraw of a closed prompt: the close text and no actions.</summary>
+    public static MattermostAttachment BuildClosedAttachment(string closeText)
+        => new(Fallback: closeText, Color: "#808080", Text: closeText);
 
     public static string BuildTextPrompt(ToolInteractionRequest request)
     {

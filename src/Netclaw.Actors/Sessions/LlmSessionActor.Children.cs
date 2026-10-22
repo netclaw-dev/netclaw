@@ -21,6 +21,8 @@ namespace Netclaw.Actors.Sessions;
 public sealed partial class LlmSessionActor
 {
     private readonly HashSet<SubAgentRunId> _unreportableRuns = [];
+    // The child prompts that the last recovery withdrew (DaemonRestarted and the other recovered reasons). Actor-local.
+    private IReadOnlyList<ToolInteractionClosed> _restartWithdrawals = [];
     private readonly ChildConsentDigest _consentDigest = new();
     private bool _noticeAdmissionInOpenTurn;
 
@@ -248,8 +250,10 @@ public sealed partial class LlmSessionActor
             _state = _state.Apply(committed);
             _execution.CloseChild(run.RunId);
             replyTo.Tell(ChildStatus(_state.ChildRuns[run.RunId]));
-            ChildApprovalsClosed(_toolWorkflow.WithdrawChildApprovals(committed, _state.ChildRuns[run.RunId], _sessionId,
-                _timeProvider.GetUtcNow()));
+            var withdrawn = _toolWorkflow.WithdrawChildApprovals(committed, _state.ChildRuns[run.RunId], _sessionId,
+                _timeProvider.GetUtcNow());
+            EmitClosedPrompts(withdrawn);
+            ChildApprovalsClosed(withdrawn);
         });
     }
 
@@ -295,6 +299,8 @@ public sealed partial class LlmSessionActor
             _state = _state.Apply(committed);
             var withdrawn = _toolWorkflow.WithdrawChildApprovals(committed, _state.ChildRuns[runId], _sessionId,
                 _timeProvider.GetUtcNow());
+            // The prompts close before the run reports its end, so no channel shows a live prompt of an ended run.
+            EmitClosedPrompts(withdrawn);
             _execution.ReleaseChild(runId);
             if (!child.Equals(ActorRefs.Nobody))
             {
@@ -553,6 +559,20 @@ public sealed partial class LlmSessionActor
     {
         _consentDigest.Requested(AgentEventFactory.ApprovalRequested(_sessionId, run, prompt, _timeProvider.GetUtcNow()));
         ChildConsentChanged();
+    }
+
+    // A closed child prompt closes on every surface (design D6). Each channel redraws it with the reason and removes it,
+    // also a second client that did not answer it. The output is not persisted. A late click reads the reason from the
+    // workflow.
+    private void EmitClosedPrompts(IReadOnlyList<AgentEvent.ChildApprovalResolved> closed)
+    {
+        foreach (var resolution in closed)
+        {
+            ToolInteractionCloseReason reason = resolution.Resolution is ChildApprovalResolution.Withdrawn withdrawn
+                ? new ToolInteractionCloseReason.Withdrawn(withdrawn.Reason)
+                : new ToolInteractionCloseReason.Answered();
+            EmitOutput(new ToolInteractionClosed(resolution.PromptCallId, reason) { SessionId = _sessionId });
+        }
     }
 
     // An answer or a withdrawal closed child requests. Only the last close of the session makes the digest ready, so no

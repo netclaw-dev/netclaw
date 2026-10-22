@@ -433,4 +433,70 @@ public sealed class SlackApprovalBlockBuilderTests
         if (withSiblingVerbs)
             Assert.Contains(sections, section => section.Contains("• `git push`", StringComparison.Ordinal));
     }
+
+    // PR 2 of child-approval-events-and-parent-pause (design D3, S7; TA-12; channel-binding-parity "Child prompts have
+    // buttons only"). A child prompt shows the command and the scope with buttons only: no "reply with" text and no
+    // child identity. The request of a child prompt has the call ID that the bridge makes, "{runId}/subagent-approval/{n}",
+    // and no agent name. A parent prompt keeps its text reply hint.
+    // Planted bug: the builder adds "You can also reply with A, B" to every prompt (today), or it prints the call ID.
+    private const string ChildRunId = "0f3c9a7d5e2b41c8a6d4e1f2b3c4d5e6";
+
+    private static ToolInteractionRequest ChildPrompt(bool child) => new()
+    {
+        SessionId = new SessionId("test/child-prompt"),
+        Kind = "approval",
+        CallId = new Netclaw.Tools.ToolCallId(child ? $"{ChildRunId}/subagent-approval/1" : "call-parent-1"),
+        ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+        DisplayText = "gh pr view 2558",
+        RequesterSenderId = new SenderId("user-1"),
+        Lifetime = child ? ToolInteractionLifetime.UntilClosed : ToolInteractionLifetime.UntilTurnEnd,
+        Patterns = ["gh pr view"],
+        CandidateVerbs = ["gh pr view"],
+        Cwd = "/repo",
+        Options =
+        [
+            new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+            new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+        ]
+    };
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Child_prompt_has_buttons_only_and_no_child_identity(bool child)
+    {
+        var request = ChildPrompt(child);
+
+        var text = SlackApprovalBlockBuilder.BuildApprovalText(request);
+        var blocks = SlackApprovalBlockBuilder.BuildApprovalBlocks(request);
+        var visible = string.Join('\n', new[] { text }.Concat(blocks
+            .OfType<SectionBlock>()
+            .Select(block => block.Text is Markdown markdown ? markdown.Text : string.Empty)));
+
+        Assert.Contains("gh pr view 2558", visible, StringComparison.Ordinal);
+        Assert.Contains(blocks, block => block is ActionsBlock);
+        Assert.DoesNotContain(ChildRunId, visible, StringComparison.Ordinal);
+        Assert.Equal(!child, visible.Contains("reply with", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Review fix S1 of PR 2: the typed Lifetime is the one signal for a child prompt. A parent prompt whose call ID holds
+    // "/subagent-approval/" keeps the lifetime "until turn end", so the builder draws it as a parent prompt with its reply
+    // hint.
+    // Planted bug: the builder detects a child prompt by the call ID shape (today) and drops the reply hint.
+    [Fact]
+    public void Parent_prompt_with_a_child_shaped_call_id_keeps_its_reply_hint()
+    {
+        var request = ChildPrompt(child: true) with { Lifetime = ToolInteractionLifetime.UntilTurnEnd };
+
+        var text = SlackApprovalBlockBuilder.BuildApprovalText(request);
+        var blocks = SlackApprovalBlockBuilder.BuildApprovalBlocks(request);
+        var sections = blocks
+            .OfType<SectionBlock>()
+            .Select(block => block.Text is Markdown markdown ? markdown.Text : string.Empty)
+            .ToList();
+
+        Assert.Contains("Reply with:", text, StringComparison.Ordinal);
+        Assert.Contains(sections, section => section.Contains("You can also reply with", StringComparison.Ordinal));
+        Assert.Contains(blocks, block => block is ActionsBlock);
+    }
 }

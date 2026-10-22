@@ -235,8 +235,10 @@ without a change to the channel contract. This change does not make that change.
   that a cold-spawned binding keeps a child prompt. An older binary ignores the unknown field. A row without the field
   reads as `UntilTurnEnd`, which is today's behavior.
 - **Buttons only (PR 2, S7).** A child prompt shows buttons only. It has no "reply with A, B" text and no text-only
-  fallback. When the button post fails, the binding reports `approval_prompt_unavailable` (existing path). For a child
-  prompt the session withdraws the request with `PromptUnavailable`.
+  fallback. A channel identifies a child prompt only by `Lifetime == UntilClosed`, never by the call ID shape. When
+  the button post fails, the binding reports `approval_prompt_unavailable` (existing path). For a child prompt the
+  session withdraws the request with `PromptUnavailable`. A text-only Mattermost binding (no `CallbackUrl`) cannot
+  show buttons, so it refuses every child consent request this way.
 - **Consent boundary.** The parent model has no tool that produces a `ToolInteractionResponse`. Its text output is a
   `TextOutput`. A channel never renders buttons from model text.
 
@@ -453,13 +455,38 @@ held fire. An isolated reminder session has no interactive channel, so it never 
 
 ### D6. Withdrawal and an accurate late reply (PR 2)
 
-- `CloseChildApprovals`, recovery, and a failed child prompt post build `ChildApprovalResolved(Withdrawn(reason))` and
-  emit `ToolInteractionClosed(CallId, Reason)` for each closed call. `ToolInteractionClosed` is an output and is not
-  persisted. A binding finds its tracked prompt by the call ID, redraws it, and journals the existing
-  `PendingApprovalPromptCleared`.
-- `RejectClosedCall` gets one new case. For a child call ID, the workflow reads the run ID from the call ID prefix
-  (the runtime made the ID) and the run lifecycle in `SessionState`. The reply is `ApprovalNoticeKind.Withdrawn`.
-- A park that the owner refuses because the run was cancelled meanwhile records `Cancelled`, not lost.
+- `ToolInteractionClosed(CallId, Reason)` is an output and is not persisted. `Reason` is the closed hierarchy
+  `ToolInteractionCloseReason`: `Answered`, or `Withdrawn(WithdrawReason)`.
+- `WithdrawChildApprovals` (at a cancel record or a terminal record), recovery (`WithdrawRecoveredChildApprovals`), and
+  a failed child prompt post build `ChildApprovalResolved(Withdrawn(reason))` and emit a `Withdrawn` close for each
+  closed call. An answer of a child prompt emits an `Answered` close, so every other subscriber drops the prompt. A
+  binding finds its tracked prompt by the call ID, redraws it, and journals the existing
+  `PendingApprovalPromptCleared`. An `Answered` redraw says "This approval request has an answer.", never "withdrawn"
+  or "Nothing ran".
+- Recovery runs before a subscriber joins. The session sends the restart closes after the session log actor is known,
+  and it keeps them (`_restartWithdrawals`) to send to each new subscriber at its join. Headless output prints only
+  the close of a prompt that it showed.
+- `RejectClosedCall` gets one new case, `ApprovalNoticeKind.Withdrawn`, with the nack `approval_withdrawn`. The
+  workflow keeps how each closed child prompt ended in `_closedChildCalls` (actor-local): an answer or a withdrawal
+  with its reason. The live close records the reason of its record. Recovery rebuilds the map from the replayed
+  approval events and the run lifecycle: an accepted run gives `DaemonRestarted`, a cancelling run or a run that
+  ended with the outcome reason `cancelled_by_parent` gives `CancelledByParent`, and another ended or lost run gives
+  `ChildEnded`. A prompt with a recorded answer gets "already has an answer", because the withdrawal text says
+  "Nothing ran".
+- Snapshot limit: a snapshot deletes the approval events of the closed prompts, so replay cannot rebuild their
+  closes. `SaveSnapshotSuccess` clears `_closedChildCalls` and `_restartWithdrawals`, so a late click gets "expired"
+  after a snapshot, before and after a restart. The routine snapshot waits while an approval entry is open
+  (`AllowsSnapshot`), but the compaction snapshot does not (`LlmSessionActor`, the compaction path). It can save while a
+  child entry is open, and the snapshot then drops that request. After a restart, a late click on that prompt gets
+  "expired", not the withdrawal text, and only the binding self-heal below clears the prompt. Only the text differs:
+  nothing runs and nothing is granted. PR 2 does not gate the compaction snapshot; PR 3 keeps parked entries in it.
+  A small window also exists: `SaveSnapshotSuccess` clears every recorded close, also a close that the session
+  recorded after the save started. A late click on such a prompt gets "expired" too.
+- Binding self-heal: a binding can restore a child prompt from its journal after the session forgot it, and then no
+  close comes. When the session refuses an answer for a prompt that the binding holds as `approval_withdrawn`,
+  `approval_prompt_expired`, or `approval_already_answered`, `ApprovalResponseFlow` removes the entry, journals
+  `PendingApprovalPromptCleared`, and redraws the prompt with a generic closed text and no buttons.
+- A park that the owner refuses because the run was cancelled meanwhile records `Cancelled`, not lost (PR 3).
 
 | `WithdrawReason` | Text for the redraw and for a late click |
 | --- | --- |
@@ -472,11 +499,29 @@ held fire. An isolated reminder session has no interactive channel, so it never 
 No text names the child run or the agent. Headless output prints the prompt and the close from
 `ToolInteractionRequest` and `ToolInteractionClosed` only, with no child identity.
 
+Limit: a run that the parent cancelled and that was then lost ends with a terminal record whose outcome reason is
+`actor_stopped`. The run record keeps no cancel fact after the terminal record, so after a restart a late click on its
+prompt gets `ChildEnded`. Live, the cancel closed the prompt with `CancelledByParent` first.
+
 ### D7. Text answer guard (PR 2)
 
-A text answer resolves a prompt only when the sender can answer exactly one open prompt. With two or more, the
-session and the channel reply "N approval prompts are open. Use the buttons on the prompt you mean." Owners:
-`SessionToolWorkflow.TryResolveTextResponse` and `PendingApprovalLookup.Resolve`.
+A text answer names no prompt. The guard applies only when a child prompt is among the prompts that the sender can
+answer (coordinator ruling of the PR 2 review):
+
+- When a child prompt is among two or more answerable prompts, the session and the channel resolve none and reply
+  "N approval prompts are open. Use the buttons on the prompt you mean." The nack is `approval_use_buttons`.
+- The session parses the text first. Text that answers no prompt gets the option-unavailable nack, as in the channel,
+  where it stays ordinary conversation.
+- With parent prompts only, the rule from before PR 2 holds. The session resolves the latest prompt by its durable
+  request time. The channels resolve the earliest prompt. A text-only Mattermost binding needs that rule for parallel
+  parent calls.
+
+Owners: `SessionToolWorkflow.TryResolveTextResponse` (a child prompt has `SourceChildRunId`) and
+`PendingApprovalLookup.Resolve` (a child prompt has `Lifetime == UntilClosed`, also when the binding restored it from
+its journal).
+
+A valid example: Alice has two parent prompts open in text-only Mattermost. Her "A" approves the earliest one. An
+invalid example: a parent prompt and a child prompt of Alice are open. Her "A" resolves neither.
 
 ### D8. Durable child wait across a restart (#2572, PR 3)
 
@@ -747,7 +792,7 @@ sequenceDiagram
 | Spawn refusal and its text | `LlmSessionActor.AcceptChild` | call-local on actor-local state |
 | Automated input waits; reminder replacement | `SessionToolWorkflow.PlanNewInputAbandonment`, `SessionInputFlow` | actor-local; `InputClosed` durable |
 | Consent answer validity | `SessionToolWorkflow.ValidateResponse` (unchanged) | actor-local plus durable resolution |
-| Withdrawal and late reply | `SessionToolWorkflow.CloseChildApprovals`, `RejectClosedCall` | derived from durable run lifecycle |
+| Withdrawal and late reply | `SessionToolWorkflow.WithdrawChildApprovals`, `RejectClosedCall` | actor-local `_closedChildCalls`, rebuilt at recovery from the approval events and the run lifecycle |
 | Text answer guard | `SessionToolWorkflow.TryResolveTextResponse`, `PendingApprovalLookup` | actor-local |
 | Prompt redraw and dedupe | `ChannelOutputEngine`, `ChatViewModel` | binding journal (`PendingApprovalPromptCleared`) |
 | Child conversation and frozen facts | `SubAgentActor` (persistent) | durable, child journal |
@@ -783,7 +828,7 @@ Notice turn, negative: in a notice turn, the model calls `shell_execute` with an
 Reminder, positive: reminder R fires at 14:00 and 15:00 while the session is paused. The 15:00 fire replaces the 14:00
 fire. After the answers, one turn of R runs, and the session-clear notice lists R.
 
-Consent boundary, negative: the parent model writes "Reply A to approve `gh pr view`" while two prompts are open, one
+Consent boundary, negative: the parent model writes "Reply A to approve `gh pr view`" while a parent prompt and a child prompt are open, one
 of them `rm -rf build`. Alice types "A". The session resolves neither prompt.
 
 Withdrawal, negative: the parent cancels r-8a1. Alice clicks its old button. The reply is "This approval request was
@@ -907,8 +952,9 @@ measured time after the first hosted run.
 - [The notice no longer joins a running person turn.] → The parent sees the notice in its own turn right after the
   running turn. `spawn_agent` is refused at once in the running turn, with the refusal text.
 - [Persist callbacks reorder the admission and the drain at a boundary.] → Admit in the persist callback, then drain.
-- [A channel binding is not subscribed when recovery emits `ToolInteractionClosed`.] → The buttons stay live until a
-  click. The click gets the D6 reply and the binding redraws.
+- [A channel binding is not subscribed when recovery emits `ToolInteractionClosed`.] → The session sends the restart
+  closes to each new subscriber at its join. After a later snapshot or passivation, a click on a restored prompt gets
+  a refusal, and the binding clears and redraws the prompt (D6 binding self-heal).
 - [PR 3: journal growth.] → Only parked runs write a journal, and the purge removes it. Expired sessions wait for
   #2573.
 - [PR 3: purge order.] → The parent purges only after the notice and `Terminated`. A Stryker target guards the order.

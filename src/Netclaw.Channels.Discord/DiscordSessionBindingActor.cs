@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.Sessions;
 using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
@@ -39,8 +40,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         ":warning: Message blocked by prompt-injection policy.";
     private const string LiveDetectorUnavailableWarning =
         ":warning: I couldn't safely analyze your message — please try again in a moment.";
-    private const string WrongRequesterWarning =
-        ":warning: Only the requesting user can approve this tool action.";
     private const string BackfillDetectorWarning =
         ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
 
@@ -133,6 +132,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             postApprovalPromptAsync: SafeReplyWithButtonsAsync,
             readPromptIdValue: promptMessageId => promptMessageId.Value,
             onApprovalPromptFailedAsync: SendApprovalPromptUnavailableAsync,
+            redrawClosedPromptAsync: RedrawClosedApprovalPromptAsync,
             persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
             handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
             advanceCursor: AdvanceCursor,
@@ -167,11 +167,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             operationTimeout: OperationTimeout,
             pendingRequests: _pendingApprovalRequests,
             hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
-            postWrongRequesterWarningAsync: () => SafeReplyAsync(WrongRequesterWarning),
+            postNoticeAsync: text => SafeReplyAsync(text),
             persistPromptCleared: callId => Persist(
                 new PendingApprovalPromptCleared { CallId = callId.Value },
                 ApplyPendingApprovalPromptCleared),
             renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
+            redrawClosedPromptAsync: RedrawClosedApprovalPromptAsync,
             log: _log);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
@@ -495,6 +496,26 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             message.SenderId.Value,
             message.PromptMessageId);
 
+    private async Task RedrawClosedApprovalPromptAsync(PendingApprovalRequest pending, string closeText)
+    {
+        var messageId = pending.PromptId ?? throw new InvalidOperationException("A closed prompt redraw needs its message.");
+        try
+        {
+            using var cts = new CancellationTokenSource(OperationTimeout);
+            await _dependencies.ReplyClient.UpdateMessageAsync(
+                _replyChannelId,
+                messageId,
+                closeText,
+                removeComponents: true,
+                cts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed to redraw closed approval prompt for call {CallId} messageId={MessageId}",
+                pending.CallId, messageId.Value);
+        }
+    }
+
     private async Task TryResolveApprovalPromptAsync(
         DiscordMessageId? promptMessageId,
         ToolInteractionRequest? request,
@@ -694,6 +715,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             ChannelTelemetry.For(ChannelType.Discord).RecordReplyPosted(duration);
             ChannelTelemetry.For(ChannelType.Discord).RecordExtra("approvalFallbackActivated", "button_prompt");
             return result.MessageId;
+        }
+        catch (Exception ex) when (request.Lifetime == ToolInteractionLifetime.UntilClosed)
+        {
+            // A child prompt has buttons only (design D3, S7). The shared output engine refuses the call as
+            // prompt_unavailable when this returns null, and the session withdraws the request.
+            _log.Error(ex, "Failed posting Discord button prompt for a child consent request; refusing the call");
+            return null;
         }
         catch (Exception ex)
         {

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Tools;
 using SlackNet.Blocks;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -60,10 +61,15 @@ internal static class SlackApprovalBlockBuilder
 
         AppendAdoptedContextSummary(lines, request);
 
-        lines.Add("");
-        lines.Add("Reply with:");
-        foreach (var replyOption in EnumerateReplyOptions(request.Options))
-            lines.Add($"  *{replyOption.Letter})* {replyOption.Option.Label}");
+        // A child prompt has buttons only (design D3, S7): a text answer could approve a command that the model text
+        // did not describe, because parallel child prompts do not name the child.
+        if (request.Lifetime != ToolInteractionLifetime.UntilClosed)
+        {
+            lines.Add("");
+            lines.Add("Reply with:");
+            foreach (var replyOption in EnumerateReplyOptions(request.Options))
+                lines.Add($"  *{replyOption.Letter})* {replyOption.Option.Label}");
+        }
 
         return string.Join("\n", lines);
     }
@@ -110,7 +116,8 @@ internal static class SlackApprovalBlockBuilder
                 })]
         });
 
-        blocks.Add(Section($"You can also reply with {FormatReplyLetters(request.Options)} in this thread."));
+        if (request.Lifetime != ToolInteractionLifetime.UntilClosed)
+            blocks.Add(Section($"You can also reply with {FormatReplyLetters(request.Options)} in this thread."));
 
         return blocks;
     }
@@ -202,6 +209,10 @@ internal static class SlackApprovalBlockBuilder
 
         return string.Join("\n", lines);
     }
+
+    /// <summary>The redraw of a closed prompt: the close text and no actions block.</summary>
+    public static IReadOnlyList<Block> BuildClosedApprovalBlocks(string closeText)
+        => [Section(closeText)];
 
     /// <summary>
     /// Block-Kit variant of <see cref="BuildResolvedApprovalTextWithoutRequest"/>.

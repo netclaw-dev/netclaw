@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.Sessions;
 using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
@@ -36,8 +37,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         ":warning: Message blocked by prompt-injection policy.";
     private const string LiveDetectorUnavailableWarning =
         ":warning: I couldn't safely analyze your message -- please try again in a moment.";
-    private const string WrongRequesterWarning =
-        ":warning: Only the requesting user can approve this tool action.";
     private const string BackfillDetectorWarning =
         ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
 
@@ -142,6 +141,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             postApprovalPromptAsync: SafeReplyWithApprovalPromptAsync,
             readPromptIdValue: promptPostId => promptPostId.Value,
             onApprovalPromptFailedAsync: SendApprovalPromptUnavailableAsync,
+            redrawClosedPromptAsync: RedrawClosedApprovalPromptAsync,
             persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
             handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
             advanceCursor: AdvanceCursor,
@@ -177,11 +177,12 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             operationTimeout: OperationTimeout,
             pendingRequests: _pendingApprovalRequests,
             hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
-            postWrongRequesterWarningAsync: () => SafeReplyAsync(WrongRequesterWarning),
+            postNoticeAsync: text => SafeReplyAsync(text),
             persistPromptCleared: callId => Persist(
                 new PendingApprovalPromptCleared { CallId = callId.Value },
                 ApplyPendingApprovalPromptCleared),
             renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
+            redrawClosedPromptAsync: RedrawClosedApprovalPromptAsync,
             log: _log);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
@@ -519,6 +520,22 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             respondSynchronously: response => ReplyIfExpected(replyTo, response));
     }
 
+    private async Task RedrawClosedApprovalPromptAsync(PendingApprovalRequest pending, string closeText)
+    {
+        var postId = pending.PromptId ?? throw new InvalidOperationException("A closed prompt redraw needs its post.");
+        try
+        {
+            var closed = MattermostApprovalPromptBuilder.BuildClosedAttachment(closeText);
+            using var cts = new CancellationTokenSource(OperationTimeout);
+            await _dependencies.ReplyClient.UpdatePostAsync(postId, closed.Text ?? string.Empty, [closed], cts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed to redraw closed approval prompt for call {CallId} postId={PostId}",
+                pending.CallId, postId.Value);
+        }
+    }
+
     private async Task TryResolveApprovalPromptAsync(
         MattermostPostId? promptPostId,
         ToolInteractionRequest? request,
@@ -748,6 +765,14 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             return await TryPostButtonPromptAsync(request, callbackUrl);
         }
 
+        // A child prompt has buttons only (design D3, S7). A binding with no callback URL cannot show buttons, so the
+        // shared output engine refuses the call as prompt_unavailable, and the session withdraws the request.
+        if (request.Lifetime == ToolInteractionLifetime.UntilClosed)
+        {
+            _log.Warning("Mattermost has no callback URL for buttons; refusing child consent request {CallId}", request.CallId);
+            return null;
+        }
+
         return await TryPostTextPromptAsync(request);
     }
 
@@ -781,6 +806,13 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 store.AssociatePromptPostId(promptCorrelationId, postId.Value);
             }
             return result.PostId;
+        }
+        catch (Exception ex) when (request.Lifetime == ToolInteractionLifetime.UntilClosed)
+        {
+            // A child prompt has buttons only (design D3, S7), so it gets no text-only fallback.
+            _log.Error(ex, "Failed posting Mattermost button prompt for a child consent request; refusing the call");
+            ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("approvalFallbackActivated", "auto_deny");
+            return null;
         }
         catch (Exception ex)
         {

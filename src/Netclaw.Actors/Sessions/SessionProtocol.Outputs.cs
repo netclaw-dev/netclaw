@@ -519,6 +519,13 @@ public static partial class SessionProtocol
     }
 
     /// <summary>
+    /// An open child consent prompt closed: a person answered it, or the session withdrew it with no answer. A channel
+    /// finds its prompt by <see cref="CallId"/>, redraws it as closed with the reason text, and removes it. The output
+    /// is not persisted. Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
+    /// </summary>
+    public sealed record ToolInteractionClosed(ToolCallId CallId, ToolInteractionCloseReason Reason) : SessionOutput;
+
+    /// <summary>
     /// An option presented to the user in a <see cref="ToolInteractionRequest"/>.
     /// </summary>
     public sealed record ToolInteractionOption(ApprovalOptionKey Key, string Label);
