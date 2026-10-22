@@ -379,6 +379,81 @@ public sealed class SecretOutputRedactorCredentialShapeTests
     [InlineData("AWS_STARTING_TOKEN=abc123", "abc123", "AWS_STARTING_TOKEN=")]
     public void Redact_masks_starting_token_env_values_as_the_old_redactor_did(string input, string secrets, string kept)
         => AssertMasked(input, secrets, kept);
+
+    // ── Third review findings (#2595) ──
+
+    // ';' after an option value ends a shell command. It is not sentence punctuation, so the
+    // value is masked, as it is before "&&". A prose word is short: a long run of lower-case
+    // letters before a period is a value. "use the --token option." stays unchanged (above).
+    [Theory]
+    [InlineData("mysql -u root --password changeme; echo done", "changeme", "mysql -u root --password|echo done")]
+    [InlineData("mysql -u root --password changeme && ls", "changeme", "mysql -u root --password|&& ls")]
+    [InlineData("--token abcdefghijklmnopqrstuvwxyzabcdef.", "abcdefghijklmnopqrstuvwxyzabcdef", "--token")]
+    [InlineData("Run with --token qwertyuiopasdfghjklzxcvbnm.", "qwertyuiopasdfghjklzxcvbnm", "Run with --token")]
+    [InlineData("X-Api-Key: abcdefghijklmnopqrstuvwxyzabcdef.", "abcdefghijklmnopqrstuvwxyzabcdef", "X-Api-Key")]
+    public void Redact_masks_a_value_before_a_shell_separator_or_a_long_word_before_a_period(string input, string secrets, string kept)
+        => AssertMasked(input, secrets, kept);
+
+    // A value that is itself a function word or a verb of a sentence is prose. The weak
+    // passwords (changeme, secret, hunter, abcdefghij, abcdefghijkl, abcdefgh) stay masked (above).
+    [Theory]
+    [InlineData("--token should come from the vault.")]
+    [InlineData("--token can be omitted when GITHUB_TOKEN is set.")]
+    [InlineData("--api-key was rotated last week.")]
+    [InlineData("--api-key takes precedence over the config file.")]
+    [InlineData("Remember: --api-key takes precedence over the env var.")]
+    [InlineData("Prefer --token over --password.")]
+    [InlineData("token: the session token")]
+    [InlineData("\"token: the session token\"")]
+    public void Redact_leaves_a_sentence_whose_next_word_is_a_function_word_alone(string input)
+        => AssertUnchanged(input);
+}
+
+/// <summary>
+/// Redact must not allocate far more than its input. A header, JSON key, or option name of
+/// 4 MB is adversarial input. The allocation counter is per thread, and Redact runs on the
+/// test thread, so other tests do not change the count.
+/// </summary>
+[Collection(RedactorTimingCollection.Name)]
+public sealed class SecretOutputRedactorCredentialShapeAllocationTests
+{
+    private const int AdversarialChars = 4 * 1024 * 1024;
+
+    // A few copies of the input are normal: each rule that matches makes a new string.
+    private const int MaxCopiesOfInput = 4;
+
+    private static string Rep(string unit) => string.Concat(Enumerable.Repeat(unit, AdversarialChars / unit.Length));
+
+    private static IEnumerable<(string Name, Func<string> Build)> Shapes()
+    {
+        yield return ("long header name", () => Rep("a-") + "token: abc123key");
+        yield return ("long json header key", () => "{\"" + Rep("a-") + "token\": \"abc123key\"}");
+        yield return ("long option name", () => "--" + Rep("a-") + "token abc123key");
+    }
+
+    public static TheoryData<string> ShapeNames()
+    {
+        var data = new TheoryData<string>();
+        foreach (var (name, _) in Shapes())
+            data.Add(name);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(ShapeNames))]
+    public void Redact_allocates_at_most_a_few_copies_of_a_long_name(string shape)
+    {
+        var input = Shapes().Single(s => s.Name == shape).Build();
+        SecretOutputRedactor.Redact(input[..1024]); // regex construction is a one-off cost, not the subject here
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        SecretOutputRedactor.Redact(input);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        long inputBytes = input.Length * sizeof(char);
+        Assert.True(allocated <= MaxCopiesOfInput * inputBytes,
+            $"{shape}: Redact allocated {allocated / 1024 / 1024} MB for {inputBytes / 1024 / 1024} MB of input (limit {MaxCopiesOfInput} copies)");
+    }
 }
 
 /// <summary>
