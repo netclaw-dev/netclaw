@@ -178,7 +178,8 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
                     && message.Text.Contains("result.md", StringComparison.Ordinal))),
                 Deadline, cancellationToken: Cancellation);
             var notice = Assert.Single(control.Committed.OfType<InputAdmitted>(), evt => evt.ChildNotice?.RunId == accepted.Run.RunId);
-            Assert.Contains("reason=actor_stopped", notice.UserMessage.Content, StringComparison.Ordinal);
+            // The session actor stopped and started again in a live daemon. Recovery names that fact (issue 2602).
+            Assert.Contains("reason=owner_restarted", notice.UserMessage.Content, StringComparison.Ordinal);
             Assert.DoesNotContain(_clients.Parent.ReceivedMessages, request => Calls(request).Any(call => call.Name == "child_run_result"));
             await AwaitAssertAsync(() => Assert.Single(control.Committed.OfType<TurnRecorded>(),
                 evt => evt.ConsumedInputIds.Contains(notice.InputId)), Deadline, cancellationToken: Cancellation);

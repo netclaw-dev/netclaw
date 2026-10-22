@@ -1496,7 +1496,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                     .LastOrDefault(messages => FindDeliveredRunIds(messages).Contains(runId));
                 Assert.NotNull(resumedRequest);
                 var resumedResult = GetChildRunResult(resumedRequest!, runId);
-                Assert.Contains("child owner was lost", resumedResult, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("did not survive", resumedResult, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("reason: owner_restarted", resumedResult, StringComparison.Ordinal);
                 Assert.Contains("uncertain", resumedResult, StringComparison.OrdinalIgnoreCase);
 
                 var originalReceipt = Assert.Single(resumedRequest

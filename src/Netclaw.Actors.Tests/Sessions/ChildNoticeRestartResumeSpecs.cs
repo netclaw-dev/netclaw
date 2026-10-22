@@ -134,7 +134,8 @@ public sealed class ChildNoticeRestartResumeSpecs(ITestOutputHelper output) : Ch
         var resultPath = ResultPath(sessionId, accepted);
         await AwaitAssertAsync(() => Assert.True(File.Exists(resultPath), $"The runtime must write {resultPath}."),
             Deadline, cancellationToken: Cancellation);
-        Assert.Contains("actor_stopped", await File.ReadAllTextAsync(resultPath, Cancellation), StringComparison.Ordinal);
+        // Recovery cannot tell a restart drain from a crash, so it names the fact that it knows (issue 2602).
+        Assert.Contains("- reason: owner_restarted", await File.ReadAllTextAsync(resultPath, Cancellation), StringComparison.Ordinal);
     }
 
     /// <summary>
