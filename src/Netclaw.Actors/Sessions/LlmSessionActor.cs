@@ -1133,14 +1133,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (continuation.ResumeToolLoop)
             _log.Info("Post-compaction: resuming tool loop with follow-up LLM call");
 
-        if (continuation.Batch is { } batch)
+        if (continuation.Batch is { DispatchesCommand: true } command)
+            DispatchBufferedCommand(command);
+        else if (continuation.Action == InputProgressAction.FollowUp)
         {
-            _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", batch.Messages.Count);
-            ApplyBufferedBatch(batch);
-        }
+            if (continuation.Batch is { } batch)
+            {
+                _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", batch.Messages.Count);
+                ApplyBufferedBatch(batch);
+            }
 
-        if (continuation.Action == InputProgressAction.FollowUp)
-        {
             FireLlmCall();
             TransitionTo(SessionPhase.Processing);
         }
@@ -1767,6 +1769,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        if (next.Batch is { DispatchesCommand: true } command)
+        {
+            DispatchBufferedCommand(command);
             return;
         }
 
@@ -3091,7 +3099,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     /// </summary>
     private bool TryHandleSlashCommand(string userContent, IReadOnlyList<SerializableMediaReference> mediaRefs)
     {
-        if (_skillRegistry is null || string.IsNullOrWhiteSpace(userContent) || userContent[0] != '/')
+        if (_skillRegistry is null || !SessionInputFlow.IsSlashCommand(userContent))
             return false;
 
         if (_skillRegistry.TryResolveSlashCommand(userContent, out var skill, out var remainder))
@@ -3920,6 +3928,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
+        if (next.Batch is { DispatchesCommand: true } command)
+        {
+            DispatchBufferedCommand(command);
+            return;
+        }
+
         if (next is not { Action: InputProgressAction.FollowUp, Batch: { } batch })
             return;
 
@@ -3928,6 +3942,20 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         ApplyBufferedBatch(batch);
         FireLlmCall();
         TransitionTo(SessionPhase.Processing);
+    }
+
+    // A buffered slash command never joins a turn (#2591). The session goes to Ready, and the command runs on the
+    // live command path. A rejected command then starts the next waiting input (RejectSlashCommand).
+    private void DispatchBufferedCommand(BufferedInputBatch batch)
+    {
+        if (_phase.Current != SessionPhase.Ready)
+        {
+            ClearApprovalTurnState();
+            TransitionTo(SessionPhase.Ready);
+        }
+
+        TurnLog().Info("turn_buffer_command input={InputId}", batch.Messages[0].AdmittedInputId);
+        ContinueIncomingUserMessage(batch.Messages[0]);
     }
 
     private bool AbandonResolvedToolBatchAfterRecovery()

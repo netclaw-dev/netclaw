@@ -35,11 +35,13 @@ internal abstract record AdmissionDecision
 // JoinsAutomationTurn: automated input joins a running turn. Either the requester of the turn is automation (a
 // reminder, a background job, a webhook), whose later inputs have the same fixed system sender, or every input of
 // the batch is a child result notice, which is automated input by its kind and brings no new person input.
+// DispatchesCommand: the batch is one slash command. The actor runs it on the live command path, not as model text.
 internal sealed record BufferedInputBatch(
     IReadOnlyList<SendUserMessage> Messages,
     bool StartsNewTurn,
     bool AdoptsAuthority,
-    bool JoinsAutomationTurn);
+    bool JoinsAutomationTurn,
+    bool DispatchesCommand);
 
 // NoticeRunIds: the child runs that the notices of the running turn name, in input order. They stay for the whole
 // turn, also after a tool batch closes the selected inputs, and end when the turn is recorded.
@@ -479,9 +481,7 @@ internal sealed class SessionInputFlow
 
     public string? BeginSlashResume(InputAdmitted first)
     {
-        if (first.ExecutableText is not { } executableText
-            || string.IsNullOrWhiteSpace(executableText)
-            || executableText.TrimStart()[0] != '/')
+        if (first.ExecutableText is not { } executableText || !IsSlashCommand(executableText))
             return null;
 
         _selectedIds.Add(first.InputId);
@@ -525,6 +525,7 @@ internal sealed class SessionInputFlow
     //                  owns that turn may join it, and the turn keeps its authority.
     //   otherwise:     the first buffered input starts a new turn, and the flow adopts its recorded authority.
     // A replay is the current turn's own message after an overflow, so it always joins the current turn.
+    // A slash command never joins a batch (#2591). It drains alone at the head of a new turn, and it stops a scan.
     private BufferedInputBatch? DrainBufferedBatch(bool continuesTurn, bool childConsentPaused)
     {
         if (_buffer.Count == 0)
@@ -541,8 +542,10 @@ internal sealed class SessionInputFlow
             : 0;
         if (start < 0)
             return null;
+        var dispatchesCommand = adoptsAuthority && IsBufferedCommand(_buffer[0]);
         var count = 0;
         while (start + count < _buffer.Count
+               && (dispatchesCommand ? count == 0 : !IsBufferedCommand(_buffer[start + count]))
                && PassesPause(_buffer[start + count], owner, startsTurn: adoptsAuthority && count == 0, childConsentPaused)
                && JoinsTurn(_buffer[start + count], owner))
             count++;
@@ -571,8 +574,14 @@ internal sealed class SessionInputFlow
         var joinsAutomationTurn = !adoptsAuthority
             && ((owner is { } running && SessionToolWorkflow.IsAutomation(running.RequesterPrincipal))
                 || messages.All(static message => message.Notice is not null));
-        return new BufferedInputBatch(messages, startsNewTurn, adoptsAuthority, joinsAutomationTurn);
+        return new BufferedInputBatch(messages, startsNewTurn, adoptsAuthority, joinsAutomationTurn, dispatchesCommand);
     }
+
+    // The live dispatch, the restart resume, and the drain use this one slash command rule.
+    public static bool IsSlashCommand(string? text) => !string.IsNullOrWhiteSpace(text) && text[0] == '/';
+
+    private static bool IsBufferedCommand((SendUserMessage Message, bool IsReplay) input)
+        => !input.IsReplay && IsSlashCommand(input.Message.Source?.ExecutableText ?? input.Message.Content);
 
     private static bool JoinsTurn((SendUserMessage Message, bool IsReplay) input, TurnContext? owner)
         => input.IsReplay || (owner is not null && BufferedAuthority(input.Message).HasSameRequester(owner));
