@@ -475,12 +475,16 @@ public sealed partial class LlmSessionActor
             .Where(input => !selected.Contains(input.InputId))
             .ToList();
         // One damaged record must not stop the recovery of the other notices and of the lost children. The input stays
-        // pending in the journal, so the loss is visible and the next start tries it again.
+        // pending in the journal, so the loss is visible and the next start tries it again. When the session was
+        // paused, StartInputsHeldByThePause logs each damaged pending input, so each record gets one log line.
         var (orphans, damaged) = SessionInputFlow.SplitByAuthority(
             candidates.TakeWhile(input => input.ChildNotice is not null));
-        foreach (var input in damaged)
-            _log.Error("Cannot resume the notice of child run {RunId}: its stored authority is invalid. The notice stays unconsumed.",
-                input.ChildNotice!.RunId);
+        if (!pausedAtRecovery)
+        {
+            foreach (var input in damaged)
+                _log.Error("Pending input {InputId} has a damaged authority", input.InputId);
+        }
+
         var restored = _input.RestoreWaitingInputs(orphans, _sessionId);
 
         // When the session was paused, StartHeldInputs queues such a notice, so it does not wait for that input.
@@ -523,12 +527,12 @@ public sealed partial class LlmSessionActor
         if (_toolWorkflow.HasParkedApprovals())
             return;
         var selected = _input.SelectedInputs.Ids;
-        var (held, damaged) = SessionInputFlow.SplitByAuthority(_state.GetExecutablePendingInputs()
-            .Where(input => !selected.Contains(input.InputId) && WasHeldByPause(input)));
+        // The split comes first, so a damaged record that is not a notice also gets its log line. It stays pending.
+        var (valid, damaged) = SessionInputFlow.SplitByAuthority(_state.GetExecutablePendingInputs()
+            .Where(input => !selected.Contains(input.InputId)));
         foreach (var input in damaged)
-            _log.Error("Cannot queue held input {InputId}: its stored authority is invalid. The input stays unconsumed.",
-                input.InputId);
-        var queued = _input.RestoreWaitingInputs(held, _sessionId);
+            _log.Error("Pending input {InputId} has a damaged authority", input.InputId);
+        var queued = _input.RestoreWaitingInputs(valid.Where(WasHeldByPause).ToArray(), _sessionId);
         if (queued > 0)
             _log.Info("Queued {HeldCount} input(s) that the child consent pause held before the restart", queued);
         StartWaitingInputAfterApproval();

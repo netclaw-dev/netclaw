@@ -2335,7 +2335,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             _log.Error(
                 "Restart reminder {ReminderId} cannot queue input(s) {InputIds}: the stored authority is invalid. "
-                + "{ValidCount} valid input(s) stay unqueued.",
+                + "{ValidCount} valid input(s) are not queued by this message.",
                 cmd.Source?.ReminderId, string.Join(",", damaged.Select(static input => input.InputId)), pending.Count);
             TryReplyNack("The interrupted input authority is invalid.");
             return;

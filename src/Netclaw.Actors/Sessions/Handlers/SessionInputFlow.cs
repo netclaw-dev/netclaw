@@ -348,7 +348,8 @@ internal sealed class SessionInputFlow
     /// <summary>
     /// Separates the pending inputs whose recorded authority parses from the damaged ones. The queue takes only valid
     /// inputs (<see cref="RestoreWaitingInputs"/> throws for a damaged one). Each caller decides what a damaged input
-    /// means for its message.
+    /// means for its message. The idle restart resume and the recovery queue behind a parked approval do not use it
+    /// yet (#2576).
     /// </summary>
     public static (IReadOnlyList<InputAdmitted> Valid, IReadOnlyList<InputAdmitted> Damaged) SplitByAuthority(
         IEnumerable<InputAdmitted> inputs)

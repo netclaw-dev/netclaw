@@ -387,10 +387,12 @@ Reminder-origin route then settles at once. A pending input whose stored authori
 order. This replaces the earlier rule of `d2-reminders-end-at-admission` (#2511): a restart reminder that found another
 turn running was a no-op, and the input stayed pending with no turn.
 
-Known order case (no code change): the session was paused at the drain, and fire F of reminder R was held. After the
-restart, the next fire F2 of R wakes the session before the restart reminder does. Recovery sends `StartHeldInputs`,
-but the stashed F2 runs first. F is not in the queue yet, so the drop rule does not see a waiting fire of R, and F2 is
-admitted and starts a turn. Then `StartHeldInputs` queues F, and F runs after F2.
+Known order cases (no code change): the session was paused at the drain, Alice's input P was interrupted, and fire F
+of reminder M was held. After the restart, the next fire F2 of M wakes the session before the restart reminder R does.
+Recovery sends `StartHeldInputs`, but the stashed F2 runs first. F is not in the queue yet, so the drop rule does not
+see a waiting fire of M, and F2 is admitted and starts a turn. Then `StartHeldInputs` queues F, and F runs after F2.
+F2 also runs before P, because P waits for R. When R arrives after `StartHeldInputs`, F is queued first, so F runs
+before P.
 
 ```text
 schematic: restart of a paused session (graceful drain, admission order [P, F])
