@@ -208,6 +208,121 @@ public sealed class SecretOutputRedactorCredentialShapeTests
     [InlineData("GPG_PASSPHRASE=correct-horse-9", "correct-horse-9")]
     public void Redact_masks_passphrase_values(string input, string secret)
         => AssertMasked(input, secret, "");
+
+    // ── Review findings for the first fix (#2595) ──
+
+    // A password can hold '@'. A user name can hold '@' too (an e-mail address). The userinfo
+    // part ends at the last '@' before the host, so all of the password must be masked.
+    [Theory]
+    [InlineData("mongodb://admin:p@ssw0rd!@db:27017/app", "ssw0rd|p@ss", "mongodb://|@db:27017/app")]
+    [InlineData("https://bob:p@ss@host/x", "p@ss|ss@host", "https://|@host/x")]
+    [InlineData("https://bob@corp.com:hunter2@git.example.com/x", "hunter2", "https://|@git.example.com/x")]
+    public void Redact_masks_a_url_password_that_holds_an_at_sign(string input, string secrets, string kept)
+        => AssertMasked(input, secrets, kept);
+
+    // Prose, docs tables, and help text name a secret option. The next word is not a value.
+    // A false mask here drops a memory and changes help output that the model reads.
+    [Theory]
+    [InlineData("--token must be a PAT with repo scope.")]
+    [InlineData("Use --password-file instead of --password because it keeps it safe")]
+    [InlineData("use the --token option.")]
+    [InlineData("Set --token (or GH_TOKEN) before you run it.")]
+    [InlineData("pass --token `<your token>` here")]
+    [InlineData("| --password | the password |")]
+    [InlineData("      --token string           Bearer token for authentication to the API server")]
+    [InlineData("      --client-secret string   The OAuth client secret")]
+    [InlineData("  -p, --password string        Password for the registry")]
+    [InlineData("--session-token (string)")]
+    [InlineData("aws s3api list-objects-v2 --bucket b --next-token CAESBwoF")]
+    [InlineData("aws s3api list-objects --bucket b --starting-token eyJNYXJrZXIiOiBudWxsfQ")]
+    public void Redact_leaves_prose_and_help_text_after_a_secret_option_alone(string input)
+        => AssertUnchanged(input);
+
+    // A header-like line that names a token, a pagination cursor, or a counter is not a secret.
+    [Theory]
+    [InlineData("Token: required for all calls")]
+    [InlineData("token: expired, please refresh")]
+    [InlineData("Next-Token: CAESBwoF")]
+    [InlineData("X-RateLimit-Token: 5")]
+    [InlineData("input-token: 500")]
+    [InlineData("""{"next-token": "CAESBwoF"}""")]
+    [InlineData("""{"Next-Token": "CAESBwoF"}""")]
+    [InlineData("""{"X-RateLimit-Token": "5"}""")]
+    [InlineData("""{"input-token": "500"}""")]
+    public void Redact_leaves_token_named_lines_that_hold_no_secret_alone(string input)
+        => AssertUnchanged(input);
+
+    // Headers that carry a credential in forms that the first fix did not know:
+    // no space after the colon, a wget option, a hyphenated scheme, and other header names.
+    [Theory]
+    [InlineData("curl -H X-Api-Key:abc123key https://api.example.com/v1", "abc123key", "X-Api-Key|https://api.example.com/v1")]
+    [InlineData("wget --header=X-Api-Key:abc123key https://example.com/f", "abc123key", "X-Api-Key|https://example.com/f")]
+    [InlineData("Authorization: Api-Key abc123key", "abc123key", "Authorization: Api-Key")]
+    [InlineData("Ocp-Apim-Subscription-Key: abc123key", "abc123key", "Ocp-Apim-Subscription-Key")]
+    [InlineData("X-Auth-Key: abc123key", "abc123key", "X-Auth-Key")]
+    [InlineData("X-Client-Secret: abc123sec", "abc123sec", "X-Client-Secret")]
+    [InlineData("""{"Ocp-Apim-Subscription-Key": "abc123key"}""", "abc123key", "\"Ocp-Apim-Subscription-Key\"")]
+    [InlineData("""{"X-Client-Secret": "abc123sec"}""", "abc123sec", "\"X-Client-Secret\"")]
+    [InlineData("""{"Set-Cookie": "session=abc123sess; Path=/"}""", "abc123sess", "\"Set-Cookie\"")]
+    [InlineData("""{"Proxy-Authorization": "Basic dXNlcjpwYXNz"}""", "dXNlcjpwYXNz", "\"Proxy-Authorization\"")]
+    public void Redact_masks_more_secret_header_forms(string input, string secrets, string kept)
+        => AssertMasked(input, secrets, kept);
+
+    // The pair rule and IsSecretKey use one vocabulary: a secret key name is a secret pair name.
+    [Theory]
+    [InlineData("MYSQL_PWD")]
+    [InlineData("db_pwd")]
+    [InlineData("admin_pwd")]
+    [InlineData("passwd")]
+    [InlineData("ssh_passphrase")]
+    [InlineData("session_cookie")]
+    [InlineData("set-cookie")]
+    [InlineData("x-api-key")]
+    public void Redact_masks_a_pair_whose_name_is_a_secret_key(string name)
+    {
+        Assert.True(SecretOutputRedactor.IsSecretKey(name), name);
+        AssertMasked($$"""{"name":"{{name}}","value":"hunter2"}""", "hunter2", $"\"{name}\"");
+    }
+
+    // A counter, or the shell working directory, is not a secret pair.
+    [Theory]
+    [InlineData("""{"name":"max_tokens","value":"4096"}""")]
+    [InlineData("""{"name":"token_count","value":"5"}""")]
+    [InlineData("""{"name":"PWD","value":"/work"}""")]
+    [InlineData("""{"name":"OLDPWD","value":"/home/u"}""")]
+    public void Redact_leaves_counter_and_directory_pairs_alone(string input)
+        => AssertUnchanged(input);
+
+    // A variable reference, a template placeholder, or a literal flag is not a secret. Each new
+    // rule keeps it, so a script or a Postman collection stays readable. The prefixed name rule
+    // ignores case for %x%, so the new rules ignore case too.
+    [Theory]
+    [InlineData("tool --password $DB_PASS")]
+    [InlineData("tool --password \"$DB_PASS\"")]
+    [InlineData("tool --password %DB_PASS%")]
+    [InlineData("tool --password '%DB_PASS%'")]
+    [InlineData("tool --password %db_pass%")]
+    [InlineData("tool --password {{db_pass}}")]
+    [InlineData("tool --password \"{{ db_pass }}\"")]
+    [InlineData("tool --token \"<token>\"")]
+    [InlineData("tool --token true")]
+    [InlineData("X-Api-Key: $API_KEY")]
+    [InlineData("curl -H \"X-Api-Key: %API_KEY%\" https://api.example.com")]
+    [InlineData("X-Api-Key: {{api_key}}")]
+    [InlineData("Authorization: Basic $CREDS")]
+    [InlineData("Authorization: Basic {{creds}}")]
+    [InlineData("""{"X-Api-Key": "$API_KEY"}""")]
+    [InlineData("""{"X-Api-Key": "{{api_key}}"}""")]
+    [InlineData("""{"X-Api-Key": "%API_KEY%"}""")]
+    [InlineData("""{"name":"api_key","value":"{{api_key}}"}""")]
+    [InlineData("""{"key":"password","value":"$DB_PASS"}""")]
+    [InlineData("""{"name":"api_key","value":"true"}""")]
+    [InlineData("https://bob:$PASSWORD@host/x")]
+    [InlineData("https://bob:${PASSWORD}@host/x")]
+    [InlineData("https://bob:%PASSWORD%@host/x")]
+    [InlineData("https://bob:{{password}}@host/x")]
+    public void Redact_leaves_references_and_placeholders_in_the_new_rules_alone(string input)
+        => AssertUnchanged(input);
 }
 
 /// <summary>
@@ -237,6 +352,12 @@ public sealed class SecretOutputRedactorCredentialShapeLinearTimeTests
         yield return ("basic auth then a long value", () => "Authorization: Basic " + new string('a', AdversarialChars));
         yield return ("name with no value", () => Rep("{\"name\":\"Authorization\","));
         yield return ("name then an open value", () => "{\"name\":\"Authorization\",\"value\":\"" + new string('a', AdversarialChars));
+        yield return ("url user then many '@'", () => "://a:" + Rep("b@"));
+        yield return ("dense option matches", () => Rep("--token x "));
+        yield return ("dense header lines", () => Rep("X-Api-Key: a\n"));
+        yield return ("dense json header keys", () => "{" + Rep("\"X-Api-Key\": \"a\", "));
+        yield return ("json header key then an open value", () => "{\"X-Api-Key\": \"" + new string('a', AdversarialChars));
+        yield return ("long hyphenated json key", () => "{\"" + Rep("a-"));
     }
 
     public static TheoryData<string> ShapeNames()
