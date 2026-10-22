@@ -221,6 +221,18 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
 
     public void ClearRestartReminderEligibility() => _restartInterruptionAt = null;
 
+    /// <summary>
+    /// The notice that tells the person that a restart drain stopped the turn, or null when the restart reminder
+    /// resumes the turn. The turn resumes only when the reminder replays the inputs of the turn, so
+    /// <paramref name="pendingTurnInputCount"/> counts the selected inputs of the stopped turn that stay pending.
+    /// <paramref name="drainReason"/> is <see cref="Protocol.PrepareForDaemonRestart.Reason"/>.
+    /// </summary>
+    internal static string? RestartStoppedTurnNotice(
+        ReminderEligibility eligibility,
+        int pendingTurnInputCount,
+        string drainReason)
+        => throw new NotImplementedException("Stub for #2601. The fix supplies the notice rule.");
+
     public PassivationStart BeginPassivation(bool hasTrackedJobs, bool managerAvailable, bool observerAvailable)
     {
         long? reapEpoch = null;
