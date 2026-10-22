@@ -139,7 +139,7 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("do not join them with separators or labels", prompt);
         Assert.Contains("Add a pipeline only when the requested result requires it", prompt);
         Assert.Contains("If approval is required but no interactive requester is available", prompt);
-        Assert.Contains("After an access denial, do not retry that call during the same user turn", prompt);
+        Assert.Contains("After a person denies a call, do not retry it, and do not reach its goal another way during the same user turn", prompt);
         Assert.Contains("A later explicit user request can start a new call", prompt);
         Assert.Contains("Use `temp_dir` for disposable files", prompt);
         Assert.Contains("Standard temporary APIs already use this directory", prompt);

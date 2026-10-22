@@ -33,7 +33,9 @@ namespace Netclaw.Actors.Tests.Sessions.Pipelines;
 public sealed class ApprovalRedriveEntryTests(ITestOutputHelper output) : TestKit(output: output)
 {
     private const string DeniedText =
-        "Tool access denied: approval_denied_by_user (shell_execute requires interactive approval and the user declined it)";
+        "Tool access denied: approval_denied_by_user (shell_execute requires interactive approval and the user declined it). "
+        + "The user declined this action. Do not reach the same goal by another tool or route. "
+        + "Tell the user what you wanted to do, and ask how to continue.";
 
     private const string ManagedTemporaryHint =
         "Hint: Use the managed temporary directory '/home/user/.netclaw/sessions/example/tmp' for disposable artifacts. "

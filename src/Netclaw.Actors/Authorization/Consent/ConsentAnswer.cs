@@ -73,12 +73,17 @@ internal static class ConsentRefusalText
 
     /// <summary>Returns the result text for a refusal.</summary>
     /// <param name="kind">Why the call did not run.</param>
-    /// <param name="deniedText">The text for an explicit "Deny" answer.</param>
-    public static string For(RefusalKind kind, string deniedText) => kind switch
+    /// <param name="toolName">The name of the refused tool.</param>
+    public static string For(RefusalKind kind, string toolName) => kind switch
     {
         RefusalKind.TimedOut => TimedOut,
         RefusalKind.PromptUnavailable => PromptUnavailable,
-        _ => deniedText,
+        // A person said no. Without this guidance a model obeys "do not retry"
+        // but reaches the same goal another way (for example, it lets CI run
+        // the build that the user declined). The model must stop and ask.
+        _ => $"Tool access denied: approval_denied_by_user ({toolName} requires interactive approval and the user declined it). "
+             + "The user declined this action. Do not reach the same goal by another tool or route. "
+             + "Tell the user what you wanted to do, and ask how to continue.",
     };
 }
 

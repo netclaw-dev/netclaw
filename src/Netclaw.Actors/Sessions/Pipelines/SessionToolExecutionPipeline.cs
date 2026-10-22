@@ -323,9 +323,7 @@ internal sealed record ApprovalRedriveEntry(
             return false;
         }
 
-        text = ConsentRefusalText.For(
-            refusal,
-            $"Tool access denied: approval_denied_by_user ({callName} requires interactive approval and the user declined it)");
+        text = ConsentRefusalText.For(refusal, callName);
         if (refusal == RefusalKind.Denied && ManagedTemporaryDenialDirectory is { Length: > 0 } denialDirectory)
             text = $"{text}\n{ManagedTemporaryCorrection.BuildDenialHint(denialDirectory)}";
         return true;
@@ -773,9 +771,7 @@ internal sealed class SessionToolExecutionPipeline
             else
             {
                 var refusal = (ConsentAnswer.Refused)step.Answer;
-                var reason = ConsentRefusalText.For(
-                    refusal.Kind,
-                    $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)");
+                var reason = ConsentRefusalText.For(refusal.Kind, tc.Name);
 
                 // When a shell call is denied because its cwd is outside both
                 // session_dir and project_dir, surface a one-line hint pointing

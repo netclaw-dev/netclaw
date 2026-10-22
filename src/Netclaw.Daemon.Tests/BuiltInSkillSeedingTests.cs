@@ -273,7 +273,7 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Assert.Contains("do not join them with separators or labels", skill, StringComparison.Ordinal);
         Assert.Contains("Add a pipeline only when the requested result requires it", skill, StringComparison.Ordinal);
         Assert.Contains("If approval is required but no interactive requester is available", skill, StringComparison.Ordinal);
-        Assert.Contains("After an access denial, do not retry that call during the same user turn", skill, StringComparison.Ordinal);
+        Assert.Contains("After a person denies a call, do not retry it, and do not reach its goal another way during the same user turn", skill, StringComparison.Ordinal);
         Assert.Contains("A later explicit user request can start a new call", skill, StringComparison.Ordinal);
         Assert.Contains("Use `temp_dir` for disposable files", skill, StringComparison.Ordinal);
         Assert.Contains("Standard temporary APIs already use this directory", skill, StringComparison.Ordinal);
@@ -295,7 +295,7 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
             "do not join them with separators or labels",
             "Add a pipeline only when the requested result requires it",
             "If approval is required but no interactive requester is available",
-            "After an access denial, do not retry that call during the same user turn",
+            "After a person denies a call, do not retry it, and do not reach its goal another way during the same user turn",
             "A later explicit user request can start a new call",
             "Apply all compatible advice in a correction response before the next call",
             "A shell call can return correction advice under Auto",

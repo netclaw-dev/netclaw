@@ -35,7 +35,7 @@ internal static class ToolChoiceGuidance
         2. Use one operation per call. Add a pipeline only when the requested result requires it.
         3. Do not use shell only to verify a successful structured tool result.
         4. If approval is required but no interactive requester is available, do not retry or substitute the call during that turn.
-        5. After an access denial, do not retry that call during the same user turn.
+        5. After a person denies a call, do not retry it, and do not reach its goal another way during the same user turn. Tell the user what you wanted to do, and ask how to continue.
         6. Do not change its scope or substitute another tool to evade the denial.
         7. A later explicit user request can start a new call. Apply the normal approval policy to that call.
         8. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.

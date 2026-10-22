@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.128.0"
+  version: "2.129.0"
 ---
 
 # Netclaw Operations
@@ -119,7 +119,7 @@ Keep shell approval friction bounded:
 3. Add a pipeline only when the requested result requires it.
 4. Do not use shell only to verify a successful structured tool result.
 5. If approval is required but no interactive requester is available, do not retry or substitute the call during that turn.
-6. After an access denial, do not retry that call during the same user turn.
+6. After a person denies a call, do not retry it, and do not reach its goal another way during the same user turn. Tell the user what you wanted to do, and ask how to continue.
 7. Do not change its scope or substitute another tool to evade the denial.
 8. A later explicit user request can start a new call. Apply the normal approval policy to that call.
 9. Apply all compatible advice in a correction response before the next call.

@@ -1286,7 +1286,11 @@ public class SubAgentActorTests : SubAgentActorTestBase
     }
 
     [Theory]
-    [InlineData("Denied", "Tool access denied: approval_denied_by_user")]
+    [InlineData(
+        "Denied",
+        "Tool access denied: approval_denied_by_user (approval_probe requires interactive approval and the user declined it). "
+        + "The user declined this action. Do not reach the same goal by another tool or route. "
+        + "Tell the user what you wanted to do, and ask how to continue.")]
     [InlineData("TimedOut", "Tool access denied: approval_timed_out")]
     public async Task Rejected_approval_returns_tool_result_without_executing_tool(
         string refusal,
