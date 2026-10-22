@@ -474,3 +474,23 @@ internal sealed class ThrowingArgumentList : System.Collections.ArrayList
 
     public override object?[] ToArray() => throw new InvalidOperationException("ToArray throws.");
 }
+
+/// <summary>
+/// An argument list whose enumerator throws. Its indexer works, so the tool
+/// cycle hash (ToolCycleSignatureFactory) can serialize it before the batch
+/// runs. Only a reader that enumerates the list gets the exception.
+/// </summary>
+internal sealed class EnumeratorThrowingArgumentList : System.Collections.ArrayList
+{
+    public EnumeratorThrowingArgumentList()
+    {
+        base.Add("indexed-item");
+    }
+
+    public override System.Collections.IEnumerator GetEnumerator()
+        => throw new InvalidOperationException("The enumerator throws.");
+
+    public override void CopyTo(Array array, int arrayIndex) => throw new InvalidOperationException("CopyTo throws.");
+
+    public override object?[] ToArray() => throw new InvalidOperationException("ToArray throws.");
+}

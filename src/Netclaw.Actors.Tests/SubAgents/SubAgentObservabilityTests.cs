@@ -9,6 +9,7 @@ using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Memory;
+using Netclaw.Actors.Tests.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -187,6 +188,52 @@ public sealed class SubAgentObservabilityTests : TestKit
         Assert.Equal("call-args", invoked["CallId"]?.ToString());
         Assert.Equal(started["AuthorizationAttemptId"]?.ToString(), invoked["AuthorizationAttemptId"]?.ToString());
         Assert.Equal(started["SessionId"]?.ToString(), invoked["SessionId"]?.ToString());
+    }
+
+    [Fact]
+    public async Task Sub_agent_tool_call_with_a_throwing_argument_still_runs_and_its_sibling_succeeds()
+    {
+        // Review finding 3 (issue #2589): the log line comes before the tool runs.
+        // An exception from the formatter must not fail this call or its sibling.
+        // The sub-agent hashes the arguments for tool cycle detection before the
+        // batch runs. That hash reads the list through its indexer, so this list
+        // throws only when a reader enumerates it.
+        var listTool = new FakeNetclawTool("list_items", "listed");
+        var greetTool = new FakeNetclawTool("greet", "Hello from tool!");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-throwing", "list_items",
+                    new Dictionary<string, object?>
+                    {
+                        ["items"] = new EnumeratorThrowingArgumentList(),
+                        ["_rationale"] = "Read the items."
+                    }),
+                new FunctionCallContent("call-sibling", "greet",
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "World",
+                        ["_rationale"] = "Greet the user."
+                    })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([listTool, greetTool]), fakeClient, PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            NewRun("Read the items and greet the user."),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Output);
+        Assert.True(listTool.WasCalled, "The call with the throwing argument did not run.");
+        Assert.True(greetTool.WasCalled, "The sibling call did not run.");
+        var toolResults = (fakeClient.LastReceivedMessages ?? [])
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+            .ToDictionary(static item => item.CallId, static item => item.Result?.ToString(), StringComparer.Ordinal);
+        Assert.Equal("listed", toolResults.GetValueOrDefault("call-throwing"));
+        Assert.Equal("Hello from tool!", toolResults.GetValueOrDefault("call-sibling"));
     }
 
     private static async Task<IReadOnlyDictionary<string, object?>> FishPropertiesAsync(
