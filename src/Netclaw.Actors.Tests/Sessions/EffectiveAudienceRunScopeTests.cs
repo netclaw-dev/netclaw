@@ -104,15 +104,20 @@ public sealed class EffectiveAudienceRunScopeTests : LlmSessionTestBase
             registry, policy, approvalService: null, NullLogger<DispatchingToolExecutor>.Instance));
     }
 
+    // spawnAllowed is false for Public: netclaw-subagents "Context layer subagent awareness" says that a
+    // Public session cannot spawn a subagent through a tool call. An operator slash command is not a tool
+    // call, so the routed child still runs. It inherits the narrowed audience ("Routed subagent inherits
+    // launch audience").
     [Theory]
-    [InlineData(DeploymentPosture.Team, TrustAudience.Personal, TrustAudience.Team)]
-    [InlineData(DeploymentPosture.Public, TrustAudience.Personal, TrustAudience.Public)]
-    [InlineData(DeploymentPosture.Personal, TrustAudience.Personal, TrustAudience.Personal)]
-    [InlineData(DeploymentPosture.Team, TrustAudience.Team, TrustAudience.Team)]
+    [InlineData(DeploymentPosture.Team, TrustAudience.Personal, TrustAudience.Team, true)]
+    [InlineData(DeploymentPosture.Public, TrustAudience.Personal, TrustAudience.Public, false)]
+    [InlineData(DeploymentPosture.Personal, TrustAudience.Personal, TrustAudience.Personal, true)]
+    [InlineData(DeploymentPosture.Team, TrustAudience.Team, TrustAudience.Team, true)]
     public async Task Every_enforcement_point_uses_the_effective_audience(
         DeploymentPosture posture,
         TrustAudience sourceAudience,
-        TrustAudience effectiveAudience)
+        TrustAudience effectiveAudience,
+        bool spawnAllowed)
     {
         _posture = posture;
 
@@ -128,53 +133,47 @@ public sealed class EffectiveAudienceRunScopeTests : LlmSessionTestBase
                 ? null
                 : [Call("call-child-probe", _childProbe.Name)];
 
-        await RunAsync(new SessionId("console/posture-spawn"), "Spawn the probe.", sourceAudience);
-        await RunAsync(new SessionId("console/posture-routed"), $"/{RoutedSkill} go", sourceAudience);
+        var spawned = await RunAsync(new SessionId("console/posture-spawn"), "Spawn the probe.", sourceAudience);
+        var routed = await RunAsync(new SessionId("console/posture-routed"), $"/{RoutedSkill} go", sourceAudience);
 
-        Assert.Equal(Expected(effectiveAudience), Observed());
+        Assert.Equal(Expected(effectiveAudience, spawnAllowed), Observed(spawned, routed));
     }
 
-    // One entry for each enforcement point. The routed-skill child is the second child.
-    private static string[] Expected(TrustAudience audience)
+    // One entry for each enforcement point. "refused" means that the tool refused the spawn and no child ran.
+    private static string[] Expected(TrustAudience audience, bool spawnAllowed)
     {
         var personal = audience == TrustAudience.Personal;
         return
         [
             $"parent run scope={audience}",
             $"set_webhook by name ran={personal}",
-            $"spawned child has set_webhook={personal}",
+            $"spawned child has set_webhook={(spawnAllowed ? personal.ToString() : "refused")}",
             $"routed child has set_webhook={personal}",
-            $"spawned child run scope={audience}",
+            $"spawned child run scope={(spawnAllowed ? audience.ToString() : "refused")}",
             $"routed child run scope={audience}"
         ];
     }
 
-    private string[] Observed()
+    private string[] Observed(TurnObservation spawned, TurnObservation routed)
     {
-        // The first model call of each child has no tool results. It shows the tools that the child got.
-        var childToolSets = _childModel.ReceivedMessages
-            .Select((messages, index) => (messages, index))
-            .Where(call => !call.messages.Any(message => message.Contents.OfType<FunctionResultContent>().Any()))
-            .Select(call => _childModel.ReceivedToolNames[call.index].Contains(SetWebhook))
-            .ToArray();
-        var childAudiences = _childProbe.Audiences.ToArray();
-        Assert.Equal(2, childToolSets.Length);
-        Assert.Equal(2, childAudiences.Length);
         return
         [
             $"parent run scope={Assert.Single(_parentProbe.Audiences)}",
             $"set_webhook by name ran={!_webhook.Audiences.IsEmpty}",
-            $"spawned child has set_webhook={childToolSets[0]}",
-            $"routed child has set_webhook={childToolSets[1]}",
-            $"spawned child run scope={childAudiences[0]}",
-            $"routed child run scope={childAudiences[1]}"
+            $"spawned child has set_webhook={spawned.ChildHasSetWebhook}",
+            $"routed child has set_webhook={routed.ChildHasSetWebhook}",
+            $"spawned child run scope={spawned.ChildAudience}",
+            $"routed child run scope={routed.ChildAudience}"
         ];
     }
 
-    // Runs one turn. It returns after the child run of the turn completes and the turn completes.
-    private async Task RunAsync(SessionId sessionId, string content, TrustAudience audience)
+    // Runs one turn. It returns after the turn completes and after the child of the turn completes, if a
+    // child started. A turn starts at most one child.
+    private async Task<TurnObservation> RunAsync(SessionId sessionId, string content, TrustAudience audience)
     {
         var ct = TestContext.Current.CancellationToken;
+        var childCallsBefore = _childModel.ReceivedMessages.Count;
+        var childAudiencesBefore = _childProbe.Audiences.Count;
         var subscriber = CreateTestProbe();
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         await JoinSessionAsync(sessionManager, subscriber, sessionId, OutputFilter.Full);
@@ -194,14 +193,36 @@ public sealed class EffectiveAudienceRunScopeTests : LlmSessionTestBase
             }
         }, TimeSpan.FromSeconds(5), ct);
 
-        bool childDone = false, turnDone = false;
-        while (!childDone || !turnDone)
+        bool childStarted = false, childDone = false, turnDone = false, spawnRefused = false;
+        while (!turnDone || childStarted != childDone)
         {
             var output = await subscriber.ExpectMsgAsync<object>(TimeSpan.FromSeconds(15), cancellationToken: ct);
+            childStarted |= output is SubAgentOutput { Phase: SubAgentPhase.Started };
             childDone |= output is SubAgentOutput { Phase: SubAgentPhase.Completed };
             turnDone |= output is TurnCompleted;
+            spawnRefused |= output is ToolResultOutput result
+                && result.ToolName.Value == "spawn_agent"
+                && result.Result.Contains("This tool is not available.", StringComparison.Ordinal);
         }
+
+        if (!childStarted)
+        {
+            var state = spawnRefused ? "refused" : "no child and no refusal";
+            return new TurnObservation(state, state);
+        }
+
+        // The first model call of the child has no tool results. It shows the tools that the child got.
+        var firstChildCall = _childModel.ReceivedMessages
+            .Select((messages, index) => (messages, index))
+            .Skip(childCallsBefore)
+            .First(call => !call.messages.Any(message => message.Contents.OfType<FunctionResultContent>().Any()));
+        var childAudience = Assert.Single(_childProbe.Audiences.Skip(childAudiencesBefore));
+        return new TurnObservation(
+            _childModel.ReceivedToolNames[firstChildCall.index].Contains(SetWebhook).ToString(),
+            childAudience.ToString());
     }
+
+    private sealed record TurnObservation(string ChildHasSetWebhook, string ChildAudience);
 
     private static FunctionCallContent Call(string callId, string name, params (string Key, object? Value)[] arguments)
     {
