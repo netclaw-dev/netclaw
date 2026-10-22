@@ -14,7 +14,8 @@ child run from its run record:
 The child consent pause SHALL come back while a parked request is open. The input that the pause held SHALL wait until
 the last open request closes, and a reminder SHALL run at most once for its held fires, also when a new fire of the
 same reminder arrives during recovery. While the pause holds, a restart reminder SHALL NOT start a turn for an input that the pause holds. It SHALL still
-resume an interrupted input of a person. A parked run with an open request SHALL NOT make the session eligible for a
+resume an interrupted input that the pause does not hold. The drain, the recovery, and the restart resume SHALL use one
+rule to decide which input the pause holds. A parked run with an open request SHALL NOT make the session eligible for a
 restart reminder. A parked run whose requests all have answers SHALL make it eligible. A session whose only child runs
 are parked with open requests SHALL be able to passivate.
 

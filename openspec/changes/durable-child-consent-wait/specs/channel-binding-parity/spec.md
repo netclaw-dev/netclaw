@@ -6,9 +6,10 @@ When a subscriber joins a session, the session SHALL send it each open parked ch
 ID, command, scope, and options, with no child identity, and marked as a replay. Each channel binding, the TUI, and
 headless output SHALL show a prompt with a given call ID at most once. A channel binding SHALL NOT post a second prompt
 for a call ID that it tracks already. When a binding cannot render a replayed prompt at all (for example, the channel
-cannot show buttons), it SHALL report the prompt as unavailable, and the session SHALL withdraw the request. When the
-post of a replayed prompt fails in transport, the binding SHALL log a warning and SHALL NOT report the prompt as
-unavailable, so the request stays open for the next join.
+cannot show buttons), or the channel API refuses the post with an error code that the binding lists as permanent, the
+binding SHALL report the prompt as unavailable, and the session SHALL withdraw the request. When the post of a replayed
+prompt fails for any other reason, the binding SHALL log a warning and SHALL NOT report the prompt as unavailable, so
+the request stays open for the next join.
 
 #### Scenario: A prompt that was never shown appears after recovery
 
@@ -29,6 +30,13 @@ unavailable, so the request stays open for the next join.
 - **WHEN** the post fails with a transport error
 - **THEN** the binding logs a warning
 - **AND** the session does not withdraw the request
+
+#### Scenario: A replayed prompt with a permanent API error is withdrawn
+
+- **GIVEN** a parked child prompt that the session replays to a Slack binding
+- **WHEN** Slack refuses the post with `is_archived`
+- **THEN** the binding reports the prompt as unavailable
+- **AND** the session withdraws the request
 
 #### Scenario: A replayed prompt that the channel cannot render is withdrawn
 

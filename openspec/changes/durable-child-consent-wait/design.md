@@ -196,6 +196,17 @@ itself, and the child never maps an Ask failure to "cancelled".
 
 - The owner keeps the waiting child's sender for each run that has a park in flight (actor-local
   `_parksInFlight[runId]`). It replies to that sender from the persist callback or from `OnPersistRejected`.
+- **Entry lifetime of `_parksInFlight`.**
+  - The owner adds the entry just before the `Persist` or `PersistAll` call of the park.
+  - The owner removes the entry in exactly two places: in the callback of the LAST event of the park, or at the FIRST
+    `ParkNotRecorded`.
+  - A rejected `PersistAll` of N events calls `OnPersistRejected` N times, so N `ParkNotRecorded` messages come. Each
+    `ParkNotRecorded` after the first finds no entry and does nothing. The owner therefore replies once and records
+    the terminal once.
+  - The owner replies `ChildParkAccepted` only from the callback of the last event.
+  - A refusal that needs no write (the run is cancelling, not owned, or above the cap) adds no entry. The owner
+    replies and records at once.
+  - Test: `A_rejected_two_request_park_replies_and_records_once` (PR 1a).
 - The reply is `ChildParkRefused(reason)` or `ChildParkAccepted`. On `ChildParkRefused` the child stops and sends no
   result. The owner already recorded the terminal. A later `ChildTerminalReturned` from that child finds the run ended,
   and `RecordChildTerminal` ignores it (existing guard).
@@ -257,6 +268,9 @@ The resumed child:
    On a mismatch the call does not run. The child parks that call again, and the session shows a new prompt. The old
    answer does not apply. Example: the operator points the same server key at a new endpoint with the same tool name
    and the same schema. The transport hash differs, so the call parks again.
+
+   Implementation note: the mismatch warning logs only which parts differ (for example `transport_hash`). It never
+   logs the URL, the command, the arguments, or a hash input.
 5. Canonicalizes the parked calls as `HandleToolCalls` does, and runs only those calls through `ExecuteToolsAsync`,
    with the pre-batch scope. One helper applies one plan entry to a call context. The parent pipeline
    (`SessionToolExecutionPipeline.cs:538-575`) and the child both call it (M11):
@@ -318,10 +332,29 @@ Other rules:
 - **A restart reminder respects the pause (N1).** `TryResumeInterruptedInput` (`LlmSessionActor.cs:2385-2446`) checks
   only `HasParkedApprovals()`, which counts parent approvals only. Held fires are pending inputs, so a drain makes the
   session eligible, and after recovery the reminder could start a turn for held automated input while the pause holds.
-  New rule: while `IsChildConsentPaused` is true, the resume leaves out every input that the pause holds
-  (`WasHeldByPause`). Those inputs are in the waiting queue already (M5). When no input of a person remains, the session
-  acknowledges the reminder with no turn (`AckRestartResumeNoOp`). An interrupted input of a person still resumes,
-  because the pause never holds a person's input. This rule depends on #2587, which changes the same method.
+  New rule: while `IsChildConsentPaused` is true, the resume leaves out every input that the pause holds (the one
+  predicate below). Those inputs are in the waiting queue already (M5). When no input that the pause does not hold
+  remains, the session acknowledges the reminder with no turn (`AckRestartResumeNoOp`). An interrupted input that the
+  pause does not hold still resumes. That set holds a person's input and also `UntrustedExternal` input. This rule
+  depends on #2587, which changes the same method.
+- **One pause predicate.** Today two copies of one security rule decide which input the pause holds:
+  `SessionInputFlow.IsHeldByPause(SendUserMessage)` for the drain (`SessionInputFlow.cs:594-597`), and
+  `WasHeldByPause(InputAdmitted)` for recovery (`LlmSessionActor.Children.cs:548-551`). They agree now. The design makes
+  one static predicate, `ChildConsentPause.Holds(TurnContext authority, bool isChildNotice)`:
+
+  ```text
+  Holds(authority, isChildNotice) :=
+      isChildNotice
+      or (IsAutomation(authority.RequesterPrincipal) and not authority.IsChildConsentNotice)
+  ```
+
+  - The caller parses the recorded authority first. An input whose authority does not parse is split off before
+    (`SplitByAuthority`), logged, and kept pending. The predicate never sees it.
+  - `IsHeldByPause`, `StartInputsHeldByThePause` (through `WasHeldByPause`), the recovery restore of held input (M5),
+    and the N1 restart-resume split all call it.
+  - The predicate is a pure refactor of the two copies, so it lands in PR 0. PR 2 uses it for the N1 split.
+  - Tests: PR 0 runs the drain path and the recovery path over one set of inputs and asserts the same held set. PR 2
+    adds the restart-resume path to the same test.
 - **Restart reminder (M2).** `UnreportedRuns()` does not count a parked run with an open request: no turn can run for
   it, and a click wakes the session. A parked run with all answers counts, because recovery must resume it.
 - **Snapshots and the journal delete.** After `SaveSnapshotSuccess`, the session deletes the journal rows up to the
@@ -356,13 +389,27 @@ Other rules:
   message or click in the thread.
 - **A replayed prompt that fails to post (M4, N2).** The replayed `ToolInteractionRequest` carries `Replayed = true`.
   The binding splits the failure in two:
-  - A deterministic failure: the channel cannot render the prompt at all, for example a Mattermost binding with no
-    callback URL, so buttons cannot work. The binding knows this before it posts. It sends `prompt_unavailable`, and
-    the session withdraws the request with `PromptUnavailable`. A pause with a prompt that no surface can show would
-    hold the session with no end.
-  - A transient failure: the post itself fails, for example a transport error or a rate limit. The binding logs a
-    warning and does not send `prompt_unavailable` (`SlackThreadBindingActor.cs:1092-1110` and the Mattermost and
-    Discord equivalents). The request stays open, and the next join replays it again.
+  - A deterministic failure: the channel cannot render the prompt at all, or the channel API refuses the post for a
+    permanent reason. The binding sends `prompt_unavailable`, and the session withdraws the request with
+    `PromptUnavailable`. A pause with a prompt that no surface can show would hold the session with no end.
+    Deterministic failures are:
+    - a capability that the binding knows before it posts: a Mattermost binding with no callback URL cannot show
+      buttons;
+    - a permanent error code from the channel API, from the list of each binding (below).
+  - A transient failure: every other post error, for example a transport error, a timeout, a rate limit, or a server
+    error. The binding logs a warning and does not send `prompt_unavailable` (`SlackThreadBindingActor.cs:1092-1110`
+    and the Mattermost and Discord equivalents). The request stays open, and the next join replays it again.
+
+  Permanent error lists. Each binding keeps its list next to its existing error mapping. A code that is not in the list
+  is transient.
+
+  | Binding | Classification today | Permanent errors for a replayed prompt |
+  | --- | --- | --- |
+  | Slack | `SlackReplyClient.MapFailureKind` maps the Slack `error` code to `DeliveryFailureKind` | the codes that map to `ContentRejected` (`invalid_blocks`, `invalid_arguments`), `MessageTooLarge` (`msg_too_long`), `UnsupportedContent` (`too_many_attachments`), and `PermissionDenied` (`not_in_channel`, `channel_not_found`, `missing_scope`, `no_permission`); PR 2 adds `is_archived` to the `PermissionDenied` group, because today it maps to `Unknown` |
+  | Discord | Discord.Net `HttpException` with `HttpCode` and `DiscordCode`; today the binding checks only `BadRequest` for the thread race | `HttpCode` 400 (for example `DiscordCode` 50035, invalid form body), 403 (50001 missing access, 50013 missing permissions), 404 (10003 unknown channel), and 413 (payload too large); 429 and 5xx stay transient |
+  | Mattermost | no code-based classifier for post errors today; the connect classifier reads message text | the HTTP status of the failed post from Mattermost.NET: 400, 403, 404, and 413; 429, 5xx, and a network error stay transient. PR 2 adds a small `MattermostPostFailureClassifier`, and its first test pins the exception type that Mattermost.NET throws |
+
+  Tests (PR 2): for each binding, one permanent code sends `prompt_unavailable`, and one transient error does not.
 
   A first post (not a replay) that fails keeps the existing rule: the session withdraws the request.
 - The replay rebuilds `ToolInteractionRequest` from the parked request, with the new `display_text` and `is_messy`
@@ -446,8 +493,8 @@ sequenceDiagram
 | The policy now denies the parked call | The gate denies it. The child gets the access-denied result. | denial result and audit log |
 | The policy now needs another consent | The one-time consent does not cover it. The child parks again. | new prompt |
 | The tool's fingerprint changed (name, server, transport, or parameter schema) | The call does not run. The child parks it again. | new prompt and warning log |
-| A restart reminder arrives while the pause holds | Held input stays in the queue. Only a person's input resumes. | `restart_resume` log line |
-| A replayed prompt cannot render in its channel | The session withdraws the request with `PromptUnavailable`. | withdrawal redraw |
+| A restart reminder arrives while the pause holds | Held input stays in the queue. Only input that the pause does not hold resumes. | `restart_resume` log line |
+| A replayed prompt cannot render in its channel, or the API refuses it with a permanent error | The session withdraws the request with `PromptUnavailable`. | withdrawal redraw |
 | A replayed prompt post fails in transport | The request stays open for the next join. | warning log |
 | The parked call's tool is gone | "Unknown tool: {name}". The child continues. | warning log (existing) |
 | The trust of the requester is narrower now | The child runs with the narrower audience. A `Public` audience fails the spawn rule. | `spawn_unavailable` or tool denial |
@@ -527,7 +574,7 @@ Each PR starts with failing tests. `tasks.md` names each test, its assertion, an
 
 | PR | Base | Content | Format | Estimate (code plus tests) |
 | --- | --- | --- | --- | --- |
-| PR 0 | `dev` | Pure refactors with no behavior change: the shared prompt builder, the shared plan-entry helper (M11), and the export and restore of the `TurnStateTracker` loop guard. It can merge to `dev` at once. | none | 300 to 500 lines |
+| PR 0 | `dev` | Pure refactors with no behavior change: the shared prompt builder, the shared plan-entry helper (M11), the export and restore of the `TurnStateTracker` loop guard, and the one pause predicate `ChildConsentPause.Holds`. It can merge to `dev` at once. | none | 350 to 550 lines |
 | PR 1a | `feature/durable-child-consent-wait` (made from `dev` after PR 0) | The child stops and the owner keeps its park in memory. The transcript (M12), the checkpoint seed (H1), the loop guard (M10), the pre-batch run scope (H3), the resume gate, the answer path with no live wait and its requester binding, the live answer applied to the park, the narrower audience (M6), the fingerprint (M7, N3, N12), the typed park refusals (N7), the profile and spawn failures, cancel of a parked run, and the `docs/architecture/tool-authorization.md` update. The existing restart rules apply. | none | 1,300 to 1,800 lines |
 | PR 1b | `feature/durable-child-consent-wait` | The receipt facts of the finished calls and their effects in live order (H2), and the managed temporary retry target and denial directory (M1, N4). | none | 400 to 650 lines |
 | Merge PR | `dev` | `feature/durable-child-consent-wait` into `dev`, as its own reviewed PR, verified on the combined stack. | none | no new lines |
@@ -542,7 +589,7 @@ PR 1a still changes a consent surface and the resume path, so it carries the arc
 diff (CLAUDE.md, "Architecture Document Rule"). It also records the pre-batch scope, so a resume never builds its scope
 from a wrong source, also on the feature branch.
 
-The total is now 3,750 to 5,450 lines over five PRs. Most of the lines are tests: each fact of the park needs a test
+The total is now 3,800 to 5,500 lines over five code PRs. Most of the lines are tests: each fact of the park needs a test
 that fails when the fact is lost.
 
 ### Tests and Stryker

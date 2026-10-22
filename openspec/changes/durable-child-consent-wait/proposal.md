@@ -40,7 +40,7 @@ retention (#2573), the headless exit rule (#2541), and a cross-process router.
 Stack:
 
 - PR 0 (base `dev`): pure refactors with no behavior change: the shared prompt builder, the shared re-drive helper,
-  and the loop-guard export.
+  the loop-guard export, and the one pause predicate.
 - PR 1a (base `feature/durable-child-consent-wait`): park and resume in memory: the transcript, the checkpoint, the
   loop guard, the pre-batch run scope, the resume gate, the answer binding, the fingerprint, the spawn failures, and
   the architecture document. No format change.
