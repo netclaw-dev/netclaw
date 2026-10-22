@@ -278,6 +278,61 @@ The session SHALL create a restart reminder only after an eligible model task st
 - **THEN** the manifest contains no restart reminder for that turn
 - **AND** the daemon reports the blocked session
 
+### Requirement: Graceful drain stops a tool loop
+
+The session SHALL apply the 2-second model grace period to each live model call of a turn. This rule applies also after a tool batch closed the inputs of the turn. After a drain request, the session SHALL start no model call and no tool batch. It SHALL keep the reminder rule of the requirement above. When the drain stops a turn and no restart reminder resumes it, the session SHALL post one text notice in its channel before it stops. The shutdown alert SHALL name each session whose drain timed out.
+
+#### Scenario: The model call after a tool batch stops after the grace period
+
+- **GIVEN** a tool batch completed
+- **AND** the next model call of the turn streams
+- **WHEN** graceful drain starts
+- **THEN** the session cancels the model call after the grace period
+- **AND** it acknowledges drain without a restart reminder for the closed input
+
+#### Scenario: A tool batch boundary stops the turn
+
+- **GIVEN** a tool batch runs
+- **WHEN** graceful drain starts, and the batch then completes
+- **THEN** the session starts no model call
+- **AND** it records reminder eligibility and acknowledges drain
+
+#### Scenario: Tool calls inside the grace period do not run
+
+- **GIVEN** graceful drain started during a model call
+- **WHEN** the model returns tool calls before the grace period ends
+- **THEN** the session starts no tool batch
+- **AND** it stops the turn as a model stop for restart does
+
+#### Scenario: A waiting input keeps its reminder
+
+- **GIVEN** a tool loop runs
+- **AND** an accepted input waits in the journal
+- **WHEN** graceful drain stops the turn
+- **THEN** the restart manifest stores one reminder for that session
+
+#### Scenario: A stopped turn without a reminder posts a notice
+
+- **GIVEN** graceful drain stops a turn after a tool batch
+- **AND** no restart reminder resumes the turn
+- **WHEN** the session passivates
+- **THEN** the session posts one text notice in its channel before it stops
+- **AND** the notice tells the person to send a message to continue
+
+#### Scenario: A resumable turn posts no notice
+
+- **GIVEN** graceful drain stops a model call that has pending admitted input
+- **AND** no tool batch or partial reply exists
+- **WHEN** the session passivates
+- **THEN** the session posts no restart notice
+
+#### Scenario: The shutdown alert names a timed-out session
+
+- **GIVEN** a session does not acknowledge drain before the drain deadline
+- **WHEN** the daemon emits the shutdown alert
+- **THEN** the alert context `timedOutSessionIds` names that session
+- **AND** the drain log line does not claim that the session recovers
+
 ### Requirement: A fresh restart reminder resumes stored work
 
 The reminder manager SHALL deliver a fresh restart reminder through its existing `current_session` path. The session SHALL restore pending input under its recorded authority.

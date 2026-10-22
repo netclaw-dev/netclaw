@@ -138,7 +138,6 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     public RestartAction RequestRestart(
         IActorRef replyTo,
         SessionPhase phase,
-        bool hasActiveTurn,
         bool hasBufferedContinuation,
         bool canParkDurableApprovals)
     {
@@ -149,7 +148,9 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         if (TryStopDurableApprovalWaits(phase, hasBufferedContinuation, canParkDurableApprovals))
             return RestartAction.StopToolTask;
 
-        if (phase == SessionPhase.Processing && HasLiveModel && hasActiveTurn)
+        // A tool batch clears the selected inputs, but the model call after it is still a live call of the turn.
+        // The grace period applies to each live model call, so that a tool loop cannot hold the drain (#2601).
+        if (phase == SessionPhase.Processing && HasLiveModel)
         {
             timers.StartSingleTimer(
                 RestartModelGraceTimerKey,
@@ -171,10 +172,9 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
            && canParkDurableApprovals
            && RequestToolStop();
 
-    public long? PlanRestartModelStop(RestartModelGraceExpired message, SessionPhase phase, bool hasActiveTurn)
+    public long? PlanRestartModelStop(RestartModelGraceExpired message, SessionPhase phase)
         => RestartDrainRequested
            && phase == SessionPhase.Processing
-           && hasActiveTurn
            && CanDispatchPreparedModel(message.CallId)
             ? message.CallId
             : null;

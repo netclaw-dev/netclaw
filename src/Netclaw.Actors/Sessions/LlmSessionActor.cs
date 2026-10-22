@@ -1420,6 +1420,18 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         List<FunctionCallContent> toolCalls,
         UsageDetails? usage)
     {
+        // The model returned tool calls inside the drain grace period. A restart can interrupt a new tool batch after
+        // its effects start, so the session drops the calls and stops the turn as a model stop for restart does.
+        if (RestartDrainRequested)
+        {
+            TurnLog().Info("turn_restart_drops_tool_calls count={CallCount}", toolCalls.Count);
+            if (_input.EmittedText)
+                CloseActiveInputs(StopTurnForRestart);
+            else
+                StopTurnForRestart();
+            return;
+        }
+
         var toolExecutor = _toolExecutor
             ?? throw new InvalidOperationException("A tool-call response requires a tool executor.");
         var prepared = _toolWorkflow.PrepareFreshBatch(
@@ -4206,6 +4218,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void ContinueAfterToolBatch(BatchCompletion.Ready completion)
     {
+        // A drain request arrived during the tool batch. The turn stops at this batch boundary and starts no model
+        // call, so that a long tool loop cannot hold the drain until the coordinator deadline (#2601).
+        if (RestartDrainRequested)
+        {
+            _toolWorkflow.ClearNormalBatch();
+            _execution.ClearToolTracking();
+            TurnLog().Info("turn_restart_stop_at_tool_batch iteration={Iteration}", _turnState.ToolIterationCount);
+            StopTurnForRestart();
+            return;
+        }
+
         var advance = _input.AdvanceAfterToolBatch(completion, ShouldCompact(), _toolWorkflow.IsChildConsentPaused);
         if (advance.Batch is { } batch)
         {
@@ -4328,7 +4351,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var action = _execution.RequestRestart(
             Sender,
             _phase.Current,
-            _input.SelectedCount > 0,
             _input.HasBufferedContinuation,
             _toolWorkflow.CanParkForRestart());
         if (action == RestartAction.EnterPassivation)
@@ -4356,7 +4378,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void HandleRestartModelGraceExpired(RestartModelGraceExpired expired)
     {
-        if (_execution.PlanRestartModelStop(expired, _phase.Current, _input.SelectedCount > 0) is not { } callId)
+        if (_execution.PlanRestartModelStop(expired, _phase.Current) is not { } callId)
             return;
 
         _modelContext.InvalidateInspection();
@@ -4373,31 +4395,50 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _log.Error(failure, "The model task failed during restart drain");
 
         if (action == ModelStopAction.CloseInputs)
-            CloseActiveInputs(CompleteModelStopForRestart);
+            CloseActiveInputs(StopTurnForRestart);
         else
-            CompleteModelStopForRestart();
+            StopTurnForRestart();
     }
 
-    private void CompleteModelStopForRestart()
+    // The drain stopped the turn before its end. If no restart reminder resumes the turn, the session tells the person
+    // in the channel. Without the notice, the turn stops silently (#2601).
+    private void StopTurnForRestart()
     {
-        RecordRestartReminderEligibility();
+        if (RecordRestartReminderEligibility() != ReminderEligibility.Eligible)
+            EmitRestartStoppedTurnNotice();
+
         ClearBufferedMessagesForRestartDrain();
         TransitionTo(SessionPhase.Passivating);
     }
 
-    private void RecordRestartReminderEligibility()
+    private void EmitRestartStoppedTurnNotice()
     {
-        if (_execution.MarkRestartReminderEligible(
-                _state.GetExecutablePendingInputs().Count,
-                UnreportedRuns().Count(),
-                _input.EmittedText,
-                _input.SelectedCount,
-                _timeProvider.GetUtcNow()) == ReminderEligibility.EmittedText)
+        _log.Info("Restart drain stopped the turn of session {SessionId}, and no restart reminder resumes it.",
+            _sessionId.Value);
+        EmitOutput(new TextOutput(
+            "The daemon restarted during this turn. The work stopped after the last completed step. "
+            + "Nothing resumes the work automatically. Send a message to continue.")
+        {
+            SessionId = _sessionId
+        }, OutputFilter.Text);
+    }
+
+    private ReminderEligibility RecordRestartReminderEligibility()
+    {
+        var eligibility = _execution.MarkRestartReminderEligible(
+            _state.GetExecutablePendingInputs().Count,
+            UnreportedRuns().Count(),
+            _input.EmittedText,
+            _input.SelectedCount,
+            _timeProvider.GetUtcNow());
+        if (eligibility == ReminderEligibility.EmittedText)
         {
             _log.Warning(
                 "Restart drain cannot resume session {SessionId} because the interrupted turn emitted text.",
                 _sessionId.Value);
         }
+
+        return eligibility;
     }
 
     private void HandleToolPipelineStoppedForRestart(ToolPipelineStoppedForRestart stopped)
