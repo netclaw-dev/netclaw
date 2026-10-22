@@ -46,7 +46,8 @@ public sealed class RestartSlashResumeQueueTests : ApprovalWaitTestBase
     private const string AliceLaterText = "Alice later work after the slash command.";
     private const string BobText = "Bob work after the slash command.";
     private const string Carol = "U-carol";
-    private const string CarolDamagedText = "Carol work with a damaged authority.";
+    private const string Zed = "U-zed";
+    private const string ZedText = "Zed live work.";
     private const string TeamPromptMarker = ReminderPromptMarker;
     private const string InvalidAuthorityReason = "The interrupted input authority is invalid.";
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(10);
@@ -241,111 +242,148 @@ public sealed class RestartSlashResumeQueueTests : ApprovalWaitTestBase
     }
 
     /// <summary>
-    /// Case 6 (review finding 2). The pending order is the slash command of Alice, a valid input of Bob, and then an
-    /// input of Carol with a damaged authority record. The restart resume validates only the leading inputs of Alice,
-    /// so it does not see the damaged input before the slash command runs. The restart resume splits the waiting
-    /// inputs with SessionInputFlow.SplitByAuthority, as StartInputsHeldByThePause does:
-    /// <list type="bullet">
-    /// <item>the input of Bob runs once, under the authority of Bob;</item>
-    /// <item>the session logs the damaged input and keeps it pending in the journal;</item>
-    /// <item>the session does not throw, so the actor does not restart or stop.</item>
-    /// </list>
-    /// Bug on dev: no turn runs the input of Bob. A fix that passes the damaged input to
-    /// SessionInputFlow.RestoreWaitingInputs throws inside the actor.
+    /// The restart resume path for the #2576 rows.
     /// </summary>
-    [Fact]
-    public async Task A_damaged_input_behind_another_requester_stays_pending_and_the_valid_input_runs()
+    public enum ResumePath
     {
-        // Arrange
-        var sessionId = new SessionId("test-channel/restart-slash-ready-damaged-behind-other");
-        var slash = Admitted(sessionId, "slash", UnknownSlash, PersonSource(Alice, TrustAudience.Personal), executableText: UnknownSlash);
-        var bob = Admitted(sessionId, "bob", BobText, PersonSource(Bob, TrustAudience.Team));
-        var carol = Admitted(sessionId, "carol", CarolDamagedText, PersonSource(Carol, TrustAudience.Team));
-        var damaged = carol with { TurnContext = carol.TurnContext with { TurnId = string.Empty } };
-        await SeedJournalAsync(sessionId, slash, bob, damaged);
-        var subscriber = await JoinNewSubscriberAsync(sessionId);
-        var session = await ResolveSessionAsync(sessionId);
-        var lifecycle = CreateTestProbe("session-lifecycle");
-        lifecycle.Watch(session);
+        /// <summary>An idle session resumes the leading inputs as one model turn.</summary>
+        Ready,
 
-        // A restart of the session actor logs its exception as an Error event with a cause. The expected log line
-        // for the damaged input has no cause.
-        var errors = CreateTestProbe("session-errors");
-        Sys.EventStream.Subscribe(errors.Ref, typeof(AkkaError));
-        var crashes = new List<AkkaError>();
-        try
-        {
-            // Act: a probe takes the reply, so a session that throws before it replies gives a clear failure.
-            var replies = CreateTestProbe("restart-replies");
-            SessionManager.Tell(RestartResumeMessage(sessionId, TrustAudience.Personal), replies.Ref);
+        /// <summary>The first input is an unknown slash command of Alice. It closes and keeps the session in Ready.</summary>
+        Slash,
 
-            // Assert
-            await AwaitAssertAsync(
-                () =>
-                {
-                    while (errors.HasMessages)
-                    {
-                        if (errors.ReceiveOne(TimeSpan.Zero, TestContext.Current.CancellationToken) is AkkaError { Cause: not null } error
-                            && error.LogSource.Contains("restart-slash-ready-damaged-behind-other", StringComparison.Ordinal))
-                            crashes.Add(error);
-                    }
-
-                    Assert.True(crashes.Count == 0,
-                        $"The session must not throw for a damaged pending input. It threw: {crashes.FirstOrDefault()?.Cause}");
-                    Assert.False(lifecycle.HasMessages, "The session actor must not stop for a damaged pending input.");
-                    Assert.True(replies.HasMessages, "The restart message got no reply.");
-                },
-                Deadline, cancellationToken: TestContext.Current.CancellationToken);
-            Assert.IsAssignableFrom<CommandAck>(replies.ReceiveOne(TimeSpan.Zero, TestContext.Current.CancellationToken));
-            await ExpectSkippedTurnAsync(subscriber);
-            await AwaitAssertAsync(
-                () =>
-                {
-                    Assert.True(
-                        FakeChat.ReceivedMessages.Any(request => LastUserText(request) == BobText),
-                        "The valid input of Bob must run after the slash command. No model call carried it.");
-                },
-                Deadline, cancellationToken: TestContext.Current.CancellationToken);
-            await ExpectTurnsAsync(subscriber, 1);
-
-            var bobRequest = Assert.Single(FakeChat.ReceivedMessages, request => LastUserText(request) == BobText);
-            Assert.Contains(TeamPromptMarker, SystemText(bobRequest));
-            Assert.DoesNotContain(FakeChat.ReceivedMessages,
-                request => request.Any(message => message.Text.Contains(CarolDamagedText, StringComparison.Ordinal)));
-            await AssertConsumedByTurnAsync(sessionId, bob.InputId);
-            Assert.Equal(new[] { damaged.InputId }, PendingInputIds(await ReadJournalAsync(sessionId)));
-            Assert.False(lifecycle.HasMessages, "The session actor must not stop for a damaged pending input.");
-        }
-        finally
-        {
-            Sys.EventStream.Unsubscribe(errors.Ref, typeof(AkkaError));
-        }
+        /// <summary>A live turn of Zed runs, so the restart message only queues the pending inputs.</summary>
+        Processing
     }
 
     /// <summary>
-    /// Case 4, guard. The input after the slash command has a damaged authority record. The restart resume validates
-    /// the inputs before it runs the slash command. It answers with a CommandNack, runs no command and no model call,
-    /// and the journal keeps both inputs pending. Dev passes this spec.
+    /// Issue #2576. One rule covers a pending input with a stored authority that does not parse. The rule applies to
+    /// each restart resume path:
+    /// <list type="bullet">
+    /// <item>The reply is a nack only when the damaged input is in the leading inputs that the restart message resumes.
+    /// In an idle session, only a damaged first input does this. In Processing, the message resumes no leading
+    /// inputs, so it never sends a nack.</item>
+    /// <item>A damaged input ends the leading inputs. The session logs it and keeps it pending in the journal.</item>
+    /// <item>Each valid input runs once, under its own authority. After a nack, no input runs and each input stays
+    /// pending.</item>
+    /// <item>The session does not throw. An actor restart logs an Error event with a cause.</item>
+    /// </list>
+    /// A layout gives the pending inputs in admission order. A, B and C are Alice, Bob and Carol. The "!" prefix marks
+    /// a damaged input.
     /// </summary>
-    [Fact]
-    public async Task A_damaged_input_after_the_slash_command_gets_a_nack_and_runs_nothing()
+    [Theory]
+    [InlineData(ResumePath.Ready, "A !A", false)]
+    [InlineData(ResumePath.Ready, "A B !C", false)]
+    [InlineData(ResumePath.Ready, "A !C B", false)]
+    [InlineData(ResumePath.Ready, "!A B", true)]
+    [InlineData(ResumePath.Slash, "A !A", false)]
+    [InlineData(ResumePath.Slash, "A B !C", false)]
+    [InlineData(ResumePath.Slash, "A !C B", false)]
+    [InlineData(ResumePath.Slash, "!A B", true)]
+    [InlineData(ResumePath.Processing, "A !A", false)]
+    [InlineData(ResumePath.Processing, "A B !C", false)]
+    [InlineData(ResumePath.Processing, "A !C B", false)]
+    [InlineData(ResumePath.Processing, "!A B", false)]
+    public async Task A_damaged_pending_input_stays_pending_and_the_valid_inputs_run(ResumePath path, string layout, bool nack)
     {
         // Arrange
-        var sessionId = new SessionId("test-channel/restart-slash-damaged-later");
-        var slash = Admitted(sessionId, "slash", UnknownSlash, PersonSource(Alice, TrustAudience.Personal), executableText: UnknownSlash);
-        var later = Admitted(sessionId, "later", AliceLaterText, PersonSource(Alice, TrustAudience.Personal));
-        var damaged = later with { TurnContext = later.TurnContext with { TurnId = string.Empty } };
-        await SeedJournalAsync(sessionId, slash, damaged);
+        var ct = TestContext.Current.CancellationToken;
+        var thread = $"damaged-{path}-{layout.Replace(' ', '-').Replace('!', 'x')}".ToLowerInvariant();
+        var sessionId = new SessionId($"test-channel/{thread}");
+        var inputs = layout.Split(' ').Select((token, index) => LayoutEntry(sessionId, path, token, index)).ToArray();
+        await SeedJournalAsync(sessionId, inputs.Select(input => input.Admitted).ToArray<ISessionEvent>());
         await JoinNewSubscriberAsync(sessionId);
+        var lifecycle = CreateTestProbe("session-lifecycle");
+        lifecycle.Watch(await ResolveSessionAsync(sessionId));
+        var errors = CreateTestProbe("session-errors");
+        Sys.EventStream.Subscribe(errors.Ref, typeof(AkkaError));
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (path == ResumePath.Processing)
+        {
+            // A live input of another requester holds its model call open, so the session stays in Processing.
+            FakeChat.NextResponseGate = hold;
+            await SendAsync(sessionId, ZedText, PersonSource(Zed, TrustAudience.Team));
+            await FakeChat.FirstCallEntered.Task.WaitAsync(Deadline, ct);
+        }
 
-        // Act
-        var reply = await SendRestartResumeAsync(sessionId, TrustAudience.Personal);
+        // Act: a probe takes the reply, so a session that throws before it replies gives a clear failure.
+        var replies = CreateTestProbe("restart-replies");
+        SessionManager.Tell(RestartResumeMessage(sessionId, TrustAudience.Personal), replies.Ref);
+        var crashes = new List<AkkaError>();
+        await AwaitAssertAsync(
+            () => Assert.True(CollectCrashes(errors, thread, crashes) || replies.HasMessages, "The restart message got no reply."),
+            Deadline, cancellationToken: ct);
+        hold.TrySetResult();
 
         // Assert
-        Assert.Equal(InvalidAuthorityReason, Assert.IsType<CommandNack>(reply).Reason);
-        Assert.Equal(0, FakeChat.CallCount);
-        var pending = PendingInputIds(await ReadJournalAsync(sessionId));
-        Assert.Equal(new[] { slash.InputId, damaged.InputId }, pending);
+        AssertNoCrash();
+        var reply = replies.ReceiveOne(TimeSpan.Zero, ct);
+        Assert.True(
+            nack ? reply is CommandNack { Reason: InvalidAuthorityReason } : reply is CommandAck,
+            $"The rule expects {(nack ? "a nack" : "an ack")}. The reply was {reply}.");
+        var runs = nack ? [] : inputs.Where(input => !input.Damaged).ToArray();
+        var stays = inputs.Except(runs).Select(input => input.Admitted.InputId).ToArray();
+        await AwaitAssertAsync(
+            async () =>
+            {
+                AssertNoCrash();
+                Assert.All(runs.Where(input => input.Marker is not null), input => Assert.True(
+                    FakeChat.ReceivedMessages.Any(request => LastUserText(request) == input.Content),
+                    $"No model call carried the valid input {input.Admitted.InputId}."));
+                Assert.Equal(stays, PendingInputIds(await ReadJournalAsync(sessionId)));
+            },
+            Deadline, cancellationToken: ct);
+        foreach (var input in inputs)
+        {
+            if (runs.Contains(input) && input.Marker is { } marker)
+                Assert.Contains(marker, SystemText(
+                    Assert.Single(FakeChat.ReceivedMessages, request => LastUserText(request) == input.Content)));
+            else
+                Assert.DoesNotContain(FakeChat.ReceivedMessages, request => UserTexts(request).Contains(input.Content));
+        }
+
+        void AssertNoCrash()
+        {
+            Assert.False(CollectCrashes(errors, thread, crashes),
+                $"The session must not throw for a damaged pending input. It threw: {crashes.FirstOrDefault()?.Cause}");
+            Assert.False(lifecycle.HasMessages, "The session actor must not stop for a damaged pending input.");
+        }
+    }
+
+    // Marker is the prompt audience of the turn that runs the input. A slash command runs no model call, so it has none.
+    private sealed record LayoutInput(InputAdmitted Admitted, string Content, string? Marker, bool Damaged);
+
+    private static LayoutInput LayoutEntry(SessionId sessionId, ResumePath path, string token, int index)
+    {
+        var damaged = token.StartsWith('!');
+        var requester = token.TrimStart('!');
+        var (sender, audience) = requester switch
+        {
+            "A" => (Alice, TrustAudience.Personal),
+            "B" => (Bob, TrustAudience.Team),
+            "C" => (Carol, TrustAudience.Team),
+            _ => throw new ArgumentException($"Unknown requester {requester} in the layout.", nameof(token))
+        };
+        var slash = path == ResumePath.Slash && index == 0;
+        var content = slash ? UnknownSlash : $"Work {index} of {requester}.";
+        var admitted = Admitted(sessionId, $"{index}", content, PersonSource(sender, audience), slash ? UnknownSlash : null);
+        if (damaged)
+            admitted = admitted with { TurnContext = admitted.TurnContext with { TurnId = string.Empty } };
+        var marker = slash ? null : audience == TrustAudience.Personal ? RequesterPromptMarker : TeamPromptMarker;
+        return new LayoutInput(admitted, content, marker, damaged);
+    }
+
+    // An actor restart logs its exception as an Error event with a cause. The log line for a damaged input has no cause.
+    private static bool CollectCrashes(Akka.TestKit.TestProbe errors, string thread, List<AkkaError> crashes)
+    {
+        while (errors.HasMessages)
+        {
+            if (errors.ReceiveOne(TimeSpan.Zero) is AkkaError { Cause: not null } error
+                && error.LogSource.Contains(thread, StringComparison.Ordinal))
+                crashes.Add(error);
+        }
+
+        return crashes.Count > 0;
     }
 
     private static InputAdmitted Admitted(
