@@ -16,7 +16,7 @@ Base: PR #2583 and PR #2584 (`child-approval-events-and-parent-pause` PR 1 and P
 - **Park always.** A child call that needs consent does not wait in memory. The child finishes the other calls of the
   batch, sends its park to the session, and stops. The live wait for child consent goes away.
 - **The park holds all that the child needs.** The conversation, the open tool batch with the receipt facts of the
-  finished calls, the path facts before the batch, the loop guard, the managed temporary state, the spawn facts, and
+  finished calls, the path facts before the batch, the loop guard, the managed temporary retry targets, the spawn facts, and
   the consent requests.
 - **The run record holds the park (PR 2).** The session journals `ChildRunEvent.Parked` in the run record, which is in
   the session journal and snapshot already. No new persistence ID, no child journal, and no purge.
@@ -37,15 +37,19 @@ approval, the TUI, and headless output.
 Out of scope: the resume of a running (not parked) child after a restart, nested children, a consent timeout, session
 retention (#2573), the headless exit rule (#2541), and a cross-process router.
 
-Stack (all PRs on `feature/durable-child-consent-wait`):
+Stack:
 
-- PR 1a: park and resume in memory: the transcript, the checkpoint, the loop guard, the resume gate, the answer binding,
-  the spawn failures, and the shared re-drive helper. No format change.
-- PR 1b: the receipt facts of finished calls, the pre-batch run scope, and the managed temporary state. No format change.
-  PR 1a must not reach `dev` alone; the feature branch merges to `dev` only after PR 1b lands.
-- PR 2: durable `Parked` and `Resumed`, recovery, passivation, and prompt replay with dedupe in the channels. Needs #2587.
-  Forward-only.
-- PR 3: TUI and headless dedupe, and the native smoke run.
+- PR 0 (base `dev`): pure refactors with no behavior change: the shared prompt builder, the shared re-drive helper,
+  and the loop-guard export.
+- PR 1a (base `feature/durable-child-consent-wait`): park and resume in memory: the transcript, the checkpoint, the
+  loop guard, the pre-batch run scope, the resume gate, the answer binding, the fingerprint, the spawn failures, and
+  the architecture document. No format change.
+- PR 1b (same base): the receipt facts of finished calls, and the managed temporary retry target and denial directory.
+  No format change. PR 1a must not reach `dev` alone. A separate reviewed PR merges the feature branch to `dev` after
+  PR 1b lands.
+- PR 2 (base `dev`): durable `Parked` and `Resumed`, recovery, passivation, the pause rule for the restart reminder,
+  and prompt replay with dedupe in the channels. Needs #2587. Forward-only.
+- PR 3 (base `dev`): TUI and headless dedupe, and the native smoke run.
 
 ## Capabilities
 

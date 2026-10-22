@@ -11,8 +11,9 @@ result SHALL NOT run again. The session SHALL number the prompts of a run from a
 in one run.
 
 The session SHALL accept a park only for a run that it owns and that is still accepted. When the session refuses the
-park, cannot record it, or finds it above the size limit, the run SHALL end as failed with a stated reason, no prompt
-SHALL appear, and no parked call SHALL run.
+park, cannot record it, or finds it above the size limit, the run SHALL end with its own stated reason (a cancelled
+run ends as cancelled; the other cases end as failed), no prompt SHALL appear, and no parked call SHALL run. A later
+result from the stopped child SHALL NOT change that reason.
 
 #### Scenario: A child parks after its siblings end
 
@@ -61,9 +62,10 @@ The resumed child SHALL take its requester, boundary, channel, delivery targets,
 the park, never from the current turn or the current parent. Its audience SHALL be the narrower of the recorded
 audience and the audience that the session derives now for the recorded requester and channel. It SHALL resolve its
 model, its tools, its operating rules, and its project instructions under the current configuration and policy, as a
-new spawn does, and the session SHALL log the recorded and the new model. When a parked call's tool fingerprint
-differs from the fingerprint at the park, the call SHALL NOT run on the old answer, and the child SHALL park it again
-with a new prompt.
+new spawn does, and the session SHALL log the recorded and the new model. The tool fingerprint of a parked call SHALL
+cover the tool name, the server, the transport identity of the server, and the parameter schema, and SHALL NOT cover
+the description text or any secret value. When the fingerprint at resume differs from the fingerprint at the park,
+the call SHALL NOT run on the old answer, and the child SHALL park it again with a new prompt.
 
 When a spawn rule fails at resume (no spawner, subagents disabled, a `Public` audience, a deleted agent profile, no
 child tool, no result reader, or no usable model provider), the run SHALL end as failed with that reason, the result
@@ -123,10 +125,17 @@ notice SHALL state the reason, and the parked calls SHALL NOT run.
 #### Scenario: A changed tool parks again
 
 - **GIVEN** a child parked at a call to an MCP tool
-- **AND** another MCP server now provides a tool with the same name
+- **AND** the operator points the same server key at a new endpoint with the same tool name and schema
 - **WHEN** the requester approves the parked request
 - **THEN** the call does not run on that answer
 - **AND** a new prompt appears for the call
+
+#### Scenario: A description change does not park again
+
+- **GIVEN** a child parked at a call to an MCP tool
+- **AND** an upgrade changes only the description text of the tool
+- **WHEN** the requester approves the parked request
+- **THEN** the call runs once on that answer
 
 #### Scenario: A deleted agent profile ends the run
 
