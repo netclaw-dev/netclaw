@@ -323,7 +323,9 @@ public sealed class SubAgentSpawner
         TrustAudience audience,
         CancellationToken cancellationToken)
     {
-        if (!result.Success || result.WorkingContext is not { } childContext)
+        // Only a completed run or a partial run has a delta. A partial run that a restart lost is not a success, but
+        // its result file shows the reviewed delta. The observed changes help the parent judge the uncertain effects.
+        if (result.WorkingContext is not { } childContext)
             return result;
 
         var finalContext = new WorkingContext

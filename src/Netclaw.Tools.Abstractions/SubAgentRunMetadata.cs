@@ -89,6 +89,12 @@ public readonly record struct SubAgentOutcomeReason(string Value)
     public static readonly SubAgentOutcomeReason OutputTruncated = new("output_truncated");
     public static readonly SubAgentOutcomeReason NoActivityTimeout = new("no_activity_timeout");
     public static readonly SubAgentOutcomeReason ActorStopped = new("actor_stopped");
+
+    /// <summary>
+    /// Recovery found the run live when its owner started again. The cause can be a daemon restart, a crash, or a
+    /// stop of the session actor. Recovery cannot tell them apart, so the reason names only the restart.
+    /// </summary>
+    public static readonly SubAgentOutcomeReason OwnerRestarted = new("owner_restarted");
     public static readonly SubAgentOutcomeReason SpawnUnavailable = new("spawn_unavailable");
     public static readonly SubAgentOutcomeReason SpawnPaused = new("spawn_paused");
     public static readonly SubAgentOutcomeReason NoToolsAvailable = new("no_tools_available");

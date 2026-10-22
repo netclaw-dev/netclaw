@@ -122,6 +122,8 @@ internal static class ChildRunDocuments
             text.Append($" reason={reason.Value}");
         text.Append($" result_file={resultPath}");
         text.AppendLine();
+        if (result.OutcomeReason == SubAgentOutcomeReason.OwnerRestarted)
+            text.AppendLine("The child did not survive a restart of its owner. Nothing re-runs the child. Its external effects are uncertain. The result file gives the details.");
         if (writeFailure is not null)
             text.AppendLine($"The runtime could not write the result file: {writeFailure} The file can be missing or out of date. Do not rely on it.");
         else

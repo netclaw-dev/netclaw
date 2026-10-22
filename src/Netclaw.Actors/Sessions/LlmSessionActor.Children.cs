@@ -350,7 +350,9 @@ public sealed partial class LlmSessionActor
                     {
                         result = await spawner.EnrichWorkingContextResultAsync(terminal.Result,
                             initialSnapshot!, run.OriginalContext.Audience, CancellationToken.None);
-                        reviewed = result.WorkingContext;
+                        // The reducer accepts a reviewed context only from a successful run. A run that a restart
+                        // lost keeps its delta in result.md, but the delta does not go into the parent context.
+                        reviewed = result.Success ? result.WorkingContext : null;
                     }
                     catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
                     {
@@ -425,11 +427,12 @@ public sealed partial class LlmSessionActor
     {
         if (_execution.FindChild(child) is not { } id || !_state.ChildRuns.TryGetValue(id, out var run))
             return false;
-        RecordChildTerminal(id, LostChildResult(run), lost: true, warning: "The child stopped without a terminal acknowledgement.", ActorRefs.Nobody);
+        RecordChildTerminal(id, LostChildResult(run, SubAgentOutcomeReason.ActorStopped), lost: true,
+            warning: "The child stopped without a terminal acknowledgement.", ActorRefs.Nobody);
         return true;
     }
 
-    private static SubAgentResult LostChildResult(BackgroundChildRun run)
+    private static SubAgentResult LostChildResult(BackgroundChildRun run, SubAgentOutcomeReason reason)
     {
         var checkpoint = run.Lifecycle switch
         {
@@ -437,23 +440,32 @@ public sealed partial class LlmSessionActor
             ChildRunLifecycle.Cancelling cancelled => cancelled.Checkpoint,
             _ => null
         };
+        var restarted = reason == SubAgentOutcomeReason.OwnerRestarted;
         return new SubAgentResult
         {
             AgentName = run.AgentName,
             Completion = checkpoint is null
-                ? new ChildRunCompletion.Failed(SubAgentOutcomeReason.ActorStopped)
-                : new ChildRunCompletion.Partial(SubAgentOutcomeReason.ActorStopped, checkpoint.ConfirmedActivity),
-            Output = checkpoint is null ? "The child owner was lost. External effects are uncertain; the child will not restart."
-                : $"The child owner was lost after round {checkpoint.CompletedRound}. {checkpoint.Summary} External effects after that checkpoint are uncertain."
+                ? new ChildRunCompletion.Failed(reason)
+                : new ChildRunCompletion.Partial(reason, checkpoint.ConfirmedActivity),
+            Output = (checkpoint, restarted) switch
+            {
+                (null, true) => "The child did not survive a restart of its owner. Nothing re-runs the child. Its external effects are uncertain.",
+                (null, false) => "The child owner was lost. External effects are uncertain; the child will not restart.",
+                ({ } last, true) => $"The child did not survive a restart of its owner after round {last.CompletedRound}. {last.Summary} "
+                                    + "Nothing re-runs the child. External effects after the last checkpoint are uncertain.",
+                ({ } last, false) => $"The child owner was lost after round {last.CompletedRound}. {last.Summary} External effects after that checkpoint are uncertain."
+            }
         };
     }
 
+    // Recovery cannot tell a restart drain, a crash, and a stop of the session actor apart. In each case the owner
+    // started again and the child did not survive, so the reason is owner_restarted.
     private void RecoverChildren()
     {
         foreach (var run in _state.GetExecutableChildRuns().ToArray())
         {
             if (run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling)
-                RecordChildTerminal(run.RunId, LostChildResult(run), lost: true,
+                RecordChildTerminal(run.RunId, LostChildResult(run, SubAgentOutcomeReason.OwnerRestarted), lost: true,
                     warning: "Recovery does not relaunch uncertain child work.", ActorRefs.Nobody);
             else if (run.Lifecycle is ChildRunLifecycle.Terminal terminal)
                 PrepareChildResult(run, terminal.Result, terminal.LegacyPrepared);
