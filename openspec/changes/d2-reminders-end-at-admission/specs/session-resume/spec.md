@@ -4,12 +4,13 @@
 
 The session SHALL treat the restart reminder as a signal to resume stored work. The session SHALL NOT admit it as an input, and its text SHALL NOT reach the model as a user message.
 
-- In `Ready` phase with pending input, the session SHALL resume that input.
-- In `Processing` or `Compacting` phase, the session SHALL queue each pending input that no turn selected and that the queue does not hold yet. It SHALL log `restart_resume_queued` and reply `RestartResumeNotNeeded`, also when it queued nothing. No turn of this message runs: each queued input runs later under its own recorded source. The normal drain SHALL run those inputs after the running turn, in admission order.
-- In `Ready` phase with nothing to resume, or when a parked approval owns the next turn, the session SHALL reply `RestartResumeNotNeeded` (a `CommandAck`), make no change, and log `restart_resume_noop`. This includes a redelivery after the resumed turn ended.
+- In `Ready` phase with pending input and no parked approval, the session SHALL resume that input.
+- In `Processing` or `Compacting` phase, the session SHALL queue each pending input that no turn selected and that the queue does not hold yet. It SHALL log `restart_resume_queued` and reply `RestartResumeNotNeeded`, also when it queued nothing. No turn of this message runs: each queued input runs later under its own recorded source. The normal drain SHALL run those inputs after the running turn. They run in admission order among themselves, after the inputs that the queue holds already. The child consent pause and the parent approval waits still apply.
+- In `Ready` phase with nothing to resume, or in `Ready` phase when a parked approval owns the next turn, the session SHALL reply `RestartResumeNotNeeded` (a `CommandAck`), make no change, and log `restart_resume_noop`. This includes a redelivery after the resumed turn ended.
 - `RestartResumeNotNeeded` SHALL tell the caller that this message resumes nothing and that no turn will run for it. A caller on the Reminder-origin route (#2491) SHALL then settle its run as success at once and SHALL NOT wait for a terminal turn.
 - A reply that resumes a turn in `Ready` phase SHALL be an ordinary `CommandAck`, and the caller SHALL wait for the resumed turn. A reply that only queues work SHALL be `RestartResumeNotNeeded`, and the caller SHALL settle at once.
-- A refusal (`CommandNack`) SHALL remain only for a restart reminder whose stored authority is invalid. The session SHALL check for a parked approval before it checks the stored authority. So the refusal SHALL hold in every phase, also when the session would queue the input, except when a parked approval owns the next turn.
+- A refusal (`CommandNack`) SHALL remain only for two causes: a pending input whose stored authority is invalid, and a restart reminder that arrives in `Processing` or `Compacting` phase while a restart drain is pending.
+- In `Ready` phase, the session SHALL check for a parked approval before it checks the stored authority. In `Processing` or `Compacting` phase, the session SHALL NOT check for a parked approval. It checks for a pending restart drain, and then it checks the stored authority.
 
 #### Scenario: A redelivered restart message during the resumed turn
 

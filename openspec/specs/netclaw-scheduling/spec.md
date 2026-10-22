@@ -782,14 +782,22 @@ restart or a passivation for those inputs:
   approval.
 - When the child consent pause held the session at recovery, the session
   queues the automated inputs that the pause held (`StartHeldInputs`).
-- A restart reminder in `Ready` phase resumes the inputs of the first
-  requester and queues the other pending inputs.
+- A restart reminder in `Ready` phase resumes the leading inputs of the first
+  requester and queues the other pending inputs. One exception applies: when
+  the first input is a slash command and the session stays in `Ready` phase
+  after it, the session queues no other pending input.
 - A restart reminder in `Processing` or `Compacting` phase queues each pending
   input that no turn selected. It replies `RestartResumeNotNeeded`.
 
+In `Processing` or `Compacting` phase, if one pending input that no turn
+selected has a stored authority that does not parse, the restart reminder
+replies `CommandNack` and queues no input. In `Ready` phase, the same reply
+applies when such an input comes before the first change of requester.
+
 A stored input that nothing will run is not waiting. A crash, an expired
-restart reminder, or a stored authority that does not parse can leave such an
-input pending. It SHALL NOT block a later fire. The session SHALL NOT drop or
+restart reminder, a stored authority that does not parse, or a slash-command
+resume that leaves the session in `Ready` phase can leave such an input
+pending. It SHALL NOT block a later fire. The session SHALL NOT drop or
 replace a fire while the earlier fire runs. The session SHALL NOT drop or
 replace a fire because another reminder has a waiting fire. A key that is not a
 reminder fire key (`{reminderId}:{fireTimeMs}`) SHALL never be dropped or
@@ -825,11 +833,12 @@ abandon an open tool batch.
 
 #### Scenario: A busy restart reminder queues a pending fire
 
-- **GIVEN** the 10:00 fire stayed pending at a graceful restart
-- **AND** recovery started the turn of an orphan child result notice
-- **WHEN** the restart reminder arrives while that turn runs
+- **GIVEN** a graceful restart interrupted the turn of the 10:00 fire, so the fire stayed pending
+- **AND** after the restart, an operator turn runs
+- **AND** no child consent request is open
+- **WHEN** the restart reminder arrives while the operator turn runs
 - **THEN** the session queues the 10:00 fire and replies `RestartResumeNotNeeded`
-- **AND** the 10:00 fire runs after the notice turn
+- **AND** the 10:00 fire runs once, after the operator turn
 - **AND** a 10:12 fire that arrives before the 10:00 fire runs is dropped
 
 #### Scenario: A fire that a crash left pending does not block the next fire

@@ -101,9 +101,10 @@ consent request of the session is open. The session refuses `spawn_agent`, and
 automated input waits. The current turn can finish. A person's message starts a
 turn, but it does not end the pause. No request expires. Only the close of
 every open child request (an answer, a refusal, or a withdrawal) ends the pause.
-Planned in `child-approval-events-and-parent-pause`.
+Added by `child-approval-events-and-parent-pause` (#2583).
 
-**Code anchor (planned):** `SessionToolWorkflow`
+**Code anchors:** `SessionToolWorkflow.IsChildConsentPaused`,
+`SessionInputFlow.MoveHeldInputBehind`, `LlmSessionActor.StartInputsHeldByThePause`
 
 ### Parked child run
 

@@ -172,7 +172,7 @@ internal sealed class SessionInputFlow
     }
 
     // Drop rule: a fire waits only while this flow's queue holds it. Recovery rebuilds that queue for approval waits.
-    // A journal row that nothing will run (a crash, a restart with two requesters, an expired restart reminder) is not
+    // A journal row that nothing will run (a crash, an expired restart reminder, a damaged stored authority) is not
     // waiting, so it must not block a later fire. An input that a turn selected has left the queue. A newer fire of
     // its reminder gets its own turn. An input whose key is not a fire key has an unknown owner, so it is never
     // dropped and never blocks.

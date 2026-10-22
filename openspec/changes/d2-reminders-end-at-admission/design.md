@@ -14,7 +14,7 @@ Exec (gateway route)
   CommandNack / timeout -> report failed
 
 Session.SendUserMessage (every phase)
-  restart-resume message? -> Ready with pending input: resume
+  restart-resume message? -> Ready, no parked approval, pending input: resume
                              Processing / Compacting: queue unselected pending input, RestartResumeNotNeeded
                              else: RestartResumeNotNeeded (no-op)
   decision = PrepareAdmission(cmd)        // pure, before any side effect
