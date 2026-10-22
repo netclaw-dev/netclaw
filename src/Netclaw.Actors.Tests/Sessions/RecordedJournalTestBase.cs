@@ -16,6 +16,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Serialization;
 using Netclaw.Tests.Utilities;
 using Xunit;
+using AkkaPersistence = Akka.Persistence.Persistence;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -89,16 +90,39 @@ public abstract class RecordedJournalTestBase : ChildNoticeTestBase
     }
 
     /// <summary>
-    /// Starts a seeder and waits for its recovery. The first start of the SQL persistence plugins happens here: plugin
-    /// creation, table creation on a new SQLite file, and recovery. That work gets the cold recovery ceiling. The
+    /// Starts a seeder and waits for its recovery. The first call starts the SQL persistence plugins, one at a time,
+    /// and each plugin creates its tables on the new SQLite file. That work gets the cold recovery ceiling. The
     /// fixture Asks after recovery time only warm writes.
     /// </summary>
     private async Task<IActorRef> StartSeederAsync(string persistenceId, string actorName)
     {
+        await StartPluginsOneAtATimeAsync();
         var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var seeder = Sys.ActorOf(Props.Create(() => new RecordedRowSeeder(persistenceId, recovered)), actorName);
         await recovered.Task.WaitAsync(ColdRecoveryCeiling, TestContext.Current.CancellationToken);
         return seeder;
+    }
+
+    /// <summary>
+    /// Starts the journal and then the snapshot store, before a seeder starts them both at once. Each SQL plugin
+    /// creates its tables in <c>PreStart</c> and replies only after that. Two plugins that start together make two
+    /// connections fight for the write lock of the new SQLite file. Microsoft.Data.Sqlite sets no SQLite busy
+    /// handler. The connection that loses sleeps 150 ms and tries again, and only its 30 s command timeout ends the
+    /// fight. That timeout is equal to the cold ceiling, so a long fight fails the start wait with no cause (#2599).
+    /// One plugin at a time has no fight. A warm plugin answers at once.
+    /// </summary>
+    private async Task StartPluginsOneAtATimeAsync()
+    {
+        const string unusedId = "recorded-journal-plugin-start";
+        var persistence = AkkaPersistence.Instance.Apply(Sys);
+        var probe = CreateTestProbe();
+        persistence.JournalFor(null).Tell(new ReplayMessages(0, long.MaxValue, long.MaxValue, unusedId, probe.Ref));
+        await probe.ExpectMsgAsync<RecoverySuccess>(ColdRecoveryCeiling,
+            cancellationToken: TestContext.Current.CancellationToken);
+        persistence.SnapshotStoreFor(null).Tell(
+            new LoadSnapshot(unusedId, SnapshotSelectionCriteria.Latest, long.MaxValue), probe.Ref);
+        await probe.ExpectMsgAsync<LoadSnapshotResult>(ColdRecoveryCeiling,
+            cancellationToken: TestContext.Current.CancellationToken);
     }
 
     private void BackupAndRestoreSqliteDatabase()
