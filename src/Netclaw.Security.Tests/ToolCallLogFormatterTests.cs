@@ -184,6 +184,9 @@ public sealed class ToolCallLogFormatterTests
 
         var text = ToolCallLogFormatter.FormatArguments(arguments);
 
+        // An empty text passes the DoesNotContain checks, so check the shape first.
+        Assert.StartsWith("{", text, StringComparison.Ordinal);
+        Assert.Contains("k000", text, StringComparison.Ordinal);
         Assert.DoesNotContain("eyJ", text, StringComparison.Ordinal);
         Assert.DoesNotContain(new string('a', 20), text, StringComparison.Ordinal);
         Assert.Contains(Redacted, text, StringComparison.Ordinal);
