@@ -170,9 +170,8 @@ public sealed class SecretOutputRedactorCredentialShapeTests
     [Theory]
     [InlineData("passwd")]
     [InlineData("db_passwd")]
-    [InlineData("pwd")]
-    [InlineData("Pwd")]
     [InlineData("admin_pwd")]
+    [InlineData("db_pwd")]
     [InlineData("passphrase")]
     [InlineData("ssh_passphrase")]
     [InlineData("cookie")]
@@ -186,8 +185,15 @@ public sealed class SecretOutputRedactorCredentialShapeTests
         => Assert.True(SecretOutputRedactor.IsSecretKey(key), key);
 
     // These names start with a short secret word, but their values are not secrets.
-    // A plain substring rule for "pwd" or "cookie" would hide them.
+    // A plain substring rule for "pwd" or "cookie" would hide them. PWD and OLDPWD are the
+    // shell variables that hold the working directory, so a name that is exactly one of them
+    // is not secret. The text rule of Redact does not know "pwd" either: "PWD=/work" stays.
     [Theory]
+    [InlineData("PWD")]
+    [InlineData("pwd")]
+    [InlineData("Pwd")]
+    [InlineData("OLDPWD")]
+    [InlineData("oldpwd")]
     [InlineData("pwd_dir")]
     [InlineData("cookie_consent")]
     [InlineData("cookie_domain")]
