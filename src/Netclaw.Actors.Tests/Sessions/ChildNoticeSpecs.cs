@@ -210,6 +210,80 @@ public sealed class ChildNoticeSpecs(ITestOutputHelper output) : ChildNoticeTest
         }
     }
 
+    /// <summary>
+    /// Issue 2574. A reminder starts child X. The notice turn of X consumes the notice in its file_read tool batch, and
+    /// then the turn ends with no end event: no TurnRecorded, no ToolBatchAbandoned, and no InputClosed. A person turn
+    /// then parks an approval, the session restarts, and the person approves. The live actor clears the noticed runs
+    /// when the person turn starts, so that turn records no reminder link. Replay must give the same noticed runs.
+    /// Rows: the model call after the notice batch fails, or the actor crashes in that model call.
+    /// Failure on d8b44b225: replay restores X from the notice batch and nothing clears it. The re-driven person turn
+    /// then records the reminder link of X.
+    /// </summary>
+    [Theory]
+    [InlineData("model_error")]
+    [InlineData("crash")]
+    public async Task A_notice_turn_that_ends_with_no_end_event_leaves_no_noticed_run_after_replay(string failure)
+    {
+        // Arrange: a reminder fire starts child X.
+        var sessionId = new SessionId($"notice/no-end-event-{failure}");
+        var journal = await JournalAsync();
+        Clients.Parent.ResponseContentsSelector = request => failure == "model_error" && AfterNoticeRead(request)
+            ? throw new IOException("The model call after the notice batch fails.")
+            : ScriptedParentReply(request);
+        var subscriber = await JoinAsync(sessionId);
+        var (accepted, childGate) = await StartReminderChildAsync(journal, sessionId, "check-pr:1712000000000", "one");
+        await ExpectTurnsAsync(subscriber, 1);
+        var hold = NewGate();
+        var entered = failure == "crash" ? ParentGate.Arm(AfterNoticeRead, hold) : Task.CompletedTask;
+
+        try
+        {
+            // Act: the notice turn of X fails after its notice batch. A person turn parks an approval, the session
+            // restarts, and the person approves.
+            childGate.TrySetResult();
+            if (failure == "model_error")
+                await subscriber.FishForMessageAsync<ErrorOutput>(_ => true, Deadline, cancellationToken: Cancellation);
+            else
+            {
+                await entered.WaitAsync(Deadline, Cancellation);
+                subscriber = await RestartSessionAsync(sessionId);
+            }
+
+            var notice = Assert.Single(NoticesFor(journal, accepted.Run.RunId));
+            var events = journal.Committed.ToArray();
+            var batchAt = ConsumedAt(journal, notice.InputId);
+            Assert.IsType<ToolBatchStarted>(events[batchAt]);
+            Assert.DoesNotContain(events.Skip(batchAt + 1), evt => evt is TurnRecorded or ToolBatchAbandoned or InputClosed);
+
+            await SendAsync(sessionId, "probe:person", Operator(Alice));
+            var approval = await FishApprovalAsync(subscriber, "probe-person");
+            subscriber = await RestartSessionAsync(sessionId);
+            AssertAck(await AnswerAsync(sessionId, approval.CallId, Alice));
+            await ExpectTurnsAsync(subscriber, 1);
+
+            // Assert: the re-driven person turn records no reminder link, as on the live path.
+            var person = await AwaitInputAdmittedAsync(journal, "probe:person");
+            var personTurn = journal.Committed.ToArray().SkipWhile(evt => !ReferenceEquals(evt, person)).OfType<TurnRecorded>().First();
+            Note($"person turn link: {personTurn.SourceReminderId}");
+            Assert.Null(personTurn.SourceReminderId);
+
+            // Assert: the parent got one notice for the result of X, and one event consumed it.
+            Assert.Single(NoticesFor(journal, accepted.Run.RunId));
+            Assert.Equal(1, ConsumptionCount(journal, notice.InputId));
+        }
+        finally
+        {
+            hold.TrySetResult();
+            childGate.TrySetResult();
+            ParentGate.Disarm();
+        }
+
+        // The model call after the notice batch: its last message is the result of the file_read call.
+        static bool AfterNoticeRead(IReadOnlyList<ChatMessage> request)
+            => request[^1].Role == Microsoft.Extensions.AI.ChatRole.Tool
+               && Results([request[^1]]).Any(result => result.CallId.StartsWith("read-", StringComparison.Ordinal));
+    }
+
     // A reminder fire whose turn starts a child. The child waits at its first model call until the caller opens the gate.
     private async Task<(ChildRunAccepted Accepted, TaskCompletionSource Gate)> StartReminderChildAsync(
         AcceptanceFault journal, SessionId sessionId, string fireKey, string label)
