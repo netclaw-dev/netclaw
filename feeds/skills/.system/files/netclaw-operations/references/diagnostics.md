@@ -76,8 +76,9 @@ What to expect inside `session.log`:
   `SessionId`. `Args` is redacted JSON: secret-named keys and known token shapes
   show `***REDACTED***`, a string longer than 256 characters shows
   `<N chars, sha256:...>` (or `<N chars, redacted>` when it held a secret), a
-  value of another type shows `<TypeName>`, and the text stops at 4,096
-  characters. `Args` is `<arguments unavailable>` when the daemon cannot read
+  value of another type shows `<TypeName>` (only `int` and `long` integers
+  show their value), and the text stops at 4,096 characters. A text that ends
+  with `...` is not complete. `Args` is `<arguments unavailable>` when the daemon cannot read
   the arguments. `Rationale` stops at 500 characters and is empty for a
   rejected call or an unknown tool. OTLP does not have the tool result.
 - The session-log writer's own failure lines are the one exception: they go to

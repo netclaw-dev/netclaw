@@ -818,9 +818,10 @@ rationale=<text>` with the same `authorizationAttemptId` and the `sessionId`.
 Use this line to see what the agent sent. `args` is redacted: a secret-named
 key or a known token shape shows `***REDACTED***`. A string longer than 256
 characters shows `<N chars, sha256:...>`, or `<N chars, redacted>` when it held
-a secret. A value of another type shows `<TypeName>`. If the daemon cannot read
-the arguments, `args` is `<arguments unavailable>`. `args` stops at 4,096
-characters. The rationale stops at 500 characters, and it is empty for a
+a secret. A value of another type shows `<TypeName>`; only `int` and `long`
+integers show their value. If the daemon cannot read the arguments, `args` is
+`<arguments unavailable>`. `args` stops at 4,096 characters, and it ends with
+`...` when the daemon stopped the walk after about 16 KB. The rationale stops at 500 characters, and it is empty for a
 rejected call or an unknown tool.
 
 ### Inspecting, revoking, and pre-approving grants

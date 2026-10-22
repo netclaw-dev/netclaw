@@ -147,19 +147,24 @@ in this order:
 2. A value under a secret key name (for example `api_key`, `Authorization`, or
    `github_token`) becomes `***REDACTED***`. A `SensitiveString` value also
    becomes `***REDACTED***`.
-3. The daemon writes only JSON values, strings, booleans, integers, decimals,
-   finite doubles, dictionaries with string keys, and lists. Any other value
-   becomes `"<TypeName>"`, for example `"<Hashtable>"` or `"<Double>"` for
-   `NaN`. The daemon does not read the contents of that value.
-4. The secret-pattern redactor runs on each string value. It removes known
-   token shapes, such as `ghp_...`, JWTs, and `Bearer` headers, and secret
-   fields in a JSON body inside a string.
+3. The daemon writes only JSON values, strings, booleans, `int` and `long`
+   integers, decimals, finite doubles, dictionaries with string keys, and
+   lists. Any other value becomes `"<TypeName>"`, for example `"<Hashtable>"`,
+   `"<Int16>"` for a `short`, or `"<Double>"` for `NaN`. The daemon does not
+   read the contents of that value.
+4. The secret-pattern redactor runs on each string value and on each key
+   name. It removes known token shapes, such as `ghp_...`, JWTs, and `Bearer`
+   headers, and secret fields in a JSON body inside a string.
 5. A string value longer than 256 characters becomes
    `<N chars, sha256:XXXXXXXXXXXXXXXX>`. The hex text is the first 16
    characters of the SHA-256 hash of the original value. If the redactor
    changed that string, it becomes `<N chars, redacted>` with no hash.
 6. The secret-pattern redactor runs again on the JSON text.
 7. The daemon cuts `Args` at 4,096 characters and adds `...`.
+
+The daemon stops the walk after about 16 KB of JSON text. When the walk stops
+early, `Args` always ends with `...`, also when the final redactor pass makes
+the text shorter than 4,096 characters.
 
 To match a call to a file, compare the hash prefix with the `sha256sum` of the
 file. The hashes match only when the file bytes are the exact UTF-8 bytes of
@@ -168,9 +173,11 @@ the argument: no byte order mark and the same line ends.
 Other limits:
 
 - An object or an array deeper than 64 levels becomes `"<nested>"`.
-- When the daemon cannot read the arguments (for example, a value that throws
-  or a string that is not valid UTF-16), `Args` is `<arguments unavailable>`.
-  The tool call still runs.
+- When the daemon cannot read the arguments, `Args` is
+  `<arguments unavailable>`. The tool call still runs. Examples are a value
+  that throws when the daemon reads it, and an escaped lone surrogate
+  (`"\ud800"`) in the JSON from the model. A lone surrogate in a .NET string
+  does not give this marker. The daemon writes U+FFFD in its place.
 - `Rationale` gets the secret-pattern redactor and a cut at 500 characters.
 
 The line does not hold the tool result. The local `session.log` file holds the

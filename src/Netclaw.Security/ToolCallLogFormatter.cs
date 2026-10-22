@@ -93,8 +93,14 @@ public static class ToolCallLogFormatter
                 WritePairs(writer, arguments, depth: 0);
             }
 
-            var json = Encoding.UTF8.GetString(buffer.WrittenSpan);
-            return TextTruncation.EllipsisAppend(SecretOutputRedactor.Redact(json), MaxArgumentsChars);
+            var text = SecretOutputRedactor.Redact(Encoding.UTF8.GetString(buffer.WrittenSpan));
+
+            // The walk stops only after it passes the budget. The final redactor
+            // pass can make that partial text shorter than the cap, so the "..."
+            // must come from the budget stop, not from the cap.
+            return buffer.WrittenCount > WalkBudgetBytes && text.Length <= MaxArgumentsChars
+                ? text + "..."
+                : TextTruncation.EllipsisAppend(text, MaxArgumentsChars);
         }
         catch (Exception)
         {
@@ -131,7 +137,9 @@ public static class ToolCallLogFormatter
             if (OverBudget(writer))
                 break;
 
-            writer.WritePropertyName(key);
+            // The writer escapes the quotes in a key, so the final redactor pass
+            // cannot match a JSON body in a key name. Redact the key itself.
+            writer.WritePropertyName(SecretOutputRedactor.Redact(key));
             if (SecretOutputRedactor.IsSecretKey(key))
                 writer.WriteStringValue(Redacted);
             else
@@ -212,7 +220,7 @@ public static class ToolCallLogFormatter
                     if (OverBudget(writer))
                         break;
 
-                    writer.WritePropertyName(property.Name);
+                    writer.WritePropertyName(SecretOutputRedactor.Redact(property.Name));
                     if (SecretOutputRedactor.IsSecretKey(property.Name))
                         writer.WriteStringValue(Redacted);
                     else
