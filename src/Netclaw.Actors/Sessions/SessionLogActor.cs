@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using System.Text.Json;
 using Akka.Event;
 using Netclaw.Actors.Protocol;
 using Netclaw.Tools;
@@ -259,8 +260,24 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
     private static string FormatToolCall(ToolCallOutput toolCall)
     {
         var args = toolCall.ArgumentsJson is not null
-            ? $" args={TextTruncation.EllipsisAppend(toolCall.ArgumentsJson, 1000)}"
+            ? $" args={FormatArguments(toolCall.ArgumentsJson)}"
             : string.Empty;
         return $"Tool call: {toolCall.ToolName} (call={toolCall.CallId}){args}";
+    }
+
+    // session.log can leave the host through the log pipeline, so the raw
+    // arguments text must never reach it. Text that does not parse as an
+    // object is dropped, not written as it is.
+    private static string FormatArguments(string argumentsJson)
+    {
+        try
+        {
+            return ToolCallLogFormatter.FormatArguments(
+                JsonSerializer.Deserialize<Dictionary<string, object?>>(argumentsJson));
+        }
+        catch (JsonException)
+        {
+            return "<arguments unavailable>";
+        }
     }
 }
