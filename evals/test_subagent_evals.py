@@ -978,6 +978,37 @@ def write_trial(root, *, daemon_lines, before=None):
     return Path(root)
 
 
+class SpawnRationaleTests(unittest.TestCase):
+    """subagent_spawn_rationale_first_try: each spawn_agent call has a _rationale."""
+
+    NO_RATIONALE = '[tool:call] spawn_agent({"agent":"headless-analyst","task":"Task two"})\n'
+    REJECTED = "[tool:result] spawn_agent \u2192 Error: '_rationale' must be a non-empty string.\n"
+
+    def check(self, stdout):
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory)
+            (raw / "cli-stdout.txt").write_text(stdout)
+            completed = run_assertion("assert_subagent_spawn_rationale_first_try",
+                                      {"STDOUT_FILE": raw / "cli-stdout.txt"})
+        return completed.returncode == 0
+
+    def test_calls_with_a_rationale_pass(self):
+        self.assertTrue(self.check(SPAWN_CALL + SPAWN_CALL))
+
+    def test_a_call_without_a_rationale_fails(self):
+        # Bug caught: the call template had no _rationale, so the first call failed.
+        self.assertFalse(self.check(SPAWN_CALL + self.NO_RATIONALE))
+
+    def test_an_empty_rationale_fails(self):
+        self.assertFalse(self.check(SPAWN_CALL.replace("Delegate the draft.", "")))
+
+    def test_a_rejected_call_followed_by_a_retry_fails(self):
+        self.assertFalse(self.check(self.NO_RATIONALE + self.REJECTED + SPAWN_CALL))
+
+    def test_a_trial_with_no_spawn_agent_call_fails(self):
+        self.assertFalse(self.check("The parent answered alone.\n"))
+
+
 class MemoryGuardTests(unittest.TestCase):
     def status(self, **kwargs):
         with tempfile.TemporaryDirectory() as directory:

@@ -2410,6 +2410,22 @@ assert_subagent_headless_ambiguous_task() {
         stdout_parent_text_not_contains 'need.*more.*information'
 }
 
+# True when each spawn_agent call line of the CLI stdout has a non-empty string
+# _rationale, and no tool result reports a missing _rationale.
+stdout_spawn_agent_calls_have_rationale() {
+    local call_lines
+    call_lines=$(grep -aE '^\[tool:call\] spawn_agent\(' "$STDOUT_FILE" 2>/dev/null \
+        | sed -E 's/^\[tool:call\] spawn_agent\(//; s/\)$//') || return 1
+    [[ -n "$call_lines" ]] || return 1
+    printf '%s\n' "$call_lines" \
+        | jq -e -s 'all(.[]; (._rationale | type) == "string" and (._rationale | length) > 0)' >/dev/null 2>&1 \
+        && ! stdout_contains "_rationale' must be a non-empty string"
+}
+
+assert_subagent_spawn_rationale_first_try() {
+    stdout_tool_called 'spawn_agent' && stdout_spawn_agent_calls_have_rationale
+}
+
 # Prints one JSON line for each child result that the parent read, from a CLI
 # session log. The fields are run_id, agent, outcome, output, call_id, and path.
 # spawn_agent returns only state "accepted". Since #2515 the runtime writes the
@@ -4227,6 +4243,10 @@ run_all() {
     run_case subagent_headless_ambiguous_task "spawned subagent completes ambiguous task without clarification" \
         "Use spawn_agent with agent headless-analyst. Ask it to prepare final release notes from these candidate changes without asking follow-up questions. Include everything that looks user-facing: fixed arrow-key input decoding; updated an internal test helper; improved file trace listener encoding. Return the subagent's assumptions and final notes." \
         "Delegate this to the headless-analyst subagent using spawn_agent: decide what belongs in release notes from this ambiguous list without asking me for clarification: legacy CSI key decoding fix; private test fixture cleanup; file trace listener writes UTF-8 correctly. Include all user-facing items and return assumptions plus final notes."
+
+    run_case subagent_spawn_rationale_first_try "every spawn_agent call carries a rationale on the first try" \
+        "Use spawn_agent with agent headless-analyst twice, in one batch. Task one: list the risks of moving a daemon from SQLite to Postgres, with at least five risks and one mitigation for each. Task two: write a rollback plan for a failed config schema migration, with numbered steps and a check for each step. Return both answers." \
+        "Delegate two jobs to headless-analyst with spawn_agent in one batch. First job: review the trade-offs of a plugin sandbox that runs out of process, and name five risks with a mitigation for each. Second job: draft a runbook for a daemon that fails to start after an upgrade, with numbered steps and a check for each step. Return both results."
 
     run_case subagent_specialization_precedence "parent returns an email with a subject and the call line, and leaves the agent files unchanged" \
         "Use spawn_agent with agent headless-analyst to write a prospecting email to Casey, a VP of Engineering interested in reducing operational toil. Return its final email." \

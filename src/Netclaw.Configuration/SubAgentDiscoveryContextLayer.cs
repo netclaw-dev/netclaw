@@ -65,7 +65,7 @@ public sealed class SubAgentDiscoveryContextLayer : IContextLayerProvider
                 $"Denied tools for sub-agents: {deniedTools}",
                 string.Empty,
                 "To add one: create an agent definition at <agents-directory>/<name>.md. The next turn or subagent lookup reloads it automatically.",
-                "Then call `spawn_agent(agent: \"<name>\", task: \"<specific task>\", context: \"<optional background>\")`."
+                "Then call `spawn_agent(agent: \"<name>\", task: \"<specific task>\", context: \"<optional background>\", _rationale: \"<one sentence of intent>\")`."
             ]);
         }
 
@@ -84,7 +84,7 @@ public sealed class SubAgentDiscoveryContextLayer : IContextLayerProvider
         }
 
         lines.Add("## How to delegate");
-        lines.Add("Call `spawn_agent(agent: \"<name>\", task: \"<specific task>\", context: \"<optional background>\")`.");
+        lines.Add("Call `spawn_agent(agent: \"<name>\", task: \"<specific task>\", context: \"<optional background>\", _rationale: \"<one sentence of intent>\")`.");
         lines.Add(string.Empty);
         lines.Add("- `task` is what the subagent should do — be concrete and bounded.");
         lines.Add("- `context` is optional per-invocation background (workspace details, the user's broader goal,");
