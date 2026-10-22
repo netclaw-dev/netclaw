@@ -28,9 +28,9 @@ public sealed class ChildConsentPauseTests
     private static readonly SessionId Session = new("test/child-consent-pause-predicate");
 
     /// <summary>
-    /// One set of inputs goes through the drain path, the recovery path, and the shared predicate. The pause holds
-    /// automated input (<c>VerifiedAutomation</c> and <c>SystemProcess</c>), a child result notice, and a webhook that
-    /// claims the notice kind. The pause never holds a person, an <c>UntrustedExternal</c> sender, or an approval
+    /// One set of inputs goes through the drain path and the recovery path. Both paths use the shared predicate. The
+    /// pause holds automated input (<c>VerifiedAutomation</c> and <c>SystemProcess</c>), a child result notice, and a
+    /// webhook that claims the notice kind. The pause never holds a person, an <c>UntrustedExternal</c> sender, or an approval
     /// notice.
     /// Planted bugs: a path holds a person or an untrusted sender, lets automation or the webhook pass, holds the
     /// approval notice, or the two paths use different rules.
@@ -82,12 +82,10 @@ public sealed class ChildConsentPauseTests
         // Act
         var drain = HeldByTheDrain(inputs);
         var recovery = HeldByTheRecovery(inputs);
-        var predicate = HeldByThePredicate(inputs);
 
         // Assert
         Assert.Equal(expected, drain);
         Assert.Equal(expected, recovery);
-        Assert.Equal(expected, predicate);
     }
 
     // The drain (SessionInputFlow.IsHeldByPause): while the pause applies, each turn starts at the first input that
@@ -111,22 +109,18 @@ public sealed class ChildConsentPauseTests
         return [];
     }
 
-    // The recovery (LlmSessionActor.StartInputsHeldByThePause): split off damaged records, then queue the valid inputs
-    // that WasHeldByPause selects.
+    // The recovery (LlmSessionActor.StartInputsHeldByThePause, and from PR 2 RecoveryCompleted): the split parses
+    // each recorded authority once and keeps the damaged records apart. The shared predicate then reads the parsed
+    // authority of each valid input. Nothing parses again, so nothing in the recovery can throw for a damaged record.
     private static string[] HeldByTheRecovery(IReadOnlyList<InputAdmitted> inputs)
     {
         var (valid, damaged) = SessionInputFlow.SplitByAuthority(inputs);
         Assert.Empty(damaged);
-        return Contents(valid.Where(LlmSessionActor.WasHeldByPause).ToArray());
+        return Contents(valid
+            .Where(static pair => ChildConsentPause.Holds(pair.Authority, isChildNotice: pair.Input.ChildNotice is not null))
+            .Select(static pair => pair.Input)
+            .ToArray());
     }
-
-    // The shared predicate gets the parsed authority, as each caller gives it after the split.
-    private static string[] HeldByThePredicate(IReadOnlyList<InputAdmitted> inputs)
-        => Contents(inputs.Where(static input =>
-        {
-            Assert.True(TurnContext.TryFromRecord(input.TurnContext, out var authority, out var reason), reason);
-            return ChildConsentPause.Holds(authority!, isChildNotice: input.ChildNotice is not null);
-        }).ToArray());
 
     private static string[] Contents(IReadOnlyList<InputAdmitted> inputs)
         => inputs.Select(static input => input.UserMessage.Content!).Order(StringComparer.Ordinal).ToArray();

@@ -361,6 +361,13 @@ internal sealed class SessionInputFlow
         return (valid, damaged);
     }
 
+    // STUB (PR 0 test author, review fix): the pause test calls the split with the new shape, the valid inputs as
+    // pairs with their parsed authority. The implementer gives SplitByAuthority this shape, updates its callers, and
+    // removes this overload. Each production caller passes a LINQ sequence, so it does not bind to this overload.
+    public static (IReadOnlyList<(InputAdmitted Input, TurnContext Authority)> Valid, IReadOnlyList<InputAdmitted> Damaged)
+        SplitByAuthority(IReadOnlyList<InputAdmitted> inputs)
+        => throw new NotImplementedException("STUB: SplitByAuthority does not return the parsed authority yet.");
+
     /// <summary>
     /// Rebuilds the waiting queue from the journal after recovery. The session acknowledged each pending input, and the
     /// journal is the only durable copy, so a restart must not drop one. The caller passes only inputs that wait for an
