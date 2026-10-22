@@ -259,8 +259,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             // A child owner never survives a restart. Close the child entries that remain before a stashed command
             // runs, then log the approvals that stay open. Replay itself logs none (see ApplyToolApprovalRequested).
-            // An open child request at the crash means that the session was paused, so automated input waits.
-            var wasPaused = _toolWorkflow.IsChildConsentPaused;
+            var pausedAtRecovery = WasPausedAtRecovery();
             _toolWorkflow.ExpireRecoveredChildApprovals();
             CloseRecoveredConsentNotices();
             foreach (var open in _toolWorkflow.OpenApprovals())
@@ -305,7 +304,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // Akka.Persistence unstashes the commands that arrived during recovery right after this handler.
             // The orphan notices must start their turn here, so a message that woke the session buffers behind them
             // and does not run first.
-            ResumeOrphanNotices(wasPaused);
+            ResumeOrphanNotices();
+            if (pausedAtRecovery)
+                QueueInputsHeldByThePause();
             if (_consentDigest.IsReady)
                 ChildConsentChanged();
         });
@@ -463,7 +464,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             if (IsRestartResume(cmd))
             {
-                AckRestartResumeNoOp(cmd);
+                QueueRestartResume(cmd);
                 return;
             }
 
@@ -897,7 +898,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             if (IsRestartResume(cmd))
             {
-                AckRestartResumeNoOp(cmd);
+                QueueRestartResume(cmd);
                 return;
             }
 
@@ -1096,7 +1097,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     // Compaction end: a ready approval notice is admitted first, so the drain sees it.
     private void DrainBufferOrReady()
-        => AdmitConsentNoticeThen(DrainBufferOrReadyNow);
+        => AdmitConsentNoticeThen(inOpenTurn: _input.ResumesToolLoopAfterCompaction, DrainBufferOrReadyNow);
 
     private void DrainBufferOrReadyNow()
     {
@@ -1724,7 +1725,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     // Turn end: a ready approval notice is admitted first, so the drain sees it.
     private void DrainBufferedMessagesOrBecomeReady()
-        => AdmitConsentNoticeThen(DrainBufferedMessagesOrBecomeReadyNow);
+        => AdmitConsentNoticeThen(inOpenTurn: false, DrainBufferedMessagesOrBecomeReadyNow);
 
     private void DrainBufferedMessagesOrBecomeReadyNow()
     {
@@ -2317,6 +2318,25 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         TransitionTo(SessionPhase.Processing);
     }
 
+    // The restart reminder arrives while a turn runs, for example the turn of an orphan notice that recovery started.
+    // The one resume path then queues each pending input that no turn selected, and the normal drain runs them after
+    // the running turn, in admission order. The queue keeps one copy of an input that recovery queued already.
+    private void QueueRestartResume(SendUserMessage cmd)
+    {
+        var selected = _input.SelectedInputs.Ids;
+        var queued = _input.RestoreWaitingInputs(
+            _state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId)).ToArray(), _sessionId);
+        if (queued == 0)
+        {
+            AckRestartResumeNoOp(cmd);
+            return;
+        }
+
+        _execution.ClearRestartReminderEligibility();
+        _log.Info("restart_resume_queued count={QueuedCount} phase={Phase}", queued, _phase.Current);
+        TryReplyAck();
+    }
+
     // The restart reminder is not an input. It only resumes inputs that the journal already holds.
     private static bool IsRestartResume(SendUserMessage cmd)
         => cmd.Source?.ReminderId?.Value is { } reminderId
@@ -2663,6 +2683,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (@event is InputAdmitted notice && IsConsentNotice(notice))
         {
             _log.Error(cause, "The journal rejected approval notice {InputId}. The session stops.", notice.InputId);
+            // A stopped actor sends the channel nothing. A turn that stays open tells the person first, as a persist
+            // failure does. At the end of a finished turn the session stays quiet.
+            if (_noticeAdmissionInOpenTurn)
+                EmitFailedTurnOutputs(PersistStoppedMessage, cause, PersistFailureCategory(cause));
             base.OnPersistRejected(cause, @event, sequenceNr);
             Context.Stop(Self);
             return;
@@ -4121,7 +4145,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         _state = completion.State;
         // Tool-batch end: a ready approval notice is admitted first. It waits for its own turn and never joins this one.
-        AdmitConsentNoticeThen(() => ContinueAfterToolBatch(completion));
+        AdmitConsentNoticeThen(inOpenTurn: true, () => ContinueAfterToolBatch(completion));
     }
 
     private void ContinueAfterToolBatch(BatchCompletion.Ready completion)

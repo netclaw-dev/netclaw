@@ -22,6 +22,7 @@ public sealed partial class LlmSessionActor
 {
     private readonly HashSet<SubAgentRunId> _unreportableRuns = [];
     private readonly ChildConsentDigest _consentDigest = new();
+    private bool _noticeAdmissionInOpenTurn;
 
     private void ApplyLegacyCoordination(LegacyCoordinationEvent evt)
     {
@@ -89,6 +90,8 @@ public sealed partial class LlmSessionActor
         Command<ChildResultWritten>(HandleChildResultWritten);
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
         Command<RecoverChildRuns>(_ => RecoverChildren());
+        // Only an idle session starts the held input. A turn that runs drains it at its end.
+        Command<StartHeldInputs>(_ => StartWaitingInputAfterApproval());
     }
 
     private void AcceptChild(AcceptChildStart message)
@@ -459,9 +462,7 @@ public sealed partial class LlmSessionActor
     // session buffers behind the notice turn. A person's pending input is not part of this repair (issue 2516):
     // recovery treats it as before. Behind a parked approval the recovery queued every pending input already, and the
     // answer ends the wait. An input of the running turn is not an orphan.
-    // When the previous run was paused (wasPaused), the pause held automated input and child result notices. A restart
-    // withdraws every child request, so the pause ends, and the held input also runs now, in admission order.
-    private void ResumeOrphanNotices(bool wasPaused)
+    private void ResumeOrphanNotices()
     {
         if (_toolWorkflow.HasParkedApprovals())
             return;
@@ -474,11 +475,8 @@ public sealed partial class LlmSessionActor
         var candidates = _state.GetExecutablePendingInputs()
             .Where(input => !selected.Contains(input.InputId))
             .ToList();
-        var orphans = candidates.TakeWhile(input => input.ChildNotice is not null).ToList();
-        if (wasPaused)
-            orphans.AddRange(candidates.Where(input => !orphans.Contains(input) && WasHeldByPause(input)));
         var restored = 0;
-        foreach (var orphan in orphans)
+        foreach (var orphan in candidates.TakeWhile(input => input.ChildNotice is not null))
         {
             try
             {
@@ -489,13 +487,13 @@ public sealed partial class LlmSessionActor
                 // One damaged record must not stop the recovery of the other notices and of the lost children. The
                 // input stays pending in the journal, so the loss is visible and the next start tries it again.
                 _log.Error(error,
-                    "Cannot resume input {InputId}: {Reason}. The input stays unconsumed.",
-                    orphan.InputId, error.Message);
+                    "Cannot resume the notice of child run {RunId}: {Reason}. The notice stays unconsumed.",
+                    orphan.ChildNotice!.RunId, error.Message);
             }
         }
 
         foreach (var waiting in candidates.SkipWhile(input => input.ChildNotice is not null)
-                     .Where(input => input.ChildNotice is not null && !orphans.Contains(input)))
+                     .Where(input => input.ChildNotice is not null))
         {
             _log.Warning(
                 "The notice of child run {RunId} waits behind an older input of a person that has no turn. "
@@ -506,11 +504,36 @@ public sealed partial class LlmSessionActor
         if (restored == 0)
             return;
 
-        _log.Info("Resuming {RestoredCount} input(s) that the previous run left unconsumed", restored);
+        _log.Info("Resuming {RestoredCount} child notice(s) that the previous run left unconsumed", restored);
         // A crash inside a tool batch leaves a tool_use with no result, and a provider refuses that history. Close the
         // interrupted batch first. Its journal callback then starts the notice turn.
         if (!AbandonInterruptedToolBatchAfterRecovery())
             StartWaitingInputAfterApproval();
+    }
+
+    // A paused session at the crash: an open child request of a run that is still Accepted. Replay never closes a
+    // request that a cancel or the end of its run withdrew, so the run state decides.
+    private bool WasPausedAtRecovery()
+        => _toolWorkflow.OpenChildRequests().Any(request =>
+            _state.ChildRuns.TryGetValue(request.SourceChildRunId!.Value, out var run)
+            && run.Lifecycle is ChildRunLifecycle.Accepted);
+
+    // A restart withdraws every child request, so the pause ends, and the input that it held can run. Recovery only
+    // queues that input, in admission order. The interrupted input of a person keeps its one resume path, the restart
+    // reminder (issue 2516 for a crash). StartHeldInputs reaches the mailbox after a stashed restart reminder, so the
+    // reminder resumes first and the held input then runs through the normal drain.
+    private void QueueInputsHeldByThePause()
+    {
+        if (_toolWorkflow.HasParkedApprovals())
+            return;
+        var selected = _input.SelectedInputs.Ids;
+        var held = _state.GetExecutablePendingInputs()
+            .Where(input => !selected.Contains(input.InputId) && WasHeldByPause(input))
+            .ToArray();
+        if (_input.RestoreWaitingInputs(held, _sessionId) == 0)
+            return;
+        _log.Info("Queued {HeldCount} input(s) that the child consent pause held before the restart", held.Length);
+        Self.Tell(new StartHeldInputs(), ActorRefs.NoSender);
     }
 
     // The pause holds automated input and child result notices (SessionInputFlow, design D5).
@@ -518,6 +541,8 @@ public sealed partial class LlmSessionActor
         => input.ChildNotice is not null
            || (TurnContext.TryFromRecord(input.TurnContext, out var context, out _) && context is not null
                && SessionToolWorkflow.IsAutomation(context.RequesterPrincipal) && !context.IsChildConsentNotice);
+
+    private sealed record StartHeldInputs : INoSerializationVerificationNeeded;
 
     // ── Approval notices (design D4) ──
 
@@ -548,20 +573,23 @@ public sealed partial class LlmSessionActor
     private void ChildConsentChanged()
     {
         if (_phase.Current == SessionPhase.Ready)
-            AdmitConsentNoticeThen(StartWaitingInputAfterApproval);
+            AdmitConsentNoticeThen(inOpenTurn: false, StartWaitingInputAfterApproval);
         else if (_phase.Current == SessionPhase.Processing && _toolWorkflow.HasPendingApprovals())
-            AdmitConsentNoticeThen(static () => { });
+            AdmitConsentNoticeThen(inOpenTurn: true, static () => { });
     }
 
     // Persists a ready digest as one approval notice input, then runs the next step of the boundary in the journal
-    // callback. The notice waits in the queue for its own turn.
-    private void AdmitConsentNoticeThen(Action next)
+    // callback. The notice waits in the queue for its own turn. inOpenTurn tells a rejected admission whether a turn
+    // stays open that the person must learn has stopped.
+    private void AdmitConsentNoticeThen(bool inOpenTurn, Action next)
     {
         if (!_consentDigest.IsReady || RestartDrainRequested)
         {
             next();
             return;
         }
+
+        _noticeAdmissionInOpenTurn = inOpenTurn;
 
         // At most one notice waits. The newer notice replaces the waiting one, and it keeps every open request and
         // every answer that the model did not read, so the model never reads a stale state of the pause.

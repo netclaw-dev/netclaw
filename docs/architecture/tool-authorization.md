@@ -477,8 +477,12 @@ The child consent pause (input placement):
   notices set `InputClosed.KeepsTurn`. Replay clears the noticed runs at each close without that flag
   (`LlmSessionActor.RecoverParentClosure`). Live code clears them when the next turn starts. An old row has no flag,
   so it reads as a close that ends the turn.
-- After a restart of a paused session, recovery runs the held input in admission order
-  (`LlmSessionActor.ResumeOrphanNotices`), because the restart withdrew every child request.
+- Recovery of a session that was paused (an open request of a run that is still `Accepted`) withdraws the child
+  requests, closes the pending notices, and then queues the held input in admission order
+  (`LlmSessionActor.QueueInputsHeldByThePause`). It starts nothing itself. The restart reminder stays the one resume
+  path for an interrupted input. It comes first in the mailbox, and in a busy session it queues each pending input
+  that no turn selected (`QueueRestartResume`). The held input then runs through the normal drain. With no restart
+  reminder, an idle session starts the held input (`StartHeldInputs`). A crash does not resume a person's input (#2516).
 - Data: the pause and the queue are actor-local. Each held input is a durable pending `InputAdmitted` record.
 - The last close of the session admits the closing notice. Then the held inputs run through
   `StartWaitingInputAfterApproval`.
@@ -883,7 +887,9 @@ The agent event channel (see [agent event](../spec/GLOSSARY.md#agent-event)):
   the open child requests. A restart withdraws every child request today, so the rebuilt digest is empty and recovery
   admits no notice.
 - When the journal rejects a notice admission, the session logs an error and stops, as after a persist failure.
-  Recovery then closes the notices, withdraws the child requests, and runs the held input.
+  A turn that stays open tells the person first: the persist-stopped error and a failed turn completion. At the end
+  of a finished turn the session stays quiet. Recovery then withdraws the child requests, closes the notices, and
+  queues the held input (section 3.1).
 - The parent cannot approve. No event carries consent. Consent goes only through the bridge.
 
 | | Bridge (`ParentSessionApprovalBridge`) | Channel (`AgentEvent`) |
@@ -1219,8 +1225,8 @@ Facts behind the diagram (current code):
   joins a running turn. A person input still runs. An approval notice is not held.
   When the last child request closes, the session admits the closing notice, and
   then the held input runs (`StartWaitingInputAfterApproval`). The pause does not
-  survive a restart today, because a restart withdraws every child request. The
-  held inputs stay pending in the journal.
+  survive a restart today, because a restart withdraws every child request.
+  Recovery queues the held inputs in admission order (section 3.1).
 - Any person can abandon the approval, not only its requester. The check is
   fail-safe: an abandonment cancels the call and grants nothing.
   A valid example: a reminder fires while Alice's `git status` prompt is open.

@@ -59,8 +59,7 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
         CrashWhileFireWaits,
         CrashWhileFireRuns,
         GracefulRestartWithTwoRequesters,
-        RestartReminderExpired,
-        RestartMessageFoundAnotherTurnRunning
+        RestartReminderExpired
     }
 
     [Theory]
@@ -299,7 +298,6 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
     [InlineData(HowOrphaned.CrashWhileFireRuns)]
     [InlineData(HowOrphaned.GracefulRestartWithTwoRequesters)]
     [InlineData(HowOrphaned.RestartReminderExpired)]
-    [InlineData(HowOrphaned.RestartMessageFoundAnotherTurnRunning)]
     public async Task A_fire_is_admitted_when_an_earlier_fire_is_pending_and_nothing_will_run_it(HowOrphaned how)
     {
         // Arrange: the 10:00 fire stays pending in the journal. No restart message and no queue will ever run it.
@@ -478,19 +476,6 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
                 Assert.NotNull(prepared.RestartReminder?.ExpiresAt);
                 await JoinNewSubscriberAsync(sessionId);
                 return () => { };
-            }
-            case HowOrphaned.RestartMessageFoundAnotherTurnRunning:
-            {
-                // The restart message arrives after an operator turn started. The message is a no-op then
-                // (D2 decision 5), so the interrupted fire stays pending. A_restart_resume_message_never_becomes_an_input
-                // proves that no-op, so this spec does not repeat it.
-                await StartHeldTurnAsync(sessionId, FireText(first), ReminderSource(first));
-                var prepared = await RestartGracefullyAsync(sessionId);
-                var reminder = Assert.IsType<ReminderDefinition>(prepared.RestartReminder);
-                await JoinNewSubscriberAsync(sessionId);
-                var held = await StartHeldTurnAsync(sessionId, "Run the build", RequesterSource(Requester));
-                Assert.IsAssignableFrom<CommandAck>(await SendRestartMessageAsync(sessionId, reminder));
-                return () => held.TrySetResult();
             }
             default:
                 throw new ArgumentOutOfRangeException(nameof(how), how, null);

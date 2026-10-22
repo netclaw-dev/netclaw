@@ -718,6 +718,7 @@ internal sealed class SessionInputFlow
 
     public void DeferApproval(IWithSessionId response) => _deferredApproval = response;
     public void ResumeToolLoopAfterCompaction() => _resumeToolLoopAfterCompaction = true;
+    public bool ResumesToolLoopAfterCompaction => _resumeToolLoopAfterCompaction;
 
     public CompactionContinuation AdvanceAfterCompaction(bool restartDrainRequested, bool childConsentPaused)
     {
