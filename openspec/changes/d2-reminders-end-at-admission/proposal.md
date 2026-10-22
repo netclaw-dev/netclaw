@@ -7,10 +7,10 @@ The session already stores each admitted input in its journal. The session can o
 ## What Changes
 
 - A Mode B run ends when the session acknowledges the fire (admission). The run no longer waits for a post.
-- A session keeps at most one waiting fire per reminder. A newer fire of that reminder is acknowledged and dropped. A fire is not dropped while the earlier fire runs.
+- A session keeps at most one waiting fire per reminder. A newer fire of that reminder is acknowledged and dropped. A fire is not dropped while the earlier fire runs. While the child consent pause applies, the newer fire replaces the waiting fire instead (`child-approval-events-and-parent-pause`).
 - One durable check at admission replaces `ProcessedReminderIds`, the in-flight reservation, and the three `IsReminderDuplicate` checks. The check reads the stored source key, so it also holds after snapshot recovery.
 - A duplicate or dropped fire causes no side effect. It does not abandon an open tool batch.
-- A restart-resume message is never an ordinary input. The session resumes pending input, or it acknowledges the message as a no-op and logs `restart_resume_noop`.
+- A restart-resume message is never an ordinary input. In an idle session, the session resumes pending input. During another turn, it queues the pending input and logs `restart_resume_queued`. Otherwise, it acknowledges the message as a no-op and logs `restart_resume_noop`.
 - Add `ReminderFireKey`, a reminder-owned value that parses the existing `"{id}:{ms}"` key. The journal shape does not change.
 - Delete `DeliveryObserver`, `ReminderDeliveryResult`, `DeliveryObservedTimeout`, the delivery backstop, `ProcessedReminderIds`, and the observer code in `ChannelOutputEngine`, the Slack, Discord, and Mattermost binding actors, and `SignalRSessionActor`.
 - **BREAKING**: a failed post for a Mode B reminder is no longer retried by the reminder system. `delivery_required` stays for `channel` delivery and has no effect for `current_session`. The session does not retry a `TransportFailure`. The session raises an alert instead.
