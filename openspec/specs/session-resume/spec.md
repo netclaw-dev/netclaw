@@ -393,8 +393,8 @@ The session SHALL treat the restart reminder as a signal to resume stored work. 
 - In `Ready` phase with nothing to resume, or in `Ready` phase when a parked approval owns the next turn, the session SHALL reply `RestartResumeNotNeeded` (a `CommandAck`), make no change, and log `restart_resume_noop`. This includes a redelivery after the resumed turn ended.
 - `RestartResumeNotNeeded` SHALL tell the caller that this message resumes nothing and that no turn will run for it. A caller on the Reminder-origin route (#2491) SHALL then settle its run as success at once and SHALL NOT wait for a terminal turn.
 - A reply that resumes a turn in `Ready` phase SHALL be an ordinary `CommandAck`, and the caller SHALL wait for the resumed turn. A reply that only queues work SHALL be `RestartResumeNotNeeded`, and the caller SHALL settle at once.
-- A refusal (`CommandNack`) SHALL remain only for two causes: a pending input whose stored authority is invalid, and a restart reminder that arrives in `Processing` or `Compacting` phase while a restart drain is pending.
-- In `Ready` phase, the session SHALL check for a parked approval before it checks the stored authority. In `Processing` or `Compacting` phase, the session SHALL NOT check for a parked approval. It checks for a pending restart drain, and then it checks the stored authority.
+- A refusal (`CommandNack`) SHALL remain only for two causes: a pending input whose stored authority is invalid, and a restart reminder that arrives in `Processing`, `Compacting`, or `Passivating` phase while a restart drain is pending.
+- In `Ready` phase, the session SHALL check for a parked approval before it checks the stored authority. In `Processing` or `Compacting` phase, the session does not check for a parked approval. It checks for a pending restart drain, and then it checks the stored authority.
 
 #### Scenario: A redelivered restart message during the resumed turn
 

@@ -276,7 +276,8 @@ restart or a passivation for those inputs:
 In `Processing` or `Compacting` phase, if one pending input that no turn
 selected has a stored authority that does not parse, the restart reminder
 replies `CommandNack` and queues no input. In `Ready` phase, the same reply
-applies when such an input comes before the first change of requester.
+applies when such an input comes before the first input of another requester,
+or is that input.
 
 A stored input that nothing will run is not waiting. A crash, an expired
 restart reminder, a stored authority that does not parse, or a slash-command
