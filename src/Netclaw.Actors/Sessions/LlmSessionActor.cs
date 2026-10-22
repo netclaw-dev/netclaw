@@ -1111,10 +1111,15 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void DrainBufferOrReadyNow()
     {
+        // Read this flag before AdvanceAfterCompaction resets it. A tool batch closed the inputs of a tool loop, so a
+        // drain at this point stops a turn that no reminder resumes. A compaction at a turn end stops no turn.
+        var stopsToolLoop = _input.ResumesToolLoopAfterCompaction;
         var continuation = _input.AdvanceAfterCompaction(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (continuation.Action == InputProgressAction.Restart)
         {
             RecordRestartReminderEligibility();
+            if (stopsToolLoop)
+                EmitRestartStoppedTurnNotice();
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
@@ -4400,11 +4405,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             StopTurnForRestart();
     }
 
-    // The drain stopped the turn before its end. If no restart reminder resumes the turn, the session tells the person
-    // in the channel. Without the notice, the turn stops silently (#2601).
+    // The drain stopped the turn before its end. The turn resumes only when a reminder replays its own selected
+    // inputs. A tool batch or a text close clears them. A reminder that only reports a child, or that only runs a
+    // buffered input as a new turn, does not resume this turn. Then the session tells the person (#2601).
     private void StopTurnForRestart()
     {
-        if (RecordRestartReminderEligibility() != ReminderEligibility.Eligible)
+        var hasSelectedInputs = _input.SelectedCount > 0;
+        if (RecordRestartReminderEligibility() != ReminderEligibility.Eligible || !hasSelectedInputs)
             EmitRestartStoppedTurnNotice();
 
         ClearBufferedMessagesForRestartDrain();
@@ -4413,7 +4420,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void EmitRestartStoppedTurnNotice()
     {
-        _log.Info("Restart drain stopped the turn of session {SessionId}, and no restart reminder resumes it.",
+        _log.Info("Restart drain stopped the turn of session {SessionId}, and no restart reminder resumes that turn.",
             _sessionId.Value);
         EmitOutput(new TextOutput(
             "The daemon restarted during this turn. The work stopped after the last completed step. "
