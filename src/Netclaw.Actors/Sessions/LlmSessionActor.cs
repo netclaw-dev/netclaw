@@ -2436,7 +2436,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             foreach (var input in damaged)
                 _log.Error("Restart reminder {ReminderId}: pending input {InputId} has a damaged authority",
                     cmd.Source?.ReminderId, input.InputId);
-            _input.RestoreWaitingInputs(valid, _sessionId);
+            _input.RestoreWaitingInputs(valid.Select(static pair => pair.Input).ToArray(), _sessionId);
             return true;
         }
 
