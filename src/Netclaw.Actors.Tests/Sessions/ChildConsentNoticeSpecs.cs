@@ -508,6 +508,68 @@ public sealed class ChildConsentNoticeSpecs(ITestOutputHelper output) : ChildCon
         }
     }
 
+    /// <summary>
+    /// Design D1.3, rule 3. A notice turn that fails counts as given, at most once. The operator answers child A, so
+    /// a closing notice runs, and its model call fails. Then child B asks. The new open notice lists B as open and does
+    /// not give the answer of A again.
+    /// Planted bug: the session puts the answers of a failed notice turn back in the digest, so the next notice repeats
+    /// the answer of A.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_notice_turn_counts_as_given_and_its_answers_do_not_come_again()
+    {
+        // Arrange: two held children of Alice. The model call of the closing notice turn fails once.
+        var sessionId = new SessionId("consent/failed-notice-given");
+        var journal = await JournalAsync();
+        var failed = 0;
+        Clients.Parent.ResponseContentsSelector = request =>
+            FreshUserTexts(request).Any(text => text.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal))
+            && Interlocked.Exchange(ref failed, 1) == 0
+                ? throw new IOException("The model call of the closing notice turn fails.")
+                : ScriptedParentReply(request);
+        ScriptChildren();
+        var subscriber = await JoinAsync(sessionId);
+        var (childA, gateA) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-fa");
+        var (childB, gateB) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-fb");
+
+        try
+        {
+            gateA.TrySetResult();
+            var promptA = await FishChildPromptAsync(subscriber, childA.Run.RunId);
+            await SettleAfterRequestAsync(journal, sessionId, childA);
+
+            // Act 1: the operator answers A. The closing notice turn starts, and its model call fails.
+            AssertAck(await AnswerAsync(sessionId, promptA.CallId, Alice));
+            await subscriber.FishForMessageAsync<ErrorOutput>(_ => true, Deadline, cancellationToken: Cancellation);
+            await SettleNoticesAsync(journal, sessionId);
+            var closing = Assert.Single(ConsentNotices(journal, sessionId),
+                notice => notice.UserMessage.Content!.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal));
+            Assert.Contains($"run={childA.Run.RunId.Value} answer=approved_once", closing.UserMessage.Content, StringComparison.Ordinal);
+            Assert.Equal(0, ConsumedByTurn(journal, closing.InputId));
+            Assert.Contains(journal.Committed.OfType<InputClosed>(), evt => evt.InputIds.Contains(closing.InputId));
+            Assert.Contains(Clients.Parent.ReceivedMessages, request => FreshUserTexts(request)
+                .Any(text => text.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal)));
+
+            // Act 2: child B asks, and its open notice runs.
+            gateB.TrySetResult();
+            await FishChildPromptAsync(subscriber, childB.Run.RunId);
+            await SettleAfterRequestAsync(journal, sessionId, childB);
+
+            // Assert: the new notice lists B as open and does not repeat the answer of A.
+            var latest = ConsentNotices(journal, sessionId)[^1];
+            var lines = Lines(latest.UserMessage.Content);
+            Assert.Equal($"{OpenNoticeHeading} 1 is open.", lines[0]);
+            Assert.Contains(lines, line => line.StartsWith($"- agent=child-a run={childB.Run.RunId.Value} tool=", StringComparison.Ordinal));
+            Assert.DoesNotContain($"run={childA.Run.RunId.Value} answer=", latest.UserMessage.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain(AnswersHeading, lines);
+        }
+        finally
+        {
+            gateA.TrySetResult();
+            gateB.TrySetResult();
+        }
+    }
+
     // The review proposed this heading for the answers in an open notice. Design D4 gives no text for it.
     private const string AnswersHeading = "Answers since the last notice:";
 
