@@ -15,35 +15,34 @@ Base: PR #2583 and PR #2584 (`child-approval-events-and-parent-pause` PR 1 and P
 
 - **Park always.** A child call that needs consent does not wait in memory. The child finishes the other calls of the
   batch, sends its park to the session, and stops. The live wait for child consent goes away.
-- **The run record holds the park.** The session journals one new event, `ChildRunEvent.Parked`. It carries the child
-  conversation, the open tool batch, the consent requests, and the spawn facts that the child cannot get again. The
-  run record is in the session journal and in the session snapshot already. No new persistence ID, no child journal,
-  and no purge are necessary.
+- **The park holds all that the child needs.** The conversation, the open tool batch with the receipt facts of the
+  finished calls, the path facts before the batch, the loop guard, the managed temporary state, the spawn facts, and
+  the consent requests.
+- **The run record holds the park (PR 2).** The session journals `ChildRunEvent.Parked` in the run record, which is in
+  the session journal and snapshot already. No new persistence ID, no child journal, and no purge.
 - **One resume path.** When every request of a park has an answer, the session journals `ChildRunEvent.Resumed` and
-  starts a new `SubAgentActor` from the run record. Only the parked calls run, each once. A live answer and an answer
+  starts a new `SubAgentActor` from the park. Only the parked calls run, each at most once. A live answer and an answer
   after a restart use the same path.
-- **Resume is a spawn from a recorded conversation.** The resume takes the authority from the run record. It resolves
-  the model, the tools, the operating rules, and the project instructions again under the current configuration and
-  policy, as a spawn does. The gate checks each parked call again at call time.
-- **Recovery keeps parked runs.** A restart keeps the prompts of a parked run open. The pause comes back. A parked run
-  whose requests all have answers, and that has no `Resumed`, resumes after recovery. A running child is lost, as
-  today.
-- **Prompt replay.** A new output subscriber gets each open child prompt again. The TUI, the channels, and headless
-  output skip a call ID that they show already.
-- **Supersedes.** This change replaces PR 3 (design D8) of `child-approval-events-and-parent-pause`: the child journal,
-  the frozen tool set, the frozen model, and the purge. The owner must confirm this (see design, Open Questions).
+- **Resume is a spawn from a recorded conversation.** The authority and the path facts come from the run record. The
+  audience is the narrower of the recorded and the current trust. The model, the tools, the rules, and the project
+  instructions resolve again. A tool fingerprint check stops an old answer from applying to a changed tool.
+- **Recovery keeps parked runs.** A restart keeps the prompts of a parked run open, and the pause comes back. The
+  session replays the open prompts to a new subscriber. A running child is lost, as today.
+- **Supersedes.** This change replaces PR 3 (design D8) of `child-approval-events-and-parent-pause`. The owner
+  decisions that change are in design.md, marked "pending owner confirmation".
 
 In scope: background child runs of one session that park at consent, in every channel that supports interactive
 approval, the TUI, and headless output.
 
-Out of scope: the resume of a running (not parked) child after a restart, nested children, a consent timeout,
-session retention (#2573), the headless exit rule (#2541), and a cross-process router.
+Out of scope: the resume of a running (not parked) child after a restart, nested children, a consent timeout, session
+retention (#2573), the headless exit rule (#2541), and a cross-process router.
 
 Stack:
 
-1. Park and resume while the daemon runs. A restart still withdraws a parked prompt. Forward-only.
-2. Recovery keeps parked runs. The pause comes back. A parked session can passivate.
-3. Prompt replay to a new subscriber, with dedupe.
+1. Park and resume in memory. No format change. The existing restart rules apply.
+2. Durable `Parked` and `Resumed`, recovery, passivation, and prompt replay with dedupe in the channels. Needs #2587.
+   Forward-only.
+3. TUI and headless dedupe, and the native smoke run.
 
 ## Capabilities
 
@@ -53,39 +52,41 @@ None.
 
 ### Modified Capabilities
 
-- `background-subagent-runs`: a child run parks at consent in its run record and resumes from it; a parked run can be
-  cancelled with no actor.
+- `background-subagent-runs`: a child run parks at consent and resumes from its park; a parked run can be cancelled
+  with no actor; the resume applies the spawn rules again.
 - `netclaw-subagents`: the live approval wait and its watchdog pause are removed; consent outcomes settle once, at
   resume.
-- `tool-authorization`: TA-12 no longer rejects the prompt of a parked child after a restart; the resumed call runs
-  once, under the run authority, and passes every gate again.
-- `session-resume`: recovery keeps parked child runs, resumes an answered park, and brings the pause back.
-- `channel-binding-parity`: an open child prompt replays to a new subscriber, and each surface skips a call ID that it
-  shows already.
+- `tool-authorization`: TA-12 keeps the prompt of a parked child valid after a restart; the resumed call runs once,
+  under the recorded authority and the narrower current trust, and passes every gate again.
+- `session-resume`: recovery keeps parked child runs, resumes an answered park, brings the pause back, and keeps one
+  run of each held reminder.
+- `channel-binding-parity`: an open child prompt replays to a new subscriber; each surface skips a call ID that it
+  shows already; a replayed prompt that fails to post does not withdraw the request.
 
 ## Impact
 
-- Code: `SubAgentActor`, `SubAgentSpawner`, `ParentSessionApprovalBridge`, `LlmSessionActor` and its `Children`
-  partial, `SessionToolWorkflow` (`.Approvals`, `.Children`, `.Recovery`), `SessionState`, `BackgroundChildRun`,
-  `SessionProtocol.ChildRuns`, `NetclawProtoMapper.CoordinationV2`, `ChannelOutputEngine`, `ChatViewModel`,
-  `HeadlessChannel`.
-- Formats (forward-only from PR 1):
-  - `ChildRunEventV2Proto` gets two `fact` cases: `parked` and `resumed`.
-  - `BackgroundChildRunV2Proto` gets one `lifecycle` case: `parked`. It reuses `ChildRunApprovalProto`,
-    `SerializableChatMessageProto`, and `ChildRunCheckpointProto`.
-  - `ToolApprovalRequestedProto` gets `optional string display_text` and `optional bool is_messy` (PR 3, additive).
-  - No new snapshot field. No new persistence ID.
+- Code: `SubAgentActor`, `SubAgentSpawner`, `TurnStateTracker`, `ParentSessionApprovalBridge`,
+  `SessionToolExecutionPipeline` (one shared plan-entry helper), `LlmSessionActor` and its `Children` partial,
+  `SessionToolWorkflow` (`.Approvals`, `.Children`, `.Recovery`), `SessionState`, `BackgroundChildRun`,
+  `SessionProtocol.ChildRuns`, `NetclawProtoMapper.CoordinationV2`, `ChannelOutputEngine`, the Slack, Mattermost, and
+  Discord bindings, `ChatViewModel`, `HeadlessChannel`.
+- Formats (PR 2, forward-only): two `fact` cases on `ChildRunEventV2Proto` (8, 9); a `parked` lifecycle case (21) and
+  `prompts_issued` (22) on `BackgroundChildRunV2Proto`; four optional fields on `ToolApprovalRequestedProto` (25 to
+  28); six new messages. No new snapshot field. No new persistence ID.
+- Data: child transcripts go into `netclaw.db`, in the same data class as the parent transcript.
 - Configuration: none.
-- CI: one new Stryker target, `child-resume-gate`, in the `child-consent` group (about 3 minutes).
-- Docs: `docs/architecture/tool-authorization.md` sections 3.5, 3.6, 4, 8, and 9; `docs/spec/GLOSSARY.md` ("Parked
-  child run"; "Child journal" is removed); the `netclaw-operations` skill.
+- CI: two Stryker targets in the `child-consent` group, `child-resume-gate` (PR 1) and `child-park-recovery` (PR 2),
+  about 3 minutes each.
+- Docs: `docs/architecture/tool-authorization.md` sections 3.5, 3.6, 4, 7.5, 8, and 9; `docs/spec/GLOSSARY.md`; the
+  `netclaw-operations` skill; release-note text for the downgrade.
+- Prerequisite: #2587 before PR 2.
 
 Security impact:
 
 - A parked call runs only after a durable `Resumed` record, at most once.
-- The resumed child takes its authority from the run record, never from the current turn.
-- The gate checks the parked call again under the current policy. A deny rule that the operator adds after the park
-  wins over the answer.
+- The resumed child takes its requester and path facts from the run record, never from the current turn or parent.
+- The audience at resume is never wider than the recorded audience.
+- The gate checks the parked call again under the current policy. A changed tool does not run on an old answer.
 - Consent comes only from the journaled answer of the run requester. It is a one-time consent bound to the exact
   candidates of the prompted call.
 - The parent model can never answer. The change adds no consent path.
@@ -94,6 +95,6 @@ Operational impact:
 
 - A child that waits for consent survives a restart or a config reload. Its prompt stays live, and the pause comes
   back.
-- A child prompt appears after the other calls of its batch finish, not while they run.
-- The session journal and snapshot hold the conversation of each parked child until it resumes.
-- Rollout is forward-only from PR 1. Back up `netclaw.db` before the rollout.
+- A child prompt appears after the other calls of its batch finish.
+- A park above 4 MiB ends the run with `park_too_large`.
+- An older binary cannot recover a session that holds a park. The release notes say so.

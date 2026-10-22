@@ -1,21 +1,25 @@
 ## ADDED Requirements
 
-### Requirement: A child run parks at consent in its run record
+### Requirement: A child run parks at consent
 
 A child call that needs consent SHALL NOT wait in memory. The child SHALL let the other calls of the same model
-response finish, and then it SHALL send its park to the owning session and stop. The session SHALL record the park in
-the run record as one durable event before it shows any prompt of the park. The park SHALL hold the child conversation,
-the results of the calls that did not park, the consent requests of the parked calls, and the spawn facts that the run
-needs to start again. A parked call SHALL NOT run while the run is parked. A call that already has a result SHALL NOT
-run again. The session SHALL number the prompts of a run from a durable counter, so a prompt number never repeats in
-one run.
+response finish, and then it SHALL send its park to the owning session and stop. The session SHALL accept the park
+before it shows any prompt of the park. The park SHALL hold the child conversation, the results and result effects of
+the calls that did not park, the path facts that the batch ran with, the loop-guard state, the spawn facts, and the
+consent requests of the parked calls. A parked call SHALL NOT run while the run is parked. A call that already has a
+result SHALL NOT run again. The session SHALL number the prompts of a run from a counter that never repeats a number
+in one run.
+
+The session SHALL accept a park only for a run that it owns and that is still accepted. When the session refuses the
+park, cannot record it, or finds it above the size limit, the run SHALL end as failed with a stated reason, no prompt
+SHALL appear, and no parked call SHALL run.
 
 #### Scenario: A child parks after its siblings end
 
 - **GIVEN** a child response with two calls, one that needs consent and one that does not
 - **WHEN** the call that does not need consent ends
-- **THEN** the session records the run as parked with the result of that call
-- **AND** the session shows the consent prompt only after the park is recorded
+- **THEN** the session accepts the park with the result of that call
+- **AND** the session shows the consent prompt only after the park is accepted
 - **AND** no child actor runs for the run
 
 #### Scenario: A park for a cancelled run is refused
@@ -25,19 +29,45 @@ one run.
 - **THEN** the session refuses the park and shows no prompt
 - **AND** the run ends as cancelled
 
-### Requirement: A parked run resumes once from its run record
+#### Scenario: A park that the journal rejects ends the run
 
-When every consent request of a park has an answer, the session SHALL record the resume in the run record before any
-parked call runs, and then start a new child from the run record. A live answer and an answer after a restart SHALL use
-the same resume path. The resumed child SHALL run only the parked calls, each at most once. An approved call SHALL get a
-one-time consent for the exact prompted candidates of that call only. A refused call SHALL get a refusal result and
-SHALL NOT run. The session SHALL NOT resume a run while a restart drain is pending.
+- **GIVEN** a child that sends its park
+- **WHEN** the journal rejects the park
+- **THEN** the run ends as failed with the reason `park_not_recorded`
+- **AND** no prompt appears and the parked call does not run
 
-The resumed child SHALL take its requester, audience, boundary, and delivery targets from the run record, never from
-the current turn. It SHALL resolve its model, its tools, its operating rules, and its project instructions under the
-current configuration and policy, as a new spawn does. When a spawn rule fails at resume (subagents disabled, no child
-tool, no result reader, or no usable model provider), the run SHALL end as failed with that reason, the result notice
-SHALL state the reason, and the parked calls SHALL NOT run.
+#### Scenario: A park above the size limit ends the run
+
+- **GIVEN** a child whose park is above the size limit
+- **WHEN** the child sends its park
+- **THEN** the run ends as failed with the reason `park_too_large`
+- **AND** no prompt appears and the parked call does not run
+
+### Requirement: A parked run resumes once from its park
+
+When every consent request of a park has an answer, the session SHALL record the resume before any parked call runs,
+and then start a new child from the park. A live answer and an answer after a restart SHALL use the same resume path.
+The resumed child SHALL run only the parked calls, each at most once, with the path facts that the batch ran with. An
+approved call SHALL get a one-time consent for the exact prompted candidates of that call only. A refused call SHALL
+get a refusal result and SHALL NOT run. The session SHALL NOT resume a run while a restart drain is pending. When the
+journal rejects the resume record, the run SHALL end as failed, and the result notice SHALL say "The parked calls did
+not run."
+
+After the parked calls, the child SHALL complete the batch in the order of a live batch: all results, then the effects
+of each result, then the nudges. The resumed child SHALL keep the loop-guard state and the round count of the park, so
+its next checkpoint round is above the recorded round.
+
+The resumed child SHALL take its requester, boundary, channel, delivery targets, and path facts from the run record and
+the park, never from the current turn or the current parent. Its audience SHALL be the narrower of the recorded
+audience and the audience that the session derives now for the recorded requester and channel. It SHALL resolve its
+model, its tools, its operating rules, and its project instructions under the current configuration and policy, as a
+new spawn does, and the session SHALL log the recorded and the new model. When a parked call's tool fingerprint
+differs from the fingerprint at the park, the call SHALL NOT run on the old answer, and the child SHALL park it again
+with a new prompt.
+
+When a spawn rule fails at resume (no spawner, subagents disabled, a `Public` audience, a deleted agent profile, no
+child tool, no result reader, or no usable model provider), the run SHALL end as failed with that reason, the result
+notice SHALL state the reason, and the parked calls SHALL NOT run.
 
 #### Scenario: An approval resumes the parked call once
 
@@ -61,6 +91,20 @@ SHALL state the reason, and the parked calls SHALL NOT run.
 - **WHEN** the requester approves the second request
 - **THEN** both calls run, each once
 
+#### Scenario: The first checkpoint after a resume is above the park round
+
+- **GIVEN** a child parked after round N
+- **WHEN** the requester approves and the resumed child ends its batch
+- **THEN** the child sends the checkpoint of round N+1
+- **AND** the session accepts it
+
+#### Scenario: A sibling project change applies after the parked call
+
+- **GIVEN** a child batch with a `set_working_directory` call and a parked shell call
+- **WHEN** the requester approves the shell call
+- **THEN** the shell call runs in the working directory that the batch started with
+- **AND** the new project directory applies after the batch, as in a live batch
+
 #### Scenario: The resumed child keeps the run authority
 
 - **GIVEN** Alice's child is parked
@@ -68,12 +112,42 @@ SHALL state the reason, and the parked calls SHALL NOT run.
 - **WHEN** Alice approves the parked request
 - **THEN** the resumed child runs under Alice's recorded authority and audience
 
+#### Scenario: A narrower trust narrows the resume
+
+- **GIVEN** Alice's child is parked with an operator audience
+- **AND** the operator then removes Alice from the operator list
+- **WHEN** Alice approves the parked request
+- **THEN** the resumed child runs with the narrower audience
+- **AND** a parked call to a tool that only the operator audience may use does not run
+
+#### Scenario: A changed tool parks again
+
+- **GIVEN** a child parked at a call to an MCP tool
+- **AND** another MCP server now provides a tool with the same name
+- **WHEN** the requester approves the parked request
+- **THEN** the call does not run on that answer
+- **AND** a new prompt appears for the call
+
+#### Scenario: A deleted agent profile ends the run
+
+- **GIVEN** a parked child whose agent profile the operator deleted
+- **WHEN** the requester approves the parked request
+- **THEN** the run ends as failed with the reason `agent_definition_unavailable`
+- **AND** the parked call does not run
+
 #### Scenario: No usable model at resume
 
 - **GIVEN** a parked child, and the model provider is no longer usable
 - **WHEN** the requester approves the parked request
 - **THEN** the run ends as failed with the reason `model_unavailable`
 - **AND** the parked call does not run
+
+#### Scenario: A rejected resume record ends the run
+
+- **GIVEN** a parked child whose last request gets an answer
+- **WHEN** the journal rejects the resume record
+- **THEN** the run ends as failed and the notice says "The parked calls did not run."
+- **AND** no child actor starts
 
 ### Requirement: A parked run can be cancelled with no actor
 
