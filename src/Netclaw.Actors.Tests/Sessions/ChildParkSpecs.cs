@@ -250,11 +250,12 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
             Assert.Empty(ApprovalTool.Contexts);
             Assert.Equal(childCalls, Clients.A.CallCount);
             turn.TrySetResult();
-            await AwaitAssertAsync(() =>
-            {
-                AdvanceScheduler(TimeSpan.FromSeconds(3));
-                Assert.True(drain.IsCompleted, "The restart drain did not finish.");
-            }, Deadline, cancellationToken: Cancellation);
+            // The turn ended, so the drain needs no model grace timer. The reply wait has the spec deadline. The next
+            // join must reach a new session, so the spec waits until the drained session stops.
+            var stopped = CreateTestProbe();
+            stopped.Watch(session);
+            await drain;
+            await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
         }
 
         await JoinRecorderAsync(id);
