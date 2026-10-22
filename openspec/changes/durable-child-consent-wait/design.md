@@ -369,6 +369,19 @@ Other rules:
   input is pending (`LlmSessionActor.cs:3509`). Then the journal keeps every park event until the pause ends or a
   compaction snapshot runs. The size log and the cap of D2 bound this.
 - **Passivation.** A click wakes the session, and the answer handler resumes the child.
+- **Recovery cost checks (PR 2, owner approval, 22 October 2026).** Parks make each recovery read and map more data.
+  Two checks keep that cost visible:
+  - A recovery-time test on the SQLite journal (the in-memory journal does not deserialize rows, so it hides the
+    cost). It recovers two sessions with the same parent history: one with several parks at the 4 MiB cap, and one
+    with no parks. A stopwatch measures each recovery from the actor start to a completion signal. The signal is the
+    reply to a probe message that the session stashes during recovery, so the test waits with no sleep. Each recovery
+    runs several times, and the test compares the fastest run of each. The PR 2 author measures both on the CI runner
+    first, then records the measured numbers and the bound as constants with a comment. The bound is a ratio with a
+    wide margin over the measured ratio, plus a small absolute floor, so normal CI noise does not fail the test. The
+    test fails when the recovery with parks takes far longer than the bound allows.
+  - A recovery log line. At `RecoveryCompleted`, when one or more parked runs exist, the session writes one Info line:
+    `child_parks_recovered count={count} bytes={bytes}`. The bytes are the total serialized size of the parks. The
+    line holds no content, only the two numbers. With no parked run, the session writes no line.
 - **Prerequisite.** #2587 must merge before PR 2. A restart resume must queue every pending input, so the held input
   of a paused session does not stay with no turn. The N1 rule edits the same method, `TryResumeInterruptedInput`, so
   PR 2 rebases on #2587.
@@ -578,7 +591,7 @@ Each PR starts with failing tests. `tasks.md` names each test, its assertion, an
 | PR 1a | `feature/durable-child-consent-wait` (made from `dev` after PR 0) | The child stops and the owner keeps its park in memory. The transcript (M12), the checkpoint seed (H1), the loop guard (M10), the pre-batch run scope (H3), the resume gate, the answer path with no live wait and its requester binding, the live answer applied to the park, the narrower audience (M6), the fingerprint (M7, N3, N12), the typed park refusals (N7), the profile and spawn failures, cancel of a parked run, and the `docs/architecture/tool-authorization.md` update. The existing restart rules apply. | none | 1,300 to 1,800 lines |
 | PR 1b | `feature/durable-child-consent-wait` | The receipt facts of the finished calls and their effects in live order (H2), and the managed temporary retry target and denial directory (M1, N4). | none | 400 to 650 lines |
 | Merge PR | `dev` | `feature/durable-child-consent-wait` into `dev`, as its own reviewed PR, verified on the combined stack. | none | no new lines |
-| PR 2 | `dev` (after the merge PR and #2587) | Durable `Parked` and `Resumed`, the proto, recovery, hydration, `AllowsSnapshot`, passivation, restart-reminder eligibility and the pause rule (N1), held input at recovery (M5, N8), the size cap, prompt replay with dedupe and the replay-failure rules (M4, N2), the mapper guards, the downgrade note. | forward-only | 1,500 to 2,100 lines |
+| PR 2 | `dev` (after the merge PR and #2587) | Durable `Parked` and `Resumed`, the proto, recovery, hydration, `AllowsSnapshot`, passivation, restart-reminder eligibility and the pause rule (N1), held input at recovery (M5, N8), the size cap, prompt replay with dedupe and the replay-failure rules (M4, N2), the mapper guards, the recovery cost checks, the downgrade note. | forward-only | 1,650 to 2,250 lines |
 | PR 3 | `dev` (after PR 2) | TUI and headless dedupe, the typed-key test, the native smoke run. | none | 250 to 400 lines |
 
 Caution: PR 1a must not reach `dev` alone. Without PR 1b, a resume can lose the working-directory change of a sibling
@@ -589,7 +602,7 @@ PR 1a still changes a consent surface and the resume path, so it carries the arc
 diff (CLAUDE.md, "Architecture Document Rule"). It also records the pre-batch scope, so a resume never builds its scope
 from a wrong source, also on the feature branch.
 
-The total is now 3,800 to 5,500 lines over five code PRs. Most of the lines are tests: each fact of the park needs a test
+The total is now 3,950 to 5,650 lines over five code PRs. Most of the lines are tests: each fact of the park needs a test
 that fails when the fact is lost.
 
 ### Tests and Stryker
