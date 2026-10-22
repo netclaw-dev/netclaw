@@ -120,7 +120,8 @@ Export target can be LocalTelemetry (or any OTLP collector).
 
 The daemon writes one Info line for each tool call, before the call runs. A
 sub-agent tool call writes the same line. A call that the argument check
-rejects also writes the line.
+rejects also writes the line. When the log level is above Info, the daemon
+does not write the line and does not read the arguments.
 
 ```text
 Invoking tool [{ToolName}] (call={CallId}) args={Args} rationale={Rationale} authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId}
@@ -132,8 +133,8 @@ The exporter sends each field as a separate attribute:
 - `CallId`: the model's tool call ID.
 - `Args`: the call arguments as compact JSON. Meta keys such as `_rationale`
   stay in this field.
-- `Rationale`: the `_rationale` text. It is empty when the call has no valid
-  rationale.
+- `Rationale`: the `_rationale` text. It is empty for every rejected call and
+  for every unknown tool, also when the arguments hold a `_rationale` key.
 - `AuthorizationAttemptId`: the same ID as the
   `Tool authorization attempt started` line. Use it to find the authorization
   decision for the call.
@@ -142,24 +143,34 @@ The exporter sends each field as a separate attribute:
 These lines leave the host, so `Args` is redacted and limited. The rules apply
 in this order:
 
-1. The daemon examines the argument JSON at every depth.
+1. The daemon examines the arguments at every depth.
 2. A value under a secret key name (for example `api_key`, `Authorization`, or
    `github_token`) becomes `***REDACTED***`. A `SensitiveString` value also
    becomes `***REDACTED***`.
-3. A string value longer than 256 characters becomes
+3. The daemon writes only JSON values, strings, booleans, integers, decimals,
+   finite doubles, dictionaries with string keys, and lists. Any other value
+   becomes `"<TypeName>"`, for example `"<Hashtable>"` or `"<Double>"` for
+   `NaN`. The daemon does not read the contents of that value.
+4. The secret-pattern redactor runs on each string value. It removes known
+   token shapes, such as `ghp_...`, JWTs, and `Bearer` headers, and secret
+   fields in a JSON body inside a string.
+5. A string value longer than 256 characters becomes
    `<N chars, sha256:XXXXXXXXXXXXXXXX>`. The hex text is the first 16
-   characters of the SHA-256 hash of the original value. To match a call to a
-   file, compare this hash prefix with `sha256sum` of the file.
-4. The secret-pattern redactor runs on the JSON text. It removes known token
-   shapes, such as `ghp_...`, JWTs, and `Bearer` headers.
-5. The daemon cuts `Args` at 4,096 characters and adds `...`.
+   characters of the SHA-256 hash of the original value. If the redactor
+   changed that string, it becomes `<N chars, redacted>` with no hash.
+6. The secret-pattern redactor runs again on the JSON text.
+7. The daemon cuts `Args` at 4,096 characters and adds `...`.
+
+To match a call to a file, compare the hash prefix with the `sha256sum` of the
+file. The hashes match only when the file bytes are the exact UTF-8 bytes of
+the argument: no byte order mark and the same line ends.
 
 Other limits:
 
 - An object or an array deeper than 64 levels becomes `"<nested>"`.
-- A JSON string or key that is not valid UTF-16 becomes
-  `"<invalid UTF-16 text>"`. The value under such a key becomes
-  `***REDACTED***`.
+- When the daemon cannot read the arguments (for example, a value that throws
+  or a string that is not valid UTF-16), `Args` is `<arguments unavailable>`.
+  The tool call still runs.
 - `Rationale` gets the secret-pattern redactor and a cut at 500 characters.
 
 The line does not hold the tool result. The local `session.log` file holds the

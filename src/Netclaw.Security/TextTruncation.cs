@@ -13,14 +13,22 @@ namespace Netclaw.Security;
 /// This type lives in Netclaw.Security so that <see cref="ToolCallLogFormatter"/>
 /// and the session log actors use one cap rule.
 /// </summary>
-public static class TextTruncation
+internal static class TextTruncation
 {
     /// <summary>
     /// Returns <paramref name="text"/> unchanged when it fits within
     /// <paramref name="maxLength"/> characters; otherwise returns the first
     /// <paramref name="maxLength"/> characters with an ellipsis appended
     /// (so the result is at most <c>maxLength + 3</c> characters long).
+    /// The cut does not split a surrogate pair, so the result can be one
+    /// character shorter.
     /// </summary>
-    public static string EllipsisAppend(string text, int maxLength) =>
-        text.Length <= maxLength ? text : string.Concat(text.AsSpan(0, maxLength), "...");
+    public static string EllipsisAppend(string text, int maxLength)
+    {
+        if (text.Length <= maxLength)
+            return text;
+
+        var cut = maxLength > 0 && char.IsHighSurrogate(text[maxLength - 1]) ? maxLength - 1 : maxLength;
+        return string.Concat(text.AsSpan(0, cut), "...");
+    }
 }

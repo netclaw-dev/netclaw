@@ -1554,15 +1554,18 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     tc.Name);
                 // Same line and same redaction helper as SessionToolExecutionPipeline.
                 // The OTLP exporter sends it off the host.
-                logger.Info(
-                    "Invoking tool [{ToolName}] (call={CallId}) args={Args} rationale={Rationale} " +
-                    "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId}",
-                    tc.Name,
-                    tc.CallId,
-                    ToolCallLogFormatter.FormatArguments(tc.Arguments),
-                    ToolCallLogFormatter.FormatRationale(interpretation.Meta?.Rationale),
-                    toolContext.Approval.AuthorizationAttemptId.Value,
-                    parentSessionId);
+                if (logger.IsInfoEnabled)
+                {
+                    logger.Info(
+                        "Invoking tool [{ToolName}] (call={CallId}) args={Args} rationale={Rationale} " +
+                        "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId}",
+                        tc.Name,
+                        tc.CallId,
+                        ToolCallLogFormatter.FormatArguments(tc.Arguments),
+                        ToolCallLogFormatter.FormatRationale(interpretation.Meta?.Rationale),
+                        toolContext.Approval.AuthorizationAttemptId.Value,
+                        parentSessionId);
+                }
                 if (interpretation.Rejection is { } rejection)
                 {
                     var refused = refusedCallIds.Contains(tc.CallId);

@@ -389,16 +389,20 @@ internal sealed class SessionToolExecutionPipeline
         // The OTLP exporter sends this line off the host. ToolCallLogFormatter
         // redacts and bounds the original arguments (meta keys included) and the
         // rationale. The line comes before the rejection branch, so a rejected
-        // call also has its arguments in the log.
-        _logger.Info(
-            "Invoking tool [{ToolName}] (call={CallId}) args={Args} rationale={Rationale} " +
-            "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId}",
-            tc.Name,
-            tc.CallId,
-            ToolCallLogFormatter.FormatArguments(tc.Arguments),
-            ToolCallLogFormatter.FormatRationale(interpretation.Meta?.Rationale),
-            authorizationAttemptId.Value,
-            batch.SessionId.Value);
+        // call also has its arguments in the log. The level check skips the walk
+        // of the arguments when Info is off.
+        if (_logger.IsInfoEnabled)
+        {
+            _logger.Info(
+                "Invoking tool [{ToolName}] (call={CallId}) args={Args} rationale={Rationale} " +
+                "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId}",
+                tc.Name,
+                tc.CallId,
+                ToolCallLogFormatter.FormatArguments(tc.Arguments),
+                ToolCallLogFormatter.FormatRationale(interpretation.Meta?.Rationale),
+                authorizationAttemptId.Value,
+                batch.SessionId.Value);
+        }
 
         if (interpretation.Rejection is { } rejection)
         {

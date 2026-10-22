@@ -75,8 +75,11 @@ What to expect inside `session.log`:
   `ToolName`, `CallId`, `Args`, `Rationale`, `AuthorizationAttemptId`, and
   `SessionId`. `Args` is redacted JSON: secret-named keys and known token shapes
   show `***REDACTED***`, a string longer than 256 characters shows
-  `<N chars, sha256:...>`, and the text stops at 4,096 characters. `Rationale`
-  stops at 500 characters. OTLP does not have the tool result.
+  `<N chars, sha256:...>` (or `<N chars, redacted>` when it held a secret), a
+  value of another type shows `<TypeName>`, and the text stops at 4,096
+  characters. `Args` is `<arguments unavailable>` when the daemon cannot read
+  the arguments. `Rationale` stops at 500 characters and is empty for a
+  rejected call or an unknown tool. OTLP does not have the tool result.
 - The session-log writer's own failure lines are the one exception: they go to
   `daemon.log`, never routed back into the file that just failed.
 - Writes are split by kind. The **conversation audit** (User/Assistant/Tool/Usage
