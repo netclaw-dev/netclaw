@@ -324,6 +324,48 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
         await AwaitModelSawAsync(third);
     }
 
+    /// <summary>
+    /// Round 6, N2. The rule that replaced the RestartMessageFoundAnotherTurnRunning case. The restart message arrives
+    /// while an operator turn runs. The session acknowledges it and queues the interrupted 10:00 fire. The 10:00 fire
+    /// runs once, after the operator turn. The 10:12 fire of the same reminder arrives while the 10:00 fire waits, so the
+    /// session drops it.
+    /// </summary>
+    [Fact]
+    public async Task A_restart_message_during_an_operator_turn_queues_the_fire_and_a_newer_fire_is_dropped()
+    {
+        // Arrange: the 10:00 fire is interrupted by a graceful restart. After the restart an operator turn runs.
+        var sessionId = new SessionId("test-channel/restart-message-during-operator-turn");
+        var first = Key(Build, FirstFireMs);
+        await JoinNewSubscriberAsync(sessionId);
+        await StartHeldTurnAsync(sessionId, FireText(first), ReminderSource(first));
+        var prepared = await RestartGracefullyAsync(sessionId);
+        var reminder = Assert.IsType<ReminderDefinition>(prepared.RestartReminder);
+        await JoinNewSubscriberAsync(sessionId);
+        var held = await StartHeldTurnAsync(sessionId, "Run the build", RequesterSource(Requester));
+
+        // Act: the restart message arrives during the operator turn. Then the 10:12 fire arrives.
+        Assert.IsAssignableFrom<CommandAck>(await SendRestartMessageAsync(sessionId, reminder));
+        var second = Key(Build, FirstFireMs + TwelveMinutesMs);
+        await SendFireAsync(sessionId, second);
+
+        // Assert: the 10:12 fire is dropped. The 10:00 fire runs once, after the operator turn.
+        Assert.Equal([first], await AdmittedSourceKeysAsync(sessionId));
+        held.TrySetResult();
+        await AwaitAssertAsync(
+            async () => Assert.Empty(PendingInputIds(await ReadJournalAsync(sessionId))),
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var events = await ReadJournalAsync(sessionId);
+        var admitted = events.Select(entry => entry.Payload).OfType<InputAdmitted>().ToArray();
+        var fireId = admitted.Single(input => input.SourceMessageId == first).InputId;
+        var operatorId = admitted.Single(input => input.UserMessage.Content == "Run the build").InputId;
+        var fireTurns = events.Where(entry => entry.Payload is TurnRecorded turn && turn.ConsumedInputIds.Contains(fireId)).ToArray();
+        var operatorTurn = events.Single(entry => entry.Payload is TurnRecorded turn && turn.ConsumedInputIds.Contains(operatorId));
+        Assert.Single(fireTurns);
+        Assert.True(operatorTurn.SequenceNr < fireTurns[0].SequenceNr, "The 10:00 fire must run after the operator turn.");
+        Assert.False(ModelSaw(second), "The dropped fire must never reach the model.");
+    }
+
     [Fact]
     public async Task A_restart_resume_message_never_becomes_an_input()
     {

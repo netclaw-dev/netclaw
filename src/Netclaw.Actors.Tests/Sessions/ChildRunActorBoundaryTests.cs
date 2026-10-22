@@ -489,6 +489,24 @@ internal sealed class AcceptanceFault(bool rejectAcceptance, bool holdAcceptance
     public void RejectNextConsentNotice() => Interlocked.Exchange(ref _consentNoticeRejections, 1);
 
     public bool TryTakeConsentNoticeRejection() => Interlocked.CompareExchange(ref _consentNoticeRejections, 0, 1) == 1;
+
+    // The journal stores the next matching admission with a damaged authority record (no turn ID), so that
+    // TurnContext.TryFromRecord fails for it after a replay. The live actor keeps the event that it wrote.
+    private Func<InputAdmitted, bool>? _damageMatch;
+
+    public TaskCompletionSource<InputAdmitted> AdmissionDamaged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void DamageNextAdmission(Func<InputAdmitted, bool> match) => Interlocked.Exchange(ref _damageMatch, match);
+
+    public InputAdmitted? TryDamage(InputAdmitted admitted)
+    {
+        var match = Volatile.Read(ref _damageMatch);
+        if (match is null || !match(admitted) || Interlocked.CompareExchange(ref _damageMatch, null, match) != match)
+            return null;
+        var damaged = admitted with { TurnContext = admitted.TurnContext with { TurnId = string.Empty } };
+        AdmissionDamaged.TrySetResult(damaged);
+        return damaged;
+    }
 }
 
 public sealed class AcceptanceBoundaryJournal : MemoryJournal
@@ -508,6 +526,8 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
     protected override async Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages, CancellationToken cancellationToken)
     {
         var writes = messages.ToArray();
+        if (_fault is { } damageFault)
+            writes = writes.Select(write => Damaged(damageFault, write)).ToArray();
         var events = writes.SelectMany(write => (IEnumerable<IPersistentRepresentation>)write.Payload).Select(item => item.Payload).ToArray();
         if (_fault is { } noticeFault && writes.Any(IsConsentNoticeWrite) && noticeFault.TryTakeConsentNoticeRejection())
             return await RejectConsentNoticeAsync(noticeFault, writes, cancellationToken);
@@ -561,6 +581,22 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
         }
 
         return results.ToImmutableList();
+    }
+
+    private static AtomicWrite Damaged(AcceptanceFault fault, AtomicWrite write)
+    {
+        var items = ((IEnumerable<IPersistentRepresentation>)write.Payload).ToArray();
+        var changed = false;
+        for (var index = 0; index < items.Length; index++)
+        {
+            if (items[index].Payload is InputAdmitted admitted && fault.TryDamage(admitted) is { } damaged)
+            {
+                items[index] = items[index].WithPayload(damaged);
+                changed = true;
+            }
+        }
+
+        return changed ? new AtomicWrite(items.ToImmutableList()) : write;
     }
 
     private static IEnumerable<object> Payloads(AtomicWrite write)

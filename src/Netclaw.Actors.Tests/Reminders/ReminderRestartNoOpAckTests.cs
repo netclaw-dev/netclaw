@@ -98,6 +98,65 @@ public sealed class ReminderRestartNoOpAckTests : ApprovalWaitTestBase
         Assert.True(completed.Success, completed.ErrorMessage);
     }
 
+    /// <summary>
+    /// Round 6 blocker. The restart reminder finds the session busy with an operator turn, so it only queues the
+    /// interrupted input P. P later runs under its own recorded source, and no turn ever carries the reminder ID. The
+    /// queue is the whole effect of this message, so the run must settle as success at once, as a no-op ack does.
+    /// Planted bug: the session answers the queue with a plain CommandAck. The run then waits for a terminal turn with
+    /// its own reminder ID. Virtual time does not move, so the run never settles.
+    /// </summary>
+    [Fact]
+    public async Task A_busy_restart_ack_that_queues_the_input_settles_the_reminder_run_at_once()
+    {
+        // Arrange: a Reminder-origin turn is interrupted by a restart. After the restart an operator turn runs, and its
+        // model call waits.
+        var sessionId = new SessionId("reminder/restart-busy-queue-ack");
+        var (definition, operatorGate) = await InterruptAndRestartAsync(sessionId);
+        var callsBefore = FakeChat.CallCount;
+        await SendAsync(sessionId, "Operator work", RequesterSource(Requester));
+        await AwaitAssertAsync(
+            () =>
+            {
+                Assert.True(FakeChat.CallCount > callsBefore, "The operator model call did not start.");
+                return Task.CompletedTask;
+            },
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var probe = CreateTestProbe();
+
+        try
+        {
+            // Act: the restart reminder reaches the busy session.
+            StartExecution(probe, definition, sessionId);
+
+            // Assert: the run settles as success while the operator turn still runs. Virtual time did not move.
+            var settled = await probe.ReceiveOneAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.True(
+                settled is ReminderExecutionCompleted,
+                "A restart ack that only queues the interrupted input must settle the run at once. The run still waits "
+                + "for a terminal turn with its own reminder ID, and no such turn will come.");
+            var completed = (ReminderExecutionCompleted)settled!;
+            Assert.True(completed.Success, completed.ErrorMessage);
+        }
+        finally
+        {
+            operatorGate.TrySetResult();
+        }
+
+        // Assert: the queued input runs after the operator turn.
+        await AwaitAssertAsync(
+            async () =>
+            {
+                var events = await ReadJournalAsync(sessionId);
+                var interrupted = events.Select(entry => entry.Payload).OfType<InputAdmitted>()
+                    .Single(admitted => admitted.UserMessage.Content == "Finish the interrupted task");
+                Assert.Contains(events.Select(entry => entry.Payload).OfType<TurnRecorded>(),
+                    turn => turn.ConsumedInputIds.Contains(interrupted.InputId));
+            },
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     // Runs a turn on the Reminder channel, stops the daemon with a graceful restart, and rejoins the session. The
     // model call of the resumed turn waits on the returned gate. The restart reminder is the one the session made.
     private async Task<(ReminderDefinition Definition, TaskCompletionSource ResumeGate)> InterruptAndRestartAsync(
