@@ -116,6 +116,34 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
         Assert.Equal("1", alert.Context["timedOutSessions"]);
     }
 
+    // Issue #2601. The coordinator cannot build a restart reminder or a channel notice for a session that does not
+    // acknowledge: the recorded authority and the channel binding belong to the session. The coordinator therefore
+    // names each such session in the operational alert, so that the operator knows which turn the restart stopped.
+    [Fact]
+    public async Task RequestConfigRestartAsync_names_each_timed_out_session_in_the_shutdown_alert()
+    {
+        var time = new FakeTimeProvider();
+        var logger = new DrainAcknowledgementLogger();
+        var (coordinator, drain) = CreateCoordinator(
+            ["slack/C123.1", "slack/C123.2"],
+            timedOutSessionIds: ["slack/C123.2"],
+            timeProvider: time,
+            logger: logger);
+
+        var restart = coordinator.RequestConfigRestartAsync(CancellationToken.None);
+        await drain.AllRequestsObserved;
+        drain.AcknowledgeAll();
+        await logger.Acknowledged;
+        time.Advance(DrainTimeout);
+        await restart;
+
+        var alert = Assert.Single(_sink.Alerts);
+        Assert.True(
+            alert.Context!.TryGetValue("timedOutSessionIds", out var timedOut),
+            "The shutdown alert does not name the session whose drain timed out.");
+        Assert.Equal("slack/C123.2", timedOut);
+    }
+
     [Fact]
     public async Task RequestConfigRestartAsync_propagates_caller_cancellation_and_reopens_ingress()
     {
