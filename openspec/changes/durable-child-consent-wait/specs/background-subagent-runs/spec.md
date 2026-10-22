@@ -6,9 +6,9 @@ A child call that needs consent SHALL NOT wait in memory. The child SHALL let th
 response finish, and then it SHALL send its park to the owning session and stop. The session SHALL accept the park
 before it shows any prompt of the park. The park SHALL hold the child conversation with the results of the calls that
 did not park, the parts of the batch that wait for the parked calls, the working directories that the batch ran with,
-the loop-guard state, the skill overlay, and the consent requests of the parked calls. A parked call SHALL NOT run while the run is parked. A call that already has a
-result SHALL NOT run again. The session SHALL number the prompts of a run from a counter that never repeats a number
-in one run.
+the loop-guard state, the skill overlay, and the consent requests of the parked calls. A parked call SHALL NOT run
+while the run is parked. A call that already has a result SHALL NOT run again. The session SHALL number the prompts of
+a run from a counter that never repeats a number in one run.
 
 The session SHALL accept a park only for a run that it owns and that is still accepted. When the session refuses the
 park, cannot record it, or finds it above the size limit, the run SHALL end with its own stated reason (a cancelled
@@ -48,11 +48,11 @@ result from the stopped child SHALL NOT change that reason.
 
 When every consent request of a park has an answer, the session SHALL record the resume before any parked call runs,
 and then start a new child from the park. A live answer and an answer after a restart SHALL use the same resume path.
-The resumed child SHALL run only the parked calls, each at most once, in the working directories that the batch ran with. An
-approved call SHALL get a one-time consent for the exact prompted candidates of that call only. A refused call SHALL
-get a refusal result and SHALL NOT run. The session SHALL NOT resume a run while a restart drain is pending. When the
-journal rejects the resume record, the run SHALL end as failed, and the result notice SHALL say "The parked calls did
-not run."
+The resumed child SHALL run only the parked calls, each at most once, in the working directories that the batch ran
+with. An approved call SHALL get a one-time consent for the exact prompted candidates of that call only. A refused
+call SHALL get a refusal result and SHALL NOT run. The session SHALL NOT resume a run while a restart drain is
+pending. When the journal rejects the resume record, the run SHALL end as failed, and the result notice SHALL say "The
+parked calls did not run."
 
 The child SHALL apply the result effects of the finished calls at the park, and the result effects of the parked calls
 after they run. The nudges of the batch SHALL come after all results. A parked call that sets the working directory
@@ -60,10 +60,11 @@ SHALL win over a finished call of the same batch that sets it. The resumed child
 the round count of the park, so its next checkpoint round is above the recorded round.
 
 The resumed child SHALL take its requester, boundary, channel, and delivery targets from the run record, and its
-working directories from the park, never from the current turn or the current parent. Its audience SHALL be the narrower of the recorded
-audience and the audience that the session derives now for the recorded requester and channel. It SHALL resolve its
-model, its tools, its agent profile, its operating rules, and its project instructions under the current configuration
-and policy, as a new spawn does, and the session SHALL log the recorded and the new model.
+working directories from the park, never from the current turn or the current parent. Its audience SHALL be the
+narrower of the recorded audience and the audience that the session derives now for the recorded requester and
+channel. It SHALL resolve its model, its tools, its agent profile, its operating rules, and its project instructions
+under the current configuration and policy, as a new spawn does, and the session SHALL log the recorded and the new
+model.
 
 When a spawn rule fails at resume (no spawner, subagents disabled, a `Public` audience, a deleted agent profile, no
 child tool, no result reader, or no usable model provider), the run SHALL end as failed with that reason, the result

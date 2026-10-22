@@ -39,7 +39,7 @@ consent to an MCP endpoint (the general endpoint-binding issue), nested children
 
 Stack (all PRs to `dev`):
 
-- PR 0: pure refactors with no behavior change: the shared prompt builder, the shared re-drive helper, the loop-guard
+- PR 0: pure refactors with no behavior change: `ApprovalRequestBuilder` (with the requester check in `ForChildCall`), the shared re-drive helper, the loop-guard
   export, and the one pause predicate.
 - PR 1: park and resume in memory. No format change. The existing restart rules apply.
 - PR 2: durable `Parked` and `Resumed`, recovery, passivation, and the pause rule for the restart reminder. After PR

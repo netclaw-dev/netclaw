@@ -251,6 +251,14 @@ ignores a second call for an ended run.
 | The journal rejects `Resumed` (PR 2) | `Self.Tell(ChildEventRejected(runId, resume_not_recorded))` | the run ends `Failed`, "The parked calls did not run."; no actor starts |
 | The journal fails a write | the session actor stops (Akka.Persistence) | recovery decides from the journal |
 
+**Order in `OnPersistRejected`.** The child-event branch is the first branch of `OnPersistRejected`. It sends
+`ChildEventRejected`, calls `base.OnPersistRejected`, and returns. It runs before the existing check that sends
+`PersistRejectedTurnFailure` (`LlmSessionActor.cs:2727-2738`). Without this order, a rejected child event would fail
+the parent's turn. The branch has two triggers:
+
+- PR 1: a `ToolApprovalRequested` with `SourceChildRunId` (the park writes its requests);
+- PR 2: `ChildRunEvent.Parked` or `ChildRunEvent.Resumed`.
+
 A rejected write of several events calls `OnPersistRejected` once for each event. The first `ChildEventRejected`
 records the terminal. Each later one finds the run ended, and `RecordChildTerminal` does nothing. So the owner records
 once with no extra state.
@@ -302,9 +310,9 @@ The resumed child:
    parked `set_working_directory` wins (test 3.6). Then it adds the media nudge (deferred and new references) and the
    repeat nudge, completes the batch loop observation, and runs "continue the loop".
 
-**Requester check.** The shared prompt builder of PR 0 has two entry points, `BuildSessionPrompt` and
-`BuildChildPrompt`. PR 1 moves the requester check (`EnsureAuthorityContext`) into the child entry point, so the owner
-never builds a parked child prompt without a requester binding.
+**Requester check.** PR 0 (`edf9e9a26`) has `ApprovalRequestBuilder` with two entry points, `ForSessionCall` and
+`ForChildCall`. `ForChildCall` already runs the requester check (`EnsureAuthorityContext`). PR 1 builds each parked
+child prompt with `ForChildCall`, so the owner never builds a parked child prompt without a requester binding.
 
 ### D5. Recovery keeps parked runs (PR 2)
 
@@ -495,7 +503,7 @@ child alike.
 | --- | --- | --- |
 | Park a batch, apply finished effects, build the park | `SubAgentActor` | actor-local until sent |
 | Accept a park, number the prompts, size cap, refusals | `LlmSessionActor` (Children partial) | PR 1 actor-local; PR 2 durable `ChildRunEvent.Parked` |
-| Prompt shape and requester check | shared prompt builder (`BuildChildPrompt`) | call-local |
+| Prompt shape and requester check | `ApprovalRequestBuilder.ForChildCall` (PR 0) | call-local |
 | Answer validity | `SessionToolWorkflow.ValidateResponse` (unchanged) | durable `ToolApprovalResolved`, also in the park |
 | Resume gate | `LlmSessionActor.TryResumeParkedRun` | PR 2 durable `ChildRunEvent.Resumed` |
 | Resume preparation, spawn rules, narrower audience | `SubAgentSpawner.PrepareResume` | call-local |
@@ -522,8 +530,8 @@ Three PRs, all to `dev`. No feature branch and no merge PR.
 
 | PR | Base | Content | Format | Size (code plus tests) |
 | --- | --- | --- | --- | --- |
-| PR 0 | `dev` | Pure refactors with no behavior change: the shared prompt builder, `ApprovalRedriveEntry`, the loop-guard export and restore, and `ChildConsentPause.Holds`. Branch `refactor/durable-child-pr0`. | none | measured on the branch: about 960 changed lines (861 added, 102 removed), most of them tests |
-| PR 1 | `dev`, after PR 0 | Park and resume in memory: the handler split and the park, the serializable transcript, the checkpoint seed, the loop guard, the scope directories, the managed temporary retry target, the resume gate, the answer path with no live wait, the live answer applied to the park, the narrower audience, the spawn and profile failures, the typed refusals, cancel of a parked run, the requester check in `BuildChildPrompt`, and the `docs/architecture/tool-authorization.md` update. The existing restart rules apply. | none | 1,200 to 1,700 lines |
+| PR 0 | `dev` | Pure refactors with no behavior change: `ApprovalRequestBuilder` (`ForSessionCall`, `ForChildCall`, with the requester check), `ApprovalRedriveEntry`, the loop-guard export and restore, and `ChildConsentPause.Holds`. Branch `refactor/durable-child-pr0`. | none | measured on the branch: about 960 changed lines (861 added, 102 removed), most of them tests |
+| PR 1 | `dev`, after PR 0 | Park and resume in memory: the handler split and the park, the serializable transcript, the checkpoint seed, the loop guard, the scope directories, the managed temporary retry target, the resume gate, the answer path with no live wait, the live answer applied to the park, the narrower audience, the spawn and profile failures, the typed refusals, cancel of a parked run, the parked prompt built with `ApprovalRequestBuilder.ForChildCall`, and the `docs/architecture/tool-authorization.md` update. The existing restart rules apply. | none | 1,200 to 1,700 lines |
 | PR 2 | `dev`, after PR 1 and PR #2592 (#2587) | Durable `Parked` and `Resumed`, the two proto messages, the one recovery path, the damaged-park spawn rule, passivation, restart-reminder eligibility and the pause rule (N1), held input at recovery, the size cap and log, the recovery cost checks, the snapshot round-trip test, and the downgrade note. | forward-only | 1,050 to 1,550 lines |
 
 PR 1 ships alone. A restart in PR 1 follows the existing rules: the run is `Accepted` in the journal, recovery records
