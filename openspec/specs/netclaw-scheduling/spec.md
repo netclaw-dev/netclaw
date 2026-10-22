@@ -783,9 +783,10 @@ restart or a passivation for those inputs:
 - When the child consent pause held the session at recovery, the session
   queues the automated inputs that the pause held (`StartHeldInputs`).
 - A restart reminder in `Ready` phase resumes the leading inputs of the first
-  requester and queues the other pending inputs. One exception applies: when
-  the first input is a slash command and the session stays in `Ready` phase
-  after it, the session queues no other pending input.
+  requester and queues the other pending inputs. This rule applies also when
+  the first input is a slash command. When the slash command keeps the session
+  in `Ready` phase, the session starts the next queued input after it closes
+  the slash command input.
 - A restart reminder in `Processing` or `Compacting` phase queues each pending
   input that no turn selected. It replies `RestartResumeNotNeeded`.
 
@@ -796,9 +797,8 @@ applies when such an input comes before the first input of another requester,
 or is that input.
 
 A stored input that nothing will run is not waiting. A crash, an expired
-restart reminder, a stored authority that does not parse, or a slash-command
-resume that leaves the session in `Ready` phase can leave such an input
-pending. It SHALL NOT block a later fire. The session SHALL NOT drop or
+restart reminder, or a stored authority that does not parse can leave such an
+input pending. It SHALL NOT block a later fire. The session SHALL NOT drop or
 replace a fire while the earlier fire runs. The session SHALL NOT drop or
 replace a fire because another reminder has a waiting fire. A key that is not a
 reminder fire key (`{reminderId}:{fireTimeMs}`) SHALL never be dropped or
@@ -841,6 +841,15 @@ abandon an open tool batch.
 - **THEN** the session queues the 10:00 fire and replies `RestartResumeNotNeeded`
 - **AND** the 10:00 fire runs once, after the operator turn
 - **AND** a 10:12 fire that arrives before the 10:00 fire runs is dropped
+
+#### Scenario: A rejected slash command does not strand the inputs behind it
+
+- **GIVEN** a graceful restart left three pending inputs: an unknown slash command of Alice, the 10:00 fire, and a later text input of Alice
+- **WHEN** the restart reminder arrives in `Ready` phase
+- **THEN** the session closes the slash command input with a skipped turn
+- **AND** the 10:00 fire runs once, under the authority of the reminder
+- **AND** the text input of Alice runs after the fire, under the authority of Alice
+- **AND** no input stays pending
 
 #### Scenario: A fire that a crash left pending does not block the next fire
 

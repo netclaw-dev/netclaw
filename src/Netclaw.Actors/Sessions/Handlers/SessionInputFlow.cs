@@ -348,8 +348,8 @@ internal sealed class SessionInputFlow
     /// <summary>
     /// Separates the pending inputs whose recorded authority parses from the damaged ones. The queue takes only valid
     /// inputs (<see cref="RestoreWaitingInputs"/> throws for a damaged one). Each caller decides what a damaged input
-    /// means for its message. The idle restart resume and the recovery queue behind a parked approval do not use it
-    /// yet (#2576).
+    /// means for its message. The idle restart resume uses it only after a slash command (#2587). The other idle
+    /// restart resume and the recovery queue behind a parked approval do not use it yet (#2576).
     /// </summary>
     public static (IReadOnlyList<InputAdmitted> Valid, IReadOnlyList<InputAdmitted> Damaged) SplitByAuthority(
         IEnumerable<InputAdmitted> inputs)
@@ -483,8 +483,7 @@ internal sealed class SessionInputFlow
     public bool CompleteSlashResume(
         bool handled,
         IReadOnlyList<InputAdmitted> pending,
-        SessionId sessionId,
-        SessionPhase phase)
+        SessionId sessionId)
     {
         if (!handled)
         {
@@ -492,22 +491,9 @@ internal sealed class SessionInputFlow
             return false;
         }
 
-        if (phase != SessionPhase.Processing)
-            return true;
-
-        foreach (var item in pending.Skip(1))
-        {
-            _buffer.Add((new SendUserMessage
-            {
-                SessionId = sessionId,
-                Content = item.UserMessage.Content ?? string.Empty,
-                MediaReferences = item.UserMessage.MediaReferences,
-                AdmittedInputId = item.InputId,
-                AdmittedAuthority = RecordedAuthority(item),
-                Notice = item.ChildNotice is { } notice ? new ChildNoticeInput(notice, item.TurnContext) : null
-            }, false));
-        }
-
+        // The other inputs of the requester run after the slash command. A rejected command keeps the session in
+        // Ready, so the queue must not depend on the phase (#2587). The caller validated the authority of each input.
+        RestoreWaitingInputs(pending.Skip(1).ToArray(), sessionId);
         return true;
     }
 
