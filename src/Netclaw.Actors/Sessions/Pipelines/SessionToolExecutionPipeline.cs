@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Collections.Frozen;
 using Akka.Actor;
 using Akka.Event;
@@ -265,6 +266,73 @@ internal sealed class SessionToolBatch
 }
 
 /// <summary>
+/// One entry of an approval re-drive plan (<see cref="ApprovalRedrivePlan"/>): the recorded answer for one call. The
+/// session pipeline applies it to the call context of a re-driven call. A resumed child applies its own recorded
+/// answers with the same helper (durable-child-consent-wait, design D4 and M11).
+/// </summary>
+/// <param name="AuthorizationAttemptId">
+/// The recorded authorization attempt ID, or a new ID when the plan has none for the call.
+/// </param>
+/// <param name="ApprovedConsentKeys">The keys of the one-time consent for an approved call, or null.</param>
+/// <param name="Refusal">The refusal of a refused call, or null.</param>
+/// <param name="ManagedTemporaryDenialDirectory">The managed temporary directory for a denial hint, or null.</param>
+internal sealed record ApprovalRedriveEntry(
+    AuthorizationAttemptId AuthorizationAttemptId,
+    IReadOnlyList<string>? ApprovedConsentKeys,
+    RefusalKind? Refusal,
+    string? ManagedTemporaryDenialDirectory)
+{
+    /// <summary>Reads the entry of one call from the four plan maps of the batch.</summary>
+    public static ApprovalRedriveEntry For(SessionToolBatch batch, string callId)
+        => new(
+            batch.AuthorizationAttemptIds.TryGetValue(callId, out var restoredAttemptId)
+                ? restoredAttemptId
+                : AuthorizationAttemptId.New(),
+            batch.OneTimeApprovalPreSeed.TryGetValue(callId, out var preSeedKeys) ? preSeedKeys : null,
+            batch.DecisionOverrides.TryGetValue(callId, out var refusal) ? refusal : null,
+            batch.ManagedTemporaryDenialDirectories.TryGetValue(callId, out var denialDirectory)
+                ? denialDirectory
+                : null);
+
+    /// <summary>
+    /// Restores the recorded authorization attempt ID and, for an approved call, seeds the one-time consent.
+    /// </summary>
+    /// <remarks>
+    /// The re-drive of an approved call: the person approved the call before the session passivated, but no
+    /// persisted grant satisfies the gate on the cold re-drive. The one-time consent lets exactly this call pass the
+    /// gate once with no second prompt. The gate still matches the consent against the tool name, the patterns, and
+    /// the exact candidate snapshot (DispatchingToolExecutor.IsOneTimeApprovalSatisfied), and the pipeline clears it
+    /// after the attempt, so it cannot reach another call.
+    /// </remarks>
+    public void ApplyTo(ToolApprovalAttempt approval, string callName)
+    {
+        approval.RestoreAuthorizationAttemptId(AuthorizationAttemptId);
+        if (ApprovedConsentKeys is not null)
+            approval.SeedOneTimeConsent(new OneTimeConsent(callName, ApprovedConsentKeys));
+    }
+
+    /// <summary>
+    /// Gets the result text of a refused call. A refused call never dispatches. Only a denial adds the managed
+    /// temporary hint.
+    /// </summary>
+    public bool TryGetRefusalText(string callName, [NotNullWhen(true)] out string? text)
+    {
+        if (Refusal is not { } refusal)
+        {
+            text = null;
+            return false;
+        }
+
+        text = ConsentRefusalText.For(
+            refusal,
+            $"Tool access denied: approval_denied_by_user ({callName} requires interactive approval and the user declined it)");
+        if (refusal == RefusalKind.Denied && ManagedTemporaryDenialDirectory is { Length: > 0 } denialDirectory)
+            text = $"{text}\n{ManagedTemporaryCorrection.BuildDenialHint(denialDirectory)}";
+        return true;
+    }
+}
+
+/// <summary>
 /// Async pipeline for parallel tool execution. Runs on the thread pool and
 /// sends results back to the session actor via <c>self.Tell()</c>.
 /// </summary>
@@ -306,15 +374,7 @@ internal sealed class SessionToolExecutionPipeline
                 var result = await ExecuteSingleToolAsync(
                     tc,
                     batch,
-                    batch.OneTimeApprovalPreSeed.TryGetValue(tc.CallId, out var preSeedKeys)
-                        ? preSeedKeys
-                        : null,
-                    batch.DecisionOverrides.TryGetValue(tc.CallId, out var overrideDecision)
-                        ? overrideDecision
-                        : null,
-                    batch.ManagedTemporaryDenialDirectories.TryGetValue(tc.CallId, out var managedTemporaryDirectory)
-                        ? managedTemporaryDirectory
-                        : null,
+                    ApprovalRedriveEntry.For(batch, tc.CallId),
                     modelInputBudget);
                 result = result with
                 {
@@ -362,15 +422,11 @@ internal sealed class SessionToolExecutionPipeline
     private async Task<ToolCallResult> ExecuteSingleToolAsync(
         FunctionCallContent tc,
         SessionToolBatch batch,
-        IReadOnlyList<string>? oneTimeApprovalPreSeed,
-        RefusalKind? decisionOverride,
-        string? managedTemporaryDenialDirectory,
+        ApprovalRedriveEntry redrive,
         ModelInputBatchBudget modelInputBudget)
     {
         var originalToolCall = tc;
-        var authorizationAttemptId = batch.AuthorizationAttemptIds.TryGetValue(tc.CallId, out var restoredAttemptId)
-            ? restoredAttemptId
-            : AuthorizationAttemptId.New();
+        var authorizationAttemptId = redrive.AuthorizationAttemptId;
 
         _logger.Info(
             "Tool authorization attempt started authorizationAttemptId={AuthorizationAttemptId} " +
@@ -513,7 +569,7 @@ internal sealed class SessionToolExecutionPipeline
             callScope,
             new ToolExecutionTimeout(timeout),
             outputs);
-        context.Approval.RestoreAuthorizationAttemptId(authorizationAttemptId);
+        redrive.ApplyTo(context.Approval, tc.Name);
         var approvalShell = _executor is IApprovalShellProvider shellProvider
             ? shellProvider.Shell
             : ApprovalShell.Bash;
@@ -526,31 +582,12 @@ internal sealed class SessionToolExecutionPipeline
             context.Approval.MarkManagedTemporaryRetry(correctionKey.Target);
         }
 
-        // Re-drive of an ApprovedOnce approval: the user already clicked
-        // "approve once" before the session passivated, but there is no
-        // persisted grant to satisfy the gate on the cold-recovered re-drive.
-        // Pre-seed the one-time approval bypass for exactly this call id so the
-        // gate passes once without emitting a duplicate approval prompt. The
-        // bypass is still matched against the tool name, patterns, and exact
-        // approval-candidate snapshot inside the gate
-        // (DispatchingToolExecutor.IsOneTimeApprovalSatisfied) and the pipeline
-        // clears it after the attempt — it cannot leak to any other call.
-        if (oneTimeApprovalPreSeed is not null)
-            context.Approval.SeedOneTimeConsent(new OneTimeConsent(tc.Name, oneTimeApprovalPreSeed));
         try
         {
-            if (decisionOverride is { } refusedOnReplay)
+            if (redrive.TryGetRefusalText(tc.Name, out var refusalText))
             {
                 sw.Stop();
-                resultText = ConsentRefusalText.For(
-                    refusedOnReplay,
-                    $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)");
-                if (refusedOnReplay == RefusalKind.Denied
-                    && managedTemporaryDenialDirectory is { Length: > 0 })
-                {
-                    resultText = $"{resultText}\n{ManagedTemporaryCorrection.BuildDenialHint(managedTemporaryDenialDirectory)}";
-                }
-
+                resultText = refusalText;
                 var deniedMessage = new SerializableChatMessage
                 {
                     Role = Protocol.ChatRole.Tool,

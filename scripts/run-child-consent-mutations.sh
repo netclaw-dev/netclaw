@@ -6,7 +6,8 @@ set -euo pipefail
 # automated input and child result notices wait: in Ready (PlanNewInputAbandonment) and in the drain. A held input
 # never joins a running turn and never starts one. A person input runs. An approval notice is identified by three
 # facts with the principal, is never held, never joins a turn, and nothing joins a notice turn.
-# ChildConsentPauseMutationTests and TurnContextChildConsentNoticeTests must kill every mutant in the four spans.
+# ChildConsentPauseMutationTests and TurnContextChildConsentNoticeTests must kill every mutant in the five spans. The
+# drain and the recovery share one hold rule, ChildConsentPause.Holds (durable-child-consent-wait, design D5).
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 actors="$repo_root/src/Netclaw.Actors"
@@ -38,7 +39,8 @@ select_span() {
 spans=(
   "Sessions/SessionToolWorkflow.Children.cs child-consent-pause 4"
   "Sessions/SessionToolWorkflow.Recovery.cs child-consent-hold 3"
-  "Sessions/Handlers/SessionInputFlow.cs child-consent-drain 22"
+  "Sessions/Handlers/SessionInputFlow.cs child-consent-drain 19"
+  "Sessions/ChildConsentPause.cs child-consent-predicate 3"
   "Channels/TurnContext.cs child-consent-notice 7"
 )
 

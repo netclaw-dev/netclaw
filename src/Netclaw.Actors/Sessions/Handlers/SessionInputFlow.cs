@@ -578,9 +578,7 @@ internal sealed class SessionInputFlow
     }
 
     private static bool IsHeldByPause(SendUserMessage message)
-        => message.Notice is not null
-           || (SessionToolWorkflow.IsAutomation(BufferedAuthority(message).RequesterPrincipal)
-               && !BufferedAuthority(message).IsChildConsentNotice);
+        => ChildConsentPause.Holds(BufferedAuthority(message), isChildNotice: message.Notice is not null);
 
     // A new turn starts at the first input that the pause does not hold. The held inputs keep their order behind the
     // other inputs and run after the last close.
@@ -634,7 +632,7 @@ internal sealed class SessionInputFlow
            ?? throw new InvalidOperationException(
                $"Buffered input {message.AdmittedInputId?.ToString() ?? "(no admission ID)"} has no recorded authority.");
 
-    private static TurnContext RecordedAuthority(InputAdmitted admitted)
+    internal static TurnContext RecordedAuthority(InputAdmitted admitted)
         => TurnContext.TryFromRecord(admitted.TurnContext, out var context, out var reason) && context is not null
             ? context
             : throw new InvalidOperationException($"Journal input {admitted.InputId} has invalid authority: {reason}");

@@ -13,7 +13,14 @@ namespace Netclaw.Actors.Sessions;
 /// </summary>
 internal static class ChildConsentPause
 {
-    // STUB (PR 0 test author): this body makes the PR 0 tests compile and fail on an assertion. The implementer
-    // replaces it and makes SessionInputFlow.IsHeldByPause and LlmSessionActor.WasHeldByPause call it.
-    public static bool Holds(TurnContext authority, bool isChildNotice) => false;
+    // <child-consent-predicate>
+    // Security boundary (child consent pause, design D5). While the pause applies, it holds automated input and child
+    // result notices. It never holds a person input or an UntrustedExternal input. It never holds an approval notice,
+    // because the notice tells the model the state of the pause. A webhook that names the notice kind is not a notice
+    // (TurnContext.IsChildConsentNotice), so the pause holds it as automation. The caller parses the recorded
+    // authority first, and an input with a damaged authority never comes here.
+    public static bool Holds(TurnContext authority, bool isChildNotice)
+        => isChildNotice
+           || (SessionToolWorkflow.IsAutomation(authority.RequesterPrincipal) && !authority.IsChildConsentNotice);
+    // </child-consent-predicate>
 }

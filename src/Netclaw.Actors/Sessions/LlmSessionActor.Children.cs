@@ -544,11 +544,10 @@ public sealed partial class LlmSessionActor
         StartWaitingInputAfterApproval();
     }
 
-    // The pause holds automated input and child result notices (SessionInputFlow, design D5).
+    // The pause holds automated input and child result notices (ChildConsentPause, design D5). The caller splits off
+    // a damaged authority first, so the parse of the recorded authority throws for a defect only.
     internal static bool WasHeldByPause(InputAdmitted input)
-        => input.ChildNotice is not null
-           || (TurnContext.TryFromRecord(input.TurnContext, out var context, out _) && context is not null
-               && SessionToolWorkflow.IsAutomation(context.RequesterPrincipal) && !context.IsChildConsentNotice);
+        => ChildConsentPause.Holds(SessionInputFlow.RecordedAuthority(input), isChildNotice: input.ChildNotice is not null);
 
     private sealed record StartHeldInputs : INoSerializationVerificationNeeded;
 
