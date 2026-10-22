@@ -474,31 +474,26 @@ public sealed partial class LlmSessionActor
         var candidates = _state.GetExecutablePendingInputs()
             .Where(input => !selected.Contains(input.InputId))
             .ToList();
-        var restored = 0;
-        foreach (var orphan in candidates.TakeWhile(input => input.ChildNotice is not null))
-        {
-            try
-            {
-                restored += _input.RestoreWaitingInputs([orphan], _sessionId);
-            }
-            catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
-            {
-                // One damaged record must not stop the recovery of the other notices and of the lost children. The
-                // input stays pending in the journal, so the loss is visible and the next start tries it again.
-                _log.Error(error,
-                    "Cannot resume the notice of child run {RunId}: {Reason}. The notice stays unconsumed.",
-                    orphan.ChildNotice!.RunId, error.Message);
-            }
-        }
+        // One damaged record must not stop the recovery of the other notices and of the lost children. The input stays
+        // pending in the journal, so the loss is visible and the next start tries it again.
+        var (orphans, damaged) = SessionInputFlow.SplitByAuthority(
+            candidates.TakeWhile(input => input.ChildNotice is not null));
+        foreach (var input in damaged)
+            _log.Error("Cannot resume the notice of child run {RunId}: its stored authority is invalid. The notice stays unconsumed.",
+                input.ChildNotice!.RunId);
+        var restored = _input.RestoreWaitingInputs(orphans, _sessionId);
 
         // When the session was paused, StartHeldInputs queues such a notice, so it does not wait for that input.
-        foreach (var waiting in candidates.SkipWhile(input => input.ChildNotice is not null)
-                     .Where(input => input.ChildNotice is not null && !pausedAtRecovery))
+        if (!pausedAtRecovery)
         {
-            _log.Warning(
-                "The notice of child run {RunId} waits behind an older input of a person that has no turn. "
-                + "The notice stays unconsumed until that input runs (issue 2516). The result is in the run folder.",
-                waiting.ChildNotice!.RunId);
+            foreach (var waiting in candidates.SkipWhile(input => input.ChildNotice is not null)
+                         .Where(input => input.ChildNotice is not null))
+            {
+                _log.Warning(
+                    "The notice of child run {RunId} waits behind an older input of a person that has no turn. "
+                    + "The notice stays unconsumed until that input runs (issue 2516). The result is in the run folder.",
+                    waiting.ChildNotice!.RunId);
+            }
         }
 
         if (restored == 0)
@@ -528,9 +523,11 @@ public sealed partial class LlmSessionActor
         if (_toolWorkflow.HasParkedApprovals())
             return;
         var selected = _input.SelectedInputs.Ids;
-        var held = _state.GetExecutablePendingInputs()
-            .Where(input => !selected.Contains(input.InputId) && WasHeldByPause(input))
-            .ToArray();
+        var (held, damaged) = SessionInputFlow.SplitByAuthority(_state.GetExecutablePendingInputs()
+            .Where(input => !selected.Contains(input.InputId) && WasHeldByPause(input)));
+        foreach (var input in damaged)
+            _log.Error("Cannot queue held input {InputId}: its stored authority is invalid. The input stays unconsumed.",
+                input.InputId);
         var queued = _input.RestoreWaitingInputs(held, _sessionId);
         if (queued > 0)
             _log.Info("Queued {HeldCount} input(s) that the child consent pause held before the restart", queued);

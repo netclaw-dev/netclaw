@@ -346,6 +346,21 @@ internal sealed class SessionInputFlow
         => id is { } inputId && _buffer.Any(item => item.Message.AdmittedInputId == inputId);
 
     /// <summary>
+    /// Separates the pending inputs whose recorded authority parses from the damaged ones. The queue takes only valid
+    /// inputs (<see cref="RestoreWaitingInputs"/> throws for a damaged one). Each caller decides what a damaged input
+    /// means for its message.
+    /// </summary>
+    public static (IReadOnlyList<InputAdmitted> Valid, IReadOnlyList<InputAdmitted> Damaged) SplitByAuthority(
+        IEnumerable<InputAdmitted> inputs)
+    {
+        var valid = new List<InputAdmitted>();
+        var damaged = new List<InputAdmitted>();
+        foreach (var input in inputs)
+            (TurnContext.TryFromRecord(input.TurnContext, out _, out _) ? valid : damaged).Add(input);
+        return (valid, damaged);
+    }
+
+    /// <summary>
     /// Rebuilds the waiting queue from the journal after recovery. The session acknowledged each pending input, and the
     /// journal is the only durable copy, so a restart must not drop one. The caller passes only inputs that wait for an
     /// open approval. Each input keeps its recorded authority. The transport source is rebuilt from the record, so a

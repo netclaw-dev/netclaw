@@ -2329,11 +2329,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void QueueRestartResume(SendUserMessage cmd)
     {
         var selected = _input.SelectedInputs.Ids;
-        var pending = _state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId)).ToArray();
-        if (pending.FirstOrDefault(input => !TurnContext.TryFromRecord(input.TurnContext, out _, out _)) is { } damaged)
+        var (pending, damaged) = SessionInputFlow.SplitByAuthority(
+            _state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId)));
+        if (damaged.Count > 0)
         {
-            _log.Warning("Restart reminder {ReminderId} cannot queue input {InputId}: its stored authority is invalid.",
-                cmd.Source?.ReminderId, damaged.InputId);
+            _log.Error(
+                "Restart reminder {ReminderId} cannot queue input(s) {InputIds}: the stored authority is invalid. "
+                + "{ValidCount} valid input(s) stay unqueued.",
+                cmd.Source?.ReminderId, string.Join(",", damaged.Select(static input => input.InputId)), pending.Count);
             TryReplyNack("The interrupted input authority is invalid.");
             return;
         }
