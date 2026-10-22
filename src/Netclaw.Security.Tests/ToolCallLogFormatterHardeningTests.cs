@@ -246,6 +246,77 @@ public sealed class ToolCallLogFormatterHardeningTests
         Assert.DoesNotContain("Summer2024!", text, StringComparison.Ordinal);
     }
 
+    // Re-review nit 1: when the walk budget stops the walk, the text is not
+    // complete, so it must end with "...". The final redactor pass can shrink the
+    // text below the cap: "set password=" has no value of its own, so the per-string
+    // pass leaves it, and the env-style rule on the whole text then takes all the
+    // text up to the next space or ';'.
+
+    [Fact]
+    public void Budget_stop_ends_with_an_ellipsis_when_the_final_redactor_shrinks_the_text()
+    {
+        var arguments = new Dictionary<string, object?> { ["a"] = "set password=" };
+        for (var index = 0; index < 400; index++)
+            arguments[$"k{index}"] = new string('z', 60);
+
+        var text = ToolCallLogFormatter.FormatArguments(arguments);
+
+        Assert.NotEqual(Unavailable, text);
+        Assert.StartsWith("{", text, StringComparison.Ordinal);
+        Assert.EndsWith("...", text, StringComparison.Ordinal);
+        Assert.True(
+            text.Length <= ToolCallLogFormatter.MaxArgumentsChars + 3,
+            $"The arguments text has {text.Length} chars.");
+    }
+
+    [Fact]
+    public void Budget_stop_with_no_secret_ends_with_an_ellipsis()
+    {
+        var arguments = new Dictionary<string, object?>();
+        for (var index = 0; index < 400; index++)
+            arguments[$"k{index}"] = new string('z', 60);
+
+        var text = ToolCallLogFormatter.FormatArguments(arguments);
+
+        Assert.StartsWith("{", text, StringComparison.Ordinal);
+        Assert.EndsWith("...", text, StringComparison.Ordinal);
+        Assert.True(
+            text.Length <= ToolCallLogFormatter.MaxArgumentsChars + 3,
+            $"The arguments text has {text.Length} chars.");
+    }
+
+    // Re-review nit 2: a key name can hold a secret too. The writer escapes the
+    // inner quotes of a key, so the final redactor pass cannot match JSON text in it.
+
+    [Fact]
+    public void Key_name_that_holds_json_with_a_secret_is_redacted_in_a_dictionary()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["{\"password\":\"hunter2\"}"] = 1,
+            ["mode"] = "fast"
+        };
+
+        var text = ToolCallLogFormatter.FormatArguments(arguments);
+
+        Assert.NotEqual(Unavailable, text);
+        Assert.DoesNotContain("hunter2", text, StringComparison.Ordinal);
+        Assert.Contains("fast", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Key_name_that_holds_json_with_a_secret_is_redacted_in_a_parsed_object()
+    {
+        var arguments = JsonSerializer.Deserialize<Dictionary<string, object?>>(
+            """{"outer":{"{\"password\":\"hunter2\"}":1,"mode":"fast"}}""")!;
+
+        var text = ToolCallLogFormatter.FormatArguments(arguments);
+
+        Assert.NotEqual(Unavailable, text);
+        Assert.DoesNotContain("hunter2", text, StringComparison.Ordinal);
+        Assert.Contains("fast", text, StringComparison.Ordinal);
+    }
+
     private static string FormatWithoutThrow(IDictionary<string, object?> arguments)
     {
         var text = default(string);
