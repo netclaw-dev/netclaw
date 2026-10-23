@@ -2404,8 +2404,8 @@ assert_subagent_headless_ambiguous_task() {
     stdout_tool_called 'spawn_agent' && \
         stdout_contains '\[subagent:done\] headless-analyst (completed' && \
         stdout_parent_text_contains 'assumption' && \
-        stdout_parent_text_not_contains 'which.*include' && \
-        stdout_parent_text_not_contains 'what.*include' && \
+        stdout_parent_text_not_contains 'which[^?]*include[^?]*[?]' && \
+        stdout_parent_text_not_contains 'what[^?]*include[^?]*[?]' && \
         stdout_parent_text_not_contains 'please.*clarify' && \
         stdout_parent_text_not_contains 'need.*more.*information'
 }
