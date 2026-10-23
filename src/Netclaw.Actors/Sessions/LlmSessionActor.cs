@@ -4293,6 +4293,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             ApplyBufferedBatch(batch);
         }
 
+        // A person's input waits behind this automation turn. The turn ends quietly, with no further model call, and
+        // the person's input then starts its own turn (SessionInputFlow.AdvanceAfterToolBatch).
+        if (advance.Next == ToolBatchNextAction.EndTurn)
+        {
+            _toolWorkflow.ClearNormalBatch();
+            _execution.ClearToolTracking();
+            TurnLog().Info("turn_person_input_end_at_tool_batch iteration={Iteration}", _turnState.ToolIterationCount);
+            CloseActiveInputs(FinishTurnWithoutReply);
+            return;
+        }
+
         if (advance.Next == ToolBatchNextAction.RequestCompaction)
         {
             _log.Info("Compaction threshold reached during tool loop ({InputTokens} tokens >= {Threshold} limit), starting compaction",

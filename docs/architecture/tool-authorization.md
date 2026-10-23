@@ -451,6 +451,14 @@ One authority per turn (buffered input):
   (`ApplyBufferedBatch`). Until the actor derives trust, the trust context is empty, so tool exposure fails closed.
 - Inside a turn (tool batch or compaction), only inputs of the turn's requester join. The turn keeps its authority.
 - An overflow replay is the current turn's own message. It always continues the current turn.
+- A person ends an automation turn. Owner: `SessionInputFlow.AdvanceAfterToolBatch`, before the drain. Automation
+  is a reminder, a background job, a webhook, or an approval notice. A person input never joins such a turn.
+  If a person input waits at a tool-batch end, the flow returns `ToolBatchNextAction.EndTurn`. No input joins,
+  and the actor makes no further model call. The actor ends the turn quietly (`FinishTurnWithoutReply`:
+  `TurnCompleted` with `Completed` and `QuietEnd`). The existing drain after a turn then starts each waiting
+  input under its own recorded authority. The queue keeps its order.
+- A child result notice is automated input by its kind, so it never ends a turn. A person never ends the turn of
+  another person. The child consent pause never holds a person, so a person also ends the turn during the pause.
 - Data: the buffer and the current authority are actor-local. Each buffered command carries a copy of its
   recorded authority. The journal keeps the durable `InputAdmitted` record.
 - Before this change, the flow sent the whole buffer in one call, and the call ran under the previous
@@ -459,6 +467,7 @@ One authority per turn (buffered input):
 ```text
 schematic: drain(continuesTurn)
   owner = continuesTurn or buffer[0] is replay ? current authority : recorded authority of buffer[0]
+  if continuesTurn after a tool batch and owner is automation and a person input waits: end the turn, drain nothing
   batch = leading inputs where input is replay or HasSameRequester(input, owner)
   if the batch starts a turn: current authority = owner; trust = derive(owner)
   the remaining inputs keep their order and wait
@@ -468,7 +477,9 @@ A valid example: Alice's turn runs a tool. Alice sends a second message during t
 The message joins Alice's turn at the tool boundary.
 An invalid example: a reminder turn runs a tool, and Bob sends a message during the tool call.
 Bob's message must not join the reminder turn, and it must not run under the reminder authority.
-It waits and starts its own turn under Bob's authority.
+Bob's message ends the reminder turn at the next tool-batch end. Then it starts its own turn under Bob's authority.
+Another invalid example: Alice's turn runs a tool, and Bob sends a message. Bob's message does not end Alice's turn.
+It waits for its own turn.
 A focused mutation gate (`./scripts/run-input-one-authority-mutations.sh`) guards the owner choice, the join rule,
 and the automation check of `PlanNewInputAbandonment`.
 Known limit: the requester check ignores provenance. Two inputs of one sender with different payload taint can share

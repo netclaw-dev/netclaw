@@ -216,5 +216,7 @@ internal abstract record BatchCompletion
 internal enum ToolBatchNextAction
 {
     ContinueModel,
-    RequestCompaction
+    RequestCompaction,
+    // A person's input waits behind an automation turn. The turn ends quietly at this tool-batch end.
+    EndTurn
 }
