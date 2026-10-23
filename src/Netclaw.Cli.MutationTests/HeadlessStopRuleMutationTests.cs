@@ -115,6 +115,9 @@ public sealed class HeadlessStopRuleMutationTests
             return Task.CompletedTask;
         };
         await using var client = new DaemonClient("http://127.0.0.1:1", transport, reconnectDelays: [TimeSpan.Zero]);
+        // The first connect creates the client actor system. A cold start can take seconds on a busy CI
+        // runner, so the test connects before the ceiling starts. The connect of the channel then returns at once.
+        await client.ConnectAsync(CancellationToken.None);
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var lifetime = new CountingLifetime(stopped);
         var channel = new HeadlessChannel(
