@@ -1032,10 +1032,11 @@ A valid example: Alice denies a prompt, the turn ends, and her second click on "
 Close of a child prompt (design D6 of child-approval-events-and-parent-pause):
 
 - Owner of the close: `SessionToolWorkflow`. `WithdrawChildApprovals` closes the open entries of a run at a cancel
-  record (`CancelledByParent`) and at a terminal record (`ChildEnded`, `CancelledByParent` for the cancel of a parked
-  run, or `ChildLost` when the live child actor stopped with no result). `WithdrawRecoveredChildApprovals` closes the entries that replay left open, with the
-  reason from the run lifecycle: a run that was live at the restart gives `DaemonRestarted`, a cancelled run gives
-  `CancelledByParent`, and a run that ended before the restart gives `ChildEnded`. A `prompt_unavailable` answer for
+  record (`CancelledByParent`) and at a terminal record (`ChildEnded`, or `CancelledByParent` for the cancel of a
+  parked run). Only a parked run has open entries, and a parked run has no actor. So a lost actor (`ChildLost`) closes
+  no entry. `WithdrawRecoveredChildApprovals` closes the entries that replay left open, with the reason from the run
+  lifecycle: a run that was live at the restart gives `DaemonRestarted`, a cancelled run gives `CancelledByParent`,
+  and a run that ended before the restart gives `ChildEnded`. A `prompt_unavailable` answer for
   a child prompt is a withdrawal with `PromptUnavailable`: the call is refused, and nothing runs.
 - `LlmSessionActor` emits one `ToolInteractionClosed(CallId, Reason)` for each closed child prompt. The reason is
   `ToolInteractionCloseReason.Withdrawn(WithdrawReason)` or `ToolInteractionCloseReason.Answered`. An answer from one
