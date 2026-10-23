@@ -39,11 +39,11 @@ A `FakeToolExecutor` result does not prove that the real executor accepts those 
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
-The job has twelve Linux matrix groups that run in parallel with the normal test matrix.
+The job has thirteen Linux matrix groups that run in parallel with the normal test matrix.
 The job timeout is 25 minutes.
 Each Stryker invocation builds the test project and runs the initial test run again. That fixed cost is about 1.5 to 2 minutes per invocation.
 The mutant run itself takes under 1 minute for most spans. Group time is mostly the sum of the invocations of its gates.
-Hosted runs from 2026-10-17 through 2026-10-19 measured these gate times (minutes):
+Hosted runs from 2026-10-17 through 2026-10-23 measured these gate times (minutes):
 
 | Group | Gates | Hosted time (about) |
 |-------|-------|---------------------|
@@ -52,12 +52,12 @@ Hosted runs from 2026-10-17 through 2026-10-19 measured these gate times (minute
 | `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
 | `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
 | `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9), `secrets-plaintext-leaf` (8 mutants, one invocation, 2 to 3, estimate) | 10 to 11 (estimate) |
-| `shell-command-analysis-a` | 131 Security mutants and 27 Actors mutants | pending cold hosted run |
-| `shell-command-analysis-b` | 172 Security mutants | pending cold hosted run |
+| `shell-command-analysis-a` | 131 Security mutants and 27 Actors mutants | [11m28s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616567) |
+| `shell-command-analysis-b` | 172 Security mutants | [11m03s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616477) |
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally) | 11 to 12 (estimate; hosted measurement required) |
-| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans | pending cold hosted run |
+| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans | [3m17s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616549) |
 | `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local) | 7 to 8 (estimate) |
 
@@ -77,7 +77,10 @@ the purge order gate. The design estimates about 12 minutes for the four gates.
 A [hosted run on 2026-10-19](https://github.com/netclaw-dev/netclaw/actions/runs/39340209966/job/118359593287) measured 15 minutes 57 seconds for that group.
 All five gates passed. The total includes checkout, tool restore, and report upload. It excludes queue time. The loopback gate took 4 minutes 15 seconds.
 
-The prior `shell-command-analysis` group was still the longest group. Its security invocation (303 mutants) took 15.8 minutes in the slow run. The new A and B groups run 131 and 172 Security mutants. The A group also runs 27 Actors mutants. Their durations need cold hosted runs.
+The prior `shell-command-analysis` group was still the longest group. Its security invocation (303 mutants) took 15.8 minutes in the slow run. The new A and B groups run 131 and 172 Security mutants. The A group also runs 27 Actors mutants.
+
+The 2026-10-23 hosted run measured 11m28s for A, 11m03s for B, and 3m17s for the combined child group.
+These totals include checkout, tool restore, and report upload. They exclude queue time.
 The `reminder` group took 16.4 minutes in the same run. Do not add a gate to it.
 The hosted runner speed varies, so the time of one gate changes by up to 5 minutes between runs.
 The `child-owner-and-report` group took 1309 to 1457 seconds of the 1500 second limit, and one run (job 120137806585) reached the timeout.
