@@ -72,8 +72,8 @@ internal sealed record HeadlessRun(
 /// </summary>
 internal static class HeadlessRunHarness
 {
-    // A fault ceiling. A run that never stops fails here. No test orchestrates with this wait.
-    private static readonly TimeSpan StopCeiling = TimeSpan.FromSeconds(30);
+    // The first request also creates the client ActorSystem. This fault ceiling includes that cold setup.
+    private static readonly TimeSpan StopCeiling = TimeSpan.FromMinutes(2);
 
     /// <param name="drive">
     /// Optional script that runs while the channel runs. It waits on events (a stdout line, the stop of the

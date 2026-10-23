@@ -2153,7 +2153,6 @@ public abstract class SessionBindingContractTests : TestKit
                 ? []
                 :
                 [
-                    new TextOutput("reply after reinitialize") { SessionId = sid },
                     new TurnCompleted
                     {
                         SessionId = sid,
@@ -2176,13 +2175,14 @@ public abstract class SessionBindingContractTests : TestKit
         // A second pipeline creation proves the actor ran the reinitialize path.
         await AwaitAssertAsync(() => Assert.Equal(2, pipeline.CreateCount), cancellationToken: ct);
 
-        // The posted reply proves the new generation's TurnCompleted ran.
+        // Only the turn end posts this response, after the cursor decision.
         await AwaitAssertAsync(
-            () => Assert.Contains(GetPostedTexts(), t => t.Contains("reply after reinitialize")),
+            () => Assert.Contains(GetPostedTexts(), IsEmptyTurnFallback),
             cancellationToken: ct);
 
         ClearPostedTexts();
         await actor.GracefulStop(TimeSpan.FromSeconds(5));
+        Assert.Empty(await ReadCursorEventsAsync(sid));
 
         // The next actor lifetime recovers the cursor from the journal. The
         // abandoned turn's message must still be in the gap. A committed cursor
