@@ -172,13 +172,16 @@ public sealed class ChildConsentPauseMutationTests
     /// waiting input then starts a turn with its own authority. An automation input does not join a turn that ends, so
     /// no input is consumed without a model call. Other input keeps the join rule. A child result notice carries the
     /// requester of its owner, but it is automated input by its kind, so it never ends a turn. The pause never holds a
-    /// person, so a person also ends the turn while the pause applies.
+    /// person, so a person also ends the turn while the pause applies. An admitted non-operator person and a person's
+    /// slash command also end it: ending a turn early grants no authority, and the command then drains alone (#2591).
     /// </summary>
     [Theory]
     [InlineData("reminder", "alice", false, "ends")]
     [InlineData("notice", "alice", false, "ends")]
     [InlineData("reminder", "alice", true, "ends")]
     [InlineData("reminder", "reminder alice", false, "ends")]
+    [InlineData("reminder", "stranger", false, "ends")]
+    [InlineData("reminder", "/review", false, "ends")]
     [InlineData("alice", "bob", false, "waits")]
     [InlineData("reminder", "child-result", false, "waits")]
     [InlineData("reminder", "reminder", false, "joins")]
@@ -197,6 +200,8 @@ public sealed class ChildConsentPauseMutationTests
         {
             "reminder" => Reminder(kind),
             "child-result" => ChildResult(kind),
+            "stranger" => Input(kind, (Context(kind) with { RequesterPrincipal = PrincipalClassification.UntrustedExternal }).ToRecord()),
+            _ when kind.StartsWith('/') => Person("alice", kind),
             _ => Person(kind, kind)
         }).ToArray();
         flow.RestoreWaitingInputs(inputs, Session);
