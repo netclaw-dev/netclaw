@@ -401,6 +401,22 @@ class HeadlessTests(unittest.TestCase):
         self.assertEqual(1, self.code(parent="Which items should I include in the notes? Each is an assumption.\n"))
         self.assertEqual(1, self.code(parent="What do you want me to include? An assumption is not possible.\n"))
 
+    def test_parent_text_checks_question_form_not_words_alone(self):
+        for text in (
+            "What we include follows the release policy.\n",
+            "| What the notes include | User-facing fixes |\n",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(self.check(parent=PARENT_ANSWER + text))
+
+        for question in (
+            "What should I include?\n",
+            "WHAT SHOULD I INCLUDE?\n",
+            "Which items should I include?\n",
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(1, self.code(parent=PARENT_ANSWER + question))
+
     def test_parent_request_for_clarification_fails(self):
         self.assertEqual(1, self.code(parent=PARENT_ANSWER + "Please clarify the audience.\n"))
         self.assertEqual(1, self.code(parent=PARENT_ANSWER + "I need a bit more information first.\n"))
