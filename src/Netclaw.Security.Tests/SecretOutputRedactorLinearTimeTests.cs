@@ -37,6 +37,20 @@ public sealed class SecretOutputRedactorLinearTimeTests
         RedactorTimingBudget.AssertFinishesWithinBudget(shape, input);
     }
 
+    [Theory]
+    [InlineData("token_")]
+    [InlineData("api_key_")]
+    [InlineData("secret_")]
+    [InlineData("password_")]
+    public void Redact_stays_linear_on_long_runs_of_a_secret_word(string unit)
+    {
+        var input = string.Concat(Enumerable.Repeat(unit, 4_000_000 / unit.Length));
+
+        var redacted = RedactorTimingBudget.AssertFinishesWithinBudget(unit, input);
+
+        Assert.Equal(input, redacted);
+    }
+
     [Fact]
     public void Redact_masks_a_private_key_that_follows_a_run_of_unterminated_headers()
     {
@@ -146,27 +160,41 @@ internal static class RedactorTimingBudget
     private static readonly TimeSpan Floor = TimeSpan.FromSeconds(4);
     private const string BenignLine = "INFO ok\n";
 
-    public static void AssertFinishesWithinBudget(string shape, string input)
+    public static string AssertFinishesWithinBudget(string shape, string input)
     {
-        SecretOutputRedactor.Redact(input[..Math.Min(input.Length, 64 * 1024)]); // warm up the JIT and the regex caches
-
         var baseline = MeasureBaseline(input.Length);
         var budget = TimeSpan.FromTicks(Math.Max(Floor.Ticks, (long)(baseline.Ticks * BaselineFactor)));
 
         // A quadratic pattern cannot be interrupted, so run it on a background thread and stop waiting.
         var stopwatch = Stopwatch.StartNew();
-        var worker = new Thread(() => SecretOutputRedactor.Redact(input)) { IsBackground = true };
+        string? redacted = null;
+        Exception? failure = null;
+        var worker = new Thread(() =>
+        {
+            try
+            {
+                // Include warmup in the guard; a bad pattern can stall on the prefix too.
+                SecretOutputRedactor.Redact(input[..Math.Min(input.Length, 64 * 1024)]);
+                redacted = SecretOutputRedactor.Redact(input);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        }) { IsBackground = true };
         worker.Start();
         var finished = worker.Join(budget);
         var elapsed = stopwatch.Elapsed;
 
-        // A worker that is still busy takes a core from the next case. Let it finish first.
+        // Limit the cleanup wait. A failed guard can leave its worker active until the test process ends.
         if (!finished)
             worker.Join(TimeSpan.FromSeconds(60));
 
         Assert.True(finished,
             $"{shape}: {input.Length / 1024 / 1024} MB did not finish within the budget. "
             + $"elapsed {elapsed.TotalSeconds:F2} s, baseline {baseline.TotalSeconds:F3} s, budget {budget.TotalSeconds:F2} s");
+        Assert.Null(failure);
+        return Assert.IsType<string>(redacted);
     }
 
     private static TimeSpan MeasureBaseline(int length)
