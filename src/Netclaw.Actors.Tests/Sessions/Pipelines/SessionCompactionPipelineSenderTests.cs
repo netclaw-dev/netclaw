@@ -35,7 +35,7 @@ public sealed class SessionCompactionPipelineSenderTests(ITestOutputHelper outpu
             KeepRecentMessages: 2,
             ContextWindowTokens: 32_000,
             SidecarTimeout: TimeSpan.FromSeconds(1),
-            CompactionTimeout: outcome == "success" ? TimeSpan.FromSeconds(1) : TimeSpan.Zero);
+            CompactionTimeout: outcome == "success" ? TimeSpan.FromSeconds(1) : TimeSpan.MinValue);
         var caller = Sys.ActorOf(Props.Create(() => new CompactionCaller(
             outputProbe.Ref,
             parameters,
@@ -54,10 +54,10 @@ public sealed class SessionCompactionPipelineSenderTests(ITestOutputHelper outpu
         {
             var failed = await outputProbe.ExpectMsgAsync<CompactionWorkFailed>(
                 cancellationToken: TestContext.Current.CancellationToken);
-            Assert.IsAssignableFrom<OperationCanceledException>(failed.Cause);
+            Assert.IsType<ArgumentOutOfRangeException>(failed.Cause);
         }
 
-        Assert.Equal(ActorRefs.NoSender, outputProbe.LastSender);
+        Assert.Equal(Sys.DeadLetters, outputProbe.LastSender);
     }
 
     private sealed record RunCompaction;
