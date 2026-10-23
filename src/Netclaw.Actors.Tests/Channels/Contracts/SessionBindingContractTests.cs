@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Configuration;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
+using Akka.Persistence;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -85,6 +86,41 @@ public abstract class SessionBindingContractTests : TestKit
     protected virtual object CreateHydrationTriggerInboundMessage(string text, string senderId)
         => throw new NotImplementedException(
             "Override CreateHydrationTriggerInboundMessage to create an inbound that triggers hydration");
+
+    // The journal persistence id of the binding actor. The cursor events go to this id.
+    protected virtual string GetCursorPersistenceId(SessionId sessionId)
+        => throw new NotImplementedException(
+            "Override GetCursorPersistenceId to return the persistence id of the binding actor");
+
+    private async Task<IReadOnlyList<CursorAdvanced>> ReadCursorEventsAsync(SessionId sessionId)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var probe = CreateTestProbe();
+        Akka.Persistence.Persistence.Instance.Apply(Sys).JournalFor(null).Tell(
+            new ReplayMessages(0, long.MaxValue, long.MaxValue, GetCursorPersistenceId(sessionId), probe.Ref));
+        var cursors = new List<CursorAdvanced>();
+        while (true)
+        {
+            switch (await probe.ExpectMsgAsync<object>(cancellationToken: ct))
+            {
+                case ReplayedMessage { Persistent.Payload: CursorAdvanced cursor }:
+                    cursors.Add(cursor);
+                    break;
+                case RecoverySuccess:
+                    return cursors;
+                case ReplayMessagesFailure failure:
+                    throw new InvalidOperationException("The cursor journal replay failed.", failure.Cause);
+            }
+        }
+    }
+
+    // The binding posts a reply when it handles TextOutput. It advances the
+    // cursor later, when it handles TurnCompleted. A test that stops the actor
+    // after the reply can stop it before the cursor event is in the journal.
+    private Task AwaitCursorPersistedAsync(SessionId sessionId)
+        => AwaitAssertAsync(
+            async () => Assert.NotEmpty(await ReadCursorEventsAsync(sessionId)),
+            cancellationToken: TestContext.Current.CancellationToken);
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services) { }
 
@@ -1770,10 +1806,11 @@ public abstract class SessionBindingContractTests : TestKit
         historyFetcher.SetHistory(Array.Empty<ChannelInput>());
 
         // First lifecycle: live inbound arrives, turn outcome is Failed.
-        // Cursor must NOT advance (PR #733 amnesia fix).
+        // Cursor must NOT advance (PR #733 amnesia fix). The turn has no
+        // output, so the binding posts the empty-turn fallback when it handles
+        // TurnCompleted. That post proves that the binding handled the turn end.
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput("partial") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), Outcome = TurnOutcome.Failed, OpenChildRunIds = [] }
         ], reactive: true);
 
@@ -1785,10 +1822,11 @@ public abstract class SessionBindingContractTests : TestKit
         await AwaitAssertAsync(() =>
         {
             Assert.True(pipeline.CapturedInputs.Count >= 1);
-            Assert.Contains(GetPostedTexts(), t => t.Contains("partial"));
+            Assert.Contains(GetPostedTexts(), IsEmptyTurnFallback);
         }, cancellationToken: ct);
 
         await actor.GracefulStop(TimeSpan.FromSeconds(5));
+        Assert.Empty(await ReadCursorEventsAsync(sid));
 
         // Second lifecycle: history contains TWO items with snowflakes/ts
         // earlier than the first-live inbound's. If the cursor had advanced
@@ -1986,13 +2024,9 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.Contains("history message 0", text);
         }, cancellationToken: ct);
 
-        // Wait for the turn to complete — the reply proves TurnCompleted ran,
-        // which triggers cursor persistence via Persist(CursorAdvanced).
-        await AwaitAssertAsync(() =>
-        {
-            var posts = GetPostedTexts();
-            Assert.Contains(posts, p => p.Contains("reply"));
-        }, cancellationToken: ct);
+        // A posted reply proves only that the binding handled TextOutput. Wait for
+        // the CursorAdvanced event in the journal before the restart.
+        await AwaitCursorPersistedAsync(sid);
 
         // GracefulStop drains the mailbox and waits for termination.
         ClearPostedTexts();
@@ -2063,11 +2097,9 @@ public abstract class SessionBindingContractTests : TestKit
         await AwaitAssertAsync(() => Assert.True(pipeline1.CapturedInputs.Count >= 1),
             cancellationToken: ct);
 
-        // Wait for TurnCompleted — this advances the cursor to the trigger's ts.
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Contains(GetPostedTexts(), p => p.Contains("reply"));
-        }, cancellationToken: ct);
+        // TurnCompleted advances the cursor to the trigger's ts. Wait for the
+        // CursorAdvanced event in the journal before the restart.
+        await AwaitCursorPersistedAsync(sid);
 
         ClearPostedTexts();
         await actor1.GracefulStop(TimeSpan.FromSeconds(5));

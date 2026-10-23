@@ -121,6 +121,9 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
 
     protected override bool SupportsThreadHydration => true;
 
+    protected override string GetCursorPersistenceId(SessionId sessionId)
+        => $"discord-session-cursor-{Uri.EscapeDataString(sessionId.Value)}";
+
     protected override IActorRef CreateBindingActorWithHydration(
         SessionId sessionId,
         RecordingSessionPipeline pipeline,

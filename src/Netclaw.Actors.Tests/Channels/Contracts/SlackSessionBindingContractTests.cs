@@ -108,6 +108,9 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
 
     protected override bool SupportsThreadHydration => true;
 
+    protected override string GetCursorPersistenceId(SessionId sessionId)
+        => $"slack-thread-cursor-{Uri.EscapeDataString(sessionId.Value)}";
+
     private int _hydrationEventCounter;
 
     protected override object CreateHydrationTriggerInboundMessage(string text, string senderId)

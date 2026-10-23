@@ -161,6 +161,9 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
 
     protected override bool SupportsThreadHydration => true;
 
+    protected override string GetCursorPersistenceId(SessionId sessionId)
+        => $"mattermost-session-cursor-{Uri.EscapeDataString(sessionId.Value)}";
+
     private long _hydrationEventCounter;
 
     protected override IActorRef CreateBindingActorWithHydration(
