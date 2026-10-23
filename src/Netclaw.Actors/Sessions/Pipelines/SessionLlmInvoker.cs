@@ -95,7 +95,7 @@ internal static class SessionLlmInvoker
                             if (textDeltaCount == 1)
                             {
                                 pendingTextDelta = text.Text;
-                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Activity = activity });
+                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Activity = activity }, ActorRefs.NoSender);
                             }
                             else
                             {
@@ -105,10 +105,10 @@ internal static class SessionLlmInvoker
                                     {
                                         CallId = callId,
                                         Activity = activity
-                                    });
+                                    }, ActorRefs.NoSender);
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Activity = activity });
+                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Activity = activity }, ActorRefs.NoSender);
                                 dispatched = true;
                             }
                             break;
@@ -118,7 +118,7 @@ internal static class SessionLlmInvoker
                             if (thinkingDeltaCount == 1)
                             {
                                 pendingThinkingDelta = thinking.Text;
-                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Activity = activity });
+                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Activity = activity }, ActorRefs.NoSender);
                             }
                             else
                             {
@@ -128,10 +128,10 @@ internal static class SessionLlmInvoker
                                     {
                                         CallId = callId,
                                         Activity = activity
-                                    });
+                                    }, ActorRefs.NoSender);
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Activity = activity });
+                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Activity = activity }, ActorRefs.NoSender);
                                 dispatched = true;
                             }
                             break;
@@ -143,7 +143,7 @@ internal static class SessionLlmInvoker
                 // even though it streams no UI text; a prompt_progress heartbeat is not).
                 if (!dispatched)
                 {
-                    self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Activity = activity });
+                    self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Activity = activity }, ActorRefs.NoSender);
                 }
             },
             cancellationToken);

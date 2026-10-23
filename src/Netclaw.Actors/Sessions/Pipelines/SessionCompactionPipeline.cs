@@ -122,7 +122,7 @@ internal static class SessionCompactionPipeline
                 ClearedCount = clearedCount,
                 PreCompactionInputTokens = parameters.PreCompactionInputTokens,
                 KeepCountUsed = effectiveKeepCount
-            });
+            }, ActorRefs.NoSender);
         }
         catch (Exception ex)
         {
@@ -130,7 +130,7 @@ internal static class SessionCompactionPipeline
             {
                 OperationId = operationId,
                 Cause = ex
-            });
+            }, ActorRefs.NoSender);
         }
     }
 

@@ -386,7 +386,7 @@ internal sealed class SessionToolExecutionPipeline
                         result.Receipt,
                         batch.SetWorkingDirectoryAvailable)
                 };
-                batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result, batch.CancellationToken));
+                batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result, batch.CancellationToken), ActorRefs.NoSender);
                 return result;
             });
             var results = await Task.WhenAll(tasks);
@@ -405,11 +405,11 @@ internal sealed class SessionToolExecutionPipeline
                         (receipt as ToolInvocationReceipt.Correction)?.RemediationCode.ToString());
             }
 
-            batch.ReplyTo.Tell(new ToolExecutionBatchCompleted(batch.CancellationToken));
+            batch.ReplyTo.Tell(new ToolExecutionBatchCompleted(batch.CancellationToken), ActorRefs.NoSender);
         }
         catch (TimeoutException ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, DispatchToken = batch.CancellationToken });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, DispatchToken = batch.CancellationToken }, ActorRefs.NoSender);
         }
         catch (OperationCanceledException) when (batch.CancellationToken.IsCancellationRequested)
         {
@@ -418,7 +418,7 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (Exception ex)
         {
-            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, DispatchToken = batch.CancellationToken });
+            batch.ReplyTo.Tell(new ToolExecutionFailed { Cause = ex, DispatchToken = batch.CancellationToken }, ActorRefs.NoSender);
         }
     }
 
