@@ -1,10 +1,11 @@
-## 1. Drain and resume
+## 1. Continuation input
 
-- [x] 1.1 Build the restart reminder from the recorded authority of a turn that stopped after its tool batch, and verify with the `RestartDrainSpecs` rows `ModelCallAfterToolBatch`, `ModelCallDeepInToolLoop`, `ToolBatchBoundary`, `ToolLoopCompaction`, `CompactionReplay`, and `AutomationTurnAfterToolBatch`
-- [x] 1.2 Post the notice when the reminder cannot resume the turn, and verify with the rows `TurnWithoutChannelType`, `BufferedInput`, `ToolStillRunning`, and `RestartNoticeRuleTests`
-- [x] 1.3 Carry the authority in snapshot field 22, wait for the store before the drain acknowledges, and verify with `SerializationRoundTripTests.Restart_stopped_turn_survives_the_snapshot_and_a_recorded_turn_clears_it`
-- [x] 1.4 Resume the stopped turn on the restart reminder with `CommandAck`, and verify that the resumed request pairs each tool call with its result and holds no reminder text
+- [x] 1.1 Journal one continuation input for an eligible stopped turn, and verify with the `RestartDrainSpecs` rows that resume after a tool batch
+- [x] 1.2 Refuse the continuation for a live job and an overflow replay, and verify with the rows `LiveBackgroundJobAtDrain` and `CompactionReplay`
+- [x] 1.3 Keep the continuation away from recovery and other requesters, and verify with the rows `NewInputBeforeReminder` and `SecondDeliveryAfterToolBatch`
+- [x] 1.4 Add no snapshot field and no event type, and verify that the protobuf schema has no change
 
-## 2. Documents
+## 2. Gate and documents
 
-- [x] 2.1 Update `session-resume`, SPEC-011, `tool-authorization.md`, and the `netclaw-operations` skill, and verify that each names the stopped-turn resume
+- [x] 2.1 Add the `stopped-turn-continuation` Stryker gate, and verify 10 killed of 10
+- [x] 2.2 Update `session-resume`, SPEC-011, `tool-authorization.md`, and the `netclaw-operations` skill, and verify that each names the continuation input

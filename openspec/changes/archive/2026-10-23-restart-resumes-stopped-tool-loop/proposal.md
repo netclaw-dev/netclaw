@@ -4,13 +4,12 @@ A daemon stop on 2026-10-23 drained two sessions in deep tool loops (#2632). Eac
 
 ## What Changes
 
-- When a restart drain stops a running turn after a tool batch, and each tool call of the turn has a recorded result, the restart reminder comes from the recorded authority of that turn. Person turns and automation turns use the same rule.
-- After the restart, the restart reminder resumes that turn with the next model call over the stored history. The reminder text is not an input.
-- The stopped turn gets the notice only when no reminder can resume it: text reached the person, an input stays pending, the stored authority is invalid, or the turn has no channel type.
-- A tool that still runs at the coordinator deadline still blocks the reminder (unchanged).
-- The final passivation snapshot carries the authority of the stopped turn. The drain acknowledges after the snapshot store confirms the write.
+- The drain journals one continuation `InputAdmitted` for an eligible turn that stopped after its tool batch. The input has no text and carries the recorded authority of the turn. Person turns and automation turns use the same rule.
+- The existing pending-input path builds the restart reminder and resumes the turn with the next model call over the stored history. The resumed turn consumes the continuation input like any input. The reminder text is not an input.
+- The turn is not eligible when text reached the person, another input waits, an overflow replay waits, a background job lives, a tool call has no recorded result, or the turn has no channel type. The person then gets the stop notice.
+- A tool that still runs at the coordinator deadline still blocks the reminder, and the session posts no notice (unchanged).
 
-In scope: the restart drain, the restart reminder, and the restart resume of one session. Out of scope: a new tool, a new reminder kind, and a resume of a turn whose tool ran at the deadline.
+In scope: the restart drain and the restart resume of one session. Out of scope: a new event type, a snapshot field, and a resume of a turn whose tool ran at the deadline.
 
 ## Capabilities
 
@@ -20,11 +19,12 @@ None.
 
 ### Modified Capabilities
 
-- `session-resume`: the drain and resume rules for a turn that stopped after its first tool batch.
+- `session-resume`: the continuation input of a stopped turn, its eligibility, and its resume.
 
 ## Impact
 
-- Code: `SessionExecutionLifetime`, `LlmSessionActor` (drain stop, final snapshot, restart resume), `SessionState`, `SessionSnapshot`, and the snapshot protobuf mapping.
-- Durable data: `SessionSnapshotProto` gets field 22 `restart_stopped_turn`. An old binary ignores it, so a rollback loses only the resume of that turn and posts no notice for it.
-- Security: the resumed turn runs under its own recorded authority. The reminder never replaces that authority, and it never mixes two authorities.
-- Operations: the drain can wait for one snapshot write before it acknowledges. The coordinator deadline stays 20 seconds.
+- Code: `SessionExecutionLifetime.ContinuesStoppedTurn`, the drain stop paths in `LlmSessionActor`, and the history filter for an input without text.
+- Durable data: no shape change. The journal gets one more `InputAdmitted` record with empty content.
+- Rollback: an older binary sees a pending input with empty content and resumes it as an ordinary input under the same recorded authority.
+- Security: the continuation input carries only the recorded authority of the stopped turn. It never joins the turn of another requester.
+- Mutation gate: `stopped-turn-continuation` (10 mutants) in the `session-reliability` group.

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.131.0"
+  version: "2.132.0"
 ---
 
 # Netclaw Operations
@@ -758,12 +758,15 @@ An active tool with a possible external effect keeps the bounded drain path.
 
 An interrupted model call can create a short-lived restart reminder. The
 session restores accepted input and its original authority from the journal.
-A turn that the drain stopped after a tool batch also resumes: the next model
-call of the turn runs over the stored history, under the turn's own authority.
-The reminder expires ten minutes after the interruption. A completed turn,
-partial reply, a tool that still runs at the drain deadline, or a turn without a
-channel type does not create this reminder. In those cases the session posts a
-notice that tells the person to send a message to continue.
+A turn that the drain stopped after a tool batch also resumes. The drain keeps
+one continuation input without text for that turn, and the reminder starts the
+next model call of the turn under the turn's own authority. The reminder expires
+ten minutes after the interruption. A completed turn gets no reminder and no
+notice. A partial reply, a live background job, an overflow replay, or a turn
+without a channel type gets no reminder. The session then posts a notice that
+tells the person to send a message to continue. A tool that still runs at the
+drain deadline gets no reminder and no session notice: the session does not
+acknowledge the drain, and only the daemon shutdown alert names the session.
 
 **Why you may not see a prompt at all.** If the user invokes a read-only verb
 (say `grep`) on a path that the audience may read, the safe-verb

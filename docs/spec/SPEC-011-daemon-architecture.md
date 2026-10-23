@@ -300,15 +300,17 @@ arrives. A completed turn, partial text, or possible tool effect produces no
 restart reminder.
 
 A tool batch consumes the turn input. When the drain stops a turn after its
-tool batch, each tool call has a recorded result, because the drain never
-cancels a running tool. The actor then builds the reminder from the recorded
-authority of that turn (#2632). The final passivation snapshot carries that
-authority, and the drain acknowledges after the snapshot store confirms the
-write. After the restart, the reminder starts the next model call of the turn
-over the stored history. The reminder text is not an input. A tool that still
-runs at the coordinator deadline has an unknown effect, so that session does
-not acknowledge and gets no reminder. A turn without a channel type gets the
-stop notice instead of a reminder.
+tool batch, the actor journals one continuation input for that turn before it
+acknowledges (#2632). The input has no text and carries the recorded authority
+of the turn. The normal pending-input path then builds the reminder and, after
+the restart, resumes the turn with the next model call over the stored history.
+The reminder text is not an input. The actor keeps the turn only when no text
+reached the person, no other input waits, no overflow replay waits, no
+background job lives, each tool call has a recorded result, and the turn has a
+channel type. Otherwise the person gets the stop notice. A tool that still runs
+at the coordinator deadline has an unknown effect, so that session does not
+acknowledge, gets no reminder and no session notice, and the shutdown alert
+names it.
 
 The daemon gives session drain 20 seconds within a 30-second shutdown phase.
 The CLI allows 45 seconds before forced termination. The generated systemd

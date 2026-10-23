@@ -512,7 +512,10 @@ internal sealed class SessionInputFlow
         _selectedIds.AddRange(pending.Select(static item => item.InputId));
         foreach (var item in pending)
             AddNoticeRun(item.ChildNotice);
-        return pending.Select(static item => item.UserMessage).ToArray();
+        // The continuation input of a stopped turn has no text for the model (#2632).
+        return pending.Select(static item => item.UserMessage)
+            .Where(static message => message.Content.Length > 0 || message.MediaReferences.Count > 0)
+            .ToArray();
     }
 
     public void BufferReplay(SendUserMessage command) => _buffer.Insert(0, (command, true));
@@ -761,7 +764,6 @@ internal sealed class SessionInputFlow
     public void ResumeToolLoopAfterCompaction() => _resumeToolLoopAfterCompaction = true;
     public bool ResumesToolLoopAfterCompaction => _resumeToolLoopAfterCompaction;
     public bool StartsWithReplay => _buffer.Count > 0 && _buffer[0].IsReplay;
-    public SendUserMessage? Replay => StartsWithReplay ? _buffer[0].Message : null;
 
     public CompactionContinuation AdvanceAfterCompaction(bool restartDrainRequested, bool childConsentPaused)
     {

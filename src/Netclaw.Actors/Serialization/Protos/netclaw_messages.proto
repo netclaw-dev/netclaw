@@ -369,9 +369,6 @@ message SessionSnapshotProto {
   repeated BackgroundChildRunProto child_runs = 19;
   optional string eligible_delivery_reminder_id = 20;
   optional bool eligible_delivery_turn_routed_skill = 21;
-  // The authority of the turn that a restart drain stopped after its last tool batch (#2632). The restart reminder
-  // resumes that turn. Written only when set. An old snapshot has no field 22, and an old binary ignores it.
-  ToolApprovalRequestedProto.TurnContextRecordProto restart_stopped_turn = 22;
 }
 
 // ── Session state ──

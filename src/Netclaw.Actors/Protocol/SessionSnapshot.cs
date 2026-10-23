@@ -112,10 +112,4 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
 
     public IReadOnlyList<string> RecentSourceMessageKeys { get; init; } =
         Array.Empty<string>();
-
-    /// <summary>
-    /// The recorded authority of the turn that a restart drain stopped after its last tool batch (#2632). The restart
-    /// reminder resumes that turn. Null for an old snapshot, and an old binary ignores the field.
-    /// </summary>
-    public SessionProtocol.TurnContextRecord? RestartStoppedTurn { get; init; }
 }
