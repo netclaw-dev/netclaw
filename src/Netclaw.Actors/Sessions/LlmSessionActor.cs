@@ -2536,7 +2536,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     {
         CommandChildMessages();
         Command<ToolInteractionRequest>(msg => HandleToolInteractionRequestDispatch(
-            new ToolInteractionRequestDispatch(msg, PersistApprovalState: true)));
+            new ToolInteractionRequestDispatch(msg)));
         Command<ToolInteractionRequestDispatch>(HandleToolInteractionRequestDispatch);
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         // Every phase accepts a late reap reply. The epoch gate protects a newer stop attempt.
@@ -3523,16 +3523,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (dispatch.SourceChildRunId is { } childRunId &&
             (!_state.ChildRuns.TryGetValue(childRunId, out var childRun) || childRun.Lifecycle is not ChildRunLifecycle.Accepted))
             return;
-        if (!dispatch.PersistApprovalState)
-        {
-            // Live sub-agent approvals need the prompt in the in-memory pending
-            // map so responses can be authorized, but there is no durable child
-            // actor/tool batch to redrive after restart.
-            ApplyToolApprovalRequested(CreateApprovalRequest(dispatch), persistApprovalState: false);
-            EmitOutput(PromptOf(dispatch));
-            return;
-        }
-
         PersistApprovalRequests([dispatch]);
     }
 
@@ -3564,13 +3554,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             CurrentTurnAudience(), NowMs());
 
     private void ApplyToolApprovalRequested(ToolApprovalRequested evt)
-        => ApplyToolApprovalRequested(evt, persistApprovalState: true);
-
-    private void ApplyToolApprovalRequested(ToolApprovalRequested evt, bool persistApprovalState)
     {
         var pending = _toolWorkflow.ApplyApprovalRequested(
             evt,
-            persistApprovalState,
+            durable: true,
             recovered: _phase.Current == SessionPhase.Recovering);
 
         // Replay re-applies requests that a later record may answer, cancel, or lose. RecoveryCompleted logs the
@@ -3578,9 +3565,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (_phase.Current != SessionPhase.Recovering)
             LogToolApprovalRequested(pending.AuthorizationAttemptId.Value, evt.CallId, evt.ToolName, recovered: false);
 
-        if (evt.SourceChildRunId is null && persistApprovalState && pending.TurnContext is { } turnContext)
+        if (evt.SourceChildRunId is null && pending.TurnContext is { } turnContext)
             _input.SetTurnContext(turnContext);
-        else if (persistApprovalState && pending.TurnContextRestoreFailure is { } restoreFailure)
+        else if (pending.TurnContextRestoreFailure is { } restoreFailure)
             _log.Error(
                 "Approval request {CallId} could not restore turn context: {Reason}",
                 evt.CallId,
@@ -3860,7 +3847,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
-        var accepted = (ApprovalResponseResult.Accepted)response;
+        var accepted = (ApprovalResponseResult.DurableAccepted)response;
         try
         {
             _log.Info(
@@ -3871,23 +3858,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 accepted.CallId.Value,
                 ConsentAnswerCodec.ToJournalText(accepted.Answer));
             await PersistApprovalGrantIfNeededAsync(accepted, CancellationToken.None);
-            switch (accepted)
+            var resolution = _toolWorkflow.CreateResolution(accepted, _sessionId, NowMs());
+            Persist(resolution, evt =>
             {
-                case ApprovalResponseResult.LiveOnlyAccepted liveOnly:
-                    _toolWorkflow.CompleteLiveResponse(liveOnly);
-                    TryReplyAck();
-                    return;
-                case ApprovalResponseResult.DurableAccepted durable:
-                    var resolution = _toolWorkflow.CreateResolution(durable, _sessionId, NowMs());
-                    Persist(resolution, evt =>
-                    {
-                        _toolWorkflow.ApplyResolvedResponse(evt, durable);
-                        TryReplyAck();
-                    });
-                    return;
-                default:
-                    throw new InvalidOperationException("The accepted approval result has no completion route.");
-            }
+                _toolWorkflow.ApplyResolvedResponse(evt, accepted);
+                TryReplyAck();
+            });
         }
         catch (Exception ex)
         {

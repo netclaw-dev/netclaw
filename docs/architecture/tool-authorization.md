@@ -886,8 +886,9 @@ job, an unanswered tool call, or no channel type gets the stop notice instead.
 The actor writes grants, persists events, and emits outputs. The lifetime owner owns task cancellation and stop completion.
 
 The workflow releases a claimed live wait only after the actor completes the required grant and journal steps.
-The journal retains durable parent-session approval requests so a UI answer can safely resume interrupted work.
-Durable child prompts use the same approval owner and request/resolution events.
+The session journals every approval request before it shows the prompt. No live-only prompt route exists: a parent
+prompt and a parked child prompt both go through `ToolApprovalRequested` and `ToolApprovalResolved`.
+Only a parent call has a live wait. A child prompt has none, and its answer goes to the idle answer handler.
 The run ID identifies the child. The original child call ID identifies its concrete tool action.
 The workflow retains the original requester, authority, and offered options.
 A later user turn cannot replace those facts.

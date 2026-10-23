@@ -234,7 +234,7 @@ public sealed partial class LlmSessionActor
             {
                 dispatches.Add(requests.ForChildCall(ChildApprovalPrompt.CreateCallId(run.RunId.Value, ++issued), request) with
                 {
-                    PersistApprovalState = true, SourceChildRunId = run.RunId, ChildContext = authority
+                    SourceChildRunId = run.RunId, ChildContext = authority
                 });
             }
         }

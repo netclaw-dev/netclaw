@@ -138,7 +138,12 @@ internal sealed class ApprovalRequestBuilder
     /// journals the wait.
     /// </summary>
     public ToolInteractionRequestDispatch ForSessionCall(ParentApprovalRequest request)
-        => Build(request.CallId, request, persistApprovalState: true);
+        => Build(request.CallId, request) with
+        {
+            ManagedTemporaryDirectory = request.Approval.IsManagedTemporaryRetry
+                ? request.Approval.ManagedTemporaryDirectory
+                : null
+        };
 
     /// <summary>
     /// Makes the request for a parked call of a child run, with the call ID <paramref name="promptCallId"/>. The
@@ -150,7 +155,9 @@ internal sealed class ApprovalRequestBuilder
     public ToolInteractionRequestDispatch ForChildCall(ToolCallId promptCallId, ParentApprovalRequest request)
     {
         EnsureAuthorityContext();
-        return Build(promptCallId, request, persistApprovalState: false);
+        // The retry target of a parked child call is deferred, so a child prompt carries no managed temporary
+        // directory.
+        return Build(promptCallId, request) with { OriginalChildCallId = request.CallId };
     }
 
     private void EnsureAuthorityContext()
@@ -172,8 +179,7 @@ internal sealed class ApprovalRequestBuilder
 
     private ToolInteractionRequestDispatch Build(
         ToolCallId promptCallId,
-        ParentApprovalRequest request,
-        bool persistApprovalState)
+        ParentApprovalRequest request)
     {
         var approval = request.Approval;
 
@@ -205,13 +211,6 @@ internal sealed class ApprovalRequestBuilder
                                  || approval.RepositoryCommonDirectory is not null)
                 .Select(static option => new ToolInteractionOption(option.Key, option.Label))
                 .ToList()
-        }, persistApprovalState)
-        {
-            // Only a journaled wait can restore the managed temporary retry after passivation.
-            OriginalChildCallId = persistApprovalState ? null : request.CallId,
-            ManagedTemporaryDirectory = persistApprovalState && approval.IsManagedTemporaryRetry
-                ? approval.ManagedTemporaryDirectory
-                : null
-        };
+        });
     }
 }
