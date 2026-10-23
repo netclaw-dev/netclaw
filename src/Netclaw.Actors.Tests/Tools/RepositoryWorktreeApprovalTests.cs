@@ -678,7 +678,8 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             process.StartInfo.ArgumentList.Add(argument);
 
         Assert.True(process.Start());
-        Assert.True(process.WaitForExit(10_000), "git timed out");
+        // No deadline: a deadline left a slow git alive and broke the cleanup on Windows.
+        process.WaitForExit();
         Assert.Equal(0, process.ExitCode);
     }
 
