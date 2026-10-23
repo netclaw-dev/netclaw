@@ -67,6 +67,12 @@ public static class LegacyCoordinationReplay
 
     public static InputClosed TranslateParentDecision(SessionState state, InputClosed evt)
     {
+        // A close with a job ID and no input ID ends a background job turn after a tool batch (#2630). It is not the
+        // parent decision of a legacy child delivery, so it never takes that continuation. No released writer wrote a
+        // close with no input ID before #2630, and a deployed job closure must name its one pending job input.
+        if (evt.InputIds.Count == 0 && evt.SourceBackgroundJobId is not null)
+            return evt;
+
         var translated = TranslateParentInputs(state, evt.InputIds, evt.ChildContinuation);
         return evt with { InputIds = translated.InputIds, ChildContinuation = translated.Continuation };
     }
