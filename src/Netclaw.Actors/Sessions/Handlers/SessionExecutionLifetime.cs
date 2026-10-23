@@ -98,7 +98,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private async Task ObserveChildStop(SubAgentRunId runId, ChildRunExecution execution, bool dispose)
     {
         try { await execution.StopAsync(); }
-        catch (Exception error) { actor.Tell(new ChildStopFailed(runId, error)); }
+        catch (Exception error) { actor.Tell(new ChildStopFailed(runId, error), ActorRefs.NoSender); }
         finally { if (dispose) execution.Dispose(); }
     }
     private CancellationTokenSource? _modelCts;
@@ -616,11 +616,11 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         try
         {
             await task.ConfigureAwait(false);
-            recipient.Tell(new ModelStoppedForRestart(callId, null));
+            recipient.Tell(new ModelStoppedForRestart(callId, null), ActorRefs.NoSender);
         }
         catch (Exception ex)
         {
-            recipient.Tell(new ModelStoppedForRestart(callId, ex));
+            recipient.Tell(new ModelStoppedForRestart(callId, ex), ActorRefs.NoSender);
         }
     }
 
@@ -629,15 +629,15 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         try
         {
             await task.ConfigureAwait(false);
-            recipient.Tell(new ToolPipelineStoppedForRestart(task, null));
+            recipient.Tell(new ToolPipelineStoppedForRestart(task, null), ActorRefs.NoSender);
         }
         catch (OperationCanceledException)
         {
-            recipient.Tell(new ToolPipelineStoppedForRestart(task, null));
+            recipient.Tell(new ToolPipelineStoppedForRestart(task, null), ActorRefs.NoSender);
         }
         catch (Exception ex)
         {
-            recipient.Tell(new ToolPipelineStoppedForRestart(task, ex));
+            recipient.Tell(new ToolPipelineStoppedForRestart(task, ex), ActorRefs.NoSender);
         }
     }
 }

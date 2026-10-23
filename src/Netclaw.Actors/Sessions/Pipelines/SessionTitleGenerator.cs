@@ -61,7 +61,7 @@ internal static class SessionTitleGenerator
                 return;
             }
 
-            self.Tell(new TitleGenerationCompleted { Title = title });
+            self.Tell(new TitleGenerationCompleted { Title = title }, ActorRefs.NoSender);
         }
         catch (Exception ex)
         {
