@@ -405,6 +405,7 @@ class HeadlessTests(unittest.TestCase):
         for text in (
             "What we include follows the release policy.\n",
             "| What the notes include | User-facing fixes |\n",
+            'What the notes include follows policy. The user asked, “What should I include?”\n',
         ):
             with self.subTest(text=text):
                 self.assertTrue(self.check(parent=PARENT_ANSWER + text))
@@ -413,6 +414,7 @@ class HeadlessTests(unittest.TestCase):
             "What should I include?\n",
             "WHAT SHOULD I INCLUDE?\n",
             "Which items should I include?\n",
+            "The notes are clear. What should I include?\n",
         ):
             with self.subTest(question=question):
                 self.assertEqual(1, self.code(parent=PARENT_ANSWER + question))
