@@ -171,10 +171,10 @@ public sealed class ChildConsentPauseMutationTests
     /// The flow tells the actor to start no model call: no input joins, and the next action is EndTurn. Each waiting
     /// input then starts a turn with its own authority, in admission order. An automation input does not join a turn
     /// that ends, so no input is consumed without a model call. Other input keeps the join rule. A child result notice
-    /// carries the requester of its owner, but it is automated input by its kind, so it never ends a turn. An
-    /// UntrustedExternal person waits, as before. The pause never holds a person, so a person also ends the turn while
-    /// the pause applies. A person's slash command also ends it, and the command then drains alone (#2591). A replay is
-    /// the running turn's own message, so it joins that turn.
+    /// carries the requester of its owner, but it is automated input by its kind, so it never ends a turn. An Operator
+    /// or a TrustedInternal person ends the turn. An UntrustedExternal person waits, as before. The pause never holds a
+    /// person, so a person also ends the turn while the pause applies. A person's slash command also ends it, and the
+    /// command then drains alone (#2591). A replay is the running turn's own message, so it joins that turn.
     /// </summary>
     [Theory]
     [InlineData("reminder", "alice", false, "ends")]
@@ -182,6 +182,7 @@ public sealed class ChildConsentPauseMutationTests
     [InlineData("reminder", "alice", true, "ends")]
     [InlineData("reminder", "reminder alice", false, "ends")]
     [InlineData("reminder", "stranger", false, "waits")]
+    [InlineData("reminder", "insider", false, "ends")]
     [InlineData("reminder", "/review", false, "ends")]
     [InlineData("alice", "bob", false, "waits")]
     [InlineData("reminder", "child-result", false, "waits")]
@@ -212,6 +213,7 @@ public sealed class ChildConsentPauseMutationTests
                 "reminder" => Reminder(kind),
                 "child-result" => ChildResult(kind),
                 "stranger" => Input(kind, (Context(kind) with { RequesterPrincipal = PrincipalClassification.UntrustedExternal }).ToRecord()),
+                "insider" => Input(kind, (Context(kind) with { RequesterPrincipal = PrincipalClassification.TrustedInternal }).ToRecord()),
                 _ when kind.StartsWith('/') => Person("alice", kind),
                 _ => Person(kind, kind)
             }], Session);

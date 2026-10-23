@@ -76,7 +76,8 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
         /// <summary>
         /// A background job result turn is automation. Alice's earlier turn started the job. The ended result turn must
         /// still close the job, so the person's prompt does not list it under the active background jobs. The same stale
-        /// entry makes a later passivation report the job as killed.
+        /// entry makes a later passivation report the job as killed. The job also stays closed after the session
+        /// recovers from its journal.
         /// </summary>
         BackgroundJobTurnThenPerson,
 
@@ -155,6 +156,8 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
 
             // Assert
             await AssertOutcomeAsync(journal, sessionId, subscriber, spec);
+            if (spec.StartsJob)
+                await AssertJobStaysClosedAfterRecoveryAsync(journal, sessionId);
         }
         finally
         {
@@ -292,6 +295,29 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
         Assert.Equal(spec.Effect == Effect.EndsTurn, turns[0].QuietEnd);
         if (spec.FireKey is { } fireKey)
             Assert.Same(turns[0], Assert.Single(turns, turn => turn.SourceReminderId?.Value == fireKey));
+    }
+
+    // The ended job turn wrote an InputClosed with no input ID and the job ID. The session recovers from its journal
+    // only (no snapshot). The job stays closed: a repeat of its result starts no turn, and the next prompt does not list
+    // the job as active. Each earlier input, also the person's input, stays consumed exactly once.
+    private async Task AssertJobStaysClosedAfterRecoveryAsync(AcceptanceFault journal, SessionId sessionId)
+    {
+        await RestartSessionAsync(sessionId);
+        var admitted = Inputs(journal, sessionId).Count;
+        await SendAsync(sessionId, Text("job"), JobResult());
+        await SendAsync(sessionId, Text("alice3"), AliceSource);
+        await AwaitAssertAsync(async () =>
+        {
+            await BarrierAsync(sessionId);
+            Assert.All(Inputs(journal, sessionId), input => Assert.True(ConsumedAt(journal, input.InputId) >= 0,
+                $"The input \"{input.UserMessage.Content}\" is still pending after recovery."));
+            Assert.True(await IsIdleAsync(sessionId), "The session still runs a turn.");
+        }, Deadline, cancellationToken: Cancellation);
+
+        Assert.Equal(admitted + 1, Inputs(journal, sessionId).Count);
+        Assert.All(Inputs(journal, sessionId), input => Assert.Equal(1, ConsumptionCount(journal, input.InputId)));
+        var next = Clients.Parent.ReceivedMessages.First(request => OwnerLabel(request) == "alice3");
+        Assert.False(ListsActiveJob(next), "After recovery, the prompt lists the closed background job as active.");
     }
 
     // The per-turn context hint ("[system: ...") stays in history, so only the fresh tail shows the current state.

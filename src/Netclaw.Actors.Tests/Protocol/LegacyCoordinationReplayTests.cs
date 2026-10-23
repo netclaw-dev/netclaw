@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
@@ -143,6 +144,44 @@ public sealed class LegacyCoordinationReplayTests : TestKit
         Assert.Equal("Neutral downstream result.", downstreamResult.Content);
         Assert.DoesNotContain(state.LegacyCoordinationEvidence,
             evidence => evidence.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation);
+    }
+
+    // Since #2630, a background job turn that a person ends after a tool batch writes an InputClosed with no input ID
+    // and the job ID. A deployed journal can hold such a close while a legacy child delivery waits for its parent
+    // decision. The close is not that decision, so the legacy continuation must stay open for the real decision.
+    [Fact]
+    public void A_job_close_with_no_input_keeps_an_open_legacy_child_continuation()
+    {
+        // Arrange
+        var serializer = Codec();
+        var originalCall = new SerializableChatMessage
+        {
+            Role = ChatRole.Assistant,
+            ToolCalls = [new SerializableToolCall { CallId = new ToolCallId("start-call"), Name = new ToolName("spawn_agent"), ArgumentsJson = "{}" }]
+        };
+        var state = SessionState.Empty with { History = [originalCall] };
+        foreach (var name in new[]
+        {
+            "child-run-accepted", "child-started", "child-checkpoint", "child-terminal",
+            "child-result-prepared", "child-delivery-admitted", "valid-child-delivery-adoption"
+        })
+        {
+            state = Replay(serializer, state, name);
+        }
+
+        var runId = new SubAgentRunId("accepted-run");
+        var jobId = new BackgroundJobId("bg-job:ended-by-person");
+        var jobClose = new InputClosed { SessionId = new SessionId(Owner), SourceBackgroundJobId = jobId, ClosedAtMs = 30 };
+
+        // Act
+        var closed = LegacyCoordinationReplay.TranslateParentDecision(state, jobClose);
+        state = state.Apply(closed);
+
+        // Assert
+        Assert.Null(closed.ChildContinuation);
+        Assert.Contains(state.LegacyCoordinationEvidence, evidence =>
+            evidence.Disposition == LegacyCoordinationDisposition.AppliedChildContinuation && evidence.ChildRunId == runId);
+        Assert.Contains(jobId, state.ProcessedBackgroundJobIds);
     }
 
     [Fact]
