@@ -41,10 +41,12 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
 
     /// <summary>
     /// S1, park and resume. Rows: a call and a sibling; two calls; a new call after the resume; a deny rule after the
-    /// park; a parent that moved its project directory. Bob's turn is open while Alice answers. Bob answers first and
-    /// gets the wrong-requester nack. A second answer after the end gets "already answered".
+    /// park; a parent that moved its project directory; a sibling that sets the child directory; a sibling that changes
+    /// a file. Bob's turn is open while Alice answers. Bob answers first and gets the wrong-requester nack. A second
+    /// answer after the end gets "already answered".
     /// Planted bug: the resume runs the batch again, resumes on the first of two answers, keeps the consent for a new
-    /// call, skips the gate, or takes the authority or the directory of the current turn.
+    /// call, skips the gate, takes the authority or the directory of the current turn, or loses the directory or the
+    /// file activity that a finished sibling of the parked batch made (design D2, batch effects).
     /// </summary>
     [Theory]
     [InlineData("sibling")]
@@ -52,6 +54,8 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     [InlineData("newcall")]
     [InlineData("deny")]
     [InlineData("moved")]
+    [InlineData("cwd")]
+    [InlineData("files")]
     public async Task A_parked_run_resumes_once_under_the_run_authority(string row)
     {
         // Arrange
@@ -60,17 +64,20 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         ScriptParentWithProjects();
         var recorded = Directory.CreateDirectory(Path.Combine(TestPaths.WorkspacesDirectory, "recorded")).FullName;
         var moved = Directory.CreateDirectory(Path.Combine(TestPaths.WorkspacesDirectory, "moved")).FullName;
+        var changed = Path.Combine(recorded, "changed.txt");
         IReadOnlyList<AIContent>[] plan = row switch
         {
             "sibling" => [[Probe("p1"), SiblingCall("s1")]],
             "two" => [[Probe("p1"), Probe("p2")]],
             "newcall" => [[Probe("p1")], [Probe("p2")]],
+            "cwd" => [[Probe("p1"), ProjectCall("c1", moved)], [Probe("p2")]],
+            "files" => [[Probe("p1"), ChangeFile("f1", changed)]],
             _ => [[Probe("p1")]]
         };
         var (parked, prompts, probeRuns) = row switch
         {
             "two" => (2, 2, 2),
-            "newcall" => (1, 2, 2),
+            "newcall" or "cwd" => (1, 2, 2),
             "deny" => (1, 1, 0),
             _ => (1, 1, 1)
         };
@@ -114,28 +121,36 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
             Assert.NotEqual("confirmed", Results(resumed).Single(result => result.CallId == "p1").Result?.ToString());
         if (row == "moved")
             Assert.Equal(recorded, Assert.Single(ApprovalTool.Contexts).ProjectDirectory);
+        if (row == "cwd")
+            Assert.Equal(moved, ApprovalTool.Contexts.Last().ProjectDirectory);
+        if (row == "files")
+            Assert.Contains(changed, terminal.Result.WorkingContext?.ConfirmedChangedFiles ?? []);
         Assert.Equal(ApprovalNackReasons.AlreadyAnswered,
             Assert.IsType<CommandNack>(await AnswerAsync(id, first[0].CallId, Alice)).Reason);
     }
 
     /// <summary>
-    /// S2, refusals. Rows: the journal rejects both requests of a park during a parent turn; the agent profile is
-    /// deleted before the answer; the model call of the resumed child fails. Each run ends failed once, and no parent
-    /// turn fails.
-    /// Planted bug: a rejected child request fails the parent turn (today), a missing profile resumes with a stale
-    /// profile, or a failed resume records two ends.
+    /// S2, refusals. Rows: the journal rejects both requests of a park during a parent turn; the journal rejects one
+    /// write of a two-request park; the agent profile is deleted before the answer; the model call of the resumed child
+    /// fails; the journal rejects the answer. Each run ends failed once, and no parent turn fails.
+    /// Planted bug: a rejected child request fails the parent turn (today), one park writes its requests in more than
+    /// one atomic write, a missing profile resumes with a stale profile, a failed resume records two ends, or a
+    /// rejected answer leaves the run open.
     /// </summary>
     [Theory]
     [InlineData("rejected")]
+    [InlineData("atomic")]
     [InlineData("profile")]
     [InlineData("model")]
+    [InlineData("answer")]
     public async Task A_refused_park_or_resume_ends_the_run_failed_once(string row)
     {
         // Arrange
         var id = new SessionId($"park/refused-{row}");
         var journal = await JournalAsync();
         ScriptParent();
-        PlanChild($"park-{row}", row == "rejected" ? [[Probe("p1"), Probe("p2")]] : [[Probe("p1")]]);
+        var twoRequests = row is "rejected" or "atomic";
+        PlanChild($"park-{row}", twoRequests ? [[Probe("p1"), Probe("p2")]] : [[Probe("p1")]]);
         var profiles = Host.Services.GetRequiredService<SubAgentDefinitionRegistry>();
         profiles.ReplaceFileProfiles([new SubAgentProfile
         {
@@ -144,17 +159,21 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         }]);
         await JoinRecorderAsync(id);
         TaskCompletionSource? aliceTurn = null;
-        if (row == "rejected")
-            journal.RejectWritesOf(static evt => evt is ToolApprovalRequested { SourceChildRunId: not null }, writes: 2);
+        if (twoRequests)
+            journal.RejectWritesOf(static evt => evt is ToolApprovalRequested { SourceChildRunId: not null },
+                writes: row == "rejected" ? 2 : 1);
 
         // Act
         var run = await StartAsync(id, $"park-{row}", row == "profile" ? "child-c" : "child-a",
             row == "rejected" ? async () => aliceTurn = await HoldTurnAsync(journal, id, "Alice keeps a turn open.", AliceSource) : null);
-        if (row == "rejected")
+        Task<ISessionResponse>? rejectedAnswer = null;
+        if (twoRequests)
         {
             await journal.FirstEventRejected.Task.WaitAsync(Deadline, Cancellation);
             await BarrierAsync(id, run);
-            aliceTurn!.TrySetResult();
+            aliceTurn?.TrySetResult();
+            // One park writes all its requests in one atomic write, so a rejected write leaves no request of the park.
+            Assert.Empty(RequestsOf(journal, run.Run.RunId));
         }
         else
         {
@@ -162,14 +181,21 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
             await AssertParkedAsync(journal, id, run, 1);
             if (row == "profile")
                 profiles.ReplaceFileProfiles([]);
-            else
+            else if (row == "model")
                 Clients.A.PlannedExceptions.Enqueue(new InvalidOperationException("The model is down."));
-            AssertAck(await AnswerAsync(id, prompt.CallId, Alice));
+            else
+                journal.RejectWritesOf(static evt => evt is ToolApprovalResolved);
+            if (row == "answer")
+                rejectedAnswer = AnswerAsync(id, prompt.CallId, Alice);
+            else
+                AssertAck(await AnswerAsync(id, prompt.CallId, Alice));
         }
 
         // Assert
         var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: row == "model" ? 1 : 0);
         Assert.Equal(SubAgentRunOutcome.Failed, terminal.Result.Outcome);
+        if (rejectedAnswer is not null)
+            Assert.IsAssignableFrom<ISessionResponse>(await rejectedAnswer);
     }
 
     /// <summary>
@@ -288,11 +314,14 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
 
     private void ScriptParentWithProjects() => Clients.Parent.ResponseContentsSelector = static request =>
         FreshUserTexts(request).FirstOrDefault(static text => text.StartsWith("cd:", StringComparison.Ordinal)) is { } cd
-            ? HasResult(request, cd) ? null : [new FunctionCallContent(cd, ProjectTool.ToolName,
-                new Dictionary<string, object?> { ["Path"] = cd[3..], ["_rationale"] = "Declare the project." })]
+            ? HasResult(request, cd) ? null : [ProjectCall(cd, cd[3..])]
             : ScriptedParentReply(request);
 
-    // A set_working_directory double for the parent. It declares the directory of its argument with no path policy.
+    private static FunctionCallContent ProjectCall(string callId, string path) => new(callId, ProjectTool.ToolName,
+        new Dictionary<string, object?> { ["Path"] = path, ["_rationale"] = "Declare the project." });
+
+    // A set_working_directory double for the parent and the child. It declares the directory of its argument with no
+    // path policy.
     private sealed class ProjectTool : INetclawTool
     {
         public const string ToolName = SetWorkingDirectoryTool.ToolName;
