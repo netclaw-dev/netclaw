@@ -27,7 +27,8 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
         // Arrange
         var owner = CreateOwner();
         var call = owner.BeginModel();
-        var work = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Inline continuations preserve the foreign actor context for the implicit Tell check.
+        var work = new TaskCompletionSource();
         owner.AttachModel(call.CallId, work.Task);
         var failure = new IOException("model task failed");
 
@@ -52,8 +53,10 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
         await ExpectMsgAsync("stop-request-returned", cancellationToken: TestContext.Current.CancellationToken);
 
         // Act: Release the exact task and receive its stop acknowledgement.
-        Complete(work, outcome, failure);
+        var completer = CompleteInForeignActor(() => Complete(work, outcome, failure));
         var stopped = await ExpectMsgAsync<ModelStoppedForRestart>(cancellationToken: TestContext.Current.CancellationToken);
+        var stopSender = LastSender;
+        await ExpectTerminatedAsync(completer, cancellationToken: TestContext.Current.CancellationToken);
         var accepted = owner.AcceptModelStop(stopped);
         var duplicateStop = owner.AcceptModelStop(stopped);
         var staleResult = owner.AcceptModelResult(call.CallId);
@@ -70,6 +73,7 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
         Assert.False(owner.HasLiveModel);
         Assert.False(duplicateStop);
         Assert.False(staleResult);
+        Assert.Equal(Sys.DeadLetters, stopSender);
     }
 
     [Theory]
@@ -81,7 +85,8 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
         // Arrange
         var owner = CreateOwner();
         var token = owner.BeginTool();
-        var work = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Inline continuations preserve the foreign actor context for the implicit Tell check.
+        var work = new TaskCompletionSource();
         owner.AttachTool(work.Task);
         var failure = new IOException("tool task failed");
 
@@ -100,8 +105,10 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
         await ExpectMsgAsync("stop-request-returned", cancellationToken: TestContext.Current.CancellationToken);
 
         // Act: Release the exact task and clear its accepted stop.
-        Complete(work, outcome, failure);
+        var completer = CompleteInForeignActor(() => Complete(work, outcome, failure));
         var stopped = await ExpectMsgAsync<ToolPipelineStoppedForRestart>(cancellationToken: TestContext.Current.CancellationToken);
+        var stopSender = LastSender;
+        await ExpectTerminatedAsync(completer, cancellationToken: TestContext.Current.CancellationToken);
         var accepted = owner.AcceptToolStop(stopped);
         owner.ClearToolTracking();
         owner.ReleaseTool();
@@ -112,6 +119,7 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
         Assert.Same(outcome == "failed" ? failure : null, stopped.Failure);
         Assert.True(accepted);
         Assert.False(staleStop);
+        Assert.Equal(Sys.DeadLetters, stopSender);
     }
 
     [Fact]
@@ -299,6 +307,28 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unknown task outcome");
+        }
+    }
+
+    private IActorRef CompleteInForeignActor(Action action)
+    {
+        var completer = Sys.ActorOf(Props.Create(() => new ActionActor(action)));
+        Watch(completer);
+        completer.Tell(new RunAction(), TestActor);
+        return completer;
+    }
+
+    private sealed record RunAction;
+
+    private sealed class ActionActor : ReceiveActor
+    {
+        public ActionActor(Action action)
+        {
+            Receive<RunAction>(_ =>
+            {
+                action();
+                Context.Stop(Self);
+            });
         }
     }
 }
