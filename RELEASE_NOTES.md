@@ -1,5 +1,26 @@
 # NetClaw Release Notes
 
+## 0.28.0-beta.2 (2026-10-23)
+
+Follow-up beta to 0.28.0-beta.1. A message from a person now ends an active automation turn, so the person no longer waits for a long reminder or job turn.
+
+### Sessions
+
+- **A message from a person ends an active automation turn.** A reminder, background-job result, webhook, or approval-notice turn is an automation turn. When the operator or a trusted person sends a message during such a turn, the turn ends after its current tool batch. The turn of the person then starts next, with the authority of that person. A message from an admitted `UntrustedExternal` person still waits until the automation turn ends ([#2630](https://github.com/netclaw-dev/netclaw/pull/2630)).
+  - The ended turn closes quietly and posts no fallback message. The daemon logs a Warning `turn_person_input_end_at_tool_batch`.
+  - Child runs that the ended turn started continue, and they report later.
+  - Before, the person waited until the whole automation turn ended.
+  - **Upgrade impact:** when a person interrupts a reminder turn, the reminder records success and does not run its remaining steps. If you need those steps, ask the agent to continue the work.
+
+### Internal
+
+- Tests for the automation turn rule, and a fix for legacy replay: a background-job close with no input IDs no longer takes a legacy child continuation ([#2631](https://github.com/netclaw-dev/netclaw/pull/2631)).
+
+### Dependency Updates
+
+- **Bump OpenTelemetry** — 1.20.0 → 1.20.1 ([#2577](https://github.com/netclaw-dev/netclaw/pull/2577))
+- **Bump Aspire.Hosting.AppHost** — 13.5.4 → 13.6.3 ([#2579](https://github.com/netclaw-dev/netclaw/pull/2579))
+
 ## 0.28.0-beta.1 (2026-10-23)
 
 This is the first beta of 0.28.0. A sub-agent now runs in the background: `spawn_agent` returns a run ID at once, and the result arrives in a later turn. When a child asks for operator consent, the parent gets a notice and pauses until the prompt closes. The daemon logs each tool call again with redacted arguments, and `session.log` now redacts tool arguments too. An OAuth token refresh no longer writes `netclaw.json`, so it no longer restarts the daemon. Agent tools can no longer read or write credential folders such as `~/.ssh` and `~/.aws`.
