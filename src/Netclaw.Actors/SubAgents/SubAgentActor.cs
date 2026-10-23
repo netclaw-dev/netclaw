@@ -864,14 +864,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var park = resume.Park;
         foreach (var message in park.Transcript)
             AddMessage(message);
-        var loopGuard = park.LoopGuard ?? throw new InvalidOperationException("A park requires its loop guard.");
-        _turnState.RestoreLoopGuard(loopGuard);
-        _checkpointRound = loopGuard.ToolIterationCount;
+        _turnState.RestoreLoopGuard(park.LoopGuard);
+        _checkpointRound = park.LoopGuard.ToolIterationCount;
+        _fileActivity.Restore(park.FileActivity);
         var parkedCallIds = park.Requests.Select(static request => request.CallId.Value).ToHashSet(StringComparer.Ordinal);
         var parkedCalls = _history.Last(static message => message.Role == Microsoft.Extensions.AI.ChatRole.Assistant)
             .Contents.OfType<FunctionCallContent>().Where(call => parkedCallIds.Contains(call.CallId)).ToList();
         _toolRegistry.CanonicalizeToolCalls(parkedCalls);
         RunTools(CreateExecutor(), parkedCalls, new HashSet<string>(StringComparer.Ordinal), resume.Answers);
+        // Design D2: the parked calls run in the directories of the batch (RunTools took that context). A finished
+        // set_working_directory call of the batch applies after them, and a parked one applies when its result comes.
+        if (park.FileActivity.ProjectDirectory is { } projectDirectory
+            && projectDirectory != park.ScopeDirectories.ProjectDirectory)
+            ApplyProjectDirectory(projectDirectory);
     }
 
     // Design D1: the batch ended and one or more calls need consent. The child hands its state to the owner, waits for
@@ -882,7 +887,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var park = new ChildRunPark
         {
             Transcript = _transcript.ToArray(), LoopGuard = _turnState.ExportLoopGuard(), ScopeDirectories = directories,
-            SkillOverlay = _definition.SkillOverlay, Requests = requests
+            FileActivity = _fileActivity.BuildResult(), SkillOverlay = _definition.SkillOverlay, Requests = requests
         };
         EndRun();
         _log.Info("SubAgent [{AgentName}] parked {Count} call(s) for consent after {Iterations} tool iterations",
@@ -1257,6 +1262,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             return;
         }
 
+        ApplyProjectDirectory(projectDirectory);
+    }
+
+    private void ApplyProjectDirectory(string projectDirectory)
+    {
         var nextScope = ToolExecutionContext.RunScope with
         {
             ProjectDirectory = projectDirectory
@@ -1883,6 +1893,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         public void SetProjectDirectory(string projectDirectory)
             => _workingContext = _workingContext.WithProjectDirectory(projectDirectory);
+
+        // A resumed child continues the file activity of its park (design D2).
+        public void Restore(WorkingContextDelta activity)
+        {
+            _workingContext = _workingContext.WithProjectDirectory(activity.ProjectDirectory);
+            _readFiles.UnionWith(activity.ReadFiles);
+            _confirmedChangedFiles.UnionWith(activity.ConfirmedChangedFiles);
+        }
 
         public WorkingContextDelta BuildResult() => new()
         {

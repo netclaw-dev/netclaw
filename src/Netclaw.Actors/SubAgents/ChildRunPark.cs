@@ -22,10 +22,16 @@ internal sealed record ChildRunPark
     public IReadOnlyList<SerializableChatMessage> Transcript { get; init; } = [];
 
     /// <summary>The loop guard after the finished calls. It is the only copy of the round (M10, H1).</summary>
-    public TurnLoopGuardState? LoopGuard { get; init; }
+    public required TurnLoopGuardState LoopGuard { get; init; }
 
     /// <summary>The project directory and the inherited working directory that the batch ran with (H3).</summary>
-    public ChildParkScopeDirectories? ScopeDirectories { get; init; }
+    public required ChildParkScopeDirectories ScopeDirectories { get; init; }
+
+    /// <summary>
+    /// The file activity of the child after the finished calls: the project directory, the read files, and the changed
+    /// files. A finished <c>set_working_directory</c> call of the batch sets this project directory.
+    /// </summary>
+    public required WorkingContextDelta FileActivity { get; init; }
 
     /// <summary>The skill overlay of the spawn, or null. The agent profile does not hold it.</summary>
     public string? SkillOverlay { get; init; }
