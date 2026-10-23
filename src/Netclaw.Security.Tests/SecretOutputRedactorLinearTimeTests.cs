@@ -137,12 +137,14 @@ public sealed class RedactorTimingCollection
 internal static class RedactorTimingBudget
 {
     // The baseline is Redact on benign text of the same length, on the same machine, at the same
-    // time. The slowest linear shape needs about 17 to 28 baselines, also on an oversubscribed
-    // machine. The known '+' regression of JsonSecretHeaderRegex needs about 270 baselines and
-    // more than 4 s, so 80 baselines with a 4 s floor still catches it.
-    private const double BaselineFactor = 80;
+    // time. The benign line has no key=value text, so it stays on the cheap path (86 ms for 4 MB).
+    // Measured in baselines: the slowest linear shape needs 13 ("repeat Password=a", 1.1 s).
+    // The known '+' regression of JsonSecretHeaderRegex needs about 80 to 266 (7 s to 23 s).
+    // The factor 36 is near the geometric middle, so each side has more than 2 times margin.
+    // The 4 s floor is above every linear shape and below the regression.
+    private const double BaselineFactor = 36;
     private static readonly TimeSpan Floor = TimeSpan.FromSeconds(4);
-    private const string BenignLine = "INFO ok id=1234 path=/a/b\n";
+    private const string BenignLine = "INFO ok\n";
 
     public static void AssertFinishesWithinBudget(string shape, string input)
     {
