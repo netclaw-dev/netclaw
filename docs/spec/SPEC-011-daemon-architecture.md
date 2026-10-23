@@ -307,7 +307,10 @@ the restart, resumes the turn with the next model call over the stored history.
 The reminder text is not an input. The actor keeps the turn only when no text
 reached the person, no other input waits, no overflow replay waits, no
 background job lives, each tool call has a recorded result, and the turn has a
-channel type. Otherwise the person gets the stop notice. A tool that still runs
+channel type. Otherwise the person gets the stop notice. A later input that
+arrives before the reminder closes the continuation input, and the person gets
+the stop notice then. When the journal rejects or fails the continuation write,
+the person gets the stop notice and no reminder exists. A tool that still runs
 at the coordinator deadline has an unknown effect, so that session does not
 acknowledge, gets no reminder and no session notice, and the shutdown alert
 names it.

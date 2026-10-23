@@ -113,7 +113,8 @@ A successful recovery emits `channel.reconnected`.
 A graceful stop can resume a safe model turn through a standard reminder.
 This includes a turn that the drain stopped after a tool batch: the drain keeps
 one continuation input without text, and the reminder starts the next model call
-of that turn. The reminder expires ten minutes after the interruption. A
+of that turn. A message that arrives before the reminder ends that resume, and
+the session then posts the stop notice. The reminder expires ten minutes after the interruption. A
 completed reply leaves the session quiet. A partial reply, a live background
 job, an overflow replay, or a turn without a channel type gets no reminder. The
 session log then has

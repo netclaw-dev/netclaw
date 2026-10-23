@@ -50,6 +50,13 @@ A tool batch consumes the turn input. When the drain stops an eligible turn afte
 - **THEN** the session journals no continuation input and posts the restart notice
 - **AND** the session submits the job no second time
 
+#### Scenario: A failed continuation write posts the notice
+
+- **GIVEN** graceful drain stops an eligible turn after its tool batch
+- **WHEN** the journal rejects the continuation input, or the journal write fails
+- **THEN** the session posts the restart notice once and leaves no input pending
+- **AND** after a rejection the drain acknowledges without a reminder, and after a failure the session stops
+
 #### Scenario: An overflow replay blocks the continuation
 
 - **GIVEN** a context overflow rolled the turn back into a replay, and compaction runs
@@ -121,7 +128,7 @@ The session SHALL apply the 2-second model grace period to each live model call 
 
 ### Requirement: A fresh restart reminder resumes stored work
 
-The reminder manager SHALL deliver a fresh restart reminder through its existing `current_session` path. The session SHALL restore pending input under its recorded authority. The continuation input of a stopped turn is a pending input. The session SHALL resume it as one, and it SHALL add no user message to the model history for it. The turn SHALL continue with the next model call over the stored history, under the recorded authority of the turn. The continuation input SHALL NOT start at recovery, and it SHALL NOT join the turn of another requester. The restart reminder is only the signal: an automation turn resumes under its own recorded automation authority, and a person turn under the recorded person authority.
+The reminder manager SHALL deliver a fresh restart reminder through its existing `current_session` path. The session SHALL restore pending input under its recorded authority. The continuation input of a stopped turn is a pending input. The session SHALL resume it as one, and it SHALL add no user message to the model history for it. The turn SHALL continue with the next model call over the stored history, under the recorded authority of the turn. The continuation input SHALL NOT start at recovery, and it SHALL NOT join the turn of another requester. When a later input is admitted while no turn selected the continuation input, the session SHALL close the continuation input in the same journal write and post the restart notice once. The stopped turn never runs after that. The restart reminder is only the signal: an automation turn resumes under its own recorded automation authority, and a person turn under the recorded person authority.
 
 #### Scenario: A fresh reminder resumes the pending input
 
@@ -137,12 +144,13 @@ The reminder manager SHALL deliver a fresh restart reminder through its existing
 - **THEN** the session replies `CommandAck` and starts the next model call of the turn
 - **AND** the model request pairs each tool call with its result, holds the turn input once, and holds no empty user message
 
-#### Scenario: Another person's input runs before the resume
+#### Scenario: A later input closes the continuation input
 
 - **GIVEN** the drain journaled a continuation input for Alice's turn
 - **WHEN** Bob writes after the restart and before the restart reminder arrives
-- **THEN** Bob's input runs in its own turn
-- **AND** the restart reminder then resumes Alice's turn under Alice's authority
+- **THEN** the session closes the continuation input and posts the restart notice once
+- **AND** Bob's input runs in its own turn under Bob's authority only
+- **AND** the restart reminder that arrives later replies `RestartResumeNotNeeded`
 
 #### Scenario: The original authority remains in force
 
