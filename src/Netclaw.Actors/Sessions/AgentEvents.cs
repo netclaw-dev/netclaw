@@ -209,6 +209,14 @@ internal static class AgentEventRenderer
     public const string AnswersHeading = "Answers since the last notice:";
 
     /// <summary>
+    /// The last line of each notice. A notice turn is automation, so a call that needs consent is denied with no
+    /// prompt. A model that goes on with the operator's work in this turn hits that denial while the operator could
+    /// approve the call in their own turn (issue 2653). The eval case notice_turn_stays_short reads this line.
+    /// </summary>
+    public const string NoticeTurnRule =
+        "This notice turn cannot ask for approval. Handle only this notice, tell the operator the next step, and end the turn. Do not start or continue other work in this turn.";
+
+    /// <summary>
     /// Renders the digest of one session. A request with no later resolution is open. With an open request the text
     /// lists the open requests, the answers that no earlier notice gave, and the rules of the pause. With none open,
     /// the text lists each answer.
@@ -251,6 +259,7 @@ internal static class AgentEventRenderer
             text.AppendLine("Until all requests close, spawn_agent is refused and automated turns wait.");
             text.AppendLine("check_agent_run can read the status of a run of this session, or cancel it.");
             text.AppendLine("Ask the operator to answer the prompts, or to cancel a child.");
+            text.AppendLine(NoticeTurnRule);
             return text.ToString();
         }
 
@@ -264,6 +273,7 @@ internal static class AgentEventRenderer
         }
 
         text.AppendLine("spawn_agent is available again.");
+        text.AppendLine(NoticeTurnRule);
         return text.ToString();
     }
 

@@ -170,11 +170,13 @@ public sealed class ChildConsentNoticeTurnSpecs(ITestOutputHelper output) : Chil
         Assert.Contains("reminder=daily-pr-sweep", closing, StringComparison.Ordinal);
         Assert.Contains("spawn_agent is available again.", closing, StringComparison.Ordinal);
 
-        // Design D4 text: the held-fires line has the design wording, and it comes just before the last line,
-        // "spawn_agent is available again.". The fire time 1_761_055_200_000 ms is 14:00:00Z.
+        // Design D4 text: the held-fires line has the design wording, and it comes just before
+        // "spawn_agent is available again.". The notice turn rule is the last line (issue 2653). The fire time
+        // 1_761_055_200_000 ms is 14:00:00Z.
         var lines = closing.Split('\n').Select(static line => line.TrimEnd('\r')).Where(static line => line.Length > 0).ToArray();
-        Assert.Equal("spawn_agent is available again.", lines[^1]);
-        Assert.Equal("Held reminder fires now run: reminder=daily-pr-sweep fired_at=14:00:00Z", lines[^2]);
+        Assert.Equal(AgentEventRenderer.NoticeTurnRule, lines[^1]);
+        Assert.Equal("spawn_agent is available again.", lines[^2]);
+        Assert.Equal("Held reminder fires now run: reminder=daily-pr-sweep fired_at=14:00:00Z", lines[^3]);
     }
 
     /// <summary>
