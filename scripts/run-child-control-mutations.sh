@@ -12,7 +12,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_file="$repo_root/src/Netclaw.Actors/Channels/TurnContext.cs"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
-output_path="${1:-$repo_root/artifacts/stryker/child-control}"
+collect_mode="${1:-}"
+if [[ "$collect_mode" == "--collect" ]]; then
+  output_path="$repo_root/artifacts/stryker/child-control"
+else
+  output_path="${1:-$repo_root/artifacts/stryker/child-control}"
+fi
 if [[ "$output_path" != /* ]]; then
   output_path="$repo_root/$output_path"
 fi
@@ -33,6 +38,12 @@ read -r span_start span_end first_line last_line < <(
     print "$start $end $first $last\n";
   ' "$source_file"
 )
+
+if [[ "$collect_mode" == "--collect" ]]; then
+  printf 'Channels/TurnContext.cs\t%s\t%s\t%s\t16\tcontrol\t%s:%s\n' \
+    "$source_file" "$first_line" "$last_line" "$span_start" "$span_end"
+  exit 0
+fi
 
 (
   cd "$test_project"

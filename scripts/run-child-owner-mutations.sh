@@ -18,7 +18,12 @@ source_file="$repo_root/src/Netclaw.Actors/Channels/TurnContext.cs"
 notice_file="$repo_root/src/Netclaw.Actors/Sessions/SessionState.ChildRuns.cs"
 resume_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionExecutionLifetime.cs"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
-output_path="${1:-$repo_root/artifacts/stryker/child-owner}"
+collect_mode="${1:-}"
+if [[ "$collect_mode" == "--collect" ]]; then
+  output_path="$repo_root/artifacts/stryker/child-owner"
+else
+  output_path="${1:-$repo_root/artifacts/stryker/child-owner}"
+fi
 if [[ "$output_path" != /* ]]; then
   output_path="$repo_root/$output_path"
 fi
@@ -74,6 +79,16 @@ read -r resume_start resume_end resume_first resume_last < <(
     print "$start $end $first $last\n";
   ' "$resume_file"
 )
+
+if [[ "$collect_mode" == "--collect" ]]; then
+  printf 'Channels/TurnContext.cs\t%s\t%s\t%s\t11\towner\t%s:%s\n' \
+    "$source_file" "$first_line" "$last_line" "$span_start" "$span_end"
+  printf 'Sessions/SessionState.ChildRuns.cs\t%s\t%s\t%s\t21\tnotice\t%s:%s\n' \
+    "$notice_file" "$notice_first" "$notice_last" "$notice_start" "$notice_end"
+  printf 'Sessions/Handlers/SessionExecutionLifetime.cs\t%s\t%s\t%s\t4\tresume\t%s:%s\n' \
+    "$resume_file" "$resume_first" "$resume_last" "$resume_start" "$resume_end"
+  exit 0
+fi
 
 (
   cd "$test_project"

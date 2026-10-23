@@ -3,9 +3,18 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
-output_path="${1:-$repo_root/artifacts/stryker/shell-command-analysis}"
-if [[ "$output_path" != /* ]]; then
-  output_path="$repo_root/$output_path"
+part="all"
+output_root="$repo_root/artifacts/stryker/shell-command-analysis"
+if [[ "${1:-}" == "--part" ]]; then
+  part="${2:?Set the shell mutation part to a, b, or all.}"
+  output_root="${3:-$output_root}"
+elif [[ "${1:-}" == "--collect" ]]; then
+  part="collect"
+else
+  output_root="${1:-$output_root}"
+fi
+if [[ "$output_root" != /* ]]; then
+  output_root="$repo_root/$output_root"
 fi
 
 find_span() {
@@ -566,12 +575,6 @@ read -r shell_name_start shell_name_end < <(
 )
 security_mutations+=("ShellVerbPolicyData.cs{$shell_name_start..$shell_name_end}")
 
-run_group \
-  "stryker-shell-command-analysis.json" \
-  "$output_path/security" \
-  303 \
-  "${security_mutations[@]}"
-
 actor_mutations=()
 
 tool_policy_file="$repo_root/src/Netclaw.Actors/Tools/ToolAccessPolicy.cs"
@@ -659,8 +662,50 @@ read -r d1_call_start d1_call_end < <(
 )
 actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$d1_call_start..$d1_call_end}")
 
-run_group \
-  "stryker-config.json" \
-  "$output_path/actors" \
-  27 \
-  "${actor_mutations[@]}"
+if [[ "${#security_mutations[@]}" -ne 53 || "${#actor_mutations[@]}" -ne 9 ]]; then
+  echo "The shell analysis target set changed. Review its partition before Stryker runs." >&2
+  exit 1
+fi
+
+# These partitions use one list of source spans.
+# The workflow runs each partition in a separate job.
+# This keeps the 303 Security mutants out of one 15-minute group with Actors.
+security_a_mutations=("${security_mutations[@]:0:27}")
+security_b_mutations=("${security_mutations[@]:27}")
+security_a_expected=131
+security_b_expected=172
+if [[ $((security_a_expected + security_b_expected)) -ne 303 ]]; then
+  echo "The Security partitions must total 303 mutants." >&2
+  exit 1
+fi
+
+case "$part" in
+  collect)
+    printf 'security-a spans=%s\n' "${#security_a_mutations[@]}"
+    printf '%s\n' "${security_a_mutations[@]}"
+    printf 'security-b spans=%s\n' "${#security_b_mutations[@]}"
+    printf '%s\n' "${security_b_mutations[@]}"
+    printf 'actors spans=%s\n' "${#actor_mutations[@]}"
+    printf 'security total expected=303; actors expected=27; combined expected=330\n'
+    ;;
+  all)
+    run_group "stryker-shell-command-analysis.json" "$output_root/security-a" \
+      "$security_a_expected" "${security_a_mutations[@]}"
+    run_group "stryker-shell-command-analysis.json" "$output_root/security-b" \
+      "$security_b_expected" "${security_b_mutations[@]}"
+    run_group "stryker-config.json" "$output_root/actors" 27 "${actor_mutations[@]}"
+    ;;
+  a)
+    run_group "stryker-shell-command-analysis.json" "$output_root/security-a" \
+      "$security_a_expected" "${security_a_mutations[@]}"
+    run_group "stryker-config.json" "$output_root/actors" 27 "${actor_mutations[@]}"
+    ;;
+  b)
+    run_group "stryker-shell-command-analysis.json" "$output_root/security-b" \
+      "$security_b_expected" "${security_b_mutations[@]}"
+    ;;
+  *)
+    echo "Usage: $0 [output-path] | --part a|b|all [output-path] | --collect" >&2
+    exit 2
+    ;;
+esac

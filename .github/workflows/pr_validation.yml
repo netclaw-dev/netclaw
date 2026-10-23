@@ -168,8 +168,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - group: shell-command-analysis
-            gates: shell-command-analysis
+          - group: shell-command-analysis-a
+            gates: shell-command-analysis-a
+          - group: shell-command-analysis-b
+            gates: shell-command-analysis-b
           - group: shell-assignment-and-paths
             gates: shell-assignment path-access
           - group: config-read-and-admission
@@ -187,7 +189,7 @@ jobs:
           - group: session-reliability
             gates: tool-batch-readiness headless-stop-rule open-child-runs local-control-proof
           - group: child-owner-and-report
-            gates: child-owner child-control reminder-report-once child-approval-close
+            gates: child-owner-and-report
           - group: loopback-host-origin
             gates: loopback-host-origin
           - group: child-consent

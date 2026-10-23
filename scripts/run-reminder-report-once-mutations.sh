@@ -3,7 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
-output_path="${1:-$repo_root/artifacts/stryker/reminder-report-once}"
+collect_mode="${1:-}"
+if [[ "$collect_mode" == "--collect" ]]; then
+  output_path="$repo_root/artifacts/stryker/reminder-report-once"
+else
+  output_path="${1:-$repo_root/artifacts/stryker/reminder-report-once}"
+fi
 if [[ "$output_path" != /* ]]; then
   output_path="$repo_root/$output_path"
 fi
@@ -41,6 +46,15 @@ while read -r span_start span_end first last count; do
   mutate_args+=(--mutate "${source_file#src/Netclaw.Actors/}{$span_start..$span_end}")
   expected_total=$((expected_total + count))
 done <<< "$spans"
+
+if [[ "$collect_mode" == "--collect" ]]; then
+  while read -r span_start span_end first last count; do
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "${source_file#src/Netclaw.Actors/}" "$repo_root/$source_file" \
+      "$first" "$last" "$count" report-once "$span_start:$span_end"
+  done <<< "$spans"
+  exit 0
+fi
 
 (
   cd "$test_project"

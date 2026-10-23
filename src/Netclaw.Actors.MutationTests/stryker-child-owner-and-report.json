@@ -1,0 +1,17 @@
+{
+  "stryker-config": {
+    "configuration": "Release",
+    "coverage-analysis": "off",
+    "reporters": [
+      "progress",
+      "json",
+      "html"
+    ],
+    "test-case-filter": "FullyQualifiedName~TurnContextRequesterTests|FullyQualifiedName~ChildNoticeReducerTests|FullyQualifiedName~RestartResumePartitionTests|FullyQualifiedName~TurnContextChildControlTests|FullyQualifiedName~TurnContextChildConsentNoticeTests|FullyQualifiedName~DeliveryRetryHandlerReminderTests|FullyQualifiedName~ChildApprovalCloseMutationTests|FullyQualifiedName~SessionInputFlowRequesterTests",
+    "thresholds": {
+      "high": 100,
+      "low": 100,
+      "break": 100
+    }
+  }
+}
