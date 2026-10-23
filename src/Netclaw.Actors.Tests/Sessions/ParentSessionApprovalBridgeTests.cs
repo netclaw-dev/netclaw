@@ -216,7 +216,7 @@ public sealed class ParentSessionApprovalBridgeTests
     }
 
     [Fact]
-    public async Task Session_call_prompt_uses_the_call_id_and_journals_the_wait()
+    public async Task Session_call_prompt_uses_the_call_id_and_keeps_the_managed_temporary_directory()
     {
         var channel = new ApprovalChannel();
         ToolInteractionRequestDispatch? emitted = null;
@@ -243,18 +243,17 @@ public sealed class ParentSessionApprovalBridgeTests
         var step = await bridge.RequestSessionConsentAsync(request, TestContext.Current.CancellationToken);
 
         Assert.NotNull(emitted);
-        Assert.True(emitted!.PersistApprovalState);
-        Assert.Equal("call-session", emitted.Request.CallId.Value);
+        Assert.Equal("call-session", emitted!.Request.CallId.Value);
         Assert.Equal("/home/user/.netclaw/tmp", emitted.ManagedTemporaryDirectory);
         // A session grant still seeds the exact one-time consent for the retry.
         Assert.Equal(OneTimeApprovalKeys.CreateConsent("shell_execute", request.Approval), step.RetryConsent);
     }
 
     /// <summary>
-    /// durable-child-consent-wait, task 2.1. A characterization of the child prompt shape before the move to the
-    /// shared prompt builder. The prompt keeps the original child call ID for the journal. It never carries the
-    /// managed temporary directory, because only a journaled parent wait can restore the managed temporary retry.
-    /// The gate facts go to the prompt without change.
+    /// durable-child-consent-wait, task 2.1. The shape of a child prompt. The prompt keeps the original child call ID
+    /// for the journal. It never carries the managed temporary directory, because the retry target of a parked child
+    /// call is deferred to a later PR. The gate facts go to the prompt without change. ChildParkSpecs proves that the
+    /// owner writes each child prompt to the journal.
     /// </summary>
     [Fact]
     public void A_child_prompt_names_its_child_call_and_leaves_out_the_managed_temporary_directory()
@@ -279,7 +278,6 @@ public sealed class ParentSessionApprovalBridgeTests
 
         var emitted = builder.ForChildCall(ChildApprovalPrompt.CreateCallId("spawn-call-shape", 1), request);
 
-        Assert.False(emitted.PersistApprovalState);
         Assert.Equal(new ToolCallId("child-call-7"), emitted.OriginalChildCallId);
         Assert.Null(emitted.ManagedTemporaryDirectory);
         Assert.Equal("approval", emitted.Request.Kind);
