@@ -99,6 +99,64 @@ public sealed class SessionInputFlowRequesterTests
         Assert.Equal(Bob, flow.Requester);
     }
 
+    public static TheoryData<string> Consent_notice_scan_cases => new()
+    {
+        "notice-only",
+        "owner-input",
+        "other-requester",
+        "replay",
+        "new-turn"
+    };
+
+    [Theory]
+    [MemberData(nameof(Consent_notice_scan_cases))]
+    public void Consent_notice_scan_preserves_queue_and_requester(string scanCase)
+    {
+        var flow = new Flow();
+        flow.Activate(Alice, "a0");
+        flow.BufferConsentNotice();
+
+        switch (scanCase)
+        {
+            case "notice-only":
+                Assert.Null(flow.ToolBoundary().Batch);
+                break;
+            case "owner-input":
+                flow.Buffer(Alice, "a1");
+                var ownerBatch = Assert.IsType<BufferedInputBatch>(flow.ToolBoundary().Batch);
+                Assert.Equal(["a1"], ownerBatch.Messages.Select(static message => message.Content));
+                break;
+            case "other-requester":
+                flow.Buffer(Bob, "b1");
+                Assert.Null(flow.ToolBoundary().Batch);
+                break;
+            case "replay":
+                flow.Replay("a0 again");
+                var replayBatch = Assert.IsType<BufferedInputBatch>(flow.FinishCompaction().Batch);
+                Assert.Equal(["a0 again"], replayBatch.Messages.Select(static message => message.Content));
+                break;
+            case "new-turn":
+                AssertNoticeStartsTurn(flow.FinishTurn());
+                Assert.Equal("child-consent", flow.Requester);
+                Assert.False(flow.HasBufferedContinuation);
+                return;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scanCase), scanCase, "Unknown scan case.");
+        }
+
+        AssertNoticeStartsTurn(flow.FinishTurn());
+        Assert.Equal("child-consent", flow.Requester);
+        Assert.Equal(scanCase == "other-requester", flow.HasBufferedContinuation);
+    }
+
+    private static void AssertNoticeStartsTurn(AfterTurnResult result)
+    {
+        Assert.Equal(InputProgressAction.FollowUp, result.Action);
+        var batch = Assert.IsType<BufferedInputBatch>(result.Batch);
+        Assert.True(batch.AdoptsAuthority);
+        Assert.Equal(["approval notice"], batch.Messages.Select(static message => message.Content));
+    }
+
     private static IEnumerable<string> Contents(AfterTurnResult result)
     {
         Assert.Equal(InputProgressAction.FollowUp, result.Action);
@@ -114,6 +172,8 @@ public sealed class SessionInputFlowRequesterTests
 
         public string? Requester => _flow.Authority.Context?.RequesterSenderId?.Value;
 
+        public bool HasBufferedContinuation => _flow.HasBufferedContinuation;
+
         public void Activate(string requester, string content)
         {
             var accepted = Admit(requester, content, InputPlacement.Activate);
@@ -125,6 +185,13 @@ public sealed class SessionInputFlowRequesterTests
 
         public void Replay(string content)
             => _flow.BufferReplay(new SendUserMessage { SessionId = SessionId, Content = content });
+
+        public void BufferConsentNotice()
+        {
+            var owner = _flow.Authority.Context!.ToRecord();
+            var admitted = SessionInputFlow.PrepareConsentNotice(SessionId, owner, "approval notice", admittedAtMs: 1);
+            _flow.ConsentNoticeCommitted(admitted);
+        }
 
         public AfterTurnResult FinishTurn()
         {
