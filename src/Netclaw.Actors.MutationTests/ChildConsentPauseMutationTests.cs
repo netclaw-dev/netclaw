@@ -166,6 +166,71 @@ public sealed class ChildConsentPauseMutationTests
         Assert.Equal(["replay"], replay.Batch!.Messages.Select(static message => message.Content));
     }
 
+    /// <summary>
+    /// A person's input ends a running automation turn at the tool-batch end (<c>PersonInputEndsAutomationTurnSpecs</c>).
+    /// The flow tells the actor to start no model call: no input joins, and the next action is not ContinueModel. Each
+    /// waiting input then starts a turn with its own authority. An automation input does not join a turn that ends, so
+    /// no input is consumed without a model call. Other input keeps the join rule. A child result notice carries the
+    /// requester of its owner, but it is automated input by its kind, so it never ends a turn. The pause never holds a
+    /// person, so a person also ends the turn while the pause applies.
+    /// </summary>
+    [Theory]
+    [InlineData("reminder", "alice", false, "ends")]
+    [InlineData("notice", "alice", false, "ends")]
+    [InlineData("reminder", "alice", true, "ends")]
+    [InlineData("reminder", "reminder alice", false, "ends")]
+    [InlineData("alice", "bob", false, "waits")]
+    [InlineData("reminder", "child-result", false, "waits")]
+    [InlineData("reminder", "reminder", false, "joins")]
+    [InlineData("alice", "alice", false, "joins")]
+    public void A_person_input_ends_an_automation_turn_at_the_tool_batch_end(string owner, string waiting, bool paused, string effect)
+    {
+        // Arrange
+        var flow = new SessionInputFlow();
+        flow.RestoreTurnAuthority(owner switch
+        {
+            "reminder" => ContextOf(Reminder("owner")),
+            "notice" => NoticeContext(),
+            _ => Context(owner)
+        }, null);
+        var inputs = waiting.Split(' ').Select(static kind => kind switch
+        {
+            "reminder" => Reminder(kind),
+            "child-result" => ChildResult(kind),
+            _ => Person(kind, kind)
+        }).ToArray();
+        flow.RestoreWaitingInputs(inputs, Session);
+        var contents = inputs.Select(static input => input.UserMessage.Content).ToArray();
+
+        // Act
+        var advance = flow.AdvanceAfterToolBatch(Completion(), compactionDue: false, childConsentPaused: paused);
+
+        // Assert
+        if (effect == "joins")
+        {
+            Assert.Equal(contents, advance.Batch!.Messages.Select(static message => message.Content));
+            Assert.Equal(ToolBatchNextAction.ContinueModel, advance.Next);
+            return;
+        }
+
+        Assert.Null(advance.Batch);
+        if (effect == "waits")
+        {
+            Assert.Equal(ToolBatchNextAction.ContinueModel, advance.Next);
+            return;
+        }
+
+        Assert.NotEqual(ToolBatchNextAction.ContinueModel, advance.Next);
+        var served = new List<string?>();
+        while (flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: paused) is { Batch: { } batch })
+        {
+            Assert.True(batch.AdoptsAuthority);
+            served.AddRange(batch.Messages.Select(static message => message.Content));
+        }
+
+        Assert.Equal(contents.Order(), served.Order());
+    }
+
     private static SessionToolWorkflow Paused()
     {
         var workflow = new SessionToolWorkflow();
@@ -214,8 +279,10 @@ public sealed class ChildConsentPauseMutationTests
 
     private static InputAdmitted Poser(string content) => Input(content, PoserContext().ToRecord());
 
-    private static TurnContext NoticeContext()
-        => TurnContext.TryFromRecord(Notice("context").TurnContext, out var context, out _) ? context! : throw new InvalidOperationException();
+    private static TurnContext NoticeContext() => ContextOf(Notice("context"));
+
+    private static TurnContext ContextOf(InputAdmitted input)
+        => TurnContext.TryFromRecord(input.TurnContext, out var context, out _) ? context! : throw new InvalidOperationException();
 
     private static TurnContext PoserContext() => NoticeContext() with
     {

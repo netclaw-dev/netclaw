@@ -454,6 +454,13 @@ public abstract class ChildNoticeTestBase : LlmSessionTestBase
 
     // The user messages after the last assistant message. They are the new work of the request.
     protected static string[] FreshUserTexts(IReadOnlyList<ChatMessage> request)
+        => FreshTail(request)
+            .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User)
+            .Select(message => message.Text)
+            .ToArray();
+
+    // The messages after the last assistant message. They are the new content of the request.
+    protected static IReadOnlyList<ChatMessage> FreshTail(IReadOnlyList<ChatMessage> request)
     {
         var lastAssistant = -1;
         for (var index = 0; index < request.Count; index++)
@@ -462,10 +469,7 @@ public abstract class ChildNoticeTestBase : LlmSessionTestBase
                 lastAssistant = index;
         }
 
-        return request.Skip(lastAssistant + 1)
-            .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User)
-            .Select(message => message.Text)
-            .ToArray();
+        return request.Skip(lastAssistant + 1).ToArray();
     }
 
     // The absolute path of result.md in the text of a notice. The notice contract is that it names this path.

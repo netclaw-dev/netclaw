@@ -139,17 +139,4 @@ public sealed class MidTurnUserMessageSpecs(ITestOutputHelper output) : ChildCon
             Assert.True(messageAt > aliceTurnEnd, "A message of another requester must wait for its own turn.");
         }
     }
-
-    // The messages after the last assistant message. They are the new content of the request.
-    private static IReadOnlyList<ChatMessage> FreshTail(IReadOnlyList<ChatMessage> request)
-    {
-        var lastAssistant = -1;
-        for (var index = 0; index < request.Count; index++)
-        {
-            if (request[index].Role == Microsoft.Extensions.AI.ChatRole.Assistant)
-                lastAssistant = index;
-        }
-
-        return request.Skip(lastAssistant + 1).ToArray();
-    }
 }
