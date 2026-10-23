@@ -278,7 +278,11 @@ public sealed class RepositoryIdentityTests
             process.StartInfo.ArgumentList.Add(argument);
 
         Assert.True(process.Start());
-        Assert.True(process.WaitForExit(10_000), "git timed out");
+        // Do not put a deadline here. On a loaded Windows runner, "git worktree
+        // add" can take more than 10 s. A deadline left git alive with its cwd
+        // in the fixture, so the cleanup delete failed and hid the timeout.
+        // The CI blame-hang timeout aborts a run in which git never exits.
+        process.WaitForExit();
         return process.ExitCode;
     }
 }
