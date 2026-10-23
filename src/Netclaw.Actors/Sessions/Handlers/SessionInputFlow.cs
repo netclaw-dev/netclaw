@@ -761,6 +761,7 @@ internal sealed class SessionInputFlow
     public void ResumeToolLoopAfterCompaction() => _resumeToolLoopAfterCompaction = true;
     public bool ResumesToolLoopAfterCompaction => _resumeToolLoopAfterCompaction;
     public bool StartsWithReplay => _buffer.Count > 0 && _buffer[0].IsReplay;
+    public SendUserMessage? Replay => StartsWithReplay ? _buffer[0].Message : null;
 
     public CompactionContinuation AdvanceAfterCompaction(bool restartDrainRequested, bool childConsentPaused)
     {

@@ -1123,9 +1123,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var continuation = _input.AdvanceAfterCompaction(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (continuation.Action == InputProgressAction.Restart)
         {
-            var eligibility = RecordRestartReminderEligibility();
+            var eligibility = RecordRestartReminderEligibility(stopsTurn);
             if (stopsTurn)
                 EmitRestartStoppedTurnNotice(eligibility, selected);
+            // An overflow replay took the user message of the turn out of the history. The resumed turn needs it, and
+            // the final snapshot keeps the history, so it goes back before the transient copy is cleared.
+            if (eligibility == ReminderEligibility.ResumesStoppedTurn && _input.Replay is { } replay)
+                _state = _state.AddUserMessage(replay.Content, replay.MediaReferences.Count > 0 ? replay.MediaReferences : null);
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
@@ -1342,9 +1346,31 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void CompleteFinalSnapshotAttempt()
     {
-        SaveSnapshotIfSafe();
-        if (_execution.AfterFinalSnapshotAttempt(_phase.Current))
+        var saved = SaveSnapshotIfSafe();
+        if (!_execution.AfterFinalSnapshotAttempt(_phase.Current))
+            return;
+
+        // The stopped turn that the restart reminder resumes lives only in this snapshot. The drain acknowledges after
+        // the store confirms the write, so the reminder never points at a turn that the store lost (#2632).
+        if (_state.RestartStoppedTurn is null)
             FinalizePassivation();
+        else if (!saved)
+            DropStoppedTurnResume("the final snapshot was skipped");
+    }
+
+    private bool AwaitsStoppedTurnSnapshot(SnapshotMetadata metadata)
+        => _phase.Current == SessionPhase.Passivating && RestartDrainRequested
+           && _state.RestartStoppedTurn is not null && metadata.SequenceNr == LastSequenceNr;
+
+    // The person gets the notice instead of a resume. The reminder can still wake the session for a child run.
+    private void DropStoppedTurnResume(string reason)
+    {
+        _log.Error("Restart drain cannot resume the stopped turn of session {SessionId}: {Reason}.",
+            _sessionId.Value, reason);
+        _execution.DropStoppedTurn();
+        _state = _state with { RestartStoppedTurn = null };
+        EmitRestartStoppedTurnNotice(ReminderEligibility.Eligible, 0);
+        FinalizePassivation();
     }
 
     // Actual termination after the grace window expires. The observer
@@ -1770,7 +1796,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var next = _input.AdvanceAfterTurn(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (next.Action == InputProgressAction.Restart)
         {
-            RecordRestartReminderEligibility();
+            RecordRestartReminderEligibility(stopsTurn: false);
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
@@ -2444,7 +2470,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var pending = _state.GetExecutablePendingInputs();
         if (pending.Count == 0)
         {
-            AckRestartResumeNoOp(cmd);
+            if (_state.RestartStoppedTurn is { } stoppedTurn)
+                ResumeStoppedTurn(cmd, stoppedTurn);
+            else
+                AckRestartResumeNoOp(cmd);
             return true;
         }
 
@@ -2464,12 +2493,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         var waiting = pending.Skip(restartContext.ResumeCount).ToArray();
         pending = pending.Take(restartContext.ResumeCount).ToArray();
-        _execution.ClearRestartReminderEligibility();
-        _input.ActivateRecoveredInput(cmd.Source, firstContext, _trustContextDeriver);
-        UpdateCrashContext();
-        _toolWorkflow.StartTurn();
-        SetSystemPrompt();
-        PrepareFreshTurnState();
+        StartRestartResumeTurn(cmd, firstContext);
 
         if (TryResumeSlashCommand(pending))
         {
@@ -2483,16 +2507,52 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _state = _state with { History = _state.History.Add(message) };
         QueueValidWaitingInputs(cmd, waiting);
 
+        FireRestartResumeModelCall(string.Join(
+            '\n',
+            pending.Select(static item => item.ExecutableText ?? item.UserMessage.Content ?? string.Empty)));
+        return true;
+    }
+
+    // The drain stopped this turn after each of its tool calls had a recorded result (#2632). The turn continues
+    // with the next model call over the stored history, under the recorded authority of the turn. The reminder is
+    // only the signal: its text never reaches the model, and the session records no input for it.
+    private void ResumeStoppedTurn(SendUserMessage cmd, TurnContextRecord stoppedTurn)
+    {
+        _state = _state with { RestartStoppedTurn = null };
+        if (!TurnContext.TryFromRecord(stoppedTurn, out var context, out var reason) || context is null)
+        {
+            _log.Warning(
+                "Restart reminder {ReminderId} cannot resume the stopped turn of session {SessionId}: {Reason}.",
+                cmd.Source!.ReminderId,
+                _sessionId.Value,
+                reason);
+            TryReplyNack("The interrupted turn authority is invalid.");
+            return;
+        }
+
+        _log.Info("restart_resume_stopped_turn reminder={ReminderId} turn={TurnId}", cmd.Source!.ReminderId, context.TurnId);
+        StartRestartResumeTurn(cmd, context);
+        // A model call after a tool batch runs no memory recall. The resumed call is that call, so it runs none.
+        FireRestartResumeModelCall(recallQuery: null);
+    }
+
+    private void StartRestartResumeTurn(SendUserMessage cmd, TurnContext context)
+    {
+        _execution.ClearRestartReminderEligibility();
+        _input.ActivateRecoveredInput(cmd.Source, context, _trustContextDeriver);
+        UpdateCrashContext();
+        _toolWorkflow.StartTurn();
+        SetSystemPrompt();
+        PrepareFreshTurnState();
+    }
+
+    private void FireRestartResumeModelCall(string? recallQuery)
+    {
         _modelContext.ResetForNewTurn();
         _input.ResetOverflowRetry();
-
         TryReplyAck();
-        var recallQuery = string.Join(
-            '\n',
-            pending.Select(static item => item.ExecutableText ?? item.UserMessage.Content ?? string.Empty));
         FireInitialTurnLlmCall(recallQuery);
         TransitionTo(SessionPhase.Processing);
-        return true;
     }
 
     private bool TryResumeSlashCommand(IReadOnlyList<InputAdmitted> pending)
@@ -2694,11 +2754,15 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             DeleteMessages(msg.Metadata.SequenceNr); // delete all messages in journal up until snapshot was taken
             DeleteSnapshots(new SnapshotSelectionCriteria(msg.Metadata.SequenceNr - 1)); // delete all old snapshots
+            if (AwaitsStoppedTurnSnapshot(msg.Metadata))
+                FinalizePassivation();
         });
 
         Command<SaveSnapshotFailure>(msg =>
         {
             _log.Warning("Snapshot failed: {Reason}", msg.Cause.Message);
+            if (AwaitsStoppedTurnSnapshot(msg.Metadata))
+                DropStoppedTurnResume($"the final snapshot failed: {msg.Cause.Message}");
         });
     }
 
@@ -3561,19 +3625,23 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SaveSnapshotIfSafe();
     }
 
-    private void SaveSnapshotIfSafe()
+    private bool SaveSnapshotIfSafe()
     {
-        // SessionSnapshot intentionally excludes parked approval state. Writing a
-        // snapshot while an assistant tool_use is unanswered would let recovery
-        // skip the journal event that rehydrates pending approval context.
-        if (_state.GetExecutablePendingInputs().Count > 0 || !_toolWorkflow.AllowsSnapshot(_state))
+        if (!CanSaveSnapshot())
         {
             _log.Info("Skipping snapshot while a durable input or approval batch is unresolved");
-            return;
+            return false;
         }
 
         SaveSnapshot(BuildSnapshot());
+        return true;
     }
+
+    // SessionSnapshot intentionally excludes parked approval state. Writing a
+    // snapshot while an assistant tool_use is unanswered would let recovery
+    // skip the journal event that rehydrates pending approval context.
+    private bool CanSaveSnapshot()
+        => _state.GetExecutablePendingInputs().Count == 0 && _toolWorkflow.AllowsSnapshot(_state);
 
     private void EmitResponseOutputs(
         AiChatMessage message,
@@ -3933,7 +4001,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var next = _input.AdvanceAfterTurn(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (next.Action == InputProgressAction.Restart)
         {
-            RecordRestartReminderEligibility();
+            RecordRestartReminderEligibility(stopsTurn: false);
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Passivating);
             return;
@@ -4427,8 +4495,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (action == RestartAction.EnterPassivation)
         {
             // A ready session has no turn to resume. A child run can still owe it a result, and only the restart
-            // reminder wakes the session after the restart so that the recovery can report that child.
-            _execution.MarkRestartReminderEligible(0, UnreportedRuns().Count(), false, 0, _timeProvider.GetUtcNow());
+            // reminder wakes the session after the restart so that the recovery can report that child. A stopped turn
+            // from an earlier drain whose reminder never came does not carry over: each drain decides again.
+            _execution.MarkRestartReminderEligible(0, UnreportedRuns().Count(), null, false, 0, _timeProvider.GetUtcNow());
+            _state = _state with { RestartStoppedTurn = null };
             TransitionTo(SessionPhase.Passivating);
         }
         else if (action == RestartAction.StopToolTask)
@@ -4471,12 +4541,13 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             StopTurnForRestart();
     }
 
-    // The drain stopped the turn before its end. The turn resumes only when a reminder replays its own selected
-    // inputs. A tool batch or a text close clears them, so read the count before the eligibility record (#2601).
+    // The drain stopped the turn before its end. The turn resumes when a reminder replays its own selected inputs, or
+    // after a tool batch consumed them, from its recorded authority (#2632). A tool batch or a text close clears the
+    // selected inputs, so read the count before the eligibility record (#2601).
     private void StopTurnForRestart()
     {
         var selected = _input.SelectedCount;
-        EmitRestartStoppedTurnNotice(RecordRestartReminderEligibility(), selected);
+        EmitRestartStoppedTurnNotice(RecordRestartReminderEligibility(stopsTurn: true), selected);
         ClearBufferedMessagesForRestartDrain();
         TransitionTo(SessionPhase.Passivating);
     }
@@ -4492,14 +4563,21 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         EmitOutput(new TextOutput(notice) { SessionId = _sessionId }, OutputFilter.Text);
     }
 
-    private ReminderEligibility RecordRestartReminderEligibility()
+    private ReminderEligibility RecordRestartReminderEligibility(bool stopsTurn)
     {
+        var stoppedTurn = stopsTurn ? ResumableStoppedTurn() : null;
         var eligibility = _execution.MarkRestartReminderEligible(
             _state.GetExecutablePendingInputs().Count,
             UnreportedRuns().Count(),
+            stoppedTurn,
             _input.EmittedText,
             _input.SelectedCount,
             _timeProvider.GetUtcNow());
+        // The final passivation snapshot carries the authority of the stopped turn to the next incarnation.
+        _state = _state with
+        {
+            RestartStoppedTurn = eligibility == ReminderEligibility.ResumesStoppedTurn ? stoppedTurn : null
+        };
         if (eligibility == ReminderEligibility.EmittedText)
         {
             _log.Warning(
@@ -4527,9 +4605,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         ClearActiveToolBatchTracking();
         // The parked approval is durable, but a child run can still owe its result, and an input can wait behind the
         // approval. Only the restart reminder wakes the session after the restart.
-        RecordRestartReminderEligibility();
+        RecordRestartReminderEligibility(stopsTurn: false);
         TransitionTo(SessionPhase.Passivating);
     }
+
+    // Security boundary (#2632): the drain never cancels a tool that runs, so a stopped turn has no tool of unknown
+    // effect. The turn resumes only when the person saw no text of the stopped model call and when the final snapshot
+    // can hold the turn. That snapshot needs no pending input and a recorded result for each tool call.
+    private TurnContextRecord? ResumableStoppedTurn()
+        => !_input.EmittedText && CanSaveSnapshot() && _input.Authority.Context is { } context
+            ? context.ToRecord()
+            : null;
 
     private void ClearBufferedMessagesForRestartDrain()
     {

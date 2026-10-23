@@ -25,7 +25,7 @@ internal sealed record RestartModelGraceExpired(long CallId) : INoSerializationV
 internal enum RestartAction { Wait, EnterPassivation, StopToolTask, StartModelGrace }
 internal enum ModelStopAction { Ignore, CloseInputs, EnterPassivation }
 internal enum ToolStopAction { Ignore, FailTurn, EnterPassivation }
-internal enum ReminderEligibility { None, Eligible, EmittedText }
+internal enum ReminderEligibility { None, Eligible, EmittedText, ResumesStoppedTurn }
 internal enum PassivationWork { NoAction, WaitForReap, AttemptSnapshot }
 internal readonly record struct PassivationStart(long? ReapEpoch, bool RequestDistillation);
 internal sealed record FinalStopResult(IActorRef? ReplyTo, ReminderDefinition? Reminder, string? OmissionReason);
@@ -112,9 +112,11 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private IActorRef? _restartDrainReplyTo;
     private string _restartDrainReason = string.Empty;
     private DateTimeOffset? _restartInterruptionAt;
-    // The reminder wakes a session that only owes a child result. Its pending inputs, if any, wait behind an approval
-    // and do not resume.
-    private bool _restartResumesChildrenOnly;
+    // The reminder resumes no pending input: it resumes the stopped turn or wakes a session that only owes a child
+    // result. Its pending inputs, if any, wait behind an approval and do not resume.
+    private bool _restartResumesNoPendingInput;
+    // The recorded authority of the turn that the drain stopped after its last tool batch (#2632).
+    private TurnContextRecord? _stoppedTurn;
     private long _jobReapEpoch;
     private ReapOperation? _reap;
     private PassivationAttempt? _attempt;
@@ -203,39 +205,55 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
             : ToolStopAction.EnterPassivation;
     }
 
-    // A session with a pending input, or with a child run whose result the parent has not received, needs the restart
-    // reminder. The reminder wakes the session after the restart, and the recovery then ends the lost child.
+    // A session with a pending input, a stopped turn, or a child run whose result the parent has not received needs
+    // the restart reminder. The reminder wakes the session after the restart, and the recovery then ends the lost
+    // child. The stopped turn resumes only when no input is pending and its recorded authority can build the
+    // reminder. Otherwise the person gets the notice (#2632).
     public ReminderEligibility MarkRestartReminderEligible(
         int pendingInputCount,
         int unreportedChildCount,
+        TurnContextRecord? stoppedTurn,
         bool emittedText,
         int selectedInputCount,
         DateTimeOffset now)
     {
-        if (pendingInputCount == 0 && unreportedChildCount == 0)
+        if (pendingInputCount == 0 && unreportedChildCount == 0 && stoppedTurn is null)
             return ReminderEligibility.None;
 
         if (emittedText && selectedInputCount > 0)
             return ReminderEligibility.EmittedText;
 
         _restartInterruptionAt = now;
-        _restartResumesChildrenOnly = pendingInputCount == 0;
-        return ReminderEligibility.Eligible;
+        _restartResumesNoPendingInput = pendingInputCount == 0;
+        _stoppedTurn = pendingInputCount == 0 ? stoppedTurn : null;
+        return _stoppedTurn is not null && RecordedRestartContext(_stoppedTurn).Context is not null
+            ? ReminderEligibility.ResumesStoppedTurn
+            : ReminderEligibility.Eligible;
     }
+
+    // The final snapshot that holds the stopped turn failed. No reminder resumes the turn.
+    public void DropStoppedTurn() => _stoppedTurn = null;
 
     public void ClearRestartReminderEligibility() => _restartInterruptionAt = null;
 
     /// <summary>
     /// The notice that tells the person that a restart drain stopped the turn, or null when the restart reminder
-    /// resumes the turn. The turn resumes only when the reminder replays the inputs of the turn, so
-    /// <paramref name="pendingTurnInputCount"/> counts the selected inputs of the stopped turn that stay pending.
+    /// resumes the turn. The turn resumes in two cases:
+    /// <list type="bullet">
+    /// <item>The reminder replays the inputs of the turn. <paramref name="pendingTurnInputCount"/> counts the selected
+    /// inputs of the stopped turn that stay pending.</item>
+    /// <item>A tool batch consumed the inputs, and the reminder resumes the turn from its recorded authority
+    /// (<see cref="ReminderEligibility.ResumesStoppedTurn"/>). The eligibility is set only when that authority can build
+    /// the reminder, so a turn without a channel type or with an invalid authority gets the notice (#2632).</item>
+    /// </list>
     /// <paramref name="drainReason"/> is <see cref="Protocol.PrepareForDaemonRestart.Reason"/>.
     /// </summary>
     internal static string? RestartStoppedTurnNotice(
         ReminderEligibility eligibility,
         int pendingTurnInputCount,
         string drainReason)
-        => eligibility == ReminderEligibility.Eligible && pendingTurnInputCount > 0
+        => eligibility == ReminderEligibility.ResumesStoppedTurn
+           || (eligibility == ReminderEligibility.Eligible && pendingTurnInputCount > 0)
             ? null
             : $"Netclaw stopped this turn because the daemon is {(drainReason == "daemon-stop" ? "stopping" : "restarting")}. "
               + "The turn did not finish, and it will not continue by itself. Send a message to continue.";
@@ -384,14 +402,16 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         if (_restartInterruptionAt is not { } interruptedAt)
             return (null, null);
 
-        // With no resumable input, the oldest unreported child supplies the recorded context. Its owner is the
-        // requester whose work the restart interrupted.
-        var fromChildren = _restartResumesChildrenOnly || pending.Count == 0;
-        if (fromChildren ? unreportedChildren.Count == 0 : pending.Count == 0)
+        // The reminder carries one recorded authority. The pending inputs supply it first. With no resumable input,
+        // the stopped turn supplies it (#2632), and otherwise the oldest unreported child. Its owner is the requester
+        // whose work the restart interrupted.
+        var oldestChild = unreportedChildren.MinBy(static run => run.AcceptedAtMs);
+        var contextResult = !_restartResumesNoPendingInput && pending.Count > 0 ? ValidateRestartResume(pending)
+            : _stoppedTurn is { } stoppedTurn ? RecordedRestartContext(stoppedTurn)
+            : oldestChild is not null ? RecordedRestartContext(oldestChild.OriginalContext)
+            : null;
+        if (contextResult is null)
             return (null, null);
-        var contextResult = fromChildren
-            ? ChildRestartContext(unreportedChildren)
-            : ValidateRestartResume(pending);
         if (contextResult.Context is not { } context)
             return (null, contextResult.Reason ?? "invalid stored authority");
 
@@ -420,14 +440,13 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         }, null);
     }
 
-    private static RestartContextResult ChildRestartContext(IReadOnlyList<BackgroundChildRun> unreportedChildren)
-    {
-        var oldest = unreportedChildren.MinBy(static run => run.AcceptedAtMs)
-            ?? throw new InvalidOperationException("A child restart context requires an unreported child run.");
-        return TurnContext.TryFromRecord(oldest.OriginalContext, out var context, out var reason) && context is not null
-            ? new RestartContextResult(context, null, 0)
-            : new RestartContextResult(null, reason, 0);
-    }
+    // The reminder delivers to the channel of the recorded turn, so a record without a channel type cannot build it.
+    private static RestartContextResult RecordedRestartContext(TurnContextRecord record)
+        => !TurnContext.TryFromRecord(record, out var context, out var reason) || context is null
+            ? new RestartContextResult(null, reason, 0)
+            : context.ChannelType is null
+                ? new RestartContextResult(null, "the turn has no channel type", 0)
+                : new RestartContextResult(context, null, 0);
 
     public long CurrentModelCallId => _modelCallId;
     public bool HasLiveModel => _modelCts is not null;

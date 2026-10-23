@@ -85,6 +85,13 @@ public sealed partial record SessionState
     public IImmutableSet<BackgroundJobId> ProcessedBackgroundJobIds { get; init; } =
         ImmutableHashSet<BackgroundJobId>.Empty;
 
+    /// <summary>
+    /// The recorded authority of the turn that a restart drain stopped after its last tool batch (#2632). The restart
+    /// reminder resumes this turn. A tool batch consumed the turn input, so the final passivation snapshot is the only
+    /// durable copy. The resume and a recorded turn clear it.
+    /// </summary>
+    public TurnContextRecord? RestartStoppedTurn { get; init; }
+
     // ── Event application (pure functions) ──
 
     public SessionState Apply(InputAdmitted evt)
@@ -202,7 +209,8 @@ public sealed partial record SessionState
         return (closed with
         {
             History = history.Add(evt.AssistantReply),
-            TurnCount = closed.TurnCount + 1
+            TurnCount = closed.TurnCount + 1,
+            RestartStoppedTurn = null
         }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
     }
 
@@ -546,6 +554,7 @@ public sealed partial record SessionState
             WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext,
             ActiveBackgroundJobs = [.. ActiveBackgroundJobs.Values],
             ProcessedBackgroundJobIds = [.. ProcessedBackgroundJobIds],
+            RestartStoppedTurn = RestartStoppedTurn,
             LegacyCoordinationEvidence = LegacyCoordinationEvidence
                 .Where(evidence => evidence.Disposition is LegacyCoordinationDisposition.QuarantinedInvalidAdoption
                                    or LegacyCoordinationDisposition.UnresolvedLegacyChild
@@ -616,7 +625,8 @@ public sealed partial record SessionState
             ActiveBackgroundJobs = activeJobs,
             ProcessedBackgroundJobIds = snapshot.ProcessedBackgroundJobIds.ToImmutableHashSet(),
             AdoptedContextRecords = adoptedContextRecords,
-            LegacyCoordinationEvidence = [.. snapshot.LegacyCoordinationEvidence]
+            LegacyCoordinationEvidence = [.. snapshot.LegacyCoordinationEvidence],
+            RestartStoppedTurn = snapshot.RestartStoppedTurn
         };
     }
 }

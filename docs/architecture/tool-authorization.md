@@ -873,7 +873,20 @@ It validates the original requester and offered answer. It selects which unanswe
 [`SessionExecutionLifetime`](../../src/Netclaw.Actors/Sessions/Handlers/SessionExecutionLifetime.cs) decides whether a restart can stop the exact tool task.
 The workflow decides whether every unfinished tool call waits on a durable approval.
 The lifetime owner also validates the complete stored turn authority before a restart reminder or resumed turn.
-The actor passes the durable input records to that check. The input owner does not store another durable copy.
+The reminder carries exactly one recorded authority. The sources come in this order:
+
+1. The pending `InputAdmitted` records. The actor passes them to the check, and the input owner stores no other copy.
+2. The turn that the drain stopped after its tool batch (#2632). A tool batch consumed its input, so the actor copies
+   the live turn authority into `SessionState.RestartStoppedTurn` when the turn can resume. The final passivation
+   snapshot is the only durable copy, and the drain acknowledges after the store confirms it. The resume and a
+   recorded turn clear it.
+3. The oldest unreported child run (`BackgroundChildRun.OriginalContext`).
+
+A stopped turn can resume only when no text of the stopped model call reached the person, no input is pending, and
+each tool call has a recorded result. The same check (`RecordedRestartContext`) decides the reminder and the notice,
+so a turn without a channel type or with a damaged authority gets the notice. After the restart, the resumed turn runs
+under the stopped turn's authority. The restart reminder is only the signal, so an automation turn keeps its
+automation authority and a person turn keeps the person's authority.
 The actor writes grants, persists events, and emits outputs. The lifetime owner owns task cancellation and stop completion.
 
 The workflow releases a claimed live wait only after the actor completes the required grant and journal steps.

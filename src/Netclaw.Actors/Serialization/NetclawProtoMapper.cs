@@ -660,6 +660,8 @@ internal static partial class NetclawProtoMapper
         proto.AdoptedContextRecords.AddRange(snap.AdoptedContextRecords.Select(ToAdoptedContextSnapshotRecord));
         proto.PendingInputs.AddRange(snap.PendingInputs.Select(ToProto));
         proto.RecentSourceMessageKeys.AddRange(snap.RecentSourceMessageKeys);
+        if (snap.RestartStoppedTurn is { } stoppedTurn)
+            proto.RestartStoppedTurn = ToProto(stoppedTurn);
         return proto;
     }
 
@@ -683,7 +685,8 @@ internal static partial class NetclawProtoMapper
             .Select(static id => new BackgroundJobId(id)).ToArray(),
         AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray(),
         PendingInputs = proto.PendingInputs.Select(FromProto).ToArray(),
-        RecentSourceMessageKeys = proto.RecentSourceMessageKeys.ToArray()
+        RecentSourceMessageKeys = proto.RecentSourceMessageKeys.ToArray(),
+        RestartStoppedTurn = proto.RestartStoppedTurn is null ? null : FromProto(proto.RestartStoppedTurn)
     };
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord ToAdoptedContextSnapshotRecord(
