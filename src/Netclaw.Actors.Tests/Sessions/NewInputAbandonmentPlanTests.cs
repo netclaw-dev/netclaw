@@ -88,7 +88,7 @@ public sealed class NewInputAbandonmentPlanTests
     private static SessionToolWorkflow WorkflowWithOpenApproval()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(Request("call-answered"), durable: true, recovered: true);
+        workflow.ApplyApprovalRequested(Request("call-answered"), recovered: true);
         return workflow;
     }
 

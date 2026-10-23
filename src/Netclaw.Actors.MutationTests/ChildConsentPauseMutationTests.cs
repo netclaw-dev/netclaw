@@ -33,13 +33,13 @@ public sealed class ChildConsentPauseMutationTests
     {
         var empty = new SessionToolWorkflow();
         var parentOnly = new SessionToolWorkflow();
-        parentOnly.ApplyApprovalRequested(ParentRequest("call-parent"), durable: true, recovered: false);
+        parentOnly.ApplyApprovalRequested(ParentRequest("call-parent"), recovered: false);
         var answeredChild = new SessionToolWorkflow();
-        answeredChild.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: false);
+        answeredChild.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), recovered: false);
         answeredChild.ApplyResolvedResponse(Resolved("run-1/subagent-approval/1"));
         var openChild = new SessionToolWorkflow();
-        openChild.ApplyApprovalRequested(ParentRequest("call-parent"), durable: true, recovered: false);
-        openChild.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: false);
+        openChild.ApplyApprovalRequested(ParentRequest("call-parent"), recovered: false);
+        openChild.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), recovered: false);
 
         Assert.False(empty.IsChildConsentPaused);
         Assert.False(parentOnly.IsChildConsentPaused);
@@ -251,7 +251,7 @@ public sealed class ChildConsentPauseMutationTests
     private static SessionToolWorkflow Paused()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), recovered: false);
         return workflow;
     }
 

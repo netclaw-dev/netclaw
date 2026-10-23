@@ -1396,8 +1396,9 @@ Facts behind the diagram (current code):
   actor-local and keeps the session in memory. A restart withdraws the old
   prompt with `DaemonRestarted` and records the run as lost, and a late click
   gets that text.
-  A subagent without a parent bridge cannot ask. Its whole run fails with
-  `ToolExecutionFailed`; it does not return a per-tool denial.
+  A subagent without a parent bridge cannot ask. The authorizer denies each
+  such call with `approval_required_unattended`
+  (`ToolAuthorizer.DenyConsentWhenUnattended`), and the run continues.
 - A channel that cannot post a prompt sends `prompt_unavailable` for that call
   (`ChannelOutputEngine`, `SlackThreadBindingActor`). The call is refused. For a
   child prompt the session also withdraws the request with `PromptUnavailable`.

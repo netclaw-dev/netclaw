@@ -250,8 +250,8 @@ public sealed class SubAgentSpawner
     /// runs enabled, a non-Public audience, a current agent profile, child tools, and <c>file_read</c>. A failed rule
     /// throws <see cref="ChildStartRejectedException"/>, and no parked call runs.
     /// </summary>
-    internal PreparedChildStart PrepareResume(BackgroundChildRun run, ChildRunResume resume, SubAgentProfile? profile,
-        ToolInvocationContext context)
+    internal PreparedChildStart PrepareResume(BackgroundChildRun run, WorkingContextSnapshot snapshot, ChildRunResume resume,
+        SubAgentProfile? profile, ToolInvocationContext context)
     {
         if (!_subAgentConfig.Enabled || context.Audience == TrustAudience.Public)
             throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable,
@@ -259,9 +259,6 @@ public sealed class SubAgentSpawner
         if (profile is null)
             throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable,
                 $"The agent profile '{run.AgentName.Value}' of this run no longer exists.");
-        var snapshot = run.InitialWorkingSnapshot
-            ?? throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable,
-                "The run has no initial working snapshot.");
         var (definition, coreToolNames) = ResolveDefinition(profile, resume.Park.SkillOverlay, context, requireResultReader: true);
         var storage = (context.SessionStorage ?? throw new InvalidOperationException("A resume requires session storage."))
             .ForChild(run.RunId, run.ScopeId);

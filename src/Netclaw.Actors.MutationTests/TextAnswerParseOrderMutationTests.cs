@@ -33,7 +33,7 @@ public sealed class TextAnswerParseOrderMutationTests
     public void One_child_prompt_of_the_sender_resolves_it()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ChildRequest("r-1", 10, TwoOptions), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("r-1", 10, TwoOptions), recovered: false);
 
         var found = workflow.TryResolveTextResponse(Text("A"), SessionState.Empty, out var response, out var nack);
 
@@ -48,8 +48,8 @@ public sealed class TextAnswerParseOrderMutationTests
     public void Text_that_answers_no_prompt_gets_the_option_unavailable_nack()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ParentRequest("call-parent", 10, TwoOptions), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(ChildRequest("r-1", 20, TwoOptions), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ParentRequest("call-parent", 10, TwoOptions), recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("r-1", 20, TwoOptions), recovered: false);
 
         var found = workflow.TryResolveTextResponse(Text("hello"), SessionState.Empty, out var response, out var nack);
 
@@ -64,8 +64,8 @@ public sealed class TextAnswerParseOrderMutationTests
     public void Text_that_answers_one_of_the_prompts_gets_the_use_buttons_nack()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ParentRequest("call-parent", 10, ThreeOptions), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(ChildRequest("r-1", 20, TwoOptions), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ParentRequest("call-parent", 10, ThreeOptions), recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("r-1", 20, TwoOptions), recovered: false);
 
         var found = workflow.TryResolveTextResponse(Text("C"), SessionState.Empty, out var response, out var nack);
 

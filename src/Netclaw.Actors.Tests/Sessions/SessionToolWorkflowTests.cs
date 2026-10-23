@@ -37,17 +37,17 @@ public sealed partial class SessionToolWorkflowTests
 
         // Act and assert
         Assert.False(workflow.CanParkForRestart());
-        workflow.ApplyApprovalRequested(first, durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(first, recovered: false);
         Assert.False(workflow.CanParkForRestart());
-        workflow.ApplyApprovalRequested(second, durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(second, recovered: false);
         Assert.True(workflow.CanParkForRestart());
 
         var legacy = second with { TurnContext = null };
-        workflow.ApplyApprovalRequested(legacy, durable: true, recovered: true);
+        workflow.ApplyApprovalRequested(legacy, recovered: true);
         Assert.False(workflow.CanParkForRestart());
 
         var incomplete = legacy with { ChannelType = null };
-        workflow.ApplyApprovalRequested(incomplete, durable: true, recovered: true);
+        workflow.ApplyApprovalRequested(incomplete, recovered: true);
         Assert.False(workflow.CanParkForRestart());
     }
 
@@ -61,7 +61,7 @@ public sealed partial class SessionToolWorkflowTests
 
         // Act and assert
         Assert.True(workflow.AllowsSnapshot(state));
-        workflow.ApplyApprovalRequested(request, durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(request, recovered: false);
         Assert.False(workflow.AllowsSnapshot(state));
         var accepted = Assert.IsAssignableFrom<ApprovalResponseResult.DurableAccepted>(
             workflow.PrepareRecoveredResponse(
@@ -119,7 +119,7 @@ public sealed partial class SessionToolWorkflowTests
         var state = new SessionToolWorkflow();
         var request = CreateRequest("call-1", requestedAtMs: 10);
 
-        var pending = state.ApplyApprovalRequested(request, durable: true, recovered: false);
+        var pending = state.ApplyApprovalRequested(request, recovered: false);
 
         Assert.Equal(1, state.PendingDiagnosticCount);
         Assert.Equal(0, state.ResolvedDiagnosticCount);
@@ -144,8 +144,8 @@ public sealed partial class SessionToolWorkflowTests
         var second = CreateRequest("call-2", requestedAtMs: 20);
         var history = HistoryState(first, second);
 
-        state.ApplyApprovalRequested(first, durable: true, recovered: true);
-        state.ApplyApprovalRequested(second, durable: true, recovered: true);
+        state.ApplyApprovalRequested(first, recovered: true);
+        state.ApplyApprovalRequested(second, recovered: true);
 
         // Act and assert
         ResolveRecovered(state, first, ApprovalOptionKeys.ApproveOnce);
@@ -170,11 +170,11 @@ public sealed partial class SessionToolWorkflowTests
         var state = new SessionToolWorkflow();
         var request = CreateRequest("call-1", requestedAtMs: 10);
 
-        state.ApplyApprovalRequested(request, durable: true, recovered: false);
+        state.ApplyApprovalRequested(request, recovered: false);
         ResolveRecovered(state, request, ApprovalOptionKeys.Deny);
 
         var replacement = request with { RequestedAtMs = 20 };
-        state.ApplyApprovalRequested(replacement, durable: true, recovered: false);
+        state.ApplyApprovalRequested(replacement, recovered: false);
 
         Assert.Equal(1, state.PendingDiagnosticCount);
         Assert.Equal(0, state.ResolvedDiagnosticCount);
@@ -196,7 +196,7 @@ public sealed partial class SessionToolWorkflowTests
             RequesterPrincipal = PrincipalClassification.TrustedInternal
         };
 
-        var pending = state.ApplyApprovalRequested(request, durable: true, recovered: true);
+        var pending = state.ApplyApprovalRequested(request, recovered: true);
 
         Assert.Equal(1, state.PendingDiagnosticCount);
         Assert.Null(pending.TurnContext);
@@ -251,8 +251,8 @@ public sealed partial class SessionToolWorkflowTests
     {
         // Arrange
         var state = new SessionToolWorkflow();
-        state.ApplyApprovalRequested(CreateRequest("newer", requestedAtMs: 20), durable: true, recovered: true);
-        state.ApplyApprovalRequested(CreateRequest("older", requestedAtMs: 10), durable: true, recovered: true);
+        state.ApplyApprovalRequested(CreateRequest("newer", requestedAtMs: 20), recovered: true);
+        state.ApplyApprovalRequested(CreateRequest("older", requestedAtMs: 10), recovered: true);
 
         // Act
         var found = state.TryResolveTextResponse(TextAnswer("A"), SessionState.Empty, out var response, out var nackReason);
@@ -276,9 +276,9 @@ public sealed partial class SessionToolWorkflowTests
         // Arrange
         var state = new SessionToolWorkflow();
         state.ApplyApprovalRequested(
-            CreateRequest("parent-call", requestedAtMs: childIsEarlier ? 20 : 10), durable: true, recovered: true);
+            CreateRequest("parent-call", requestedAtMs: childIsEarlier ? 20 : 10), recovered: true);
         state.ApplyApprovalRequested(
-            CreateChildRequest("r-guard", requestedAtMs: childIsEarlier ? 10 : 20), durable: true, recovered: true);
+            CreateChildRequest("r-guard", requestedAtMs: childIsEarlier ? 10 : 20), recovered: true);
 
         // Act
         var found = state.TryResolveTextResponse(TextAnswer("A"), SessionState.Empty, out var response, out var nackReason);
@@ -326,9 +326,9 @@ public sealed partial class SessionToolWorkflowTests
             })
         };
 
-        state.ApplyApprovalRequested(approved, durable: true, recovered: true);
-        state.ApplyApprovalRequested(denied, durable: true, recovered: true);
-        state.ApplyApprovalRequested(pending, durable: true, recovered: true);
+        state.ApplyApprovalRequested(approved, recovered: true);
+        state.ApplyApprovalRequested(denied, recovered: true);
+        state.ApplyApprovalRequested(pending, recovered: true);
         ResolveRecovered(state, approved, ApprovalOptionKeys.ApproveOnce);
         ResolveRecovered(state, denied, ApprovalOptionKeys.Deny);
 
@@ -380,7 +380,7 @@ public sealed partial class SessionToolWorkflowTests
             ],
         };
         var state = new SessionToolWorkflow();
-        state.ApplyApprovalRequested(request, durable: true, recovered: true);
+        state.ApplyApprovalRequested(request, recovered: true);
         ResolveRecovered(state, request, ApprovalOptionKeys.ApproveAssignmentAlwaysV1);
 
         var dispatch = Assert.IsType<RecoveredContinuation.Dispatch>(

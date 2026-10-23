@@ -120,9 +120,8 @@ internal sealed partial class SessionToolWorkflow
 
     public PendingToolInteraction ApplyApprovalRequested(
         ToolApprovalRequested request,
-        bool durable,
         bool recovered)
-        => Request(request, durable, recovered);
+        => Request(request, recovered);
 
     public bool TryResolveTextResponse(
         ToolInteractionTextResponse text,

@@ -1186,6 +1186,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void AddMessage(SerializableChatMessage message)
     {
+        // reinjectMeta: the model wrote the timeout and background hints in its call, and the serializable form strips
+        // them. Put them back, so the history matches the model message and a resumed parked call keeps its hints.
         _history.Add(ChatMessageConverter.ToAiMessage(message, ToolExecutionContext.SessionDirectory, reinjectMeta: true));
         _transcript.Add(message);
     }

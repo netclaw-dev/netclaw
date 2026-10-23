@@ -31,8 +31,8 @@ public sealed class TextAnswerGuardMutationTests
     public void Two_parent_prompts_of_the_sender_resolve_the_latest()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(Request("call-2", "alice", 20), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(Request("call-1", "alice", 10), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(Request("call-2", "alice", 20), recovered: false);
+        workflow.ApplyApprovalRequested(Request("call-1", "alice", 10), recovered: false);
 
         var found = workflow.TryResolveTextResponse(Text("alice"), SessionState.Empty, out var response, out var nack);
 
@@ -45,8 +45,8 @@ public sealed class TextAnswerGuardMutationTests
     public void A_parent_prompt_and_a_child_prompt_of_the_sender_resolve_neither()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(Request("call-1", "alice", 10), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(ChildRequest("r-1", "alice", 20), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(Request("call-1", "alice", 10), recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("r-1", "alice", 20), recovered: false);
 
         var found = workflow.TryResolveTextResponse(Text("alice"), SessionState.Empty, out var response, out var nack);
 
@@ -59,8 +59,8 @@ public sealed class TextAnswerGuardMutationTests
     public void Two_child_prompts_of_the_sender_resolve_neither()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ChildRequest("r-1", "alice", 10), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(ChildRequest("r-2", "alice", 20), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("r-1", "alice", 10), recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("r-2", "alice", 20), recovered: false);
 
         var found = workflow.TryResolveTextResponse(Text("alice"), SessionState.Empty, out var response, out var nack);
 
@@ -73,7 +73,7 @@ public sealed class TextAnswerGuardMutationTests
     public void One_prompt_of_the_sender_resolves_it()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(Request("call-1", "alice", 10), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(Request("call-1", "alice", 10), recovered: false);
 
         var found = workflow.TryResolveTextResponse(Text("alice"), SessionState.Empty, out var response, out var nack);
 
@@ -87,8 +87,8 @@ public sealed class TextAnswerGuardMutationTests
     public void The_guard_counts_only_the_prompts_that_the_sender_can_answer()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(Request("call-alice", "alice", 10), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(Request("call-bob", "bob", 20), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(Request("call-alice", "alice", 10), recovered: false);
+        workflow.ApplyApprovalRequested(Request("call-bob", "bob", 20), recovered: false);
 
         var found = workflow.TryResolveTextResponse(Text("bob"), SessionState.Empty, out var response, out _);
 
