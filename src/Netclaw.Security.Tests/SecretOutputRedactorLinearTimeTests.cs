@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using Xunit;
 
 namespace Netclaw.Security.Tests;
@@ -15,11 +16,9 @@ namespace Netclaw.Security.Tests;
 [Collection(RedactorTimingCollection.Name)]
 public sealed class SecretOutputRedactorLinearTimeTests
 {
-    // The quadratic patterns needed seconds per megabyte (minutes for a private key); linear
-    // work needs well under a second per 4 MB even on a loaded machine. The budget is generous
-    // so scheduling noise cannot trip it, and far below what any quadratic shape can reach.
+    // The quadratic patterns needed seconds per megabyte (minutes for a private key).
+    // RedactorTimingBudget sets the budget for linear work.
     private const int AdversarialChars = 4 * 1024 * 1024;
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(4);
 
     public static TheoryData<string> ShapeNames()
     {
@@ -34,14 +33,8 @@ public sealed class SecretOutputRedactorLinearTimeTests
     public void Redact_finishes_adversarial_input_within_budget(string shape)
     {
         var input = RedactorComparisonInputs.Shapes().Single(s => s.Name == shape).Build(AdversarialChars);
-        SecretOutputRedactor.Redact(input[..1024]); // regex construction is a one-off cost, not the subject here
 
-        // A quadratic pattern cannot be interrupted, so run it on a background thread and stop waiting.
-        var worker = new Thread(() => SecretOutputRedactor.Redact(input)) { IsBackground = true };
-        worker.Start();
-        var finished = worker.Join(Budget);
-
-        Assert.True(finished, $"{shape}: {AdversarialChars / 1024 / 1024} MB did not finish within {Budget.TotalSeconds} s");
+        RedactorTimingBudget.AssertFinishesWithinBudget(shape, input);
     }
 
     [Fact]
@@ -135,4 +128,57 @@ public sealed class SecretOutputRedactorLinearTimeTests
 public sealed class RedactorTimingCollection
 {
     public const string Name = "RedactorTiming";
+}
+
+/// <summary>
+/// Times Redact on adversarial input against a budget that scales with the current speed of
+/// the machine. A fixed 4 s budget failed linear code on a busy CI runner.
+/// </summary>
+internal static class RedactorTimingBudget
+{
+    // The baseline is Redact on benign text of the same length, on the same machine, at the same
+    // time. The slowest linear shape needs about 17 to 28 baselines, also on an oversubscribed
+    // machine. The known '+' regression of JsonSecretHeaderRegex needs about 270 baselines and
+    // more than 4 s, so 80 baselines with a 4 s floor still catches it.
+    private const double BaselineFactor = 80;
+    private static readonly TimeSpan Floor = TimeSpan.FromSeconds(4);
+    private const string BenignLine = "INFO ok id=1234 path=/a/b\n";
+
+    public static void AssertFinishesWithinBudget(string shape, string input)
+    {
+        SecretOutputRedactor.Redact(input[..Math.Min(input.Length, 64 * 1024)]); // warm up the JIT and the regex caches
+
+        var baseline = MeasureBaseline(input.Length);
+        var budget = TimeSpan.FromTicks(Math.Max(Floor.Ticks, (long)(baseline.Ticks * BaselineFactor)));
+
+        // A quadratic pattern cannot be interrupted, so run it on a background thread and stop waiting.
+        var stopwatch = Stopwatch.StartNew();
+        var worker = new Thread(() => SecretOutputRedactor.Redact(input)) { IsBackground = true };
+        worker.Start();
+        var finished = worker.Join(budget);
+        var elapsed = stopwatch.Elapsed;
+
+        // A worker that is still busy takes a core from the next case. Let it finish first.
+        if (!finished)
+            worker.Join(TimeSpan.FromSeconds(60));
+
+        Assert.True(finished,
+            $"{shape}: {input.Length / 1024 / 1024} MB did not finish within the budget. "
+            + $"elapsed {elapsed.TotalSeconds:F2} s, baseline {baseline.TotalSeconds:F3} s, budget {budget.TotalSeconds:F2} s");
+    }
+
+    private static TimeSpan MeasureBaseline(int length)
+    {
+        var benign = string.Concat(Enumerable.Repeat(BenignLine, length / BenignLine.Length + 1))[..length];
+        var fastest = TimeSpan.MaxValue;
+        for (var run = 0; run < 3; run++)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            SecretOutputRedactor.Redact(benign);
+            if (stopwatch.Elapsed < fastest)
+                fastest = stopwatch.Elapsed;
+        }
+
+        return fastest;
+    }
 }

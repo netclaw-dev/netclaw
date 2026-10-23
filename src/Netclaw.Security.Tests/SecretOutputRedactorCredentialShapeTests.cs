@@ -458,14 +458,13 @@ public sealed class SecretOutputRedactorCredentialShapeAllocationTests
 
 /// <summary>
 /// The patterns for issue #2595 must stay linear. Each input is adversarial for one pattern:
-/// a long run of a prefix with no end. The work of a linear pattern for 4 MB is well below the
-/// budget. A quadratic pattern needs minutes.
+/// a long run of a prefix with no end. RedactorTimingBudget scales the budget for linear work.
+/// A quadratic pattern needs minutes.
 /// </summary>
 [Collection(RedactorTimingCollection.Name)]
 public sealed class SecretOutputRedactorCredentialShapeLinearTimeTests
 {
     private const int AdversarialChars = 4 * 1024 * 1024;
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(4);
 
     private static string Rep(string unit) => string.Concat(Enumerable.Repeat(unit, Math.Max(1, AdversarialChars / unit.Length)));
 
@@ -508,14 +507,8 @@ public sealed class SecretOutputRedactorCredentialShapeLinearTimeTests
     public void Redact_finishes_adversarial_credential_shapes_within_budget(string shape)
     {
         var input = Shapes().Single(s => s.Name == shape).Build();
-        SecretOutputRedactor.Redact(input[..1024]); // regex construction is a one-off cost, not the subject here
 
-        // A quadratic pattern cannot be interrupted, so run it on a background thread and stop waiting.
-        var worker = new Thread(() => SecretOutputRedactor.Redact(input)) { IsBackground = true };
-        worker.Start();
-        var finished = worker.Join(Budget);
-
-        Assert.True(finished, $"{shape}: {AdversarialChars / 1024 / 1024} MB did not finish within {Budget.TotalSeconds} s");
+        RedactorTimingBudget.AssertFinishesWithinBudget(shape, input);
     }
 
     // A long run of unfinished URL credentials must not hide a real one after it.
