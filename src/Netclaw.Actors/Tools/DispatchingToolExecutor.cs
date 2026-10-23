@@ -259,7 +259,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
 
             return result;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not ToolApprovalRequiredException)
         {
             CompleteExceptionOutcome(context, ex, ct);
             sw.Stop();
