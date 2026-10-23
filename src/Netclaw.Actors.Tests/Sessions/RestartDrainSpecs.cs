@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
@@ -33,12 +34,15 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <item>The drain acknowledges before the 20-second coordinator deadline (virtual time).</item>
 /// <item>After the drain request, no model call starts and no tool batch starts or runs.</item>
 /// <item>The input of the stopped turn stays pending only when the turn resumes and no tool batch consumed it.</item>
+/// <item>A resumable turn leaves exactly one pending input. After a tool batch, that input is a continuation input
+/// without text that carries the recorded requester of the turn (#2632).</item>
 /// <item>A restart reminder exists exactly when an input stays pending or the stopped turn resumes. The reminder carries
-/// the recorded audience, boundary, and channel of the turn (#2632).</item>
+/// the recorded audience, boundary, and channel of the turn.</item>
 /// <item>When the turn does not resume, exactly one notice with the text for the drain reason posts. Otherwise no
 /// notice posts.</item>
 /// <item>When the turn resumes, the restart reminder starts the next model call of the turn after the restart. The
-/// reminder text is not an input, and the history pairs each tool call with its result (#2632).</item>
+/// reminder text is not an input, and the history pairs each tool call with its result. The resumed turn consumes the
+/// pending input, and no turn consumes inputs of two requesters (#2632).</item>
 /// <item>When the session dropped tool calls, the next model request after the restart has a valid history.</item>
 /// </list>
 /// One row has a different contract. When a tool still runs at the coordinator deadline, its effect is unknown. The
@@ -49,7 +53,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 public sealed class RestartDrainSpecs : LlmSessionTestBase
 {
     private const string SystemPrompt = "You are a test assistant in a tool loop.";
-    private const string Requester = "U-drain";
+    private const string RequesterId = "U-drain";
     private const string TurnInputText = "Check the package profile";
     private static readonly DateTimeOffset FixedReceivedAt = new(2026, 10, 22, 16, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(10);
@@ -58,6 +62,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     private readonly ScriptedChatClient _chat = new();
     private readonly HoldingToolExecutor _tools = new();
     private readonly ControllableWorkingContextSnapshotProvider _snapshots = new();
+    private readonly FakeJobManager _jobs = new();
 
     public RestartDrainSpecs(ITestOutputHelper output) : base(output)
     {
@@ -74,6 +79,9 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         TurnWithoutChannelType,
         ToolBatchBoundary,
         ToolStillRunning,
+        LiveBackgroundJobAtDrain,
+        SecondDeliveryAfterToolBatch,
+        NewInputBeforeReminder,
         GraceToolCalls,
         GraceToolCallsAfterText,
         GraceEmptyReplyRetry,
@@ -90,7 +98,13 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     [InlineData(DrainPoint.ModelCallDeepInToolLoop, "daemon-stop", true, true)]
     [InlineData(DrainPoint.ToolBatchBoundary, "config-reload", true, true)]
     [InlineData(DrainPoint.ToolLoopCompaction, "config-reload", true, true)]
-    [InlineData(DrainPoint.CompactionReplay, "config-reload", true, true)]
+    [InlineData(DrainPoint.SecondDeliveryAfterToolBatch, "daemon-stop", true, true)]
+    [InlineData(DrainPoint.NewInputBeforeReminder, "daemon-stop", true, true)]
+    // The overflow rollback took the tool calls and results of the turn out of the history. The model cannot see what
+    // ran, so the turn does not resume.
+    [InlineData(DrainPoint.CompactionReplay, "config-reload", false, false)]
+    // Passivation stops the live job, and a resume could submit it again. The turn does not resume.
+    [InlineData(DrainPoint.LiveBackgroundJobAtDrain, "daemon-stop", false, false)]
     // A reminder turn resumes under its own automation authority, as a person turn does.
     [InlineData(DrainPoint.AutomationTurnAfterToolBatch, "daemon-stop", true, true)]
     // The turn has no channel type, so no reminder can deliver to it. The person gets the notice.
@@ -137,11 +151,17 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         var prepared = await AwaitDrainAsync(drain, before);
 
         // Assert
-        await AssertDrainContractAsync(sessionId, session, subscriber, prepared, before, reason, turnResumes, reminderExpected);
-        if (turnResumes)
-            await AssertTurnResumesAfterRestartAsync(sessionId, prepared.RestartReminder!);
+        var resumed = await AssertDrainContractAsync(
+            sessionId, session, subscriber, prepared, before, reason, turnResumes, reminderExpected);
+        if (resumed is not null)
+            await AssertTurnResumesAfterRestartAsync(point, sessionId, prepared.RestartReminder!, resumed);
         if (point == DrainPoint.GraceToolCallsAfterText)
             await AssertValidHistoryAfterRestartAsync(sessionId);
+        if (point == DrainPoint.LiveBackgroundJobAtDrain)
+        {
+            await PingAsync(sessionId);
+            Assert.True(_jobs.Starts == 1, $"The session submitted {_jobs.Starts} background jobs, but the turn started one.");
+        }
     }
 
     // Drives the session to the drain point. Returns the action that releases held work after the drain request.
@@ -155,8 +175,13 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
                 _chat.Script(Step.StreamUntilCancelled);
                 break;
             case DrainPoint.ModelCallAfterToolBatch or DrainPoint.BufferedInput or DrainPoint.AutomationTurnAfterToolBatch
-                or DrainPoint.TurnWithoutChannelType:
+                or DrainPoint.TurnWithoutChannelType or DrainPoint.SecondDeliveryAfterToolBatch
+                or DrainPoint.NewInputBeforeReminder:
                 _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
+                break;
+            case DrainPoint.LiveBackgroundJobAtDrain:
+                ActorRegistry.Register<BackgroundJobManagerActorKey>(_jobs.Manager(Sys), overwrite: true);
+                _chat.Script(Step.ToolCall, Step.BackgroundToolCall, Step.StreamUntilCancelled);
                 break;
             case DrainPoint.ModelCallDeepInToolLoop:
                 _chat.Script(Step.ToolCall, Step.ToolCall, Step.ToolCall, Step.StreamUntilCancelled);
@@ -295,8 +320,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Assert.True(_tools.Runs == before.ToolRuns, "The session ran a tool after the drain request.");
     }
 
-    // The shared postconditions of every drain point.
-    private async Task AssertDrainContractAsync(
+    // The shared postconditions of every drain point. Returns the pending input that the restart reminder resumes.
+    private async Task<InputAdmitted?> AssertDrainContractAsync(
         SessionId sessionId,
         IActorRef session,
         Akka.TestKit.TestProbe subscriber,
@@ -343,11 +368,32 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             Assert.Equal(authority.Boundary, reminder.Boundary);
         }
 
-        if (turnResumes)
-            Assert.Empty(notices);
-        else
+        if (!turnResumes)
+        {
             Assert.Equal(RestartNoticeRuleTests.ExpectedNotice(reason), Assert.Single(notices));
+            return null;
+        }
+
+        Assert.Empty(notices);
+        var resumable = events.OfType<InputAdmitted>().Where(input => pending.Contains(input.InputId)).ToArray();
+        Assert.True(resumable.Length == 1,
+            $"A resumable turn must leave exactly one pending input, but {resumable.Length} stay pending.");
+        var resumed = resumable[0];
+        Assert.Equal(Requester(turnInput.TurnContext), Requester(resumed.TurnContext));
+        if (consumedByBatch)
+        {
+            Assert.True(string.IsNullOrEmpty(resumed.UserMessage.Content) && string.IsNullOrEmpty(resumed.ExecutableText),
+                "The continuation input of a stopped turn must carry no new text.");
+        }
+
+        return resumed;
     }
+
+    // The recorded requester of an input. Two inputs of one turn must have the same requester.
+    private static (string? Sender, PrincipalClassification? Principal, TrustAudience Audience, TrustBoundary? Boundary,
+        string? Channel) Requester(TurnContextRecord context)
+        => (context.RequesterSenderId?.Value, context.RequesterPrincipal, context.Audience, context.Boundary,
+            context.ChannelType);
 
     // After the restart, the first model request must pair each tool call with its result.
     private async Task AssertValidHistoryAfterRestartAsync(SessionId sessionId)
@@ -362,34 +408,99 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     }
 
     // After the restart, the reminder system sends the restart reminder. It must start the next model call of the
-    // stopped turn. The reminder is a signal, not an input: its text never reaches the model, and the session records
-    // no input for it. The resume replays the turn input at most once (#2632).
-    private async Task AssertTurnResumesAfterRestartAsync(SessionId sessionId, ReminderDefinition reminder)
+    // stopped turn under the recorded requester of that turn. The reminder is a signal, not an input: its text never
+    // reaches the model, and the session records no input for it (#2632).
+    private async Task AssertTurnResumesAfterRestartAsync(
+        DrainPoint point, SessionId sessionId, ReminderDefinition reminder, InputAdmitted resumed)
     {
-        _chat.Script();
+        _chat.Script(point == DrainPoint.SecondDeliveryAfterToolBatch ? [Step.ToolCall, Step.StreamUntilCancelled] : []);
         var subscriber = CreateTestProbe("resume-subscriber");
         await JoinAsync(subscriber, sessionId);
+        if (point == DrainPoint.NewInputBeforeReminder)
+        {
+            // Another person writes before the reminder arrives. That input runs first in its own turn (D1).
+            await SendAsync(sessionId, OtherInputText, OtherPersonSource);
+            await subscriber.FishForMessageAsync<TurnCompleted>(
+                _ => true, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+        }
+
         var calls = _chat.MainCalls;
-        var reply = await SessionManager.Ask<ISessionResponse>(new SendUserMessage
+        var reply = await SendRestartReminderAsync(sessionId, reminder);
+        Assert.True(reply is CommandAck and not RestartResumeNotNeeded,
+            $"The restart reminder did not resume the stopped turn. The session replied {reply}.");
+        if (point == DrainPoint.SecondDeliveryAfterToolBatch)
+        {
+            await AssertSecondDeliveryResumesNothingAsync(sessionId, reminder, calls);
+        }
+        else
+        {
+            await subscriber.FishForMessageAsync<TurnCompleted>(
+                _ => true, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+            var request = _chat.MainRequests[calls];
+            Assert.DoesNotContain(request, message => message.Text?.Contains(reminder.Instructions, StringComparison.Ordinal) == true);
+            // The summary of a tool-loop compaction replaced the turn input. Each other row holds it exactly once.
+            var turnInputCopies = request.Count(message => message.Role == AiChatRole.User && message.Text == TurnInputText);
+            Assert.True(turnInputCopies == (point == DrainPoint.ToolLoopCompaction ? 0 : 1),
+                $"The resumed model request holds {turnInputCopies} copies of the turn input.");
+            AssertPairedToolHistory(request);
+        }
+
+        AssertNoTurnMixesRequesters(await ReadJournalAsync(sessionId), reminder, resumed, point == DrainPoint.NewInputBeforeReminder);
+    }
+
+    // The resumed turn starts a tool batch, which consumes the pending input. The session actor then stops without a
+    // drain and recovers from the journal. A second delivery of the same reminder finds nothing to resume.
+    private async Task AssertSecondDeliveryResumesNothingAsync(SessionId sessionId, ReminderDefinition reminder, int calls)
+    {
+        await AwaitAssertAsync(
+            () => Assert.Equal(calls + 2, _chat.MainCalls), Deadline, cancellationToken: TestContext.Current.CancellationToken);
+        var session = await ResolveSessionAsync(sessionId);
+        Watch(session);
+        Sys.Stop(session);
+        await ExpectTerminatedAsync(session, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+
+        var again = await SendRestartReminderAsync(sessionId, reminder);
+        Assert.True(again is RestartResumeNotNeeded,
+            $"The second delivery of the restart reminder must resume nothing. The session replied {again}.");
+        await PingAsync(sessionId);
+        Assert.Equal(calls + 2, _chat.MainCalls);
+    }
+
+    // The resumed turn consumes the input that the drain left pending. Each journal record that consumes inputs consumes
+    // the inputs of one requester only. Another person's input, when present, runs before the resume in its own turn.
+    private static void AssertNoTurnMixesRequesters(
+        IReadOnlyList<object> events, ReminderDefinition reminder, InputAdmitted resumed, bool otherInputFirst)
+    {
+        Assert.DoesNotContain(events.OfType<InputAdmitted>(), input => input.UserMessage.Content == reminder.Instructions);
+        var admitted = events.OfType<InputAdmitted>().ToDictionary(input => input.InputId);
+        var consumers = events
+            .Select(payload => payload switch
+            {
+                TurnRecorded turn => turn.ConsumedInputIds,
+                ToolBatchStarted batch => batch.ConsumedInputIds,
+                _ => []
+            })
+            .Where(ids => ids.Count > 0)
+            .ToList();
+        Assert.All(consumers, ids => Assert.Single(ids.Select(id => Requester(admitted[id].TurnContext)).Distinct()));
+        var resumedAt = consumers.FindIndex(ids => ids.Contains(resumed.InputId));
+        Assert.True(resumedAt >= 0, "The resumed turn did not consume the input that the drain left pending.");
+        if (otherInputFirst)
+        {
+            var other = Assert.Single(admitted.Values, input => input.UserMessage.Content == OtherInputText);
+            var otherAt = consumers.FindIndex(ids => ids.Contains(other.InputId));
+            Assert.True(otherAt >= 0 && otherAt < resumedAt, "The other person's input did not run first in its own turn.");
+        }
+    }
+
+    // After a daemon restart the reminder system sends the restart reminder to the recovered session.
+    private async Task<ISessionResponse> SendRestartReminderAsync(SessionId sessionId, ReminderDefinition reminder)
+        => await SessionManager.Ask<ISessionResponse>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = reminder.Instructions,
             Source = ApprovalWaitTestBase.RestartReminderSource(reminder)
         }, Deadline, TestContext.Current.CancellationToken);
-        Assert.True(reply is CommandAck and not RestartResumeNotNeeded,
-            $"The restart reminder did not resume the stopped turn. The session replied {reply}.");
-        await subscriber.FishForMessageAsync<TurnCompleted>(
-            _ => true, Deadline, cancellationToken: TestContext.Current.CancellationToken);
-
-        var request = _chat.MainRequests[calls];
-        Assert.DoesNotContain(request, message => message.Text?.Contains(reminder.Instructions, StringComparison.Ordinal) == true);
-        Assert.True(request.Count(message => message.Role == AiChatRole.User && message.Text == TurnInputText) <= 1,
-            "The resume replayed the turn input more than once.");
-        AssertPairedToolHistory(request);
-        Assert.DoesNotContain(
-            (await ReadJournalAsync(sessionId)).OfType<InputAdmitted>(),
-            input => input.UserMessage.Content == reminder.Instructions);
-    }
 
     private static void AssertPairedToolHistory(IReadOnlyList<ChatMessage> request)
     {
@@ -451,16 +562,20 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             Source = source
         }, Deadline, TestContext.Current.CancellationToken);
 
+    // The boundary is not the default of the audience or the session, so a resume under another authority fails.
     private static readonly MessageSource PersonSource = new()
     {
         ChannelType = ChannelType.Slack,
-        SenderId = new SenderId(Requester),
+        SenderId = new SenderId(RequesterId),
         Audience = TrustAudience.Team,
-        Boundary = TrustBoundary.Team,
+        Boundary = new TrustBoundary("slack:C-drain"),
         Principal = PrincipalClassification.TrustedInternal,
         Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public),
         ReceivedAt = FixedReceivedAt,
     };
+
+    private const string OtherInputText = "What is the status of the beta feed?";
+    private static readonly MessageSource OtherPersonSource = PersonSource with { SenderId = new SenderId("U-other") };
 
     // Mirrors the source that ReminderExecutionActor builds for a reminder fire in an existing Slack session.
     private const string AutomationFireKey = "daily-check:1792777119000";
@@ -530,6 +645,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     private enum Step
     {
         ToolCall,
+        BackgroundToolCall,
         ToolCallWithFullContext,
         StreamUntilCancelled,
         HeldToolCall,
@@ -548,6 +664,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         private readonly List<IReadOnlyList<ChatMessage>> _mainRequests = [];
         private Step[] _script = [];
         private int _mainCalls;
+        private int _scriptStart;
         private TaskCompletionSource _nextCall = NewGate();
         private TaskCompletionSource? _heldCallRelease;
         private TaskCompletionSource? _summaryRelease;
@@ -563,7 +680,12 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             get { lock (_mainRequests) { return _mainRequests.ToArray(); } }
         }
 
-        public void Script(params Step[] steps) => _script = steps;
+        // The script starts at the next main model call.
+        public void Script(params Step[] steps)
+        {
+            _scriptStart = MainCalls;
+            _script = steps;
+        }
 
         public void ReleaseHeldCall() => Volatile.Read(ref _heldCallRelease)?.TrySetResult();
 
@@ -603,7 +725,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
                 _mainRequests.Add(messages);
             var call = Interlocked.Increment(ref _mainCalls);
             Interlocked.Exchange(ref _nextCall, NewGate()).TrySetResult();
-            var step = call <= _script.Length ? _script[call - 1] : (Step?)null;
+            var index = call - _scriptStart;
+            var step = index >= 1 && index <= _script.Length ? _script[index - 1] : (Step?)null;
 
             if (step is Step.HeldTextAndToolCall)
             {
@@ -624,6 +747,17 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             {
                 case Step.ToolCall or Step.HeldToolCall or Step.HeldTextAndToolCall:
                     yield return ToolCallUpdate(call, usage: null);
+                    yield break;
+                case Step.BackgroundToolCall:
+                    yield return new ChatResponseUpdate(AiChatRole.Assistant,
+                    [
+                        new FunctionCallContent($"call-drain-{call}", "shell_execute", new Dictionary<string, object?>
+                        {
+                            ["command"] = "python3 serve_profile.py",
+                            ["_background"] = true,
+                            ["_rationale"] = "serve the profile"
+                        })
+                    ]) { FinishReason = ChatFinishReason.ToolCalls };
                     yield break;
                 case Step.ToolCallWithFullContext:
                     yield return ToolCallUpdate(call, new UsageDetails
@@ -694,6 +828,17 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             return hold;
         }
 
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+            => Task.FromResult(new ShellProcessLaunch(
+                ToolArgumentHelper.GetString(toolCall.Arguments, "Command")!,
+                context.ResolveShellCwd(ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory"))
+                    ?? throw new InvalidOperationException("The test launch requires a working directory."),
+                context.Invocation,
+                new Netclaw.Security.ShellCommandPolicy(TestShellEnvironment.Current),
+                new Netclaw.Security.ToolPathPolicy(TestShellEnvironment.Current, []),
+                static _ => Task.CompletedTask));
+
         public async Task<string> ExecuteAsync(
             FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default)
         {
@@ -707,6 +852,27 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     }
 
     private static TaskCompletionSource NewGate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Starts each background job at once and acknowledges each reap. It counts the job submissions.</summary>
+    private sealed class FakeJobManager
+    {
+        private int _starts;
+
+        public int Starts => Volatile.Read(ref _starts);
+
+        public IActorRef Manager(ActorSystem system) => system.ActorOf(Props.Create(() => new Actor(this)));
+
+        private sealed class Actor : ReceiveActor
+        {
+            public Actor(FakeJobManager owner)
+            {
+                Receive<BackgroundJobProtocol.StartBackgroundJob>(_ => Sender.Tell(new BackgroundJobProtocol.BackgroundJobStarted(
+                    new BackgroundJobId($"job-{Interlocked.Increment(ref owner._starts)}"))));
+                Receive<BackgroundJobProtocol.KillJobsForSession>(kill =>
+                    Sender.Tell(new BackgroundJobProtocol.SessionJobsReaped(kill.SessionId, 1)));
+            }
+        }
+    }
 }
 
 /// <summary>

@@ -980,47 +980,6 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(new Netclaw.Actors.Jobs.BackgroundJobId("job-55"), result.ActiveBackgroundJobs[0].JobId);
     }
 
-    /// <summary>
-    /// The final passivation snapshot is the only durable copy of the authority of a turn that a restart drain stopped
-    /// after its last tool batch (#2632). Field 22 carries that authority to the next incarnation. A snapshot from an
-    /// older binary has no field 22, so the session resumes no stopped turn. A recorded turn clears the field.
-    /// </summary>
-    [Fact]
-    public void Restart_stopped_turn_survives_the_snapshot_and_a_recorded_turn_clears_it()
-    {
-        // Arrange
-        var sessionId = new SessionId("slack/C1/1700.3");
-        var stoppedTurn = new TurnContextRecord
-        {
-            SessionId = sessionId,
-            TurnId = "turn-7",
-            Audience = TrustAudience.Team,
-            Boundary = new TrustBoundary("slack:C1"),
-            ChannelType = "slack",
-            RequesterSenderId = new SenderId("reminder-system"),
-            RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
-            TransportAuthenticity = TransportAuthenticity.LocalProcess,
-            PayloadTaint = PayloadTaint.Trusted,
-            SourceKind = "reminder"
-        };
-        var state = SessionState.Empty with { RestartStoppedTurn = stoppedTurn };
-
-        // Act
-        var restored = SessionState.FromSnapshot(RoundTrip(state.ToSnapshot()));
-        var oldSnapshot = RoundTrip(new SessionSnapshot { TurnCount = 1 });
-        var afterTurn = restored.Apply(new TurnRecorded
-        {
-            SessionId = sessionId,
-            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Check the feed" },
-            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Done" }
-        });
-
-        // Assert
-        Assert.Equivalent(stoppedTurn, restored.RestartStoppedTurn, strict: true);
-        Assert.Null(oldSnapshot.RestartStoppedTurn);
-        Assert.Null(afterTurn.RestartStoppedTurn);
-    }
-
     [Fact]
     public void SessionSnapshot_eligible_turn_number_wrap_is_byte_identical_to_raw_primitive_proto()
     {
