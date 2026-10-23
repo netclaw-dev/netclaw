@@ -32,10 +32,13 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <list type="bullet">
 /// <item>The drain acknowledges before the 20-second coordinator deadline (virtual time).</item>
 /// <item>After the drain request, no model call starts and no tool batch starts or runs.</item>
-/// <item>The input of the stopped turn stays pending only when the turn resumes. A reminder exists only when an input
-/// stays pending.</item>
+/// <item>The input of the stopped turn stays pending only when the turn resumes and no tool batch consumed it.</item>
+/// <item>A restart reminder exists exactly when an input stays pending or the stopped turn resumes. The reminder carries
+/// the recorded audience, boundary, and channel of the turn (#2632).</item>
 /// <item>When the turn does not resume, exactly one notice with the text for the drain reason posts. Otherwise no
 /// notice posts.</item>
+/// <item>When the turn resumes, the restart reminder starts the next model call of the turn after the restart. The
+/// reminder text is not an input, and the history pairs each tool call with its result (#2632).</item>
 /// <item>When the session dropped tool calls, the next model request after the restart has a valid history.</item>
 /// </list>
 /// A drain point with a child run needs the child fixture. The notice rule for a child-only reminder is a pure decision,
@@ -64,6 +67,9 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     {
         FirstModelCall,
         ModelCallAfterToolBatch,
+        ModelCallDeepInToolLoop,
+        AutomationTurnAfterToolBatch,
+        TurnWithoutChannelType,
         ToolBatchBoundary,
         GraceToolCalls,
         GraceToolCallsAfterText,
@@ -76,13 +82,19 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
 
     [Theory]
     [InlineData(DrainPoint.FirstModelCall, "config-reload", true, true)]
-    [InlineData(DrainPoint.ModelCallAfterToolBatch, "daemon-stop", false, false)]
-    [InlineData(DrainPoint.ToolBatchBoundary, "config-reload", false, false)]
+    // A tool batch consumed the turn input. The turn resumes from its own recorded authority (#2632).
+    [InlineData(DrainPoint.ModelCallAfterToolBatch, "daemon-stop", true, true)]
+    [InlineData(DrainPoint.ModelCallDeepInToolLoop, "daemon-stop", true, true)]
+    [InlineData(DrainPoint.ToolBatchBoundary, "config-reload", true, true)]
+    [InlineData(DrainPoint.ToolLoopCompaction, "config-reload", true, true)]
+    [InlineData(DrainPoint.CompactionReplay, "config-reload", true, true)]
+    // A reminder turn resumes under its own automation authority, as a person turn does.
+    [InlineData(DrainPoint.AutomationTurnAfterToolBatch, "daemon-stop", true, true)]
+    // The turn has no channel type, so no reminder can deliver to it. The person gets the notice.
+    [InlineData(DrainPoint.TurnWithoutChannelType, "daemon-stop", false, false)]
     [InlineData(DrainPoint.GraceToolCalls, "config-reload", true, true)]
     [InlineData(DrainPoint.GraceToolCallsAfterText, "config-reload", false, false)]
     [InlineData(DrainPoint.GraceEmptyReplyRetry, "config-reload", true, true)]
-    [InlineData(DrainPoint.ToolLoopCompaction, "config-reload", false, false)]
-    [InlineData(DrainPoint.CompactionReplay, "config-reload", false, false)]
     [InlineData(DrainPoint.PreparedModelRequest, "config-reload", true, true)]
     [InlineData(DrainPoint.BufferedInput, "config-reload", false, true)]
     public async Task A_restart_drain_meets_the_drain_contract(
@@ -115,6 +127,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
 
         // Assert
         await AssertDrainContractAsync(sessionId, session, subscriber, prepared, before, reason, turnResumes, reminderExpected);
+        if (turnResumes)
+            await AssertTurnResumesAfterRestartAsync(sessionId, prepared.RestartReminder!);
         if (point == DrainPoint.GraceToolCallsAfterText)
             await AssertValidHistoryAfterRestartAsync(sessionId);
     }
@@ -129,8 +143,12 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             case DrainPoint.FirstModelCall:
                 _chat.Script(Step.StreamUntilCancelled);
                 break;
-            case DrainPoint.ModelCallAfterToolBatch or DrainPoint.BufferedInput:
+            case DrainPoint.ModelCallAfterToolBatch or DrainPoint.BufferedInput or DrainPoint.AutomationTurnAfterToolBatch
+                or DrainPoint.TurnWithoutChannelType:
                 _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
+                break;
+            case DrainPoint.ModelCallDeepInToolLoop:
+                _chat.Script(Step.ToolCall, Step.ToolCall, Step.ToolCall, Step.StreamUntilCancelled);
                 break;
             case DrainPoint.ToolBatchBoundary:
                 _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
@@ -152,7 +170,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             case DrainPoint.CompactionReplay:
                 // A completed turn gives the compaction enough history for a summary call, which the row holds.
                 _chat.Script(Step.Text, Step.ToolCall, Step.ContextOverflow);
-                await SendAsync(sessionId, "Earlier question");
+                await SendAsync(sessionId, "Earlier question", PersonSource);
                 await subscriber.FishForMessageAsync<TurnCompleted>(
                     _ => true, Deadline, cancellationToken: TestContext.Current.CancellationToken);
                 break;
@@ -179,10 +197,15 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             release = _chat.HoldSummary().SetResult;
         }
 
-        await SendAsync(sessionId, TurnInputText);
+        await SendAsync(sessionId, TurnInputText, point switch
+        {
+            DrainPoint.AutomationTurnAfterToolBatch => AutomationSource,
+            DrainPoint.TurnWithoutChannelType => null,
+            _ => PersonSource
+        });
         await reached.WaitAsync(Deadline, TestContext.Current.CancellationToken);
         if (point == DrainPoint.BufferedInput)
-            await SendAsync(sessionId, "Also check the beta feed");
+            await SendAsync(sessionId, "Also check the beta feed", PersonSource);
         return release;
     }
 
@@ -262,10 +285,25 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Assert.True(Count<ToolBatchStarted>(events) == before.ToolBatches,
             "The session recorded a tool batch after the drain request.");
         var pending = PendingInputIds(events);
-        var turnInput = events.OfType<InputAdmitted>().Single(input => input.UserMessage.Content == TurnInputText).InputId;
-        Assert.True(pending.Contains(turnInput) == turnResumes, "The turn input must stay pending exactly when the turn resumes.");
-        Assert.Equal(reminderExpected, prepared.RestartReminder is not null);
-        Assert.True(reminderExpected == pending.Count > 0, "A restart reminder must exist exactly when an input stays pending.");
+        var turnInput = events.OfType<InputAdmitted>().Single(input => input.UserMessage.Content == TurnInputText);
+        var consumedByBatch = events.OfType<ToolBatchStarted>().Any(batch => batch.ConsumedInputIds.Contains(turnInput.InputId));
+        Assert.True(pending.Contains(turnInput.InputId) == (turnResumes && !consumedByBatch),
+            "The turn input must stay pending exactly when the turn resumes and no tool batch consumed it.");
+        Assert.True(reminderExpected == (pending.Count > 0 || turnResumes),
+            "A restart reminder must exist exactly when an input stays pending or the stopped turn resumes.");
+        Assert.True(reminderExpected == (prepared.RestartReminder is not null),
+            $"The drain returned {(prepared.RestartReminder is null ? "no" : "a")} restart reminder.");
+        if (prepared.RestartReminder is { } reminder)
+        {
+            // The reminder carries exactly the recorded authority of the turn, not a session default (#2632).
+            var authority = turnInput.TurnContext;
+            Assert.Equal(SessionExecutionLifetime.RestartReminderInstruction, reminder.Instructions);
+            Assert.Equal(DeliveryKind.CurrentSession, reminder.Delivery.Kind);
+            Assert.Equal(sessionId.Value, reminder.Delivery.SessionId);
+            Assert.Equal(authority.ChannelType, reminder.Delivery.OriginChannelType?.ToWireValue());
+            Assert.Equal(authority.Audience, reminder.Audience);
+            Assert.Equal(authority.Boundary, reminder.Boundary);
+        }
 
         if (turnResumes)
             Assert.Empty(notices);
@@ -279,10 +317,44 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         var subscriber = CreateTestProbe("after-restart-subscriber");
         await JoinAsync(subscriber, sessionId);
         var calls = _chat.MainCalls;
-        await SendAsync(sessionId, "Continue the work");
+        await SendAsync(sessionId, "Continue the work", PersonSource);
         await subscriber.FishForMessageAsync<TurnCompleted>(
             _ => true, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+        AssertPairedToolHistory(_chat.MainRequests[calls]);
+    }
+
+    // After the restart, the reminder system sends the restart reminder. It must start the next model call of the
+    // stopped turn. The reminder is a signal, not an input: its text never reaches the model, and the session records
+    // no input for it. The resume replays the turn input at most once (#2632).
+    private async Task AssertTurnResumesAfterRestartAsync(SessionId sessionId, ReminderDefinition reminder)
+    {
+        _chat.Script();
+        var subscriber = CreateTestProbe("resume-subscriber");
+        await JoinAsync(subscriber, sessionId);
+        var calls = _chat.MainCalls;
+        var reply = await SessionManager.Ask<ISessionResponse>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = reminder.Instructions,
+            Source = ApprovalWaitTestBase.RestartReminderSource(reminder)
+        }, Deadline, TestContext.Current.CancellationToken);
+        Assert.True(reply is CommandAck and not RestartResumeNotNeeded,
+            $"The restart reminder did not resume the stopped turn. The session replied {reply}.");
+        await subscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+
         var request = _chat.MainRequests[calls];
+        Assert.DoesNotContain(request, message => message.Text?.Contains(reminder.Instructions, StringComparison.Ordinal) == true);
+        Assert.True(request.Count(message => message.Role == AiChatRole.User && message.Text == TurnInputText) <= 1,
+            "The resume replayed the turn input more than once.");
+        AssertPairedToolHistory(request);
+        Assert.DoesNotContain(
+            (await ReadJournalAsync(sessionId)).OfType<InputAdmitted>(),
+            input => input.UserMessage.Content == reminder.Instructions);
+    }
+
+    private static void AssertPairedToolHistory(IReadOnlyList<ChatMessage> request)
+    {
         var contents = request.SelectMany(message => message.Contents).ToArray();
         Assert.Equal(
             contents.OfType<FunctionCallContent>().Select(call => call.CallId).Order(),
@@ -332,22 +404,44 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         => await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
             .ResolveOne(Deadline, TestContext.Current.CancellationToken);
 
-    private async Task SendAsync(SessionId sessionId, string content)
+    // A null source is a turn without a recorded channel type.
+    private async Task SendAsync(SessionId sessionId, string content, MessageSource? source)
         => await SessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = content,
-            Source = new MessageSource
-            {
-                ChannelType = ChannelType.Slack,
-                SenderId = new SenderId(Requester),
-                Audience = TrustAudience.Team,
-                Boundary = TrustBoundary.Team,
-                Principal = PrincipalClassification.TrustedInternal,
-                Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public),
-                ReceivedAt = FixedReceivedAt,
-            }
+            Source = source
         }, Deadline, TestContext.Current.CancellationToken);
+
+    private static readonly MessageSource PersonSource = new()
+    {
+        ChannelType = ChannelType.Slack,
+        SenderId = new SenderId(Requester),
+        Audience = TrustAudience.Team,
+        Boundary = TrustBoundary.Team,
+        Principal = PrincipalClassification.TrustedInternal,
+        Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public),
+        ReceivedAt = FixedReceivedAt,
+    };
+
+    // Mirrors the source that ReminderExecutionActor builds for a reminder fire in an existing Slack session.
+    private const string AutomationFireKey = "daily-check:1792777119000";
+    private static readonly MessageSource AutomationSource = new()
+    {
+        ChannelType = ChannelType.Slack,
+        SenderId = new SenderId("reminder-system"),
+        MessageId = AutomationFireKey,
+        TurnId = new TurnId(AutomationFireKey),
+        ReminderId = new ReminderId(AutomationFireKey),
+        Audience = TrustAudience.Team,
+        Boundary = TrustBoundary.Team,
+        Principal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+        {
+            SourceKind = new SourceKind("reminder")
+        },
+        ReceivedAt = FixedReceivedAt,
+    };
 
     private static int Count<T>(IEnumerable<object> events) => events.OfType<T>().Count();
 
@@ -491,10 +585,10 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             switch (step)
             {
                 case Step.ToolCall or Step.HeldToolCall or Step.HeldTextAndToolCall:
-                    yield return ToolCallUpdate(usage: null);
+                    yield return ToolCallUpdate(call, usage: null);
                     yield break;
                 case Step.ToolCallWithFullContext:
-                    yield return ToolCallUpdate(new UsageDetails
+                    yield return ToolCallUpdate(call, new UsageDetails
                     {
                         InputTokenCount = 200_000, OutputTokenCount = 1, TotalTokenCount = 200_001
                     });
@@ -520,12 +614,13 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             }
         }
 
-        private static ChatResponseUpdate ToolCallUpdate(UsageDetails? usage)
+        // Each model call gets its own tool call ID, so a loop of several batches has a valid history.
+        private static ChatResponseUpdate ToolCallUpdate(int call, UsageDetails? usage)
         {
             List<AIContent> contents =
             [
-                new FunctionCallContent("call-drain-1", "shell_execute",
-                    new Dictionary<string, object?> { ["command"] = "python3 fetch_profile.py" })
+                new FunctionCallContent($"call-drain-{call}", "shell_execute",
+                    new Dictionary<string, object?> { ["command"] = $"python3 fetch_profile.py --page {call}" })
             ];
             if (usage is not null)
                 contents.Add(new UsageContent(usage));
