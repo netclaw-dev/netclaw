@@ -84,6 +84,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         LiveBackgroundJobAtDrain,
         SecondDeliveryAfterToolBatch,
         NewInputBeforeReminder,
+        AutomaticInputBeforeReminder,
         ContinuationOrphanedThenLaterDrain,
         ContinuationWriteRejected,
         ContinuationWriteFailed,
@@ -105,6 +106,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     [InlineData(DrainPoint.ToolLoopCompaction, "config-reload", true, true)]
     [InlineData(DrainPoint.SecondDeliveryAfterToolBatch, "daemon-stop", true, true)]
     [InlineData(DrainPoint.NewInputBeforeReminder, "daemon-stop", true, true)]
+    // Any later input closes the continuation, also an automatic one (a reminder fire on the ordinary admission path).
+    [InlineData(DrainPoint.AutomaticInputBeforeReminder, "daemon-stop", true, true)]
     [InlineData(DrainPoint.ContinuationOrphanedThenLaterDrain, "daemon-stop", true, true)]
     // The journal does not keep the continuation input, so no reminder can resume the turn. The person gets the notice.
     [InlineData(DrainPoint.ContinuationWriteRejected, "config-reload", false, false)]
@@ -199,7 +202,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
                 break;
             case DrainPoint.ModelCallAfterToolBatch or DrainPoint.BufferedInput or DrainPoint.AutomationTurnAfterToolBatch
                 or DrainPoint.TurnWithoutChannelType or DrainPoint.SecondDeliveryAfterToolBatch
-                or DrainPoint.NewInputBeforeReminder:
+                or DrainPoint.NewInputBeforeReminder or DrainPoint.AutomaticInputBeforeReminder:
                 _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
                 break;
             case DrainPoint.LiveBackgroundJobAtDrain:
@@ -496,9 +499,10 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         _chat.Script(point == DrainPoint.SecondDeliveryAfterToolBatch ? [Step.ToolCall, Step.StreamUntilCancelled] : []);
         var subscriber = CreateTestProbe("resume-subscriber");
         await JoinAsync(subscriber, sessionId);
-        if (point == DrainPoint.NewInputBeforeReminder)
+        if (point is DrainPoint.NewInputBeforeReminder or DrainPoint.AutomaticInputBeforeReminder)
         {
-            await AssertLaterInputClosesTheContinuationAsync(sessionId, subscriber, reason, reminder, resumed);
+            await AssertLaterInputClosesTheContinuationAsync(sessionId, subscriber, reason, reminder, resumed,
+                point == DrainPoint.NewInputBeforeReminder ? OtherPersonSource : LaterFireSource);
             return;
         }
 
@@ -528,14 +532,19 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             "The resumed turn did not consume the input that the drain left pending.");
     }
 
-    // Another person writes before the reminder arrives. The start of that turn closes the continuation input and posts
-    // the restart notice that the drain held back. The later turn runs under its own authority only, and the reminder
-    // that arrives after it resumes nothing (#2632).
+    // Another input arrives before the reminder: a message of another person, or an automatic input. Its admission
+    // closes the continuation input and posts the restart notice that the drain held back. The later turn runs under
+    // its own authority only, and the reminder that arrives after it resumes nothing (#2632).
     private async Task AssertLaterInputClosesTheContinuationAsync(
-        SessionId sessionId, Akka.TestKit.TestProbe subscriber, string reason, ReminderDefinition reminder, InputAdmitted resumed)
+        SessionId sessionId,
+        Akka.TestKit.TestProbe subscriber,
+        string reason,
+        ReminderDefinition reminder,
+        InputAdmitted resumed,
+        MessageSource laterSource)
     {
         var calls = _chat.MainCalls;
-        await SendAsync(sessionId, OtherInputText, OtherPersonSource);
+        await SendAsync(sessionId, OtherInputText, laterSource);
         var notices = 0;
         await subscriber.FishForMessageAsync(
             message =>
@@ -563,6 +572,9 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Assert.Contains(events.OfType<InputClosed>(), close => close.InputIds.Contains(resumed.InputId));
         var consumers = AssertNoTurnMixesRequesters(events, reminder);
         Assert.DoesNotContain(consumers, ids => ids.Contains(resumed.InputId));
+        var later = Assert.Single(events.OfType<InputAdmitted>(), input => input.UserMessage.Content == OtherInputText);
+        Assert.Equal(laterSource.SenderId.Value, later.TurnContext.RequesterSenderId?.Value);
+        Assert.Contains(consumers, ids => ids.Contains(later.InputId));
         Assert.Empty(PendingInputIds(events));
     }
 
@@ -713,6 +725,15 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             SourceKind = new SourceKind("reminder")
         },
         ReceivedAt = FixedReceivedAt,
+    };
+
+    // A later fire of another reminder. Static fields start in text order, so this field follows AutomationSource.
+    private const string LaterFireKey = "status-check:1792777200000";
+    private static readonly MessageSource LaterFireSource = AutomationSource with
+    {
+        MessageId = LaterFireKey,
+        TurnId = new TurnId(LaterFireKey),
+        ReminderId = new ReminderId(LaterFireKey)
     };
 
     private static int Count<T>(IEnumerable<object> events) => events.OfType<T>().Count();
