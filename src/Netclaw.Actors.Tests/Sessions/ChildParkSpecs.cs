@@ -83,7 +83,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         };
         PlanChild($"park-{row}", plan);
         await JoinRecorderAsync(id);
-        if (row == "moved")
+        if (row is "moved" or "cwd")
             await DeclareProjectAsync(journal, id, recorded);
         var run = await StartAsync(id, $"park-{row}");
         var first = await AwaitPromptsAsync(run.Run.RunId, parked);
@@ -121,8 +121,9 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
             Assert.NotEqual("confirmed", Results(resumed).Single(result => result.CallId == "p1").Result?.ToString());
         if (row == "moved")
             Assert.Equal(recorded, Assert.Single(ApprovalTool.Contexts).ProjectDirectory);
+        // H3: the parked call runs in the directory of its batch. The next call runs where the finished sibling moved.
         if (row == "cwd")
-            Assert.Equal(moved, ApprovalTool.Contexts.Last().ProjectDirectory);
+            Assert.Equal([recorded, moved], ApprovalTool.Contexts.Select(static context => context.ProjectDirectory));
         if (row == "files")
             Assert.Contains(changed, terminal.Result.WorkingContext?.ConfirmedChangedFiles ?? []);
         Assert.Equal(ApprovalNackReasons.AlreadyAnswered,
@@ -166,7 +167,6 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         // Act
         var run = await StartAsync(id, $"park-{row}", row == "profile" ? "child-c" : "child-a",
             row == "rejected" ? async () => aliceTurn = await HoldTurnAsync(journal, id, "Alice keeps a turn open.", AliceSource) : null);
-        Task<ISessionResponse>? rejectedAnswer = null;
         if (twoRequests)
         {
             await journal.FirstEventRejected.Task.WaitAsync(Deadline, Cancellation);
@@ -184,9 +184,17 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
             else if (row == "model")
                 Clients.A.PlannedExceptions.Enqueue(new InvalidOperationException("The model is down."));
             else
+            {
+                // An open parent turn proves that the child branch of OnPersistRejected runs before the turn failure.
+                aliceTurn = await HoldTurnAsync(journal, id, "Alice keeps a turn open.", AliceSource);
                 journal.RejectWritesOf(static evt => evt is ToolApprovalResolved);
+            }
             if (row == "answer")
-                rejectedAnswer = AnswerAsync(id, prompt.CallId, Alice);
+            {
+                Assert.Equal(ApprovalNackReasons.PersistFailed,
+                    Assert.IsType<CommandNack>(await AnswerAsync(id, prompt.CallId, Alice)).Reason);
+                aliceTurn!.TrySetResult();
+            }
             else
                 AssertAck(await AnswerAsync(id, prompt.CallId, Alice));
         }
@@ -194,8 +202,6 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         // Assert
         var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: row == "model" ? 1 : 0);
         Assert.Equal(SubAgentRunOutcome.Failed, terminal.Result.Outcome);
-        if (rejectedAnswer is not null)
-            Assert.IsAssignableFrom<ISessionResponse>(await rejectedAnswer);
     }
 
     /// <summary>
