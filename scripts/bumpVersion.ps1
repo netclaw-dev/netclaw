@@ -11,9 +11,11 @@ function UpdateVersionAndReleaseNotes {
     $xmlContent = New-Object XML
     $xmlContent.Load($XmlFilePath)
 
-    # Update VersionPrefix and PackageReleaseNotes
+    $versionParts = $ReleaseNotesResult.Version -split '-', 2
     $versionPrefixElement = $xmlContent.SelectSingleNode("//VersionPrefix")
-    $versionPrefixElement.InnerText = $ReleaseNotesResult.Version
+    $versionPrefixElement.InnerText = $versionParts[0]
+    $versionSuffixElement = $xmlContent.SelectSingleNode("//VersionSuffix")
+    $versionSuffixElement.InnerText = if ($versionParts.Count -eq 2) { $versionParts[1] } else { "" }
 
     $packageReleaseNotesElement = $xmlContent.SelectSingleNode("//PackageReleaseNotes")
     $packageReleaseNotesElement.InnerText = $ReleaseNotesResult.ReleaseNotes
