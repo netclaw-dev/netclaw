@@ -32,8 +32,9 @@ public sealed class ToolApprovalConfig
     public ToolApprovalMode DefaultMode { get; set; } = ToolApprovalMode.Auto;
 
     /// <summary>
-    /// Per-tool approval mode overrides. Keys are exact tool names
-    /// (e.g., "shell_execute", "file_write"). For MCP tools the key format is
+    /// Per-tool approval mode overrides. Keys are tool names, matched without
+    /// regard to case (e.g., "shell_execute", "file_write"). If two keys differ
+    /// only by case, the more restrictive mode applies. For MCP tools the key format is
     /// "{serverName}/{toolName}" (for example "notion/create-pages"). An exact
     /// entry here always wins over <see cref="McpServerDefaults"/> and
     /// <see cref="DefaultMode"/>.
@@ -70,7 +71,7 @@ public sealed class ToolApprovalConfig
     /// </summary>
     public bool TryGetExplicitMode(string toolName, out ToolApprovalMode mode)
     {
-        if (ToolOverrides.TryGetValue(toolName, out mode))
+        if (ApprovalOverrideKeys.TryGetMode(ToolOverrides, toolName, out mode))
         {
             return true;
         }
@@ -87,13 +88,13 @@ public sealed class ToolApprovalConfig
         if (slashIndex > 0)
         {
             var aliasKey = toolName.Replace("/", "__", StringComparison.Ordinal);
-            if (ToolOverrides.TryGetValue(aliasKey, out mode))
+            if (ApprovalOverrideKeys.TryGetMode(ToolOverrides, aliasKey, out mode))
             {
                 return true;
             }
 
             var serverName = toolName[..slashIndex];
-            if (McpServerDefaults.TryGetValue(serverName, out mode))
+            if (ApprovalOverrideKeys.TryGetMode(McpServerDefaults, serverName, out mode))
             {
                 return true;
             }

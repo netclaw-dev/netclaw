@@ -516,8 +516,6 @@ public sealed class ToolApprovalGateTests
             decision.ApprovalContext!.Options.Select(static option => option.Key.Value));
     }
 
-    private const string ControlPlaneRoot = "/home/user/.netclaw/config";
-
     private static ToolAccessPolicy CreateFileWritePolicy(ToolApprovalConfig? approvalPolicy = null)
     {
         var config = new ToolConfig();
@@ -531,11 +529,10 @@ public sealed class ToolApprovalGateTests
                 UsedStrictFallback: false),
             shellCommandPolicy: new ShellCommandPolicy(),
             toolPathPolicy: new ToolPathPolicy([]),
-            fileApprovalMatcher: new FilePathApprovalMatcher(ControlPlaneRoot));
+            fileApprovalMatcher: new FilePathApprovalMatcher());
     }
 
     private static INetclawTool FileWriteToolInstance() => new FileWriteTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
-    private static INetclawTool FileEditToolInstance() => new FileEditTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
 
     [Fact]
     public void File_grant_tool_without_path_descriptor_fails_closed()
@@ -602,44 +599,7 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void file_write_to_netclaw_json_requires_approval_under_fail_closed_default()
-    {
-        var policy = CreateFileWritePolicy(approvalPolicy: null);
-        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
-
-        var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
-
-        Assert.True(decision.NeedsApproval);
-        Assert.NotNull(decision.ApprovalContext);
-        Assert.Contains(
-            decision.ApprovalContext!.Patterns,
-            p => p.StartsWith("file_write:control-plane:", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void file_write_to_control_plane_still_requires_approval_when_policy_exists_without_override()
-    {
-        var approvalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        };
-        var policy = CreateFileWritePolicy(approvalPolicy);
-        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
-
-        var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
-
-        Assert.True(decision.NeedsApproval);
-        Assert.NotNull(decision.ApprovalContext);
-        Assert.Contains(
-            decision.ApprovalContext!.Patterns,
-            p => p.StartsWith("file_write:control-plane:", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void file_write_to_non_control_plane_path_auto_approves_under_null_policy()
+    public void file_write_auto_approves_under_null_policy()
     {
         var policy = CreateFileWritePolicy(approvalPolicy: null);
         var args = ToolInput.Create("Path", "/tmp/scratch.txt", "Content", "hello");
@@ -650,48 +610,43 @@ public sealed class ToolApprovalGateTests
         Assert.False(decision.NeedsApproval);
     }
 
-    [Fact]
-    public void file_edit_of_netclaw_json_requires_approval()
+    // Override keys match tool names without regard to case. A "File_Write": "Deny" key that
+    // missed the lookup left file_write at the audience default, and the write ran.
+    [Theory]
+    [InlineData("File_Write", ToolApprovalMode.Deny)]
+    [InlineData("FILE_WRITE", ToolApprovalMode.Approval)]
+    [InlineData("file_write", ToolApprovalMode.Deny)]
+    public void file_write_honors_an_override_key_in_any_case(string key, ToolApprovalMode mode)
     {
-        var policy = CreateFileWritePolicy(approvalPolicy: null);
-        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "OldString", "a", "NewString", "b");
-
-        var decision = policy.AuthorizeInvocation(FileEditToolInstance(), PersonalContext(), args);
-
-        Assert.True(decision.NeedsApproval);
-        Assert.Contains(
-            decision.ApprovalContext!.Patterns,
-            p => p.StartsWith("file_edit:control-plane:", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void file_write_emits_distinct_per_path_patterns()
-    {
-        var matcher = new FilePathApprovalMatcher(ControlPlaneRoot);
-        var netclawJson = matcher.ExtractPatterns(new ToolName("file_write"),
-            ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json"));
-        var toolApprovals = matcher.ExtractPatterns(new ToolName("file_write"),
-            ToolInput.Create("Path", ControlPlaneRoot + "/tool-approvals.json"));
-        var devices = matcher.ExtractPatterns(new ToolName("file_write"),
-            ToolInput.Create("Path", ControlPlaneRoot + "/devices.json"));
-
-        Assert.NotEqual(netclawJson[0], toolApprovals[0]);
-        Assert.NotEqual(netclawJson[0], devices[0]);
-        Assert.NotEqual(toolApprovals[0], devices[0]);
-    }
-
-    [Fact]
-    public void file_write_control_plane_approval_honors_explicit_auto_override()
-    {
-        var approvalPolicy = new ToolApprovalConfig
+        var policy = CreateFileWritePolicy(new ToolApprovalConfig
         {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["file_write:control-plane"] = ToolApprovalMode.Auto
-            }
-        };
-        var policy = CreateFileWritePolicy(approvalPolicy);
-        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
+            DefaultMode = ToolApprovalMode.Auto,
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal) { [key] = mode }
+        });
+        var args = ToolInput.Create("Path", "/tmp/scratch.txt", "Content", "hello");
+
+        var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
+
+        if (mode == ToolApprovalMode.Deny)
+        {
+            Assert.False(decision.Allowed);
+            Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
+        }
+        else
+        {
+            Assert.True(decision.NeedsApproval);
+        }
+    }
+
+    [Fact]
+    public void file_write_auto_override_in_another_case_lifts_a_restrictive_default()
+    {
+        var policy = CreateFileWritePolicy(new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Deny,
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal) { ["File_Write"] = ToolApprovalMode.Auto }
+        });
+        var args = ToolInput.Create("Path", "/tmp/scratch.txt", "Content", "hello");
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
@@ -700,43 +655,22 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void file_write_control_plane_override_takes_precedence_over_base_tool_override()
+    public void file_write_with_two_keys_that_differ_only_by_case_uses_the_more_restrictive_mode()
     {
-        var approvalPolicy = new ToolApprovalConfig
+        var policy = CreateFileWritePolicy(new ToolApprovalConfig
         {
             ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
             {
                 ["file_write"] = ToolApprovalMode.Auto,
-                ["file_write:control-plane"] = ToolApprovalMode.Approval
+                ["File_Write"] = ToolApprovalMode.Deny
             }
-        };
-        var policy = CreateFileWritePolicy(approvalPolicy);
-        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
+        });
+        var args = ToolInput.Create("Path", "/tmp/scratch.txt", "Content", "hello");
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
-        Assert.True(decision.NeedsApproval);
-        Assert.NotNull(decision.ApprovalContext);
-    }
-
-    [Fact]
-    public void file_write_control_plane_falls_back_to_base_tool_override_when_specific_override_missing()
-    {
-        var approvalPolicy = new ToolApprovalConfig
-        {
-            DefaultMode = ToolApprovalMode.Approval,
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["file_write"] = ToolApprovalMode.Auto
-            }
-        };
-        var policy = CreateFileWritePolicy(approvalPolicy);
-        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
-
-        var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
-
-        Assert.True(decision.Allowed);
-        Assert.False(decision.NeedsApproval);
+        Assert.False(decision.Allowed);
+        Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
     }
 
     // ── MCP server default precedence ──
@@ -782,6 +716,36 @@ public sealed class ToolApprovalGateTests
 
         Assert.True(decision.NeedsApproval);
         Assert.Equal("notion/create-pages", decision.ApprovalContext!.ToolName);
+    }
+
+    [Theory]
+    [InlineData("Notion/Create-Pages")]
+    [InlineData("NOTION__CREATE-PAGES")]
+    public void mcp_tool_override_key_in_mixed_case_denies_the_tool(string key)
+    {
+        var policy = CreateMcpApprovalPolicy(new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Auto,
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal) { [key] = ToolApprovalMode.Deny }
+        });
+
+        var decision = policy.AuthorizeInvocation(McpTool("notion", "create-pages"), PersonalContext());
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
+    }
+
+    [Fact]
+    public void mcp_server_default_key_in_another_case_applies()
+    {
+        var policy = CreateMcpApprovalPolicy(new ToolApprovalConfig
+        {
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal) { ["NOTION"] = ToolApprovalMode.Approval }
+        });
+
+        var decision = policy.AuthorizeInvocation(McpTool("notion", "create-pages"), PersonalContext());
+
+        Assert.True(decision.NeedsApproval);
     }
 
     [Fact]

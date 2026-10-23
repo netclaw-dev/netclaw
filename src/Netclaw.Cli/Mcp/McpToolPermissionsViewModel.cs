@@ -297,7 +297,8 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var current = _pendingServerDefaults.TryGetValue(key, out var pending)
             ? pending
-            : ResolveProfile(SelectedAudience).ApprovalPolicy?.McpServerDefaults.TryGetValue(SelectedServer, out var configMode) == true
+            : ResolveProfile(SelectedAudience).ApprovalPolicy is { } currentPolicy
+              && ApprovalOverrideKeys.TryGetMode(currentPolicy.McpServerDefaults, SelectedServer, out var configMode)
                 ? configMode
                 : ToolApprovalMode.Auto;
 
@@ -379,7 +380,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             return (pendingDefault, true);
 
         if (approvalPolicy is not null
-            && approvalPolicy.McpServerDefaults.TryGetValue(SelectedServer, out var configDefault))
+            && ApprovalOverrideKeys.TryGetMode(approvalPolicy.McpServerDefaults, SelectedServer, out var configDefault))
             return (configDefault, true);
 
         return (approvalPolicy?.DefaultMode ?? ToolApprovalMode.Auto, true);
@@ -400,7 +401,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var approvalPolicy = ResolveProfile(SelectedAudience).ApprovalPolicy;
         if (approvalPolicy is not null
-            && approvalPolicy.McpServerDefaults.TryGetValue(SelectedServer, out var configMode))
+            && ApprovalOverrideKeys.TryGetMode(approvalPolicy.McpServerDefaults, SelectedServer, out var configMode))
             return configMode;
 
         return approvalPolicy?.DefaultMode ?? ToolApprovalMode.Auto;
@@ -672,8 +673,8 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         {
             var (approvalSection, inMemoryPolicy) = GetOrCreateApprovalPolicy(profilesSection, audienceName);
             var serverDefaults = ConfigFileHelper.GetOrCreateSection(approvalSection, "McpServerDefaults");
-            serverDefaults[serverName] = mode.ToString();
-            inMemoryPolicy.McpServerDefaults[serverName] = mode;
+            ApprovalOverrideKeys.Set(serverDefaults, serverName, mode.ToString());
+            ApprovalOverrideKeys.Set(inMemoryPolicy.McpServerDefaults, serverName, mode);
         }
     }
 
@@ -688,17 +689,17 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
             if (mode is null)
             {
-                toolOverrides.Remove(exactKey);
-                toolOverrides.Remove(aliasKey);
-                inMemoryPolicy.ToolOverrides.Remove(exactKey);
-                inMemoryPolicy.ToolOverrides.Remove(aliasKey);
+                ApprovalOverrideKeys.Remove(toolOverrides, exactKey);
+                ApprovalOverrideKeys.Remove(toolOverrides, aliasKey);
+                ApprovalOverrideKeys.Remove(inMemoryPolicy.ToolOverrides, exactKey);
+                ApprovalOverrideKeys.Remove(inMemoryPolicy.ToolOverrides, aliasKey);
             }
             else
             {
-                toolOverrides[exactKey] = mode.Value.ToString();
-                toolOverrides.Remove(aliasKey);
-                inMemoryPolicy.ToolOverrides[exactKey] = mode.Value;
-                inMemoryPolicy.ToolOverrides.Remove(aliasKey);
+                ApprovalOverrideKeys.Set(toolOverrides, exactKey, mode.Value.ToString());
+                ApprovalOverrideKeys.Remove(toolOverrides, aliasKey);
+                ApprovalOverrideKeys.Set(inMemoryPolicy.ToolOverrides, exactKey, mode.Value);
+                ApprovalOverrideKeys.Remove(inMemoryPolicy.ToolOverrides, aliasKey);
             }
         }
     }
@@ -710,8 +711,8 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         out ToolApprovalMode mode)
     {
         if (policy is not null
-            && (policy.ToolOverrides.TryGetValue($"{serverName}/{toolName}", out mode)
-                || policy.ToolOverrides.TryGetValue($"{serverName}__{toolName}", out mode)))
+            && (ApprovalOverrideKeys.TryGetMode(policy.ToolOverrides, $"{serverName}/{toolName}", out mode)
+                || ApprovalOverrideKeys.TryGetMode(policy.ToolOverrides, $"{serverName}__{toolName}", out mode)))
             return true;
 
         mode = default;

@@ -229,6 +229,270 @@ public sealed class ToolConfigBindingTests : IDisposable
         Assert.Equal(expected, mode);
     }
 
+    // The binder reads a colon in a key as a section separator. "file_write:control-plane" becomes
+    // a section "file_write" with a child and no value, which binds as the enum default (Auto).
+    // Such a section must not become an override of the whole tool.
+    [Theory]
+    [InlineData(TrustAudience.Personal)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Public)]
+    public void A_colon_key_in_ToolOverrides_does_not_become_an_override_of_the_tool(TrustAudience audience)
+    {
+        var policy = BindApprovalPolicy(audience,
+            """
+            {
+              "DefaultMode": "Approval",
+              "ToolOverrides": {
+                "file_write:control-plane": "Approval",
+                "file_edit:control-plane": "Deny",
+                "mcp:memorizer:store": "Approval"
+              }
+            }
+            """);
+
+        Assert.DoesNotContain(policy.ToolOverrides.Keys, static key => key is "file_write" or "file_edit" or "mcp");
+        Assert.Equal(ToolApprovalMode.Approval, policy.GetEffectiveMode("file_write"));
+        Assert.Equal(ToolApprovalMode.Approval, policy.GetEffectiveMode("file_edit"));
+        Assert.Equal(ToolApprovalMode.Approval, policy.GetEffectiveMode("mcp"));
+        Assert.Equal(ToolApprovalMode.Approval, policy.GetEffectiveMode("memorizer/store"));
+    }
+
+    [Fact]
+    public void A_colon_key_in_McpServerDefaults_does_not_become_a_server_default()
+    {
+        var policy = BindApprovalPolicy(TrustAudience.Team,
+            """{ "DefaultMode": "Approval", "McpServerDefaults": { "notion:pages": "Auto", "github": "Deny" } }""");
+
+        Assert.Equal(["github"], policy.McpServerDefaults.Keys);
+        Assert.Equal(ToolApprovalMode.Approval, policy.GetEffectiveMode("notion/create-pages"));
+        Assert.Equal(ToolApprovalMode.Deny, policy.GetEffectiveMode("github/create-issue"));
+    }
+
+    [Fact]
+    public void Ordinary_keys_bind_beside_a_colon_key()
+    {
+        var policy = BindApprovalPolicy(TrustAudience.Team,
+            """
+            {
+              "DefaultMode": "Approval",
+              "ToolOverrides": {
+                "shell_execute": "Deny",
+                "notion/create-pages": "Auto",
+                "github__create_issue": "Auto",
+                "file_write:control-plane": "Deny"
+              }
+            }
+            """);
+
+        Assert.Equal(ToolApprovalMode.Deny, policy.GetEffectiveMode("shell_execute"));
+        Assert.Equal(ToolApprovalMode.Auto, policy.GetEffectiveMode("notion/create-pages"));
+        Assert.Equal(ToolApprovalMode.Auto, policy.GetEffectiveMode("github/create_issue"));
+        Assert.Equal(ToolApprovalMode.Approval, policy.GetEffectiveMode("file_write"));
+        Assert.Equal(3, policy.ToolOverrides.Count);
+    }
+
+    [Fact]
+    public void An_explicit_key_beside_a_colon_key_of_the_same_tool_still_wins()
+    {
+        var policy = BindApprovalPolicy(TrustAudience.Team,
+            """
+            {
+              "DefaultMode": "Auto",
+              "ToolOverrides": { "file_write": "Approval", "file_write:control-plane": "Deny" }
+            }
+            """);
+
+        Assert.Equal(ToolApprovalMode.Approval, policy.ToolOverrides["file_write"]);
+        Assert.Equal(ToolApprovalMode.Approval, policy.GetEffectiveMode("file_write"));
+    }
+
+    [Fact]
+    public void A_colon_key_does_not_remove_a_posture_default_override()
+    {
+        var tools = BindPolicy(
+            """
+            {
+              "Security": { "DeploymentPosture": "Personal", "StrictDefaults": true },
+              "Tools": { "AudienceProfiles": { "Personal": { "ApprovalPolicy": { "ToolOverrides": { "shell_execute:x": "Auto" } } } } }
+            }
+            """).Tools;
+
+        Assert.Equal(ToolApprovalMode.Approval, tools.AudienceProfiles.Personal.ApprovalPolicy!.GetEffectiveMode("shell_execute"));
+    }
+
+    [Fact]
+    public void A_colon_key_in_a_JSON_source_yields_one_warning_naming_it()
+    {
+        var warnings = BindPolicy(
+            """
+            {
+              "Security": { "DeploymentPosture": "Personal", "StrictDefaults": true },
+              "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "ToolOverrides": { "shell_execute": "Deny", "file_write:control-plane": "Approval" } } } } }
+            }
+            """).ToolWarnings;
+
+        Assert.Equal(
+            ["Tools.AudienceProfiles.Team.ApprovalPolicy.ToolOverrides key 'file_write:control-plane' was ignored because a ':' in a key splits it into nested sections. No override was created, so the default approval mode applies. Write an MCP tool as server/tool."],
+            warnings);
+    }
+
+    [Fact]
+    public void A_colon_key_from_an_environment_style_source_yields_one_warning_naming_it()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Security:DeploymentPosture"] = "Personal",
+                ["Tools:AudienceProfiles:Personal:ApprovalPolicy:McpServerDefaults:notion:pages"] = "Approval",
+            })
+            .Build();
+
+        var warnings = PolicyConfiguration.Bind(configuration).ToolWarnings;
+
+        Assert.Equal(
+            ["Tools.AudienceProfiles.Personal.ApprovalPolicy.McpServerDefaults key 'notion:pages' was ignored because a ':' in a key splits it into nested sections. No override was created, so the default approval mode applies. Write an MCP tool as server/tool."],
+            warnings);
+    }
+
+    [Fact]
+    public void Ordinary_override_keys_yield_no_warning()
+    {
+        var warnings = BindPolicy(
+            """
+            {
+              "Security": { "DeploymentPosture": "Personal", "StrictDefaults": true },
+              "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "ToolOverrides": { "shell_execute": "Deny", "notion/create-pages": "Auto" }, "McpServerDefaults": { "github": "Deny" } } } } }
+            }
+            """).ToolWarnings;
+
+        Assert.Empty(warnings);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Personal, "File_Write", ToolApprovalMode.Deny)]
+    [InlineData(TrustAudience.Team, "FILE_WRITE", ToolApprovalMode.Approval)]
+    [InlineData(TrustAudience.Public, "File_write", ToolApprovalMode.Auto)]
+    public void A_wrong_case_override_key_applies_to_the_tool(TrustAudience audience, string key, ToolApprovalMode written)
+    {
+        var defaultMode = written == ToolApprovalMode.Auto ? ToolApprovalMode.Deny : ToolApprovalMode.Auto;
+        var policy = BindApprovalPolicy(audience,
+            $$"""{ "DefaultMode": "{{defaultMode}}", "ToolOverrides": { "{{key}}": "{{written}}" } }""");
+
+        Assert.Equal(written, policy.GetEffectiveMode("file_write"));
+    }
+
+    // A posture default and the operator's spelling of the same key differ only by case. The
+    // operator's key replaces the default, as the same spelling would. If both stayed, the
+    // restrictive default would win and "Shell_Execute": "Auto" could not remove the prompt.
+    [Fact]
+    public void A_wrong_case_override_replaces_the_posture_default_for_that_tool()
+    {
+        var policy = BindApprovalPolicy(TrustAudience.Personal, """{ "ToolOverrides": { "Shell_Execute": "Auto" } }""");
+
+        Assert.Equal(ToolApprovalMode.Auto, policy.GetEffectiveMode("shell_execute"));
+        Assert.DoesNotContain("shell_execute", policy.ToolOverrides.Keys);
+    }
+
+    // Configuration providers merge keys without regard to case, so a pair of keys cannot reach the
+    // policy. A JSON file with such a pair stops binding, which is loud and fails closed. The daemon
+    // and every CLI command, `netclaw doctor` included, stop with the key named.
+    [Fact]
+    public void Two_override_keys_that_differ_only_by_case_stop_binding()
+    {
+        var exception = Assert.ThrowsAny<Exception>(() => BindApprovalPolicy(
+            TrustAudience.Team,
+            """{ "ToolOverrides": { "file_write": "Auto", "File_Write": "Deny" } }"""));
+
+        Assert.Contains("duplicate", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void An_override_key_that_cannot_be_a_tool_name_is_a_warning_that_names_the_key()
+    {
+        var warnings = BindPolicy(
+            """
+            {
+              "Security": { "DeploymentPosture": "Personal", "StrictDefaults": true },
+              "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "ToolOverrides": { "file write": "Deny", "File_Write": "Deny", "some_future_tool": "Deny" } } } } }
+            }
+            """).ToolWarnings;
+
+        var warning = Assert.Single(warnings);
+        Assert.Contains("Tools.AudienceProfiles.Team.ApprovalPolicy.ToolOverrides key 'file write'", warning);
+        Assert.Contains("cannot be a tool name", warning);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    public void An_override_key_with_no_value_is_ignored_and_the_warning_says_so(string value)
+    {
+        var warnings = BindPolicy(
+            $$"""
+            {
+              "Security": { "DeploymentPosture": "Personal", "StrictDefaults": true },
+              "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "ToolOverrides": { "file_write": {{value}} } } } } }
+            }
+            """).ToolWarnings;
+
+        var warning = Assert.Single(warnings);
+        Assert.Equal(
+            "Tools.AudienceProfiles.Team.ApprovalPolicy.ToolOverrides key 'file_write' has no value and was ignored. No override was created, so the default approval mode applies.",
+            warning);
+    }
+
+    [Fact]
+    public void A_key_whose_spelling_differs_from_the_tool_gets_one_notice_and_still_applies()
+    {
+        var policy = BindPolicy(
+            """
+            {
+              "Security": { "DeploymentPosture": "Personal", "StrictDefaults": true },
+              "McpServers": { "notion": { "Transport": "http", "Url": "https://example.test/mcp" } },
+              "Tools": { "AudienceProfiles": { "Personal": { "ApprovalPolicy": {
+                "ToolOverrides": { "Shell_Execute": "Auto", "Notion/Search": "Deny", "file_read": "Auto" },
+                "McpServerDefaults": { "Notion": "Approval" } } } } }
+            }
+            """);
+
+        Assert.Equal(
+            [
+                "Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides key 'Notion/Search' now applies to the tools of MCP server 'notion' (keys are matched without regard to case).",
+                "Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides key 'Shell_Execute' now applies to tool 'shell_execute' (keys are matched without regard to case).",
+                "Tools.AudienceProfiles.Personal.ApprovalPolicy.McpServerDefaults key 'Notion' now applies to MCP server 'notion' (keys are matched without regard to case)."
+            ],
+            policy.ToolNotices);
+        Assert.Equal(ToolApprovalMode.Auto, policy.Tools.AudienceProfiles.Personal.ApprovalPolicy!.GetEffectiveMode("shell_execute"));
+    }
+
+    [Fact]
+    public void Keys_spelled_like_the_tool_get_no_notice()
+    {
+        var notices = BindPolicy(
+            """
+            {
+              "Security": { "DeploymentPosture": "Personal", "StrictDefaults": true },
+              "McpServers": { "GitHub": { "Transport": "http", "Url": "https://example.test/mcp" } },
+              "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "ToolOverrides": { "shell_execute": "Deny", "GitHub/Create_Issue": "Deny" }, "McpServerDefaults": { "GitHub": "Deny" } } } } }
+            }
+            """).ToolNotices;
+
+        Assert.Empty(notices);
+    }
+
+    private ToolApprovalConfig BindApprovalPolicy(TrustAudience audience, string approvalPolicy)
+    {
+        var tools = BindPolicy(
+            $$"""
+            {
+              "Security": { "DeploymentPosture": "Personal", "StrictDefaults": true },
+              "Tools": { "AudienceProfiles": { "{{audience}}": { "ApprovalPolicy": {{approvalPolicy}} } } }
+            }
+            """).Tools;
+        return ToolAudienceProfileDefaults.GetResolvedProfile(tools.AudienceProfiles, audience).ApprovalPolicy!;
+    }
+
     [Fact]
     public void An_undefined_posture_stops_binding()
     {

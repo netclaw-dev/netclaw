@@ -991,6 +991,56 @@ public sealed class McpCommandTests : IDisposable
         Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
     }
 
+    // An existing key in another case must be replaced. Two keys that differ only by case make
+    // the next config load fail.
+    [Fact]
+    public async Task Tools_Revoke_ReplacesAnExistingOverrideKeyInAnotherCase()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": { "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "Dropbox/Delete": "Approval", "dropbox__DELETE": "Approval" } } } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--revoke", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Personal")
+            .GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        var property = Assert.Single(overrides.EnumerateObject());
+        Assert.Equal("dropbox/delete", property.Name);
+        Assert.Equal("Deny", property.Value.GetString());
+    }
+
+    [Fact]
+    public async Task Tools_Grant_RemovesAnExistingDenyOverrideKeyInAnotherCase()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": { "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "Dropbox/Delete": "Deny", "other": "Auto" } } } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Personal")
+            .GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.Equal(["other"], overrides.EnumerateObject().Select(static p => p.Name));
+    }
+
     [Fact]
     public async Task Tools_InvalidToolsSection_StopsWithAnError()
     {

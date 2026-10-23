@@ -452,12 +452,12 @@ internal static class McpCommand
             if (!grantAll && audience != TrustAudience.Personal)
             {
                 var grants = GetOrCreateSection(audienceSection, "McpServerToolGrants");
-                grants[serverName.Value] = new List<string>();
+                ApprovalOverrideKeys.Set(grants, serverName.Value, new List<string>());
             }
 
             var approvalPolicy = GetOrCreateSection(audienceSection, "ApprovalPolicy");
             var serverDefaults = GetOrCreateSection(approvalPolicy, "McpServerDefaults");
-            serverDefaults[serverName.Value] = approvalMode.ToString();
+            ApprovalOverrideKeys.Set(serverDefaults, serverName.Value, approvalMode.ToString());
         }
     }
 
@@ -988,8 +988,8 @@ internal static class McpCommand
            && !configuredServers.Any(other => other.Length > serverName.Value.Length && StartsWithServer(key, other));
 
     private static bool StartsWithServer(string key, string server)
-        => key.StartsWith(server + "/", StringComparison.Ordinal)
-           || key.StartsWith(server + "__", StringComparison.Ordinal);
+        => key.StartsWith(server + "/", StringComparison.OrdinalIgnoreCase)
+           || key.StartsWith(server + "__", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Removes the server's entries from every audience profile: the allow-list, the tool
@@ -1023,12 +1023,14 @@ internal static class McpCommand
                 removed = true;
             }
 
-            removed |= GetSectionOrNull(profile, "McpServerToolGrants")?.Remove(serverName.Value) == true;
+            removed |= GetSectionOrNull(profile, "McpServerToolGrants") is { } grants
+                && ApprovalOverrideKeys.Remove(grants, serverName.Value);
 
             if (GetSectionOrNull(profile, "ApprovalPolicy") is not { } approvalPolicy)
                 continue;
 
-            removed |= GetSectionOrNull(approvalPolicy, "McpServerDefaults")?.Remove(serverName.Value) == true;
+            removed |= GetSectionOrNull(approvalPolicy, "McpServerDefaults") is { } serverDefaults
+                && ApprovalOverrideKeys.Remove(serverDefaults, serverName.Value);
 
             if (GetSectionOrNull(approvalPolicy, "ToolOverrides") is { } toolOverrides)
             {
@@ -1036,7 +1038,7 @@ internal static class McpCommand
                     .Where(key => IsToolOfServer(key, serverName, configured))
                     .ToList();
                 foreach (var key in staleKeys)
-                    toolOverrides.Remove(key);
+                    ApprovalOverrideKeys.Remove(toolOverrides, key);
 
                 removed |= staleKeys.Count > 0;
             }
@@ -1755,18 +1757,18 @@ internal static class McpCommand
                         continue;
 
                     if (serverDefaultIsDeny)
-                        toolOverrides[key] = ToolApprovalMode.Approval.ToString();
+                        ApprovalOverrideKeys.Set(toolOverrides, key, ToolApprovalMode.Approval.ToString());
                     else
-                        toolOverrides.Remove(key);
+                        ApprovalOverrideKeys.Remove(toolOverrides, key);
 
-                    toolOverrides.Remove(aliasKey);
+                    ApprovalOverrideKeys.Remove(toolOverrides, aliasKey);
                 }
 
             if (revokeTools is not null)
                 foreach (var tool in revokeTools)
                 {
-                    toolOverrides[$"{serverName.Value}/{tool}"] = ToolApprovalMode.Deny.ToString();
-                    toolOverrides.Remove($"{serverName.Value}__{tool}");
+                    ApprovalOverrideKeys.Set(toolOverrides, $"{serverName.Value}/{tool}", ToolApprovalMode.Deny.ToString());
+                    ApprovalOverrideKeys.Remove(toolOverrides, $"{serverName.Value}__{tool}");
                 }
 
             WriteConfigFile(paths.NetclawConfigPath, allConfig);
@@ -1909,7 +1911,7 @@ internal static class McpCommand
         if (approvalPolicy is null)
             return ToolApprovalMode.Auto;
 
-        return approvalPolicy.McpServerDefaults.TryGetValue(serverName, out var serverDefault)
+        return ApprovalOverrideKeys.TryGetMode(approvalPolicy.McpServerDefaults, serverName, out var serverDefault)
             ? serverDefault
             : approvalPolicy.DefaultMode;
     }
@@ -1921,8 +1923,8 @@ internal static class McpCommand
         out ToolApprovalMode mode)
     {
         if (policy is not null
-            && (policy.ToolOverrides.TryGetValue($"{serverName}/{toolName}", out mode)
-                || policy.ToolOverrides.TryGetValue($"{serverName}__{toolName}", out mode)))
+            && (ApprovalOverrideKeys.TryGetMode(policy.ToolOverrides, $"{serverName}/{toolName}", out mode)
+                || ApprovalOverrideKeys.TryGetMode(policy.ToolOverrides, $"{serverName}__{toolName}", out mode)))
             return true;
 
         mode = default;

@@ -17,14 +17,28 @@ public sealed record PolicyConfiguration(
     SecurityPolicyConfig Security,
     EffectivePolicyDefaults Defaults,
     ToolConfig Tools,
-    IReadOnlyList<string> ToolWarnings)
+    IReadOnlyList<string> ToolWarnings,
+    IReadOnlyList<string> ToolNotices)
 {
     public static PolicyConfiguration Bind(IConfiguration configuration)
     {
         var security = configuration.GetSection("Security").Get<SecurityPolicyConfig>() ?? new SecurityPolicyConfig();
         var defaults = SecurityPolicyDefaults.Resolve(security);
         var tools = ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), defaults.DeploymentPosture, out var warnings);
-        return new PolicyConfiguration(security, defaults, tools, warnings);
+        var serverNames = configuration.GetSection("McpServers").GetChildren().Select(static server => server.Key).ToList();
+        return new PolicyConfiguration(security, defaults, tools, warnings, [.. DescribeSpellingNotices(tools.AudienceProfiles, serverNames)]);
+    }
+
+    private static IEnumerable<string> DescribeSpellingNotices(ToolAudienceProfiles profiles, IReadOnlyCollection<string> serverNames)
+    {
+        foreach (var (name, profile) in new[] { ("Personal", profiles.Personal), ("Team", profiles.Team), ("Public", profiles.Public) })
+        {
+            if (profile.ApprovalPolicy is { } policy)
+            {
+                foreach (var notice in ApprovalOverrideKeys.DescribeSpellingNotices($"Tools.AudienceProfiles.{name}.ApprovalPolicy", policy, serverNames))
+                    yield return notice;
+            }
+        }
     }
 }
 
@@ -96,6 +110,7 @@ public sealed class ToolConfig
 
         var defaults = CreatePostureDefaults(posture);
         var found = new List<string>();
+        RemoveValuelessApprovalEntries(section, toolConfig, defaults, found);
         foreach (var list in DefaultedLists)
             list.ApplyConfiguredOrDefault(section, toolConfig, defaults, found);
         MapLegacyDefaultAllowedTools(toolConfig.AudienceProfiles.Public, TrustAudience.Public, found);
@@ -111,6 +126,104 @@ public sealed class ToolConfig
         }
 
         return toolConfig;
+    }
+
+    // The binder reads a colon in a key as a section separator, so "file_write:control-plane" becomes
+    // a section "file_write" with a child and no value of its own. It binds that section as the enum
+    // default (Auto) and the policy would treat it as an explicit override of the whole tool. Only an
+    // entry that carries a value is an override. Each dropped key is a warning, because the doctor check
+    // reads only netclaw.json and a key from an environment variable or secrets.json would go unreported.
+    private static void RemoveValuelessApprovalEntries(IConfigurationSection tools, ToolConfig bound, ToolConfig defaults, List<string> warnings)
+    {
+        foreach (var (name, profile, defaultProfile) in new[]
+        {
+            ("Personal", bound.AudienceProfiles.Personal, defaults.AudienceProfiles.Personal),
+            ("Team", bound.AudienceProfiles.Team, defaults.AudienceProfiles.Team),
+            ("Public", bound.AudienceProfiles.Public, defaults.AudienceProfiles.Public),
+        })
+        {
+            if (profile.ApprovalPolicy is not { } policy)
+                continue;
+
+            var policyKey = $"AudienceProfiles:{name}:ApprovalPolicy:";
+            var defaultPolicy = defaultProfile.ApprovalPolicy;
+            var overrides = tools.GetSection(policyKey + nameof(ToolApprovalConfig.ToolOverrides));
+            RemoveValueless(overrides, policy.ToolOverrides, defaultPolicy?.ToolOverrides, warnings);
+            RemoveValueless(tools.GetSection(policyKey + nameof(ToolApprovalConfig.McpServerDefaults)), policy.McpServerDefaults, defaultPolicy?.McpServerDefaults, warnings);
+            WarnAboutUnusableOverrideKeys(overrides, policy.ToolOverrides, warnings);
+        }
+    }
+
+    // A key that cannot be a tool name never matches a tool, so the mode written for it is not
+    // applied. See ApprovalOverrideKeys.CanBeToolName for why this checks the shape of the name.
+    private static void WarnAboutUnusableOverrideKeys(IConfigurationSection map, Dictionary<string, ToolApprovalMode> bound, List<string> warnings)
+    {
+        foreach (var key in bound.Keys.Where(static key => !ApprovalOverrideKeys.CanBeToolName(key)).Order(StringComparer.Ordinal))
+        {
+            warnings.Add(ApprovalOverrideKeys.DescribeUnusableKey(map.Path.Replace(':', '.'), key));
+        }
+    }
+
+    private static void RemoveValueless(
+        IConfigurationSection map,
+        Dictionary<string, ToolApprovalMode> bound,
+        Dictionary<string, ToolApprovalMode>? defaults,
+        List<string> warnings)
+    {
+        // A key that differs from a posture default only by case is the operator's spelling of that
+        // key. It replaces the default, as the same spelling would. Both would otherwise stay, and
+        // the more restrictive of the two would apply, so a default could not be loosened.
+        foreach (var configured in map.GetChildren().Where(static entry => !string.IsNullOrEmpty(entry.Value)))
+        {
+            foreach (var key in bound.Keys.Where(key => string.Equals(key, configured.Key, StringComparison.OrdinalIgnoreCase)
+                         && !string.Equals(key, configured.Key, StringComparison.Ordinal)
+                         && defaults is not null && defaults.ContainsKey(key)).ToList())
+            {
+                bound.Remove(key);
+            }
+        }
+
+        // JSON [] and "" give an empty value, null and {} give none.
+        foreach (var entry in map.GetChildren().Where(static entry => string.IsNullOrEmpty(entry.Value)))
+        {
+            bound.Remove(entry.Key);
+            if (defaults is not null && defaults.TryGetValue(entry.Key, out var defaultMode))
+                bound[entry.Key] = defaultMode;
+
+            // The children carry the rest of the key the operator wrote, such as "control-plane". A key
+            // with no children had a null, {} or [] value.
+            var path = map.Path.Replace(':', '.');
+            var written = LeafPaths(entry).Select(leaf => leaf[(map.Path.Length + 1)..]).ToList();
+            if (written.Count == 0)
+            {
+                warnings.Add(
+                    $"{path} key '{entry.Key}' has no value and was ignored. "
+                    + "No override was created, so the default approval mode applies.");
+                continue;
+            }
+
+            foreach (var key in written)
+            {
+                warnings.Add(
+                    $"{path} key '{key}' was ignored because a ':' in a key splits it into nested sections. "
+                    + "No override was created, so the default approval mode applies. "
+                    + "Write an MCP tool as server/tool.");
+            }
+        }
+    }
+
+    private static IEnumerable<string> LeafPaths(IConfigurationSection section)
+    {
+        foreach (var child in section.GetChildren())
+        {
+            if (child.Value is not null)
+                yield return child.Path;
+            else
+            {
+                foreach (var path in LeafPaths(child))
+                    yield return path;
+            }
+        }
     }
 
     private static ToolConfig CreatePostureDefaults(DeploymentPosture posture)

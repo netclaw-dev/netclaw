@@ -101,13 +101,19 @@ public sealed class ApprovalContractGuardTests(ShellApprovalMatrixFixture fixtur
         Assert.Contains("project-tilde-content", run.Output);
     }
 
-    // Guard: the "file_write:control-plane" approval override key has no
-    // effect with the production protected paths. The configuration directory
-    // is write-denied before the approval mode is read.
+    // Guard: the configuration directory is write-denied before an approval mode
+    // is read, so no approval mode opens it. A retired "<tool>:control-plane"
+    // override key in an old configuration changes nothing either.
     [Theory]
-    [InlineData(ToolApprovalMode.Auto)]
-    [InlineData(ToolApprovalMode.Approval)]
-    public async Task Control_plane_approval_override_does_not_open_the_configuration_directory(ToolApprovalMode mode)
+    [InlineData("file_write", ToolApprovalMode.Auto)]
+    [InlineData("file_write", ToolApprovalMode.Approval)]
+    [InlineData("file_write", ToolApprovalMode.Deny)]
+    [InlineData("file_edit", ToolApprovalMode.Auto)]
+    [InlineData("file_edit", ToolApprovalMode.Approval)]
+    [InlineData("file_edit", ToolApprovalMode.Deny)]
+    public async Task No_approval_mode_opens_the_configuration_directory_to_a_file_tool(
+        string tool,
+        ToolApprovalMode mode)
     {
         await using var harness = await ShellApprovalHarness.CreateAsync(
             "control-plane-override",
@@ -119,19 +125,24 @@ public sealed class ApprovalContractGuardTests(ShellApprovalMatrixFixture fixtur
             {
                 PersonalApprovalOverrides = new Dictionary<string, ToolApprovalMode>
                 {
-                    ["file_write:control-plane"] = mode
+                    [tool] = mode,
+                    [tool + ":control-plane"] = mode
                 }
             });
         var target = harness.Paths.NetclawConfigPath;
-        var arguments = ToolInput.Create("Path", target, "Content", "{}");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        await File.WriteAllTextAsync(target, "original", Ct);
+        var arguments = tool == "file_write"
+            ? ToolInput.Create("Path", target, "Content", "{}")
+            : ToolInput.Create("Path", target, "OldString", "original", "NewString", "changed");
 
-        var decision = await harness.EvaluateToolAsync("file_write", arguments, Ct);
-        var run = await harness.RunToolAsync("file_write", arguments, Ct);
+        var decision = await harness.EvaluateToolAsync(tool, arguments, Ct);
+        var run = await harness.RunToolAsync(tool, arguments, Ct);
 
         Assert.Equal(ApprovalOutcome.Denied, decision.Outcome);
         Assert.Equal("path_access_denied", decision.DenyReason);
         Assert.Equal(ApprovalOutcome.Denied, run.Outcome);
-        Assert.False(File.Exists(target));
+        Assert.Equal("original", await File.ReadAllTextAsync(target, Ct));
     }
 
     // Guard: allow checks compare paths with case. On a case-insensitive macOS

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -783,6 +784,249 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
               }
             }
             """;
+
+    [Fact]
+    public async Task ControlPlaneOverrideKey_IsReportedAsInvalidAndSetsNoOverride()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ApprovalPolicy": {
+                      "DefaultMode": "Approval",
+                      "ToolOverrides": {
+                        "shell_execute": "Approval",
+                        "file_write:control-plane": "Approval",
+                        "file_edit:control-plane": "Deny"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        var toolConfig = ConfigFileHelper.LoadToolConfig(_paths);
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        var policy = toolConfig.AudienceProfiles.Personal.ApprovalPolicy!;
+        Assert.Equal(ToolApprovalMode.Approval, policy.ToolOverrides["shell_execute"]);
+        Assert.DoesNotContain("file_write", policy.ToolOverrides.Keys);
+        Assert.DoesNotContain("file_edit", policy.ToolOverrides.Keys);
+        Assert.Equal(ToolApprovalMode.Approval, policy.GetEffectiveMode("file_write"));
+        Assert.Equal(ToolApprovalMode.Approval, policy.GetEffectiveMode("file_edit"));
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains(
+            "Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides key 'file_edit:control-plane' is not a valid tool name and was ignored.",
+            result.Message);
+        Assert.Contains("key 'file_write:control-plane' is not a valid tool name and was ignored.", result.Message);
+        Assert.Contains(
+            "0.27.1 and earlier an override named 'file_write' was created with mode Auto, so a tool of that name may have run without approval and the mode you wrote was never applied.",
+            result.Message);
+        Assert.Contains("Valid forms are tool_name, server/tool, or server__tool.", result.Message);
+    }
+
+    [Theory]
+    [InlineData("ToolOverrides", "mcp:memorizer:store", "an override named 'mcp' was created with mode Auto, so a tool of that name may have run without approval and the mode you wrote was never applied.")]
+    [InlineData("McpServerDefaults", "notion:pages", "every tool of MCP server 'notion' was set to Auto.")]
+    [InlineData("toolOVERRIDES", "mcp:memorizer:store", "an override named 'mcp' was created with mode Auto, so a tool of that name may have run without approval and the mode you wrote was never applied.")]
+    public async Task ColonKey_InMcpOrToolMaps_IsReportedAsInvalid(string map, string key, string effect)
+    {
+        File.WriteAllText(
+            _paths.NetclawConfigPath,
+            $$"""
+            {
+              "configVersion": 1,
+              "Tools": {
+                "audienceprofiles": {
+                  "team": { "approvalpolicy": { "{{map}}": { "{{key}}": "Approval", "shell_execute": "Deny" } } }
+                }
+              }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains($"Tools.AudienceProfiles.Team.ApprovalPolicy.{(map.Equals("McpServerDefaults", StringComparison.Ordinal) ? map : "ToolOverrides")} key '{key}'", result.Message);
+        Assert.Contains($"0.27.1 and earlier {effect}", result.Message);
+        Assert.DoesNotContain("shell_execute", result.Message);
+    }
+
+    [Fact]
+    public async Task ColonKey_ForThePublicAudience_IsReportedAsInvalid()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Public": { "ApprovalPolicy": { "ToolOverrides": { "file_write:control-plane": "Approval" } } }
+                }
+              }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Tools.AudienceProfiles.Public.ApprovalPolicy.ToolOverrides key 'file_write:control-plane'", result.Message);
+    }
+
+    [Theory]
+    [InlineData("shell_execute")]
+    [InlineData("notion/create-pages")]
+    [InlineData("notion__create_pages")]
+    public async Task ValidOverrideKeys_AreNotReported(string key)
+    {
+        WriteConfig(
+            new
+            {
+                configVersion = 1,
+                Tools = new { AudienceProfiles = new { Personal = new { ApprovalPolicy = new { ToolOverrides = new Dictionary<string, string> { [key] = "Approval" } } } } },
+            });
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("not a valid tool name", result.Message);
+    }
+
+    [Fact]
+    public async Task WrongCaseOverrideKey_IsAcceptedAndAppliesToTheTool()
+    {
+        WriteConfig(
+            new
+            {
+                configVersion = 1,
+                Tools = new { AudienceProfiles = new { Personal = new { ApprovalPolicy = new { ToolOverrides = new Dictionary<string, string> { ["File_Write"] = "Deny" } } } } },
+            });
+
+        var toolConfig = ConfigFileHelper.LoadToolConfig(_paths);
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolApprovalMode.Deny, toolConfig.AudienceProfiles.Personal.ApprovalPolicy!.GetEffectiveMode("file_write"));
+        Assert.DoesNotContain("ignored", result.Message);
+        Assert.Contains("key 'File_Write' now applies to tool 'file_write'", result.Message);
+        Assert.NotEqual(DoctorSeverity.Error, result.Severity);
+    }
+
+    [Fact]
+    public async Task OverrideKeyThatCannotBeAToolName_IsAWarningThatNamesTheKey()
+    {
+        WriteConfig(
+            new
+            {
+                configVersion = 1,
+                Tools = new { AudienceProfiles = new { Team = new { ApprovalPolicy = new { ToolOverrides = new Dictionary<string, string> { ["file write"] = "Deny", ["some_future_tool"] = "Deny" } } } } },
+            });
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Tools.AudienceProfiles.Team.ApprovalPolicy.ToolOverrides key 'file write' was ignored because it cannot be a tool name.", result.Message);
+        Assert.DoesNotContain("some_future_tool", result.Message);
+    }
+
+    [Theory]
+    [InlineData("shell_execute")]
+    [InlineData("Shell_Execute")]
+    public async Task ExplicitPersonalShellAuto_IsReportedWhenTheShellModeComesFromThePosture(string key)
+    {
+        // Tools.ShellMode is unset. The posture gives HostAllowed, as in the daemon.
+        WriteConfig(
+            $$"""
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Personal", "ShellExecutionMode": "HostAllowed", "StrictDefaults": true },
+              "Tools": { "AudienceProfiles": { "Personal": { "ApprovalPolicy": { "ToolOverrides": { "{{key}}": "Auto" } } } } }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("Personal profile explicitly sets shell_execute to Auto", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task KeysSpelledDifferentlyFromTheTool_AreReportedOncePerKey()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "McpServers": { "notion": { "Transport": "http", "Url": "https://example.test/mcp" } },
+              "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": {
+                "ToolOverrides": { "File_Write": "Deny", "Notion/Search": "Deny" },
+                "McpServerDefaults": { "Notion": "Deny" } } } } }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Tools.AudienceProfiles.Team.ApprovalPolicy.ToolOverrides key 'File_Write' now applies to tool 'file_write' (keys are matched without regard to case).", result.Message);
+        Assert.Contains("ToolOverrides key 'Notion/Search' now applies to the tools of MCP server 'notion' (keys are matched without regard to case).", result.Message);
+        Assert.Contains("McpServerDefaults key 'Notion' now applies to MCP server 'notion' (keys are matched without regard to case).", result.Message);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    public async Task OverrideKeyWithNoValue_IsReportedAsIgnored(string value)
+    {
+        WriteConfig(
+            $$"""
+            {
+              "configVersion": 1,
+              "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "ToolOverrides": { "file_write": {{value}} } } } } }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Tools.AudienceProfiles.Team.ApprovalPolicy.ToolOverrides key 'file_write' has no value and was ignored.", result.Message);
+        Assert.DoesNotContain("':'", result.Message);
+    }
+
+    [Fact]
+    public async Task ControlPlaneOverrideKey_PassesSchemaValidation()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ApprovalPolicy": {
+                      "ToolOverrides": { "file_write:control-plane": "Auto" }
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        var result = await new ConfigSchemaDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public void ConfigSchema_DoesNotAdvertiseControlPlaneOverrideKeys()
+    {
+        var schemaText = EmbeddedSchemaLoader.LoadConfigSchema(EmbeddedSchemaLoader.CurrentSchemaVersion);
+
+        Assert.NotNull(schemaText);
+        Assert.DoesNotContain(":control-plane", schemaText, StringComparison.Ordinal);
+    }
 
     private void WriteConfig(object config)
     {

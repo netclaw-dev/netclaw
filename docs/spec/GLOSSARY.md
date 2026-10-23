@@ -629,7 +629,7 @@ The configuration key is `ApprovalPolicy` and stays so.
 
 A candidate is one unit of a tool call that needs coverage. A shell call has
 one candidate per command occurrence. A non-shell tool has one candidate: its
-tool name, or a path-scoped name for a protected write target.
+tool name.
 
 **Code anchors:** `ApprovalCandidate`, `ShellPolicyCandidate`
 

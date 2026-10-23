@@ -643,6 +643,35 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ToggleTool_AllMcpServersMode_RespectsAndReplacesAMixedCaseDenyOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "Dropbox/Copy": "Deny" } }
+          } } }
+        }
+        """);
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        Assert.False(vm.IsToolGranted(new ToolName("copy")));
+
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.True(vm.IsToolGranted(new ToolName("copy")));
+        Assert.True(vm.Save());
+
+        // The edit removes the old spelling. Left in place, it would sit beside a new key and the
+        // daemon would stop at startup on the pair.
+        var personal = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Personal");
+        var overrides = personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.Empty(overrides.EnumerateObject());
+    }
+
+    [Fact]
     public void ToggleTool_AllMcpServersMode_EnablesOverDefaultDeny()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """

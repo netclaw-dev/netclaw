@@ -2456,18 +2456,17 @@ public partial class DispatchingToolExecutorTests : IDisposable
     }
 
     [Fact]
-    public async Task One_time_approval_bypasses_policy_for_path_aware_file_patterns()
+    public async Task File_write_prompt_shows_the_path_and_one_time_approval_allows_the_retry()
     {
-        // The control-plane root must not sit under a platform temp root. A
-        // file_write under a temp root gets managed temp-directory advice, which
-        // takes precedence over the approval prompt. The test binaries may run
-        // from /tmp, so the root uses the user profile, as other approval tests do.
-        var controlPlaneRoot = Path.Combine(
+        // The root must not sit under a platform temp root. A file_write under a temp
+        // root gets managed temp-directory advice, which takes precedence over the
+        // approval prompt. The test binaries may run from /tmp, so the root uses the
+        // user profile, as other approval tests do.
+        var root = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            $".netclaw-control-plane-{Guid.NewGuid():N}");
-        var targetPath = Path.Combine(controlPlaneRoot, "netclaw.json");
-        var secondPath = Path.Combine(controlPlaneRoot, "devices.json");
-        Directory.CreateDirectory(controlPlaneRoot);
+            $".netclaw-file-approval-{Guid.NewGuid():N}");
+        var targetPath = Path.Combine(root, "notes.txt");
+        Directory.CreateDirectory(root);
 
         try
         {
@@ -2476,7 +2475,7 @@ public partial class DispatchingToolExecutorTests : IDisposable
             {
                 ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
                 {
-                    ["shell_execute"] = ToolApprovalMode.Approval
+                    ["file_write"] = ToolApprovalMode.Approval
                 }
             };
 
@@ -2494,10 +2493,10 @@ public partial class DispatchingToolExecutorTests : IDisposable
                         UsedStrictFallback: false),
                     new ShellCommandPolicy(),
                     new ToolPathPolicy([]),
-                    fileApprovalMatcher: new FilePathApprovalMatcher(controlPlaneRoot)));
+                    fileApprovalMatcher: new FilePathApprovalMatcher()));
 
             var toolCall = CreateToolCall(
-                "call-file-approve-once-bypass",
+                "call-file-approve-once",
                 "file_write",
                 ToolInput.Create("Path", targetPath, "Content", "approved once"));
 
@@ -2512,19 +2511,16 @@ public partial class DispatchingToolExecutorTests : IDisposable
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
 
+            // The prompt names the path. The saved grant is the tool name alone, so it does not
+            // pin the path of the call that was approved.
+            Assert.Equal($"file_write: {targetPath}", firstAttempt.ApprovalContext.DisplayText);
+            Assert.Equal(["file_write"], firstAttempt.ApprovalContext.Patterns);
+
             context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext)));
 
             var retryResult = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
             Assert.Contains("Successfully wrote", retryResult, StringComparison.Ordinal);
             Assert.True(File.Exists(targetPath));
-
-            var secondCall = CreateToolCall(
-                "call-file-approve-once-bypass-second",
-                "file_write",
-                ToolInput.Create("Path", secondPath, "Content", "different path"));
-
-            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
-                executor.ExecuteAsync(secondCall, context, TestContext.Current.CancellationToken));
 
             context.Approval.ClearOneTimeConsent();
 
@@ -2533,8 +2529,8 @@ public partial class DispatchingToolExecutorTests : IDisposable
         }
         finally
         {
-            if (Directory.Exists(controlPlaneRoot))
-                Directory.Delete(controlPlaneRoot, recursive: true);
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
         }
     }
 
@@ -2570,7 +2566,7 @@ public partial class DispatchingToolExecutorTests : IDisposable
                 UsedStrictFallback: false),
             commandPolicy,
             protectedPaths,
-            fileApprovalMatcher: new FilePathApprovalMatcher(paths.ConfigDirectory));
+            fileApprovalMatcher: new FilePathApprovalMatcher());
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(policy);
         var executor = new DispatchingToolExecutor(registry, policy, new UnexpectedApprovalService());

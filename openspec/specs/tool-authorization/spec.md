@@ -239,17 +239,16 @@ daemon startup with an error that names the invalid entries.
 ### Requirement: TA-4 Consent mode and shell mode resolve per audience and tool
 
 The consent mode of a call SHALL be `Auto`, `Approval`, or `Deny`, resolved in
-this order: a matcher-specific key (for example `file_write:control-plane`),
-`ToolOverrides[tool]` (an MCP `server__tool` alias also matches),
+this order: `ToolOverrides[tool]` (an MCP `server__tool` alias also matches),
 `McpServerDefaults[server]`, the Personal fail-closed rule, then `DefaultMode`.
+Keys SHALL match without regard to case. If two keys differ only by case, the
+more restrictive mode SHALL apply.
 Without an `ApprovalPolicy`, the mode SHALL be `Auto` except where the
 Personal fail-closed rule applies.
 
 - The Personal fail-closed rule SHALL select `Approval` for `shell_execute`
-  unless an exact `shell_execute` override selects a mode. It SHALL apply when
+  unless a `shell_execute` override selects a mode. It SHALL apply when
   `ApprovalPolicy` is absent and when `DefaultMode` is `Auto`.
-- The rule SHALL also select `Approval` for Personal `file_write` and
-  `file_edit` on a Netclaw control-plane path.
 - `Deny` SHALL deny with `tool_denied_by_approval_policy` and SHALL NOT prompt.
 - A shell call that needs an exact tree approval SHALL raise `Auto` to
   `Approval`.

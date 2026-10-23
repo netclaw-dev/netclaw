@@ -48,11 +48,14 @@ internal static class ConfigFileHelper
     /// view narrows the profile (issue #2362).
     /// </remarks>
     internal static ToolConfig LoadToolConfig(Configuration.NetclawPaths paths)
+        => LoadPolicyConfiguration(paths).Tools;
+
+    internal static PolicyConfiguration LoadPolicyConfiguration(Configuration.NetclawPaths paths)
     {
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
             .Build();
-        return PolicyConfiguration.Bind(configuration).Tools;
+        return PolicyConfiguration.Bind(configuration);
     }
 
     /// <summary>

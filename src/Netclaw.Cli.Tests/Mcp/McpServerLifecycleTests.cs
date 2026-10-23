@@ -200,25 +200,45 @@ public sealed class McpServerLifecycleTests : IDisposable
     }
 
     [Fact]
-    public async Task Remove_ServerWithCaseVariantSibling_KeepsEntriesTheSiblingUses()
+    public async Task Remove_ClearsEveryCaseSpellingOfTheServersKeys()
     {
-        WriteServers("github", "GITHUB");
+        // A sibling server that differs only by case cannot exist in a loadable config, so entries
+        // under another spelling of the name are leftovers. Keys match without regard to case.
+        WriteServers("github");
         ConfigureOperatorState("github");
         ConfigureOperatorState("GITHUB");
+        var config = ReadConfig();
+        foreach (var audience in new[] { "Team", "Public" })
+            config["Tools"]!["AudienceProfiles"]![audience]!["ApprovalPolicy"]!["ToolOverrides"]!["GitHub__extra"] = "Deny";
+        File.WriteAllText(_paths.NetclawConfigPath, config.ToJsonString());
 
         Assert.Equal(0, await McpCommand.RunAsync(["mcp", "remove", "github"], _paths, output: _output));
 
         foreach (var audience in new[] { "Team", "Public" })
         {
             var profile = ReadConfig()["Tools"]!["AudienceProfiles"]![audience]!;
-            // The runtime reads these allow-list entries as the surviving server too.
-            Assert.Contains("github", profile["AllowedMcpServers"]!.AsArray().Select(node => node!.GetValue<string>()));
-            Assert.Contains("GITHUB", profile["AllowedMcpServers"]!.AsArray().Select(node => node!.GetValue<string>()));
-            Assert.Null(profile["McpServerToolGrants"]!["github"]);
-            Assert.NotNull(profile["McpServerToolGrants"]!["GITHUB"]);
-            Assert.NotNull(profile["ApprovalPolicy"]!["McpServerDefaults"]!["GITHUB"]);
-            Assert.NotNull(profile["ApprovalPolicy"]!["ToolOverrides"]!["GITHUB/fetch"]);
-            Assert.Null(profile["ApprovalPolicy"]!["ToolOverrides"]!["github/fetch"]);
+            Assert.Equal(["unrelated"], profile["AllowedMcpServers"]!.AsArray().Select(node => node!.GetValue<string>()));
+            Assert.Empty(profile["McpServerToolGrants"]!.AsObject());
+            Assert.Empty(profile["ApprovalPolicy"]!["McpServerDefaults"]!.AsObject());
+            Assert.Equal(["file_write"], profile["ApprovalPolicy"]!["ToolOverrides"]!.AsObject().Select(pair => pair.Key));
+        }
+    }
+
+    // The defaults that add writes replace a leftover under another spelling of the name. Two
+    // keys that differ only by case stop the next config load.
+    [Fact]
+    public async Task Add_ReplacesLeftoverGrantAndDefaultKeysInAnotherCase()
+    {
+        WriteServers();
+        ConfigureOperatorState("NOTION");
+
+        await AddNotionAsync(clientSecret: null);
+
+        foreach (var audience in new[] { "Team", "Public" })
+        {
+            var profile = ReadConfig()["Tools"]!["AudienceProfiles"]![audience]!;
+            Assert.Equal(["notion"], profile["McpServerToolGrants"]!.AsObject().Select(pair => pair.Key));
+            Assert.Equal(["notion"], profile["ApprovalPolicy"]!["McpServerDefaults"]!.AsObject().Select(pair => pair.Key));
         }
     }
 

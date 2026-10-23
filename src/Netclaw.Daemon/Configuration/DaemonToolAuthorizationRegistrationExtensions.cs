@@ -55,7 +55,7 @@ internal static class DaemonToolAuthorizationRegistrationExtensions
             hardDenyOverrides);
         services.AddSingleton(shellCommandPolicy);
 
-        var fileApprovalMatcher = new FilePathApprovalMatcher(paths.ConfigDirectory);
+        var fileApprovalMatcher = new FilePathApprovalMatcher();
 
         var toolAccessPolicy = new ToolAccessPolicy(
             paths,

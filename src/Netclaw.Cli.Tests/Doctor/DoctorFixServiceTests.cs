@@ -134,6 +134,38 @@ public sealed class DoctorFixServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task LeavesColonOverrideKeysForTheOperator()
+    {
+        var paths = NewPaths();
+        var config =
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ApprovalPolicy": {
+                      "ToolOverrides": { "file_write:control-plane": "Approval", "mcp:memorizer:store": "Approval" },
+                      "McpServerDefaults": { "notion:pages": "Approval" }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, config, TestContext.Current.CancellationToken);
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        var after = await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken);
+        Assert.Contains("\"file_write:control-plane\": \"Approval\"", after, StringComparison.Ordinal);
+        Assert.Contains("\"mcp:memorizer:store\": \"Approval\"", after, StringComparison.Ordinal);
+        Assert.Contains("\"notion:pages\": \"Approval\"", after, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RemovesStalePropertyViaSchemaFix()
     {
         var paths = NewPaths();

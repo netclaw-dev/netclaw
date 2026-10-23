@@ -108,8 +108,7 @@ Notes on the diagram:
   before any grant lookup. See [TA-5](../../openspec/specs/tool-authorization/spec.md#requirement-ta-5-hard-deny-precedes-grant-lookup-and-repeats-at-launch).
 - "Correctable" ends this attempt. The model authors a new call, which starts a
   new [authorization attempt](../spec/GLOSSARY.md#authorization-attempt).
-- A non-shell tool has one candidate: the tool name. `file_write` and
-  `file_edit` on a control-plane path use a path-scoped candidate.
+- A non-shell tool has one candidate: the tool name.
 - Today, the code has no type for each stage. One decision record
   (`ToolAuthorizationDecision`) and one mutable bag (`ToolApprovalAttempt` in
   [`ToolExecutionContext.cs`](../../src/Netclaw.Tools.Abstractions/ToolExecutionContext.cs))
@@ -1742,10 +1741,7 @@ the approval boundary set and the outcome direction check for every recipe.
 1. Admission: add the tool to the audience profile defaults and the schema.
    Add a `ToolOverrides` mode only when the default is wrong.
 2. Consent: give the tool one candidate. Today a non-shell tool uses its tool
-   name. `FilePathApprovalMatcher` shows the one path-scoped form today: a
-   control-plane key for `file_write` and `file_edit`. In the daemon, the
-   write-deny list denies the config directory before that key applies
-   (consolidation plan D5, tier A). Do not copy that pattern for a new tool.
+   name.
 3. Consent delivery: confirm that the prompt shows a safe display text.
 
 Tests: an Admission case per audience (see `McpToolAudienceGrantsTests`), a

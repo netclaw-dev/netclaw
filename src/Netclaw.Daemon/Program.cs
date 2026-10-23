@@ -185,7 +185,7 @@ static async Task RunDaemonAsync(
     builder.WebHost.UseUrls($"http://{daemonConfig.Host}:{daemonConfig.Port}");
     var daemonLogLevel = builder.ConfigureNetclawLogging(paths);
     builder.AddNetclawTelemetry();
-    var configurationWarnings = ConfigureDaemonServices(
+    var (configurationWarnings, configurationNotices) = ConfigureDaemonServices(
         builder.Services,
         builder.Configuration,
         paths,
@@ -269,6 +269,8 @@ static async Task RunDaemonAsync(
         shellResolution.Environment.PowerShellDialect?.ToString() ?? "not-applicable");
     foreach (var warning in configurationWarnings)
         startupLogger.LogWarning("Configuration warning: {ConfigurationWarning}", warning);
+    foreach (var notice in configurationNotices)
+        startupLogger.LogInformation("Configuration notice: {ConfigurationNotice}", notice);
 
     if (shellResolution.FallbackReason is { } fallbackReason)
     {
@@ -462,7 +464,7 @@ static (NetclawPaths Paths, ModelSelection Models) ConfigureConfigServices(
 // ═══════════════════════════════════════════════════════════════════════
 
 // Returns configuration warnings. The caller logs them after the host builds its loggers.
-static IReadOnlyList<string> ConfigureDaemonServices(
+static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices) ConfigureDaemonServices(
     IServiceCollection services,
     IConfigurationManager configuration,
     NetclawPaths paths,
@@ -613,6 +615,7 @@ static IReadOnlyList<string> ConfigureDaemonServices(
     services.AddSingleton(effectivePolicyDefaults);
     var toolConfig = policyConfiguration.Tools;
     var toolConfigWarnings = policyConfiguration.ToolWarnings;
+    var toolConfigNotices = policyConfiguration.ToolNotices;
     services.AddSingleton(toolConfig);
     services.AddSingleton<TrustContextDeriver>();
 
@@ -1188,7 +1191,7 @@ static IReadOnlyList<string> ConfigureDaemonServices(
 
     // Expired data is cleared by DataRetentionActor, which runs every RetentionJob registered here.
     var retentionWarnings = services.AddRetentionJobs(configuration, paths);
-    return [.. toolConfigWarnings, .. retentionWarnings, .. OAuthTokenExpiryStorage.RetiredKeyWarnings(paths)];
+    return ([.. toolConfigWarnings, .. retentionWarnings, .. OAuthTokenExpiryStorage.RetiredKeyWarnings(paths)], toolConfigNotices);
 }
 
 static ISearchBackend? CreateSearchBackend(SearchConfig config)

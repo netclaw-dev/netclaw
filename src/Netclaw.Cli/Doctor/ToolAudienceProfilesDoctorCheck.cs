@@ -39,10 +39,10 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         // Bind the same way as the daemon: the Tools section on top of the posture defaults. An
         // absent profile or list is the posture default, which is the normal state after
         // `netclaw init`, so it is not a warning. Doctor reads only netclaw.json.
-        ToolConfig toolConfig;
+        PolicyConfiguration policyConfiguration;
         try
         {
-            toolConfig = ConfigFileHelper.LoadToolConfig(paths);
+            policyConfiguration = ConfigFileHelper.LoadPolicyConfiguration(paths);
         }
         catch (Exception ex)
         {
@@ -50,6 +50,18 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 "Tool Audience Profiles",
                 $"Failed to parse Tools configuration: {ex.Message}",
                 "Fix Tools.AudienceProfiles values or rerun `netclaw init`."));
+        }
+
+        var toolConfig = policyConfiguration.Tools;
+
+        // The binder has already split a colon key into nested sections, so only the raw file shows it.
+        var invalidKeys = FindColonOverrideKeys(root);
+        if (invalidKeys.Count > 0)
+        {
+            return Task.FromResult(DoctorCheckResult.Error(
+                "Tool Audience Profiles",
+                string.Join("; ", invalidKeys),
+                "Rename each key to the tool you meant, or delete it. `netclaw doctor --fix` does not change these keys."));
         }
 
         var mcpServers = root["McpServers"] is JsonObject mcpObj
@@ -74,7 +86,10 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         var warnings = new List<string>();
 
-        CheckExplicitPersonalShellAuto(toolConfig, warnings);
+        CheckUnusableOverrideKeys(toolConfig.AudienceProfiles, warnings);
+        warnings.AddRange(FindValuelessOverrideKeys(root));
+        warnings.AddRange(policyConfiguration.ToolNotices);
+        CheckExplicitPersonalShellAuto(toolConfig, policyConfiguration.Defaults, warnings);
         CheckMissingToolOutputRead(toolConfig.AudienceProfiles, warnings);
         CheckWriteWiderThanRead(toolConfig.AudienceProfiles, warnings);
 
@@ -308,14 +323,14 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 continue;
             }
 
-            if (approvalPolicy.McpServerDefaults.ContainsKey(serverName))
+            if (ApprovalOverrideKeys.TryGetMode(approvalPolicy.McpServerDefaults, serverName, out _))
                 continue;
 
             var canonicalPrefix = $"{serverName}/";
             var aliasPrefix = $"{serverName}__";
             var hasPerToolOverride = approvalPolicy.ToolOverrides.Keys.Any(
-                k => k.StartsWith(canonicalPrefix, StringComparison.Ordinal)
-                  || k.StartsWith(aliasPrefix, StringComparison.Ordinal));
+                k => k.StartsWith(canonicalPrefix, StringComparison.OrdinalIgnoreCase)
+                  || k.StartsWith(aliasPrefix, StringComparison.OrdinalIgnoreCase));
             if (hasPerToolOverride)
                 continue;
 
@@ -371,9 +386,88 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         }
     }
 
-    private static void CheckExplicitPersonalShellAuto(ToolConfig toolConfig, List<string> warnings)
+    // A key with a colon is not a tool name. Configuration binding reads the colon as a section
+    // separator, drops the key, and in 0.27.1 and earlier turned its first segment into an Auto
+    // override of the whole tool. Doctor reports the key and leaves it for the operator to resolve.
+    private static List<string> FindColonOverrideKeys(JsonObject root)
     {
-        if (toolConfig.ShellMode != ShellExecutionMode.HostAllowed)
+        var found = new List<string>();
+        foreach (var audience in new[] { "Personal", "Team", "Public" })
+        {
+            var policy = Child(Child(Child(Child(root, "Tools"), "AudienceProfiles"), audience), "ApprovalPolicy");
+            foreach (var map in new[] { "ToolOverrides", "McpServerDefaults" })
+            {
+                if (Child(policy, map) is not JsonObject entries)
+                    continue;
+
+                foreach (var key in entries.Select(static pair => pair.Key).Where(static key => key.Contains(':', StringComparison.Ordinal)).Order(StringComparer.Ordinal))
+                {
+                    var first = key[..key.IndexOf(':', StringComparison.Ordinal)];
+                    var effect = map == "McpServerDefaults"
+                        ? $"every tool of MCP server '{first}' was set to Auto"
+                        : $"an override named '{first}' was created with mode Auto, so a tool of that name may have run without approval and the mode you wrote was never applied";
+                    found.Add(
+                        $"Tools.AudienceProfiles.{audience}.ApprovalPolicy.{map} key '{key}' is not a valid tool name and was ignored. "
+                        + $"In Netclaw 0.27.1 and earlier {effect}. "
+                        + "Valid forms are tool_name, server/tool, or server__tool.");
+                }
+            }
+        }
+
+        return found;
+    }
+
+    // A key with a null, {} or [] value carries no mode and is ignored. A key that contains a colon
+    // is reported by FindColonOverrideKeys.
+    private static List<string> FindValuelessOverrideKeys(JsonObject root)
+    {
+        var found = new List<string>();
+        foreach (var audience in new[] { "Personal", "Team", "Public" })
+        {
+            var policy = Child(Child(Child(Child(root, "Tools"), "AudienceProfiles"), audience), "ApprovalPolicy");
+            foreach (var map in new[] { "ToolOverrides", "McpServerDefaults" })
+            {
+                if (Child(policy, map) is not JsonObject entries)
+                    continue;
+
+                foreach (var (key, value) in entries.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+                {
+                    var valueless = value is null or JsonArray { Count: 0 } or JsonObject { Count: 0 };
+                    if (valueless && !key.Contains(':', StringComparison.Ordinal))
+                    {
+                        found.Add(
+                            $"Tools.AudienceProfiles.{audience}.ApprovalPolicy.{map} key '{key}' has no value and was ignored. "
+                            + "No override was created, so the default approval mode applies.");
+                    }
+                }
+            }
+        }
+
+        return found;
+    }
+
+    // A key that cannot be a tool name never matches a tool, so its mode is not applied.
+    private static void CheckUnusableOverrideKeys(ToolAudienceProfiles profiles, List<string> warnings)
+    {
+        foreach (var (name, profile) in (ReadOnlySpan<(string, ToolAudienceProfile)>)
+                 [("Personal", profiles.Personal), ("Team", profiles.Team), ("Public", profiles.Public)])
+        {
+            if (profile.ApprovalPolicy is not { } policy)
+                continue;
+
+            foreach (var key in policy.ToolOverrides.Keys.Where(static key => !ApprovalOverrideKeys.CanBeToolName(key)).Order(StringComparer.Ordinal))
+                warnings.Add(ApprovalOverrideKeys.DescribeUnusableKey($"Tools.AudienceProfiles.{name}.ApprovalPolicy.ToolOverrides", key));
+        }
+    }
+
+    // The configuration binder matches section names without regard to case, so doctor does too.
+    private static JsonObject? Child(JsonObject? parent, string name)
+        => parent?.FirstOrDefault(pair => string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase)).Value as JsonObject;
+
+    private static void CheckExplicitPersonalShellAuto(ToolConfig toolConfig, EffectivePolicyDefaults defaults, List<string> warnings)
+    {
+        // The posture sets the shell mode when netclaw.json does not, as in the daemon.
+        if ((toolConfig.ShellMode ?? defaults.ShellExecutionMode) != ShellExecutionMode.HostAllowed)
             return;
 
         var personal = toolConfig.AudienceProfiles.Personal;

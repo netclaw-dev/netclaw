@@ -275,7 +275,7 @@ public sealed class ToolAccessPolicy
         return approvalArguments;
     }
 
-    /// <summary>Selects the matcher that gives the candidates and the mode key of a call that is not a shell call.</summary>
+    /// <summary>Selects the matcher that gives the candidates of a call that is not a shell call.</summary>
     internal IToolApprovalMatcher SelectApprovalMatcher(INetclawTool tool)
         => tool is McpToolAdapter
             ? McpApprovalMatcher.Instance
@@ -1196,10 +1196,8 @@ public sealed class ToolAccessPolicy
     {
         var audience = ResolveAudience(context.Invocation);
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
-        var approvalModeKey = matcher.GetApprovalModeKey(toolName, arguments);
         return ResolveApprovalMode(
             profile.ApprovalPolicy,
-            approvalModeKey,
             toolName,
             arguments,
             audience,
@@ -1507,7 +1505,6 @@ public sealed class ToolAccessPolicy
 
     private static ToolApprovalMode ResolveApprovalMode(
         ToolApprovalConfig? approvalPolicy,
-        string approvalModeKey,
         ToolName toolName,
         IDictionary<string, object?>? arguments,
         TrustAudience audience,
@@ -1516,17 +1513,7 @@ public sealed class ToolAccessPolicy
         if (approvalPolicy is null)
             return GetMissingApprovalPolicyDefaultMode(toolName, arguments, audience, matcher);
 
-        // Matcher-derived argument-aware key (e.g. "file_write:control-plane").
-        // This only fires when the matcher produced a distinct key; it is
-        // unrelated to MCP tool names and therefore never consults
-        // McpServerDefaults.
-        if (!string.Equals(approvalModeKey, toolName.Value, StringComparison.Ordinal)
-            && approvalPolicy.ToolOverrides.TryGetValue(approvalModeKey, out var matcherMode))
-        {
-            return matcherMode;
-        }
-
-        // No-matcher-key case shares the three-step precedence with
+        // Shares the three-step precedence with
         // ToolApprovalConfig.GetEffectiveMode: exact ToolOverrides[toolName]
         // → McpServerDefaults[serverName] → fall-through. This keeps the
         // two callers consistent by construction.

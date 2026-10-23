@@ -26,7 +26,9 @@ These checks run first and cannot be overridden by an approval:
 - The audience profile must allow the tool.
 - Shell calls need the Personal audience and a shell mode that allows the host
   shell.
-- A hard-deny rule or a protected path denies the call. A glob word that can
+- A hard-deny rule or a protected path denies the call. A file tool cannot
+  write to the config directory, whatever the approval mode or a grant.
+- A glob word that can
   match a protected path or the credential store (`~/.netclaw/keys`,
   `~/.netclaw/config/secrets.json`), such as `cat ~/.netclaw/k*/*.xml`, is
   denied as the literal path is (owner decision D5). The check compares the
@@ -66,16 +68,18 @@ Set the mode in the `ApprovalPolicy` of each audience profile in
 ```
 
 This means: all tools run without a prompt, but `shell_execute` needs approval
-for the Personal audience. Add other tools to `ToolOverrides` as needed, for
-example `"mcp:filesystem:write_file": "Approval"`. `McpServerDefaults` sets a
-mode for every tool of one MCP server.
+for the Personal audience. Add other tools to `ToolOverrides` as needed. Key an
+MCP tool as `server/tool` (for example `"filesystem/write_file": "Approval"`)
+or `server__tool`. Keys match tool names without regard to case, so
+`"File_Write": "Deny"` denies `file_write`. `McpServerDefaults` sets a mode for
+every tool of one MCP server. `netclaw doctor` warns about a key that cannot be
+a tool name.
 
 Defaults you get without an `ApprovalPolicy`:
 
 - Personal `shell_execute` uses `Approval`, even when `DefaultMode` is `Auto`.
-  Only an exact `shell_execute` override of `Auto` removes the prompt.
-- Personal `file_write` and `file_edit` on a Netclaw control-plane path use
-  `Approval`.
+  Only a `shell_execute` override of `Auto` removes the prompt. Keys match
+  without regard to case, so `Shell_Execute` counts.
 - Other tools use `Auto`.
 - Team and Public cannot use `shell_execute`.
 
@@ -555,7 +559,7 @@ Use the trace before you ask for a policy change:
 ## FAQ
 
 **Q: Can I turn off approval for shell commands?**
-A: Yes. Set an exact `shell_execute` override to `Auto`. A removed override
+A: Yes. Set a `shell_execute` override to `Auto`. A removed override
 does not turn off the Personal default.
 
 **Q: Can I require approval for an MCP tool?**
@@ -564,7 +568,7 @@ A: Yes. Add the tool to `ToolOverrides`:
 ```json
 "ToolOverrides": {
   "shell_execute": "Approval",
-  "mcp:memorizer:store": "Approval"
+  "memorizer/store": "Approval"
 }
 ```
 
