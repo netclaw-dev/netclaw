@@ -451,12 +451,24 @@ One authority per turn (buffered input):
   (`ApplyBufferedBatch`). Until the actor derives trust, the trust context is empty, so tool exposure fails closed.
 - Inside a turn (tool batch or compaction), only inputs of the turn's requester join. The turn keeps its authority.
 - An overflow replay is the current turn's own message. It always continues the current turn.
-- A person ends an automation turn. Owner: `SessionInputFlow.AdvanceAfterToolBatch`, before the drain. Automation
-  is a reminder, a background job, a webhook, or an approval notice. A person input never joins such a turn.
-  If a person input waits at a tool-batch end, the flow returns `ToolBatchNextAction.EndTurn`. No input joins,
-  and the actor makes no further model call. The actor ends the turn quietly (`FinishTurnWithoutReply`:
-  `TurnCompleted` with `Completed` and `QuietEnd`). The existing drain after a turn then starts each waiting
-  input under its own recorded authority. The queue keeps its order.
+- A person ends an automation turn. Owner: `SessionInputFlow.AdvanceAfterToolBatch`, before the drain
+  (`PersonWaitsBehindAutomation`). The data is actor-local: the buffer and the current authority.
+  - An automation turn has the requester principal `VerifiedAutomation` or `SystemProcess`. Examples are a reminder
+    fire, a background job result, a webhook, and an approval notice. A child result notice turn is automation when
+    an automation turn started the child, because the notice carries the requester of the run owner.
+  - A person is a buffered input with the principal `Operator` or `TrustedInternal` that is not a child result
+    notice. A person's slash command counts. A person input never joins an automation turn.
+  - An `UntrustedExternal` person does not end the turn. That input waits for its own turn, as before.
+  - The check runs only at a tool-batch end. It does not run after a compaction or during a model call.
+  - If a person waits, the flow returns `ToolBatchNextAction.EndTurn`. No input joins, and the actor makes no
+    further model call. A compaction that is due at that batch does not run before the person's turn.
+  - The actor ends the turn quietly (`FinishTurnWithoutReply`: `TurnCompleted` with `Completed` and `QuietEnd`).
+    The close (`InputClosed`) carries the background job ID of a job result turn, so the journal closes the job
+    on the live path and on replay.
+  - The drain after the turn then starts each waiting input under its own recorded authority. The queue stays
+    FIFO. An automation input before the person gets its own turn, and the person ends that turn in the same way.
+  - Children that the ended turn started keep running. Each child reports later in a notice under the recorded
+    authority of its run owner.
 - A child result notice is automated input by its kind, so it never ends a turn. A person never ends the turn of
   another person. The child consent pause never holds a person, so a person also ends the turn during the pause.
 - Data: the buffer and the current authority are actor-local. Each buffered command carries a copy of its
@@ -467,7 +479,7 @@ One authority per turn (buffered input):
 ```text
 schematic: drain(continuesTurn)
   owner = continuesTurn or buffer[0] is replay ? current authority : recorded authority of buffer[0]
-  if continuesTurn after a tool batch and owner is automation and a person input waits: end the turn, drain nothing
+  after a tool batch only: if owner is automation and an Operator or TrustedInternal person waits: end the turn, drain nothing
   batch = leading inputs where input is replay or HasSameRequester(input, owner)
   if the batch starts a turn: current authority = owner; trust = derive(owner)
   the remaining inputs keep their order and wait
@@ -481,7 +493,7 @@ Bob's message ends the reminder turn at the next tool-batch end. Then it starts 
 Another invalid example: Alice's turn runs a tool, and Bob sends a message. Bob's message does not end Alice's turn.
 It waits for its own turn.
 A focused mutation gate (`./scripts/run-input-one-authority-mutations.sh`) guards the owner choice, the join rule,
-and the automation check of `PlanNewInputAbandonment`.
+the automation check of `PlanNewInputAbandonment`, and the person check of `AdvanceAfterToolBatch`.
 Known limit: the requester check ignores provenance. Two inputs of one sender with different payload taint can share
 a turn under the trust of the first input. Today each producer sets one provenance per sender, so no live mix exists.
 `SessionInputFlowAccordantTests` states the rule over generated sequences.
