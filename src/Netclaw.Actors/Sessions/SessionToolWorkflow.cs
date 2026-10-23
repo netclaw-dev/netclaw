@@ -49,11 +49,9 @@ internal sealed record PendingToolInteraction(
 }
 
 // Internal actor message for approval prompts. The request is the public output
-// shape; PersistApprovalState is session routing policy that decides whether the
-// prompt becomes durable parent-session approval state.
+// shape. The session journals every prompt before it shows it.
 internal sealed record ToolInteractionRequestDispatch(
-    SessionProtocol.ToolInteractionRequest Request,
-    bool PersistApprovalState) : INoSerializationVerificationNeeded
+    SessionProtocol.ToolInteractionRequest Request) : INoSerializationVerificationNeeded
 {
     internal string? ManagedTemporaryDirectory { get; init; }
     internal SubAgentRunId? SourceChildRunId { get; init; }

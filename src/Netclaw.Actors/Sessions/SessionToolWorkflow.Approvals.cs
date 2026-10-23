@@ -46,10 +46,6 @@ internal abstract record ApprovalResponseResult
         public TrustAudience Audience => Pending.TurnContext?.Audience ?? Pending.Request.Audience;
     }
 
-    internal abstract record LiveOnlyAccepted(
-        PendingToolInteraction Pending,
-        ConsentAnswer Answer) : Accepted(Pending, Answer);
-
     internal abstract record DurableAccepted(
         PendingToolInteraction Pending,
         ConsentAnswer Answer) : Accepted(Pending, Answer);
@@ -73,11 +69,6 @@ internal sealed partial class SessionToolWorkflow
     private sealed record ValidatedAccepted(
         PendingToolInteraction Pending,
         ConsentAnswer Answer) : ApprovalResponseResult.Accepted(Pending, Answer);
-
-    private sealed record ClaimedLiveOnlyAccepted(
-        PendingToolInteraction Pending,
-        ConsentAnswer Answer,
-        ClaimedApprovalWait Claim) : ApprovalResponseResult.LiveOnlyAccepted(Pending, Answer);
 
     private sealed record ClaimedDurableAccepted(
         PendingToolInteraction Pending,
@@ -233,12 +224,7 @@ internal sealed partial class SessionToolWorkflow
                 ApprovalNoticeKind.Expired,
                 "no_live_wait");
 
-        if (!pending.PersistApprovalState)
-            RemovePending(response.CallId.Value);
-        var validated = (ValidatedAccepted)validation;
-        return pending.PersistApprovalState
-            ? new ClaimedDurableAccepted(pending, validated.Answer, claim)
-            : new ClaimedLiveOnlyAccepted(pending, validated.Answer, claim);
+        return new ClaimedDurableAccepted(pending, ((ValidatedAccepted)validation).Answer, claim);
     }
 
     public ApprovalResponseResult PrepareRecoveredResponse(
@@ -332,23 +318,10 @@ internal sealed partial class SessionToolWorkflow
             ResolvedAtMs = nowMs
         };
 
-    public void CompleteLiveResponse(ApprovalResponseResult.LiveOnlyAccepted accepted)
-    {
-        if (accepted is ClaimedLiveOnlyAccepted live)
-            live.Claim.Complete(live.Answer);
-    }
-
     public void FailLiveResponse(ApprovalResponseResult.Accepted accepted)
     {
-        switch (accepted)
-        {
-            case ClaimedLiveOnlyAccepted live:
-                live.Claim.Complete(ConsentAnswer.Denied);
-                break;
-            case ClaimedDurableAccepted durable:
-                durable.Claim.Complete(ConsentAnswer.Denied);
-                break;
-        }
+        if (accepted is ClaimedDurableAccepted durable)
+            durable.Claim.Complete(ConsentAnswer.Denied);
     }
 
     public void ApplyResolvedResponse(ToolApprovalResolved resolution)
