@@ -266,7 +266,7 @@ public sealed class SubAgentSpawner
         var storage = (context.SessionStorage ?? throw new InvalidOperationException("A resume requires session storage."))
             .ForChild(run.RunId, run.ScopeId);
         var prepared = BuildStart(definition, coreToolNames, profile, context, run.RunId, run.ScopeId, storage, snapshot,
-            resume.Park.ScopeDirectories?.InheritedWorkingDirectory, run.ArgumentsDigest);
+            resume.Park.ScopeDirectories.InheritedWorkingDirectory, run.ArgumentsDigest);
         return prepared with { Execution = prepared.Execution with { Resume = resume } };
     }
 

@@ -2782,11 +2782,20 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
-        // A rejected consent request of a parked child ends that run, never the parent turn (durable-child-consent-wait,
-        // design D3). This branch runs before the turn failure below.
-        if (@event is ToolApprovalRequested { SourceChildRunId: { } rejectedRun })
+        // A rejected consent request or answer of a parked child ends that run, never the parent turn
+        // (durable-child-consent-wait, design D3). This branch runs before the turn failure below. The person who
+        // answered gets a nack, because no resume follows the rejected answer.
+        var childRun = @event switch
         {
-            _log.Error(cause, "The journal rejected a consent request of child run {RunId}", rejectedRun);
+            ToolApprovalRequested request => request.SourceChildRunId,
+            ToolApprovalResolved answer => answer.SourceChildRunId,
+            _ => null
+        };
+        if (childRun is { } rejectedRun)
+        {
+            _log.Error(cause, "The journal rejected a consent event of child run {RunId}", rejectedRun);
+            if (@event is ToolApprovalResolved)
+                TryReplyNack(ApprovalNackReasons.PersistFailed);
             Self.Tell(new ChildEventRejected(rejectedRun));
             base.OnPersistRejected(cause, @event, sequenceNr);
             return;
@@ -3511,30 +3520,30 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void HandleToolInteractionRequestDispatch(ToolInteractionRequestDispatch dispatch)
     {
-        // A parent prompt ends with its turn. A child prompt lives until an answer or a close, because the child keeps
-        // waiting after the parent turn ends or fails (#2523).
-        var msg = dispatch.SourceChildRunId is null
-            ? dispatch.Request
-            : dispatch.Request with { Lifetime = ToolInteractionLifetime.UntilClosed };
         if (dispatch.SourceChildRunId is { } childRunId &&
             (!_state.ChildRuns.TryGetValue(childRunId, out var childRun) || childRun.Lifecycle is not ChildRunLifecycle.Accepted))
             return;
-        var evt = _toolWorkflow.CreateApprovalRequest(
-            dispatch, _sessionId, _input.Authority.Context, _input.Authority.Source,
-            CurrentTurnAudience(), NowMs());
-
         if (!dispatch.PersistApprovalState)
         {
             // Live sub-agent approvals need the prompt in the in-memory pending
             // map so responses can be authorized, but there is no durable child
             // actor/tool batch to redrive after restart.
-            ApplyToolApprovalRequested(evt, persistApprovalState: false);
-            EmitOutput(msg);
+            ApplyToolApprovalRequested(CreateApprovalRequest(dispatch), persistApprovalState: false);
+            EmitOutput(PromptOf(dispatch));
             return;
         }
 
-        Persist(evt, e =>
+        PersistApprovalRequests([dispatch]);
+    }
+
+    // The journal stores the requests in one atomic write. A park sends all its requests here at once, so a rejected
+    // write leaves no request of the park (durable-child-consent-wait, design D3).
+    private void PersistApprovalRequests(IReadOnlyList<ToolInteractionRequestDispatch> dispatches)
+    {
+        var prompts = new Queue<ToolInteractionRequest>(dispatches.Select(PromptOf));
+        PersistAll(dispatches.Select(CreateApprovalRequest).ToArray(), e =>
         {
+            var msg = prompts.Dequeue();
             ApplyToolApprovalRequested(e);
             EmitOutput(msg);
             TryStopDurableApprovalWaits();
@@ -3542,6 +3551,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 ChildApprovalRequested(_state.ChildRuns[requestingRun], msg);
         });
     }
+
+    // A parent prompt ends with its turn. A child prompt lives until an answer or a close, because the child keeps
+    // waiting after the parent turn ends or fails (#2523).
+    private static ToolInteractionRequest PromptOf(ToolInteractionRequestDispatch dispatch)
+        => dispatch.SourceChildRunId is null
+            ? dispatch.Request
+            : dispatch.Request with { Lifetime = ToolInteractionLifetime.UntilClosed };
+
+    private ToolApprovalRequested CreateApprovalRequest(ToolInteractionRequestDispatch dispatch)
+        => _toolWorkflow.CreateApprovalRequest(dispatch, _sessionId, _input.Authority.Context, _input.Authority.Source,
+            CurrentTurnAudience(), NowMs());
 
     private void ApplyToolApprovalRequested(ToolApprovalRequested evt)
         => ApplyToolApprovalRequested(evt, persistApprovalState: true);

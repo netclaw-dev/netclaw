@@ -902,18 +902,20 @@ The snapshot gate still accounts for all unresolved approval evidence.
 Parked child prompts (PR 1 of durable-child-consent-wait, design D1 to D4):
 
 - A child call that needs consent does not wait. The child lets the other calls of its batch end, sends
-  `ChildParkReached` with its park (transcript, loop guard, directories of the batch, skill overlay, requests), and
-  stops after `ChildTerminalCommitted`. The child bridge only says that consent is available. No child asks a bridge.
+  `ChildParkReached` with its park (transcript, loop guard, directories of the batch, file activity, skill overlay,
+  requests), and stops after `ChildTerminalCommitted`. The child bridge only says that consent is available. No child
+  asks a bridge.
 - Owner of the park decision: `LlmSessionActor.AcceptChildPark` through `ChildParkRules.AcceptPark`. Only the owned
   child of an `Accepted` run opens prompts. A park of a cancelling run ends the run as cancelled. Any other sender gets
   the stop signal, and the session records nothing. The park is actor-local.
 - The owner builds each prompt with `ApprovalRequestBuilder.ForChildCall` for the requester of the run record, never
-  for the requester of the current turn. The run prompt counter numbers the call IDs. The session journals each
-  request before it shows the prompt. A rejected request ends the run as failed, and the `OnPersistRejected` branch
-  for it runs first, so it never fails the parent turn.
+  for the requester of the current turn. The run prompt counter numbers the call IDs. The session journals all
+  requests of one park in one atomic write before it shows the prompts. A rejected write ends the run as failed, and
+  the `OnPersistRejected` branch for it runs first, so it never fails the parent turn.
 - A child answer has no live wait. It goes to the idle answer handler in every phase. After the journal holds the
   answer, `TryResumeParkedRun` asks `ChildParkRules.ResumeGate`: the run waits for every answer and for the end of a
-  restart drain.
+  restart drain. If the journal rejects the answer, the same `OnPersistRejected` branch nacks it with
+  `approval_persist_failed`, and the run ends as failed.
 - The resume is a spawn: `SubAgentSpawner.PrepareResume` applies the spawn rules again under `run.OriginalContext`
   and the directories of the park. The new child runs only the parked calls, each once, through
   `ApprovalRedriveEntry`, and the gate checks each call again. A failed spawn rule ends the run as failed, and no

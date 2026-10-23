@@ -96,7 +96,7 @@ public sealed partial class LlmSessionActor
         Command<ChildResultWritten>(HandleChildResultWritten);
         Command<ChildParkReached>(AcceptChildPark);
         Command<ChildEventRejected>(message => EndParkedRun(message.RunId, SubAgentOutcomeReason.ToolExecutionFailed,
-            "The journal rejected a consent request of the child.", ActorRefs.Nobody));
+            "The journal rejected a consent request or answer of the child.", ActorRefs.Nobody));
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
         Command<RecoverChildRuns>(_ => RecoverChildren());
         Command<StartHeldInputs>(_ => StartInputsHeldByThePause());
@@ -200,7 +200,7 @@ public sealed partial class LlmSessionActor
     }
 
     // Design D1 and D3: the owner keeps the park actor-local, releases the child, and asks the run requester once for
-    // each parked call. Each prompt shows after its request is in the journal.
+    // each parked call. The prompts show after all requests of the park are in the journal, in one atomic write.
     private void AcceptChildPark(ChildParkReached message)
     {
         var child = Sender;
@@ -248,8 +248,7 @@ public sealed partial class LlmSessionActor
         Context.Unwatch(child);
         _execution.ReleaseChild(run.RunId);
         child.Tell(new ChildTerminalCommitted());
-        foreach (var dispatch in dispatches)
-            HandleToolInteractionRequestDispatch(dispatch);
+        PersistApprovalRequests(dispatches);
     }
 
     // Design D3, the resume gate. It runs after the journal holds an answer of a parked request.
@@ -294,7 +293,7 @@ public sealed partial class LlmSessionActor
             InlineOutputBudget = new InlineOutputBudget(_config.Tuning.MaxInlineToolResultChars),
             InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
             ModelInputModalities = _model.InputModalities,
-            ProjectDirectory = resume.Park.ScopeDirectories?.ProjectDirectory,
+            ProjectDirectory = resume.Park.ScopeDirectories.ProjectDirectory,
             RecentFiles = run.InitialWorkingSnapshot?.WorkingContext.RecentFiles ?? []
         };
         var profile = _subAgentRegistry.TryGetByName(run.AgentName.Value);

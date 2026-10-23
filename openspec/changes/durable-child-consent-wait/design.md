@@ -116,8 +116,8 @@ The owner approved a cut plan for PR 1. Where this design and the cut plan diffe
 - M6 is cut. A resumed child uses `run.OriginalContext` as it is, as the first spawn does.
 - Cut: `RepeatNudge`, `BatchObservations` and the cycle-batch rebuild, `LoadedTools`, `ModelId`, the typed reason
   `park_not_recorded`, and the `parked` state of `check_agent_run`. Each refusal reuses an existing reason.
-- Deferred to a later PR: `DeferredMedia`, `FileActivity`, and the managed temporary retry target
-  (`platform_temporary_root` on `ApprovalRedriveEntry`).
+- Deferred to a later PR: `DeferredMedia` and the managed temporary retry target (`platform_temporary_root` on
+  `ApprovalRedriveEntry`). The PR 1 review moved `FileActivity` back into PR 1.
 - Deferred to PR 2: the 4 MiB cap, and the update of the park in the persist callback of an answer.
 - In PR 1, a park drops the media nudge, the repeat nudge, and the loop observation of its batch.
 - A resumed child does not keep the deferred tools that the parked incarnation loaded. It can load them again.
@@ -180,7 +180,7 @@ order. No user message comes between two tool results, because the nudges still 
 | `Transcript` | every message after the system message: the assistant message of the open batch and the results of its finished calls, as `SerializableChatMessage` | it exists only in the child |
 | `DeferredMedia` (deferred to a later PR) | the model-input media references of the finished calls | the media nudge comes after all results |
 | `ScopeDirectories` | the project directory and the inherited working directory (audit row 9) | the parked calls run in the directories of the live batch (H3) |
-| `FileActivity` (deferred to a later PR) | the `WorkingContextDelta` of the child after the finished calls: project directory, read files, changed files | the existing type; the round is in `LoopGuard` only |
+| `FileActivity` | the `WorkingContextDelta` of the child after the finished calls: project directory, read files, changed files | the existing type; the round is in `LoopGuard` only. A finished `set_working_directory` call sets its project directory |
 | `LoopGuard` | `TurnLoopGuardState` from PR 0 (`TurnStateTracker.ExportLoopGuard`) | a park does not reset the loop guard (M10) |
 | `SkillOverlay` | the skill overlay of the spawn, or none (audit row 12) | the profile does not hold it |
 | `Requests` | one `ToolApprovalRequested` per parked call, and later its `ToolApprovalResolved` | the facts that the gate made |
@@ -256,6 +256,7 @@ ignores a second call for an ended run.
 | The sender is not the owned child | send the existing stop signal `ChildTerminalCommitted` to the sender | no record; the sender stops itself |
 | The park is above the cap (PR 2) | `RecordChildTerminal(Failed, park_too_large)` | no prompt; no parked call runs |
 | The journal rejects the park | `OnPersistRejected` sends `Self.Tell(ChildEventRejected(runId))`; the handler calls `RecordChildTerminal(Failed, tool_execution_failed)` | the notice says "The child could not wait for consent. The calls that needed consent did not run." |
+| The journal rejects an answer | `OnPersistRejected` nacks the answer with `approval_persist_failed` and sends `ChildEventRejected(runId)` | the run ends as above; the person who answered gets the nack |
 | The journal rejects `Resumed` (PR 2) | `Self.Tell(ChildEventRejected(runId, resume_not_recorded))` | the run ends `Failed`, "The parked calls did not run."; no actor starts |
 | The journal fails a write | the session actor stops (Akka.Persistence) | recovery decides from the journal |
 
@@ -264,7 +265,8 @@ ignores a second call for an ended run.
 `PersistRejectedTurnFailure` (`LlmSessionActor.cs:2727-2738`). Without this order, a rejected child event would fail
 the parent's turn. The branch has two triggers:
 
-- PR 1: a `ToolApprovalRequested` with `SourceChildRunId` (the park writes its requests);
+- PR 1: a `ToolApprovalRequested` or a `ToolApprovalResolved` with `SourceChildRunId` (the park writes its requests
+  in one `PersistAll`, so a rejected write leaves no request of the park);
 - PR 2: `ChildRunEvent.Parked` or `ChildRunEvent.Resumed`.
 
 A rejected write of several events calls `OnPersistRejected` once for each event. The first `ChildEventRejected`
@@ -280,7 +282,8 @@ authority comes from the run record.**
 | --- | --- |
 | Requester, boundary, channel, delivery targets | `run.OriginalContext`. Never the current turn, never the current parent. |
 | Project directory, inherited working directory | `park.ScopeDirectories` (H3) |
-| Recent files | `run.InitialWorkingSnapshot` (`park.FileActivity` is deferred to a later PR) |
+| Recent files | `run.InitialWorkingSnapshot` |
+| Read files, changed files, the project directory after the parked calls | `park.FileActivity`, unless a parked `set_working_directory` call changes the directory |
 | Model input modalities | the model that resolves at resume |
 | Base agent prompt, model role, findings flag, budgets | the current agent profile; a deleted profile fails with `spawn_unavailable` |
 | Skill overlay | `park.SkillOverlay` |
@@ -442,6 +445,7 @@ sequenceDiagram
 | Case | Outcome | Loud signal |
 | --- | --- | --- |
 | The journal rejects the park | The run ends `Failed`, `tool_execution_failed`. No prompt. No parked call runs. | result notice |
+| The journal rejects an answer | The answer gets a nack. The run ends `Failed`, `tool_execution_failed`. No parked call runs. | nack and result notice |
 | The journal fails a write | The session stops. Recovery decides from the journal. | session stop (existing) |
 | The park is above the cap (PR 2) | The run ends `Failed`, `park_too_large`. | result notice and error log with the size |
 | Crash before `Parked` | Recovery records the run as lost. No prompt was shown. | lost notice |
