@@ -41,6 +41,8 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// reminder text is not an input, and the history pairs each tool call with its result (#2632).</item>
 /// <item>When the session dropped tool calls, the next model request after the restart has a valid history.</item>
 /// </list>
+/// One row has a different contract. When a tool still runs at the coordinator deadline, its effect is unknown. The
+/// session does not acknowledge, so no restart reminder runs the turn again blindly.
 /// A drain point with a child run needs the child fixture. The notice rule for a child-only reminder is a pure decision,
 /// so <see cref="RestartNoticeRuleTests"/> covers it.
 /// </summary>
@@ -71,6 +73,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         AutomationTurnAfterToolBatch,
         TurnWithoutChannelType,
         ToolBatchBoundary,
+        ToolStillRunning,
         GraceToolCalls,
         GraceToolCallsAfterText,
         GraceEmptyReplyRetry,
@@ -92,6 +95,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     [InlineData(DrainPoint.AutomationTurnAfterToolBatch, "daemon-stop", true, true)]
     // The turn has no channel type, so no reminder can deliver to it. The person gets the notice.
     [InlineData(DrainPoint.TurnWithoutChannelType, "daemon-stop", false, false)]
+    // A possible effect blocks the reminder: the tool result is not in the journal.
+    [InlineData(DrainPoint.ToolStillRunning, "daemon-stop", false, false)]
     [InlineData(DrainPoint.GraceToolCalls, "config-reload", true, true)]
     [InlineData(DrainPoint.GraceToolCallsAfterText, "config-reload", false, false)]
     [InlineData(DrainPoint.GraceEmptyReplyRetry, "config-reload", true, true)]
@@ -114,6 +119,12 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
 
         // Act
         var drain = await RequestDrainAsync(sessionId, reason);
+        if (point == DrainPoint.ToolStillRunning)
+        {
+            await AssertRunningToolHoldsTheDrainAsync(sessionId, drain, before, turnResumes || reminderExpected, release!);
+            return;
+        }
+
         if (release is not null)
         {
             // The clock must not move before the session handles the released work. Otherwise the model grace stop
@@ -150,7 +161,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             case DrainPoint.ModelCallDeepInToolLoop:
                 _chat.Script(Step.ToolCall, Step.ToolCall, Step.ToolCall, Step.StreamUntilCancelled);
                 break;
-            case DrainPoint.ToolBatchBoundary:
+            case DrainPoint.ToolBatchBoundary or DrainPoint.ToolStillRunning:
                 _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
                 release = _tools.HoldNextRun().SetResult;
                 reached = _tools.Started.Task;
@@ -218,12 +229,39 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             new PrepareForDaemonRestart(sessionId, reason),
             TimeSpan.FromMinutes(5),
             TestContext.Current.CancellationToken);
-        await SessionManager.Ask<SessionJoined>(new JoinSession(CreateTestProbe("drain-ping"))
+        await PingAsync(sessionId);
+        return drain;
+    }
+
+    // The session handles the messages in its mailbox before the join.
+    private async Task PingAsync(SessionId sessionId)
+        => await SessionManager.Ask<SessionJoined>(new JoinSession(CreateTestProbe())
         {
             SessionId = sessionId,
             Filter = OutputFilter.ProcessingState
         }, Deadline, TestContext.Current.CancellationToken);
-        return drain;
+
+    // A tool still runs when the coordinator deadline passes. The drain does not cancel a tool that does not wait for
+    // an approval, so the effect of the tool is unknown and the journal has no result for it. The session does not
+    // acknowledge. The daemon then gets no restart reminder, and its shutdown alert names the session
+    // (DaemonRestartCoordinatorTests). The release lets the session end the batch after the check. In production the
+    // daemon ignores that late acknowledgement.
+    private async Task AssertRunningToolHoldsTheDrainAsync(
+        SessionId sessionId,
+        Task<DaemonRestartPrepared> drain,
+        Activity before,
+        bool resumeExpected,
+        Action release)
+    {
+        Assert.False(resumeExpected, "A turn with a tool of unknown effect must not resume.");
+        AdvanceScheduler(CoordinatorDeadline);
+        await PingAsync(sessionId);
+        Assert.False(drain.IsCompleted, "The drain acknowledged while a tool still ran.");
+        AssertNoWorkAfterDrain(before);
+        var events = await ReadJournalAsync(sessionId);
+        Assert.Single(events.OfType<ToolBatchStarted>());
+        Assert.Empty(events.OfType<ToolCallRecorded>());
+        release();
     }
 
     // Moves the virtual clock in 3-second steps, but not past the coordinator deadline.
