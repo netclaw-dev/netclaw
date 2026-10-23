@@ -225,10 +225,32 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
 
     public void ClearRestartReminderEligibility() => _restartInterruptionAt = null;
 
+    // The drain stopped a turn after a tool batch consumed its input. One continuation input without text keeps the
+    // turn pending under its recorded authority, and the restart reminder resumes it like any pending input (#2632).
+    // Security boundary: the turn continues only when nothing of it is unknown or lost.
+    //   - The person saw no text of the stopped model call.
+    //   - No other input waits. The reminder resumes the leading inputs of one requester only.
+    //   - No overflow replay waits. The rollback took the tool calls and results of the turn out of the history.
+    //   - No background job lives. Passivation stops it, and a resume could start it again.
+    //   - Each tool call has a recorded result, so the next model call sees what ran.
+    //   - The turn has a channel type, so the reminder can deliver to it.
+    // <stopped-turn-continuation>
+    internal static bool ContinuesStoppedTurn(
+        bool emittedText,
+        int pendingInputCount,
+        bool replayWaits,
+        bool hasLiveBackgroundJob,
+        bool hasUnansweredToolCall,
+        bool hasChannelType)
+        => !emittedText && pendingInputCount == 0 && !replayWaits && !hasLiveBackgroundJob && !hasUnansweredToolCall
+           && hasChannelType;
+    // </stopped-turn-continuation>
+
     /// <summary>
     /// The notice that tells the person that a restart drain stopped the turn, or null when the restart reminder
     /// resumes the turn. The turn resumes only when the reminder replays the inputs of the turn, so
-    /// <paramref name="pendingTurnInputCount"/> counts the selected inputs of the stopped turn that stay pending.
+    /// <paramref name="pendingTurnInputCount"/> counts the selected inputs of the stopped turn that stay pending. After a
+    /// tool batch, that is the one continuation input (<see cref="ContinuesStoppedTurn"/>, #2632).
     /// <paramref name="drainReason"/> is <see cref="Protocol.PrepareForDaemonRestart.Reason"/>.
     /// </summary>
     internal static string? RestartStoppedTurnNotice(
@@ -384,8 +406,9 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         if (_restartInterruptionAt is not { } interruptedAt)
             return (null, null);
 
-        // With no resumable input, the oldest unreported child supplies the recorded context. Its owner is the
-        // requester whose work the restart interrupted.
+        // A pending input supplies the recorded context. The continuation input of a stopped turn is one too (#2632).
+        // With no resumable input, the oldest unreported child supplies it. Its owner is the requester whose work the
+        // restart interrupted.
         var fromChildren = _restartResumesChildrenOnly || pending.Count == 0;
         if (fromChildren ? unreportedChildren.Count == 0 : pending.Count == 0)
             return (null, null);

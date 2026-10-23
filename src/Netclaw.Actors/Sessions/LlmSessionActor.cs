@@ -120,6 +120,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private string? _turnRestartNotice;
     // Replay only: the requester of the journal turn that the last replayed tool batch belongs to. Actor-local.
     private TurnContext? _replayTurnOwner;
+    // The continuation input of a stopped turn that the drain writes, and the stop that waits for it (#2632).
+    private (InputAdmitted Event, Action<int> Stop)? _continuationWrite;
 
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
@@ -1119,16 +1121,18 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         // Read these facts before AdvanceAfterCompaction resets them. A drain after a tool-loop or replay compaction
         // stops an open turn. A compaction at a turn end stops no turn, so it posts no notice.
         var stopsTurn = _input.ResumesToolLoopAfterCompaction || _input.StartsWithReplay;
-        var selected = _input.SelectedCount;
         var continuation = _input.AdvanceAfterCompaction(RestartDrainRequested, _toolWorkflow.IsChildConsentPaused);
         if (continuation.Action == InputProgressAction.Restart)
         {
-            var eligibility = RecordRestartReminderEligibility();
-            if (stopsTurn)
-                EmitRestartStoppedTurnNotice(eligibility, selected);
-            ClearBufferedMessagesForRestartDrain();
-            TransitionTo(SessionPhase.Ready);
-            TransitionTo(SessionPhase.Passivating);
+            KeepStoppedTurnThen(stopsTurn, pendingTurnInputs =>
+            {
+                var eligibility = RecordRestartReminderEligibility();
+                if (stopsTurn)
+                    EmitRestartStoppedTurnNotice(eligibility, pendingTurnInputs);
+                ClearBufferedMessagesForRestartDrain();
+                TransitionTo(SessionPhase.Ready);
+                TransitionTo(SessionPhase.Passivating);
+            });
             return;
         }
 
@@ -1841,6 +1845,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         foreach (var message in batch.Messages)
         {
+            // The continuation input of a stopped turn has no text for the model (#2632).
+            if (string.IsNullOrEmpty(message.Content) && message.MediaReferences.Count == 0)
+                continue;
             var refs = message.MediaReferences.Count > 0 ? message.MediaReferences : null;
             _state = _state.AddUserMessage(message.Content, refs);
         }
@@ -2178,9 +2185,19 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         throw new InvalidOperationException("Unknown input admission decision.");
     }
 
+    // A later input ends the continuation input of a stopped turn that no turn selected (#2632). One write closes it
+    // and admits the later input. The stopped turn never runs after that, so the person gets the held-back notice once.
     private void PersistAdmission(InputAdmitted evt, SendUserMessage cmd, InputPlacement placement, InputId? replaces = null)
-        => PersistReplacingInput(replaces, evt, "reminder_fire_replaced", admitted =>
+    {
+        var selected = _input.SelectedInputs.Ids;
+        var stale = replaces is null
+            ? _state.GetExecutablePendingInputs()
+                .FirstOrDefault(input => SessionInputFlow.IsContinuation(input) && !selected.Contains(input.InputId))
+            : null;
+        PersistReplacingInput(replaces ?? stale?.InputId, evt, stale is null ? "reminder_fire_replaced" : "continuation_closed", admitted =>
         {
+            if (stale is not null)
+                EmitRestartStoppedTurnNotice(ReminderEligibility.None, 0);
             // The review reads the ended run, which the notice turns into a reported run.
             var endedRun = admitted.ChildNotice is { } notice ? _state.ChildRuns[notice.RunId] : null;
             _state = _state.Apply(admitted);
@@ -2188,6 +2205,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             var accepted = _input.AdmissionCommitted(admitted, cmd, placement);
             CompleteAcceptedInput(accepted, placement);
         });
+    }
 
     // The replace rule of a waiting input (a reminder fire while paused, an approval notice). One atomic write holds the
     // close of the waiting input and the admission of the newer input, so a crash keeps both or neither.
@@ -2726,7 +2744,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     protected override void OnPersistFailure(Exception cause, object @event, long sequenceNr)
     {
-        if (@event is InputAdmitted)
+        // Base stops the actor, and the journal has no continuation input, so nothing resumes the stopped turn (#2632).
+        if (TakeContinuationWrite(@event) is not null)
+            EmitRestartStoppedTurnNotice(ReminderEligibility.None, 0);
+        else if (@event is InputAdmitted)
         {
             TryReplyNack("The input journal failed. The session did not start a model call.");
         }
@@ -2748,6 +2769,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     protected override void OnPersistRejected(Exception cause, object @event, long sequenceNr)
     {
+        // The journal keeps no continuation input, so no reminder resumes the stopped turn (#2632). The normal stop then
+        // posts the notice, and the drain acknowledges without a reminder. No sender waits for this write.
+        if (TakeContinuationWrite(@event) is { } stop)
+        {
+            _log.Error(cause, "The journal rejected the continuation input of the stopped turn of session {SessionId}.",
+                _sessionId.Value);
+            stop(0);
+            base.OnPersistRejected(cause, @event, sequenceNr);
+            return;
+        }
+
         // Base only logs a rejection; the actor keeps running. A turn that nothing ends would hold
         // the session until the processing watchdog fires, so fail the turn here.
         // A rejected approval notice stops the session, as a persist failure does: the boundary that admitted it cannot
@@ -4471,14 +4503,57 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             StopTurnForRestart();
     }
 
-    // The drain stopped the turn before its end. The turn resumes only when a reminder replays its own selected
-    // inputs. A tool batch or a text close clears them, so read the count before the eligibility record (#2601).
-    private void StopTurnForRestart()
+    // The drain stopped the turn before its end. The turn resumes only when a reminder replays its own pending inputs.
+    private void StopTurnForRestart() => KeepStoppedTurnThen(stopsTurn: true, pendingTurnInputs =>
     {
-        var selected = _input.SelectedCount;
-        EmitRestartStoppedTurnNotice(RecordRestartReminderEligibility(), selected);
+        EmitRestartStoppedTurnNotice(RecordRestartReminderEligibility(), pendingTurnInputs);
         ClearBufferedMessagesForRestartDrain();
         TransitionTo(SessionPhase.Passivating);
+    });
+
+    // A tool batch or a text close clears the selected inputs, so the count is read before the eligibility record
+    // (#2601). After a tool batch, an eligible turn gets one continuation input in the journal before the drain goes on
+    // (#2632). The input has no text and carries the recorded authority of the turn, never a wider one.
+    private void KeepStoppedTurnThen(bool stopsTurn, Action<int> stop)
+    {
+        var selected = _input.SelectedCount;
+        if (!stopsTurn || _input.Authority.Context is not { } context
+            || !SessionExecutionLifetime.ContinuesStoppedTurn(
+                _input.EmittedText,
+                _state.GetExecutablePendingInputs().Count,
+                _input.StartsWithReplay,
+                HasLiveBackgroundJobs,
+                ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null,
+                context.ChannelType is not null))
+        {
+            stop(selected);
+            return;
+        }
+
+        var continuation = new InputAdmitted
+        {
+            SessionId = _sessionId,
+            InputId = InputId.New(),
+            UserMessage = new SerializableChatMessage { Role = Protocol.ChatRole.User },
+            TurnContext = context.ToRecord(),
+            AdmittedAtMs = NowMs()
+        };
+        _continuationWrite = (continuation, stop);
+        Persist(continuation, admitted =>
+        {
+            _continuationWrite = null;
+            _state = _state.Apply(admitted);
+            stop(1);
+        });
+    }
+
+    private Action<int>? TakeContinuationWrite(object @event)
+    {
+        if (_continuationWrite is not { } write || !ReferenceEquals(write.Event, @event))
+            return null;
+
+        _continuationWrite = null;
+        return write.Stop;
     }
 
     private void EmitRestartStoppedTurnNotice(ReminderEligibility eligibility, int pendingTurnInputCount)

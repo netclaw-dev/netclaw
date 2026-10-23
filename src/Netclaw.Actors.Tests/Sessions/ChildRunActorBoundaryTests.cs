@@ -491,6 +491,35 @@ internal sealed class AcceptanceFault(bool rejectAcceptance, bool holdAcceptance
 
     public bool TryTakeConsentNoticeRejection() => Interlocked.CompareExchange(ref _consentNoticeRejections, 0, 1) == 1;
 
+    // The journal rejects the next writes that hold a matching event, up to the count. Akka then reports a
+    // WriteMessageRejected for each event of a rejected write. The journal stores the other writes.
+    private readonly object _rejectSync = new();
+    private Func<object, bool>? _rejectMatch;
+    private int _rejectsLeft;
+
+    public TaskCompletionSource FirstEventRejected { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // When true, a matching write fails instead: the journal throws, and Akka reports a persist failure.
+    public bool FailMatchingWrites { get; set; }
+
+    public void RejectWritesOf(Func<object, bool> match, int writes = 1)
+    {
+        lock (_rejectSync)
+            (_rejectMatch, _rejectsLeft) = (match, writes);
+    }
+
+    public bool RejectsWrite(IEnumerable<object> events, bool take)
+    {
+        lock (_rejectSync)
+        {
+            if (_rejectMatch is not { } match || _rejectsLeft <= 0 || !events.Any(match))
+                return false;
+            if (take)
+                _rejectsLeft--;
+            return true;
+        }
+    }
+
     // The journal stores the next matching admission with a damaged authority record (no turn ID), so that
     // TurnContext.TryFromRecord fails for it after a replay. The live actor keeps the event that it wrote.
     private Func<InputAdmitted, bool>? _damageMatch;
@@ -530,6 +559,8 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
         if (_fault is { } damageFault)
             writes = writes.Select(write => Damaged(damageFault, write)).ToArray();
         var events = writes.SelectMany(write => (IEnumerable<IPersistentRepresentation>)write.Payload).Select(item => item.Payload).ToArray();
+        if (_fault is { } eventFault && writes.Any(write => eventFault.RejectsWrite(Payloads(write), take: false)))
+            return await RejectMatchingEventsAsync(eventFault, writes, cancellationToken);
         if (_fault is { } noticeFault && writes.Any(IsConsentNoticeWrite) && noticeFault.TryTakeConsentNoticeRejection())
             return await RejectConsentNoticeAsync(noticeFault, writes, cancellationToken);
         var accepted = events.OfType<ChildRunAccepted>().SingleOrDefault();
@@ -577,6 +608,33 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
 
             var written = await base.WriteMessagesAsync([write], cancellationToken);
             foreach (var evt in Payloads(write))
+                fault.Committed.Enqueue(evt);
+            results.Add(written?.FirstOrDefault()!);
+        }
+
+        return results.ToImmutableList();
+    }
+
+    // One result for each atomic write, in order. A write that holds a matching event is rejected as a whole, and the
+    // journal stores the other writes. With FailMatchingWrites, the journal throws for the matching write instead.
+    private async Task<IImmutableList<Exception>> RejectMatchingEventsAsync(
+        AcceptanceFault fault, IReadOnlyList<AtomicWrite> writes, CancellationToken cancellationToken)
+    {
+        var results = new List<Exception>();
+        foreach (var write in writes)
+        {
+            var payloads = Payloads(write).ToArray();
+            if (fault.RejectsWrite(payloads, take: true))
+            {
+                fault.FirstEventRejected.TrySetResult();
+                if (fault.FailMatchingWrites)
+                    throw new IOException("The test journal failed the write.");
+                results.Add(new InvalidOperationException("The test journal rejected the write."));
+                continue;
+            }
+
+            var written = await base.WriteMessagesAsync([write], cancellationToken);
+            foreach (var evt in payloads)
                 fault.Committed.Enqueue(evt);
             results.Add(written?.FirstOrDefault()!);
         }

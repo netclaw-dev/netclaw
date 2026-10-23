@@ -874,6 +874,15 @@ It validates the original requester and offered answer. It selects which unanswe
 The workflow decides whether every unfinished tool call waits on a durable approval.
 The lifetime owner also validates the complete stored turn authority before a restart reminder or resumed turn.
 The actor passes the durable input records to that check. The input owner does not store another durable copy.
+A tool batch consumes the turn input. When the restart drain stops a turn after its tool batch, the actor journals one
+continuation `InputAdmitted` for the turn (#2632). The record has no text and carries the turn's recorded
+`TurnContext`, never a wider one. The restart reminder then takes its authority from that pending input, as from any
+pending input, and the resumed turn runs under it. The reminder is only the signal, so an automation turn keeps its
+automation authority and a person turn keeps the person's authority. The input waits for the reminder: recovery does
+not start it, and it never joins the turn of another requester. A later input that arrives first closes it in the same
+journal write, and the session posts the stop notice once. `SessionExecutionLifetime.ContinuesStoppedTurn`
+decides if the turn is kept. A turn with partial text, another pending input, an overflow replay, a live background
+job, an unanswered tool call, or no channel type gets the stop notice instead.
 The actor writes grants, persists events, and emits outputs. The lifetime owner owns task cancellation and stop completion.
 
 The workflow releases a claimed live wait only after the actor completes the required grant and journal steps.

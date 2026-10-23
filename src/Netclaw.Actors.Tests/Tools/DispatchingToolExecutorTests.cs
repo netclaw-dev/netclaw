@@ -2369,6 +2369,80 @@ public partial class DispatchingToolExecutorTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Exception_logs_preserve_approval_and_failure_outcomes(bool approvalRequired)
+    {
+        var logger = new RecordingLogger<DispatchingToolExecutor>();
+        var context = CreateInteractivePersonalContext(
+            approvalRequired ? "signalr/approval-log" : "signalr/failure-log");
+        Exception? expectedException = null;
+        if (approvalRequired)
+        {
+            var approvalService = new FixedShellApprovalService(request =>
+                ShellApprovalMatchResult.Create(
+                    request.Candidates,
+                    null,
+                    request.Candidates.Select(candidate =>
+                        ShellGrantCandidateResult.Uncovered(candidate)).ToArray()));
+            var executor = CreateApprovalGatedShellExecutor(approvalService, logger);
+            var toolCall = CreateToolCall(
+                "call-approval-log",
+                "shell_execute",
+                ToolInput.Create("Command", "git status"));
+
+            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+
+            Assert.Null(context.Receipt);
+        }
+        else
+        {
+            expectedException = new InvalidOperationException("The tool failed.");
+            var registry = new ToolRegistry();
+            registry.Register(new ThrowingTestTool(expectedException));
+            var config = new ToolConfig();
+            var executor = new DispatchingToolExecutor(
+                registry,
+                new ToolAccessPolicy(new NetclawPaths(), config,
+                    new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
+                        ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
+                    new ShellCommandPolicy(), new ToolPathPolicy([])),
+                logger: logger);
+            var toolCall = CreateToolCall("call-failure-log", "failure_probe", ToolInput.Empty());
+
+            var propagated = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+
+            Assert.Same(expectedException, propagated);
+            Assert.IsType<ToolInvocationReceipt.OtherOutcome>(context.Receipt);
+        }
+
+        var attemptId = context.Approval.AuthorizationAttemptId.Value;
+        if (approvalRequired)
+        {
+            var authorizationLog = Assert.Single(logger.LogRecords, entry =>
+                Equals(entry.Properties.GetValueOrDefault("AuthorizationAttemptId"), attemptId)
+                && Equals(entry.Properties.GetValueOrDefault("AuthorizationOutcome"),
+                    nameof(ToolAuthorizationOutcome.RequiresApproval)));
+            Assert.Equal(LogLevel.Information, authorizationLog.Level);
+            Assert.Null(authorizationLog.Exception);
+            Assert.DoesNotContain(logger.LogRecords, entry =>
+                entry.Level == LogLevel.Error
+                && Equals(entry.Properties.GetValueOrDefault("AuthorizationAttemptId"), attemptId));
+        }
+        else
+        {
+            var executionLog = Assert.Single(logger.LogRecords, entry =>
+                Equals(entry.Properties.GetValueOrDefault("AuthorizationAttemptId"), attemptId)
+                && !entry.Properties.ContainsKey("AuthorizationOutcome"));
+            Assert.Equal(LogLevel.Error, executionLog.Level);
+            Assert.Same(expectedException, executionLog.Exception);
+            Assert.Equal(attemptId, executionLog.Properties["AuthorizationAttemptId"]);
+        }
+    }
+
     [Fact]
     public async Task One_time_approval_bypasses_policy_for_matching_shell_patterns()
     {
@@ -4226,6 +4300,7 @@ public partial class DispatchingToolExecutorTests : IDisposable
     private sealed class RecordingLogger<T> : ILogger<T>
     {
         public List<IReadOnlyDictionary<string, object?>> Entries { get; } = [];
+        public List<LogRecord> LogRecords { get; } = [];
 
         public IDisposable BeginScope<TState>(TState state) where TState : notnull
             => EmptyScope.Instance;
@@ -4242,11 +4317,18 @@ public partial class DispatchingToolExecutorTests : IDisposable
             if (state is not IEnumerable<KeyValuePair<string, object?>> properties)
                 return;
 
-            Entries.Add(properties.ToDictionary(
+            var captured = properties.ToDictionary(
                 property => property.Key,
                 property => property.Value,
-                StringComparer.Ordinal));
+                StringComparer.Ordinal);
+            Entries.Add(captured);
+            LogRecords.Add(new LogRecord(logLevel, exception, captured));
         }
+
+        public sealed record LogRecord(
+            LogLevel Level,
+            Exception? Exception,
+            IReadOnlyDictionary<string, object?> Properties);
 
         private sealed class EmptyScope : IDisposable
         {
@@ -4256,6 +4338,21 @@ public partial class DispatchingToolExecutorTests : IDisposable
             {
             }
         }
+    }
+
+    private sealed class ThrowingTestTool(Exception exception) : INetclawTool
+    {
+        public string Name => "failure_probe";
+        public LlmFacingToolName LlmFacingName => LlmFacingToolName.FromCanonical(Name);
+        public string Description => "A test tool that throws.";
+        public string GrantCategory => "test";
+        public System.Text.Json.JsonElement ParameterSchema => default;
+        public AITool ToAITool() => AIFunctionFactory.Create(() => "unused", Name);
+        public Task<string> ExecuteAsync(
+            IDictionary<string, object?>? arguments,
+            ToolInvocationContext context,
+            CancellationToken ct = default)
+            => Task.FromException<string>(exception);
     }
 
     private sealed class StubRequiredActor : IRequiredActor<ToolApprovalActorKey>

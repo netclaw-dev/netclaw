@@ -499,9 +499,12 @@ held fire. An isolated reminder session has no interactive channel, so it never 
 No text names the child run or the agent. Headless output prints the prompt and the close from
 `ToolInteractionRequest` and `ToolInteractionClosed` only, with no child identity.
 
-Limit: a run that the parent cancelled and that was then lost ends with a terminal record whose outcome reason is
-`actor_stopped`. The run record keeps no cancel fact after the terminal record, so after a restart a late click on its
-prompt gets `ChildEnded`. Live, the cancel closed the prompt with `CancelledByParent` first.
+Limit: a run that the parent cancelled can still end with a loss reason.
+A live child termination records `actor_stopped`.
+Recovery of a run in the cancel state records `owner_restarted`.
+The terminal record does not retain the earlier cancel fact.
+After a later restart, a late click on its prompt gets `ChildEnded`.
+Live, the cancel first closes the prompt with `CancelledByParent`.
 
 ### D7. Text answer guard (PR 2)
 

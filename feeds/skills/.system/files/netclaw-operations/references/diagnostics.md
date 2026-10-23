@@ -111,9 +111,18 @@ A disconnect emits `channel.disconnected`. The supervisor retries with exponenti
 A successful recovery emits `channel.reconnected`.
 
 A graceful stop can resume a safe model turn through a standard reminder.
-The reminder expires ten minutes after the interruption. A completed reply,
-partial reply, or possible tool effect leaves the session quiet. A crash does
-not create a restart reminder.
+This includes a turn that the drain stopped after a tool batch: the drain keeps
+one continuation input without text, and the reminder starts the next model call
+of that turn. A message that arrives before the reminder ends that resume, and
+the session then posts the stop notice. The reminder expires ten minutes after the interruption. A
+completed reply leaves the session quiet. A partial reply, a live background
+job, an overflow replay, or a turn without a channel type gets no reminder. The
+session log then has
+`Restart drain stopped the turn of session <id>, and no restart reminder resumes that turn.`
+and the session posts a notice that tells the person to send a message. A tool
+that still runs at the drain deadline gets no reminder and no session notice.
+The session does not acknowledge the drain, and only the daemon shutdown alert
+names it (`timedOutSessionIds`). A crash does not create a restart reminder.
 
 The daemon gives session drain 20 seconds within a 30-second shutdown phase.
 The CLI allows 45 seconds, and the generated systemd unit allows 60 seconds.

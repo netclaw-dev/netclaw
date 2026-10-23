@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.5.0"
+  version: "1.5.1"
 ---
 
 # Agent Coordination
@@ -117,6 +117,9 @@ Do not respawn or poll a waiting child. Tell the operator to answer the prompt.
 Cancel a waiting child only when the operator asks for it or the task no longer needs it.
 A child prompt has buttons only. Tell the operator to use the buttons. Do not ask for a text reply such as "A".
 A cancel or the end of a child withdraws its open prompts. The prompt then states the reason, and nothing runs.
+An approval notice turn is automation. It cannot ask the operator for approval.
+In that turn, handle only the notice, tell the operator the next step, and end the turn.
+Do not start or continue other work in it. The operator continues that work in a later turn.
 Load `netclaw-operations` and read `references/child-runs.md` for the notice and pause rules.
 
 ### Cancellation

@@ -123,7 +123,8 @@ public sealed class AgentEventChannelTests
     /// Design D4 text. One notice lists every open request of the session with the agent, the run, and the tool, in the
     /// order of the requests. It says who answers, that the children are not stalled, that spawn_agent and automated
     /// turns wait, and that check_agent_run does not work in the notice turn for a run that a person started.
-    /// Planted bug: the notice omits a run, reorders the runs, or omits a rule that the parent model needs.
+    /// Planted bug: the notice omits a run, reorders the runs, or omits a rule that the parent model needs, such as the
+    /// last line that keeps the notice turn to the notice (issue 2653).
     /// </summary>
     [Fact]
     public void An_open_notice_lists_each_request_and_states_the_rules_of_the_pause()
@@ -146,13 +147,15 @@ public sealed class AgentEventChannelTests
         Assert.Contains("Until all requests close, spawn_agent is refused and automated turns wait.", text, StringComparison.Ordinal);
         Assert.Contains("check_agent_run can read the status of a run of this session, or cancel it.", text, StringComparison.Ordinal);
         Assert.Contains("Ask the operator to answer the prompts, or to cancel a child.", text, StringComparison.Ordinal);
+        Assert.EndsWith(AgentEventRenderer.NoticeTurnRule + Environment.NewLine, text, StringComparison.Ordinal);
         Assert.DoesNotContain("spawn_agent is available again", text, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// Design D4 closing text. When no request stays open, the notice lists each answer, with the reason of a
     /// withdrawal, and says that spawn_agent is available again.
-    /// Planted bug: the closing notice keeps the open-notice rules, or loses the reason of a withdrawal.
+    /// Planted bug: the closing notice keeps the open-notice rules, loses the reason of a withdrawal, or loses the last
+    /// line that keeps the notice turn to the notice (issue 2653).
     /// </summary>
     [Fact]
     public void A_closing_notice_lists_each_answer_and_says_that_spawn_agent_is_available()
@@ -176,6 +179,7 @@ public sealed class AgentEventChannelTests
         Assert.Contains("- agent=pr-reviewer run=r-7f2 answer=approved_once", text, StringComparison.Ordinal);
         Assert.Contains("- agent=pr-reviewer run=r-8a1 answer=withdrawn reason=cancelled_by_parent", text, StringComparison.Ordinal);
         Assert.Contains("spawn_agent is available again.", text, StringComparison.Ordinal);
+        Assert.EndsWith(AgentEventRenderer.NoticeTurnRule + Environment.NewLine, text, StringComparison.Ordinal);
         Assert.DoesNotContain("spawn_agent is refused", text, StringComparison.Ordinal);
     }
 

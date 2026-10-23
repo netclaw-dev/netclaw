@@ -387,7 +387,8 @@ A first post that fails keeps the existing rule: the session withdraws the reque
   withdraw reason (`cancelled_by_parent` gives `CancelledByParent`, lost gives `ChildLost`, any other end gives
   `ChildEnded`). `WithdrawChildApprovals` and `RecoveredWithdrawReason` both call it, so the live redraw and the
   recovered late click say "cancelled" for a cancelled run.
-- **Check.** `check_agent_run` shows `state: "parked"` and the open request count.
+- **Check.** PR 1 cuts the `check_agent_run` status `state: "parked"`.
+  The tool keeps its existing lifecycle status and `pending_approval_count`.
 - **End.** A resumed run ends as any run ends.
 
 ### Formats (PR 2, forward-only)

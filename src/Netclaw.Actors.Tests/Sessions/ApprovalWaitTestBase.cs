@@ -330,7 +330,7 @@ public abstract class ApprovalWaitTestBase : LlmSessionTestBase
     };
 
     // Mirrors the source that the restart reminder uses to resume a session after a daemon restart.
-    protected static MessageSource RestartReminderSource(ReminderDefinition reminder) => new()
+    internal static MessageSource RestartReminderSource(ReminderDefinition reminder) => new()
     {
         ChannelType = ChannelType.Slack,
         SenderId = new SenderId("reminder-system"),

@@ -512,8 +512,14 @@ internal sealed class SessionInputFlow
         _selectedIds.AddRange(pending.Select(static item => item.InputId));
         foreach (var item in pending)
             AddNoticeRun(item.ChildNotice);
-        return pending.Select(static item => item.UserMessage).ToArray();
+        // The continuation input of a stopped turn has no text for the model (#2632).
+        return pending.Where(static item => !IsContinuation(item)).Select(static item => item.UserMessage).ToArray();
     }
+
+    // The continuation input of a stopped turn (#2632): the drain writes it with no text, no media, and no notice.
+    public static bool IsContinuation(InputAdmitted input)
+        => input.UserMessage.Content.Length == 0 && input.UserMessage.MediaReferences.Count == 0
+           && input.ExecutableText is null && input.ChildNotice is null;
 
     public void BufferReplay(SendUserMessage command) => _buffer.Insert(0, (command, true));
 

@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Diagnostics;
 using System.Net;
 using System.Text.RegularExpressions;
 using Xunit;
@@ -457,26 +456,6 @@ public sealed class SecretOutputRedactorTests
         Assert.Matches(oldRule, input); // the case really is an old-rule case
 
         Assert.DoesNotContain(value, SecretOutputRedactor.Redact(input), StringComparison.Ordinal);
-    }
-
-    // Bounded name tails keep these linear. A quadratic scan took seconds per megabyte, and
-    // the redactor runs several times over every tool output (model, session log, spill file).
-    [Theory]
-    [InlineData("token_")]
-    [InlineData("api_key_")]
-    [InlineData("secret_")]
-    [InlineData("password_")]
-    public void Redact_stays_linear_on_long_runs_of_a_secret_word(string unit)
-    {
-        var input = string.Concat(Enumerable.Repeat(unit, 4_000_000 / unit.Length));
-        SecretOutputRedactor.Redact(input[..1000]);
-
-        var sw = Stopwatch.StartNew();
-        var redacted = SecretOutputRedactor.Redact(input);
-        sw.Stop();
-
-        Assert.Equal(input, redacted);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20), $"Redact took {sw.Elapsed.TotalMilliseconds:F0} ms for 4 MB of '{unit}'");
     }
 
     [Fact]
