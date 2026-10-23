@@ -534,22 +534,23 @@ public sealed class ReminderFireAdmissionTests : ApprovalWaitTestBase
         return prepared;
     }
 
-    // The drain gives a running model call 2 seconds before it ends. That timer runs on virtual time, so the spec
-    // moves the clock in 3-second steps until the drain replies.
+    // The rejection proves that the actor installed its grace timer before virtual time advances.
     private async Task<DaemonRestartPrepared> DrainForRestartAsync(SessionId sessionId)
     {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var timeout = TimeSpan.FromSeconds(30);
         var drain = SessionManager.Ask<DaemonRestartPrepared>(
             new PrepareForDaemonRestart(sessionId, "daemon-stop"),
-            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
-        await AwaitAssertAsync(
-            () =>
-            {
-                AdvanceScheduler(TimeSpan.FromSeconds(3));
-                Assert.True(drain.IsCompleted, "The restart drain did not finish.");
-                return Task.CompletedTask;
-            },
-            TimeSpan.FromSeconds(10),
-            cancellationToken: TestContext.Current.CancellationToken);
+            timeout, cancellationToken);
+        var rejected = await SessionManager.Ask<CommandNack>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "This input must not enter the restart drain.",
+            Source = RequesterSource(Requester)
+        }, timeout, cancellationToken);
+        Assert.Equal(SessionIngressGate.RestartInProgressMessage, rejected.Reason);
+
+        AdvanceScheduler(TimeSpan.FromSeconds(3));
         return await drain;
     }
 
