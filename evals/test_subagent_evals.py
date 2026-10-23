@@ -415,6 +415,7 @@ class HeadlessTests(unittest.TestCase):
             "WHAT SHOULD I INCLUDE?\n",
             "Which items should I include?\n",
             "The notes are clear. What should I include?\n",
+            "Before I finalize the notes, what should I include?\n",
         ):
             with self.subTest(question=question):
                 self.assertEqual(1, self.code(parent=PARENT_ANSWER + question))
