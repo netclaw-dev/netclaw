@@ -4,9 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Runtime.CompilerServices;
+using Akka;
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Persistence;
+using Akka.Persistence.Hosting;
 using Akka.Persistence.Journal;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -82,6 +84,9 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         LiveBackgroundJobAtDrain,
         SecondDeliveryAfterToolBatch,
         NewInputBeforeReminder,
+        ContinuationOrphanedThenLaterDrain,
+        ContinuationWriteRejected,
+        ContinuationWriteFailed,
         GraceToolCalls,
         GraceToolCallsAfterText,
         GraceEmptyReplyRetry,
@@ -100,6 +105,10 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     [InlineData(DrainPoint.ToolLoopCompaction, "config-reload", true, true)]
     [InlineData(DrainPoint.SecondDeliveryAfterToolBatch, "daemon-stop", true, true)]
     [InlineData(DrainPoint.NewInputBeforeReminder, "daemon-stop", true, true)]
+    [InlineData(DrainPoint.ContinuationOrphanedThenLaterDrain, "daemon-stop", true, true)]
+    // The journal does not keep the continuation input, so no reminder can resume the turn. The person gets the notice.
+    [InlineData(DrainPoint.ContinuationWriteRejected, "config-reload", false, false)]
+    [InlineData(DrainPoint.ContinuationWriteFailed, "daemon-stop", false, false)]
     // The overflow rollback took the tool calls and results of the turn out of the history. The model cannot see what
     // ran, so the turn does not resume.
     [InlineData(DrainPoint.CompactionReplay, "config-reload", false, false)]
@@ -139,13 +148,27 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             return;
         }
 
+        if (point == DrainPoint.ContinuationWriteFailed)
+        {
+            release!();
+            await AssertFailedContinuationWritePostsTheNoticeAsync(sessionId, session, subscriber, reason);
+            return;
+        }
+
         if (release is not null)
         {
             // The clock must not move before the session handles the released work. Otherwise the model grace stop
             // can win, and the row does not test its drain point.
             var nextWork = Task.WhenAny(drain, _chat.NextCall, _tools.NextRun);
             release();
-            await nextWork.WaitAsync(Deadline, TestContext.Current.CancellationToken);
+            try
+            {
+                await nextWork.WaitAsync(Deadline, TestContext.Current.CancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail("After the released work, the drain did not acknowledge and no model call or tool run started.");
+            }
         }
 
         var prepared = await AwaitDrainAsync(drain, before);
@@ -154,7 +177,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         var resumed = await AssertDrainContractAsync(
             sessionId, session, subscriber, prepared, before, reason, turnResumes, reminderExpected);
         if (resumed is not null)
-            await AssertTurnResumesAfterRestartAsync(point, sessionId, prepared.RestartReminder!, resumed);
+            await AssertTurnResumesAfterRestartAsync(point, reason, sessionId, prepared.RestartReminder!, resumed);
         if (point == DrainPoint.GraceToolCallsAfterText)
             await AssertValidHistoryAfterRestartAsync(sessionId);
         if (point == DrainPoint.LiveBackgroundJobAtDrain)
@@ -168,7 +191,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     private async Task<Action?> DriveToDrainPointAsync(DrainPoint point, SessionId sessionId, Akka.TestKit.TestProbe subscriber)
     {
         Action? release = null;
-        Task reached = _chat.Reached.Task;
+        Task? reached = null;
         switch (point)
         {
             case DrainPoint.FirstModelCall:
@@ -186,7 +209,23 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             case DrainPoint.ModelCallDeepInToolLoop:
                 _chat.Script(Step.ToolCall, Step.ToolCall, Step.ToolCall, Step.StreamUntilCancelled);
                 break;
-            case DrainPoint.ToolBatchBoundary or DrainPoint.ToolStillRunning:
+            case DrainPoint.ContinuationOrphanedThenLaterDrain:
+                await LeaveStaleContinuationAsync(sessionId, subscriber);
+                _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
+                break;
+            case DrainPoint.ToolBatchBoundary or DrainPoint.ToolStillRunning or DrainPoint.ContinuationWriteRejected
+                or DrainPoint.ContinuationWriteFailed:
+                if (point is DrainPoint.ContinuationWriteRejected or DrainPoint.ContinuationWriteFailed)
+                {
+                    var fault = new AcceptanceFault(rejectAcceptance: false, holdAcceptance: false)
+                    {
+                        FailMatchingWrites = point == DrainPoint.ContinuationWriteFailed
+                    };
+                    fault.RejectWritesOf(payload => payload is InputAdmitted { UserMessage.Content: "" });
+                    await AkkaPersistence.Instance.Apply(Sys).JournalFor(null)
+                        .Ask<Done>(fault, Deadline, TestContext.Current.CancellationToken);
+                }
+
                 _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
                 release = _tools.HoldNextRun().SetResult;
                 reached = _tools.Started.Task;
@@ -239,7 +278,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             DrainPoint.TurnWithoutChannelType => null,
             _ => PersonSource
         });
-        await reached.WaitAsync(Deadline, TestContext.Current.CancellationToken);
+        await (reached ?? _chat.Reached.Task).WaitAsync(Deadline, TestContext.Current.CancellationToken);
         if (point == DrainPoint.BufferedInput)
             await SendAsync(sessionId, "Also check the beta feed", PersonSource);
         return release;
@@ -271,6 +310,47 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     // acknowledge. The daemon then gets no restart reminder, and its shutdown alert names the session
     // (DaemonRestartCoordinatorTests). The release lets the session end the batch after the check. In production the
     // daemon ignores that late acknowledgement.
+    // A drain stops another person's turn after a tool batch, and its reminder never arrives. The continuation input of
+    // that turn stays pending. After the restart, a person turn starts and ends. The later drain must then decide for
+    // the current turn only, never for the stale one.
+    private async Task LeaveStaleContinuationAsync(SessionId sessionId, Akka.TestKit.TestProbe subscriber)
+    {
+        _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
+        await SendAsync(sessionId, "Check the old profile", OtherPersonSource);
+        await _chat.Reached.Task.WaitAsync(Deadline, TestContext.Current.CancellationToken);
+        var session = await ResolveSessionAsync(sessionId);
+        Watch(session);
+        var stale = await AwaitDrainAsync(
+            await RequestDrainAsync(sessionId, "daemon-stop"), new Activity(_chat.MainCalls, _tools.Runs, 0));
+        Assert.NotNull(stale.RestartReminder);
+        await ExpectTerminatedAsync(session, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync<SessionDeactivated>(
+            _ => true, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+
+        await JoinAsync(subscriber, sessionId);
+        _chat.Script();
+        await SendAsync(sessionId, "Earlier question", PersonSource);
+        await subscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    // The journal fails the write of the continuation input, so Akka stops the session. The person must get the notice
+    // before the session stops. No input stays pending, so nothing resumes later.
+    private async Task AssertFailedContinuationWritePostsTheNoticeAsync(
+        SessionId sessionId, IActorRef session, Akka.TestKit.TestProbe subscriber, string reason)
+    {
+        await ExpectTerminatedAsync(session, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+        var notices = 0;
+        while (subscriber.HasMessages)
+        {
+            if (subscriber.ReceiveOne(TimeSpan.Zero) is TextOutput text && text.Text == RestartNoticeRuleTests.ExpectedNotice(reason))
+                notices++;
+        }
+
+        Assert.True(notices == 1, $"The session posted {notices} restart notices before it stopped.");
+        Assert.Empty(PendingInputIds(await ReadJournalAsync(sessionId)));
+    }
+
     private async Task AssertRunningToolHoldsTheDrainAsync(
         SessionId sessionId,
         Task<DaemonRestartPrepared> drain,
@@ -411,17 +491,15 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     // stopped turn under the recorded requester of that turn. The reminder is a signal, not an input: its text never
     // reaches the model, and the session records no input for it (#2632).
     private async Task AssertTurnResumesAfterRestartAsync(
-        DrainPoint point, SessionId sessionId, ReminderDefinition reminder, InputAdmitted resumed)
+        DrainPoint point, string reason, SessionId sessionId, ReminderDefinition reminder, InputAdmitted resumed)
     {
         _chat.Script(point == DrainPoint.SecondDeliveryAfterToolBatch ? [Step.ToolCall, Step.StreamUntilCancelled] : []);
         var subscriber = CreateTestProbe("resume-subscriber");
         await JoinAsync(subscriber, sessionId);
         if (point == DrainPoint.NewInputBeforeReminder)
         {
-            // Another person writes before the reminder arrives. That input runs first in its own turn (D1).
-            await SendAsync(sessionId, OtherInputText, OtherPersonSource);
-            await subscriber.FishForMessageAsync<TurnCompleted>(
-                _ => true, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+            await AssertLaterInputClosesTheContinuationAsync(sessionId, subscriber, reason, reminder, resumed);
+            return;
         }
 
         var calls = _chat.MainCalls;
@@ -445,7 +523,47 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             AssertPairedToolHistory(request);
         }
 
-        AssertNoTurnMixesRequesters(await ReadJournalAsync(sessionId), reminder, resumed, point == DrainPoint.NewInputBeforeReminder);
+        var consumers = AssertNoTurnMixesRequesters(await ReadJournalAsync(sessionId), reminder);
+        Assert.True(consumers.Any(ids => ids.Contains(resumed.InputId)),
+            "The resumed turn did not consume the input that the drain left pending.");
+    }
+
+    // Another person writes before the reminder arrives. The start of that turn closes the continuation input and posts
+    // the restart notice that the drain held back. The later turn runs under its own authority only, and the reminder
+    // that arrives after it resumes nothing (#2632).
+    private async Task AssertLaterInputClosesTheContinuationAsync(
+        SessionId sessionId, Akka.TestKit.TestProbe subscriber, string reason, ReminderDefinition reminder, InputAdmitted resumed)
+    {
+        var calls = _chat.MainCalls;
+        await SendAsync(sessionId, OtherInputText, OtherPersonSource);
+        var notices = 0;
+        await subscriber.FishForMessageAsync(
+            message =>
+            {
+                // The new incarnation of the session may not know the reason of the drain, so each notice text counts.
+                if (message is TextOutput text && (text.Text == RestartNoticeRuleTests.ExpectedNotice(reason)
+                                                   || text.Text == RestartNoticeRuleTests.ExpectedNotice("config-reload")))
+                    notices++;
+                return message is TurnCompleted;
+            },
+            Deadline,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(notices == 1, $"The later input posted {notices} restart notices for the stopped turn.");
+
+        var reply = await SendRestartReminderAsync(sessionId, reminder);
+        Assert.True(reply is RestartResumeNotNeeded,
+            $"The reminder after the later turn must resume nothing. The session replied {reply}.");
+        await PingAsync(sessionId);
+        Assert.True(_chat.MainCalls == calls + 1, $"The session made {_chat.MainCalls - calls} model calls after the restart.");
+        var request = _chat.MainRequests[calls];
+        Assert.True(request[^1].Role == AiChatRole.User && request[^1].Text == OtherInputText,
+            "The model request of the later turn must end with the later input.");
+
+        var events = await ReadJournalAsync(sessionId);
+        Assert.Contains(events.OfType<InputClosed>(), close => close.InputIds.Contains(resumed.InputId));
+        var consumers = AssertNoTurnMixesRequesters(events, reminder);
+        Assert.DoesNotContain(consumers, ids => ids.Contains(resumed.InputId));
+        Assert.Empty(PendingInputIds(events));
     }
 
     // The resumed turn starts a tool batch, which consumes the pending input. The session actor then stops without a
@@ -466,10 +584,9 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Assert.Equal(calls + 2, _chat.MainCalls);
     }
 
-    // The resumed turn consumes the input that the drain left pending. Each journal record that consumes inputs consumes
-    // the inputs of one requester only. Another person's input, when present, runs before the resume in its own turn.
-    private static void AssertNoTurnMixesRequesters(
-        IReadOnlyList<object> events, ReminderDefinition reminder, InputAdmitted resumed, bool otherInputFirst)
+    // No journal record consumes the inputs of two requesters, and the reminder text is never an input. Returns the
+    // input IDs of each record that consumes inputs, in journal order.
+    private static List<IReadOnlyList<InputId>> AssertNoTurnMixesRequesters(IReadOnlyList<object> events, ReminderDefinition reminder)
     {
         Assert.DoesNotContain(events.OfType<InputAdmitted>(), input => input.UserMessage.Content == reminder.Instructions);
         var admitted = events.OfType<InputAdmitted>().ToDictionary(input => input.InputId);
@@ -483,14 +600,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             .Where(ids => ids.Count > 0)
             .ToList();
         Assert.All(consumers, ids => Assert.Single(ids.Select(id => Requester(admitted[id].TurnContext)).Distinct()));
-        var resumedAt = consumers.FindIndex(ids => ids.Contains(resumed.InputId));
-        Assert.True(resumedAt >= 0, "The resumed turn did not consume the input that the drain left pending.");
-        if (otherInputFirst)
-        {
-            var other = Assert.Single(admitted.Values, input => input.UserMessage.Content == OtherInputText);
-            var otherAt = consumers.FindIndex(ids => ids.Contains(other.InputId));
-            Assert.True(otherAt >= 0 && otherAt < resumedAt, "The other person's input did not run first in its own turn.");
-        }
+        return consumers;
     }
 
     // After a daemon restart the reminder system sends the restart reminder to the recovered session.
@@ -508,6 +618,15 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Assert.Equal(
             contents.OfType<FunctionCallContent>().Select(call => call.CallId).Order(),
             contents.OfType<FunctionResultContent>().Select(result => result.CallId).Order());
+    }
+
+    // The fault journal behaves as the memory journal until a row installs a fault.
+    protected override void ConfigureSessionPersistence(AkkaConfigurationBuilder builder)
+    {
+        builder.WithInMemoryJournal().WithInMemorySnapshotStore();
+        builder.AddHocon($"""
+            akka.persistence.journal.inmem.class = "{typeof(AcceptanceBoundaryJournal).AssemblyQualifiedName}"
+            """, HoconAddMode.Prepend);
     }
 
     protected override void ConfigureSessionServices(IServiceCollection services)
@@ -672,7 +791,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         public int MainCalls => Volatile.Read(ref _mainCalls);
         public Task NextCall => Volatile.Read(ref _nextCall).Task;
         // The session reached the drain point: a held call waits, or a call streams until it is cancelled.
-        public TaskCompletionSource Reached { get; } = NewGate();
+        public TaskCompletionSource Reached { get; private set; } = NewGate();
         public TaskCompletionSource SummaryHeld { get; } = NewGate();
 
         public IReadOnlyList<IReadOnlyList<ChatMessage>> MainRequests
@@ -685,6 +804,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         {
             _scriptStart = MainCalls;
             _script = steps;
+            Reached = NewGate();
         }
 
         public void ReleaseHeldCall() => Volatile.Read(ref _heldCallRelease)?.TrySetResult();
