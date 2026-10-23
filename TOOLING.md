@@ -39,7 +39,7 @@ A `FakeToolExecutor` result does not prove that the real executor accepts those 
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
-The job has eleven Linux matrix groups that run in parallel with the normal test matrix.
+The job has twelve Linux matrix groups that run in parallel with the normal test matrix.
 The job timeout is 25 minutes.
 Each Stryker invocation builds the test project and runs the initial test run again. That fixed cost is about 1.5 to 2 minutes per invocation.
 The mutant run itself takes under 1 minute for most spans. Group time is mostly the sum of the invocations of its gates.
@@ -56,7 +56,8 @@ Hosted runs from 2026-10-17 through 2026-10-19 measured these gate times (minute
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4) | 10 to 11 |
-| `child-owner-and-report` | `child-owner` (3.2), `child-control` (2.8), `reminder-report-once` (2.7), `child-approval-close` (2.7), `loopback-host-origin` (two invocations, 4.3) | 16.0 (one run) |
+| `child-owner-and-report` | `child-owner` (3.2), `child-control` (2.8), `reminder-report-once` (2.7), `child-approval-close` (2.7) | 13 to 18 (estimate) |
+| `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local) | 7 to 8 (estimate) |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
@@ -67,7 +68,7 @@ A hosted run of 2026-10-18 put the two gates of #2527 part 2 into `verb-chain` a
 `shutdown-notice-identity` took 3.4 minutes and `stop-proof` took 6.9 minutes there. `stop-proof` has its own group, and `shutdown-notice-identity` runs in `reminder`.
 The `shell-analysis` group held three gates. A hosted run of 2026-10-18 took 25 minutes 18 seconds, and the job timeout cancelled it. The `shell-assignment-and-paths` group held three gates and took 21.5 minutes.
 The `session-reliability` group held five gates and took 18.7 minutes. It now holds three gates, and `child-owner-and-report` holds the other two. The `child-approval-close` gate (#2525) joined that group later.
-The `child-control` gate of #2524 runs in `child-owner-and-report` too. The group holds five gates with `loopback-host-origin`.
+The `child-control` gate of #2524 runs in `child-owner-and-report` too. The group held five gates with `loopback-host-origin`.
 The `child-consent` group is new (child-approval-events-and-parent-pause). The `child-owner-and-report` group is near its
 budget, so the change adds a group. PR 2 of that change added the text answer guard gate. PR 3 adds the resume gate and
 the purge order gate. The design estimates about 12 minutes for the four gates.
@@ -78,6 +79,9 @@ All five gates passed. The total includes checkout, tool restore, and report upl
 The `shell-command-analysis` group is still the longest group. Its first invocation (303 mutants) took 15.8 minutes in the slow run. A split of that gate needs a script change and a new expected mutant count for each part. Do not add a gate to this group.
 The `reminder` group took 16.4 minutes in the same run. Do not add a gate to it.
 The hosted runner speed varies, so the time of one gate changes by up to 5 minutes between runs.
+The `child-owner-and-report` group took 1309 to 1457 seconds of the 1500 second limit, and one run (job 120137806585) reached the timeout.
+The `loopback-host-origin` gate moved to its own group. It targets `Netclaw.Daemon` and `Netclaw.Configuration`, not child runs.
+Keep each group at 15 minutes or less on a fast runner. Do not raise the job timeout.
 Measure a new gate on a cold runner and update this table.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
 Add a gate to the lightest group when its measured cost fits the timeout and the Windows test duration.
@@ -354,7 +358,7 @@ spans (the `origin.Count` comparisons and `Sum` replacements in `FindRefusal`).
 The count of 41 excludes them.
 
 The local run took 2 to 3 minutes after package restore. CI runs it in the
-`child-owner-and-report` group of the `mutation-gates` job. Its report directory is
+`loopback-host-origin` group of the `mutation-gates` job. Its report directory is
 `artifacts/stryker/loopback-host-origin`.
 
 ### Session Reliability Gate

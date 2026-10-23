@@ -187,7 +187,9 @@ jobs:
           - group: session-reliability
             gates: tool-batch-readiness headless-stop-rule open-child-runs
           - group: child-owner-and-report
-            gates: child-owner child-control reminder-report-once child-approval-close loopback-host-origin
+            gates: child-owner child-control reminder-report-once child-approval-close
+          - group: loopback-host-origin
+            gates: loopback-host-origin
           - group: child-consent
             gates: child-consent text-answer-guard
 
