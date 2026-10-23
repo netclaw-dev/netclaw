@@ -71,7 +71,7 @@ public sealed class WaitingReminderIdleAbandonmentBackgroundJobTests : ApprovalW
     {
         // Arrange
         var sessionId = new SessionId("test-channel/idle-abandon-reminder-starts-job");
-        var session = await ReachIdleAbandonmentAsync(sessionId, remindersTurnStartsJob: true);
+        var (session, watcher) = await ReachIdleAbandonmentAsync(sessionId, remindersTurnStartsJob: true);
 
         // Act: the reminder turn starts the job and ends.
         var subscriber = await JoinFullSubscriberAsync(sessionId);
@@ -79,7 +79,7 @@ public sealed class WaitingReminderIdleAbandonmentBackgroundJobTests : ApprovalW
         await ExpectTurnsAsync(subscriber, 1);
 
         // Assert: the live job keeps the session. Nobody kills the job.
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
+        await watcher.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
         Assert.Empty(_killedSessions);
         var join = await session.Ask<SessionJoined>(new JoinSession(subscriber)
         {
@@ -94,7 +94,7 @@ public sealed class WaitingReminderIdleAbandonmentBackgroundJobTests : ApprovalW
         session.Tell(ReceiveTimeout.Instance);
 
         // Assert: with no live job, the normal idle rule applies.
-        await ExpectTerminatedAsync(session, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        await watcher.ExpectTerminatedAsync(session, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     // Control: the same flow without a job. The deferred passivation ends the session when the reminder turn ends.
@@ -103,19 +103,20 @@ public sealed class WaitingReminderIdleAbandonmentBackgroundJobTests : ApprovalW
     {
         // Arrange
         var sessionId = new SessionId("test-channel/idle-abandon-reminder-starts-no-job");
-        var session = await ReachIdleAbandonmentAsync(sessionId, remindersTurnStartsJob: false);
+        var (session, watcher) = await ReachIdleAbandonmentAsync(sessionId, remindersTurnStartsJob: false);
 
         // Act
         session.Tell(ReceiveTimeout.Instance);
 
         // Assert
-        await ExpectTerminatedAsync(session, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        await watcher.ExpectTerminatedAsync(session, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
         await AwaitReminderRunAsync();
         Assert.Empty(_killedSessions);
     }
 
     // A half-answered batch, a recovered session, and a reminder that waits. The caller sends the idle message.
-    private async Task<IActorRef> ReachIdleAbandonmentAsync(SessionId sessionId, bool remindersTurnStartsJob)
+    // A dedicated probe watches the session, so a stray message to the test actor cannot hide the Terminated message.
+    private async Task<(IActorRef Session, TestProbe Watcher)> ReachIdleAbandonmentAsync(SessionId sessionId, bool remindersTurnStartsJob)
     {
         var jobManager = CreateTestProbe("job-manager");
         jobManager.SetAutoPilot(new DelegateAutoPilot((sender, message) =>
@@ -160,8 +161,9 @@ public sealed class WaitingReminderIdleAbandonmentBackgroundJobTests : ApprovalW
         }
 
         var session = await ResolveSessionAsync(sessionId);
-        Watch(session);
-        return session;
+        var watcher = CreateTestProbe("session-watcher");
+        watcher.Watch(session);
+        return (session, watcher);
     }
 
     private async Task ParkTwoApprovalsAsync(SessionId sessionId)

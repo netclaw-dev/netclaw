@@ -35,19 +35,22 @@ internal static class SessionLlmInvoker
         SessionAffinityContext.SessionId = sessionId.Value;
         try
         {
+            // This code runs off the actor thread, so it sends with no sender. The implicit sender comes from a
+            // thread-static actor cell, and a test kit can leave a test actor of another system there. The session
+            // can reply to the sender of the message that ends a turn.
             var response = await StreamAsync(client, messages, options, self, callId, cancellationToken);
-            self.Tell(response);
+            self.Tell(response, ActorRefs.NoSender);
         }
         catch (OperationCanceledException ex)
         {
             // The actor's ProcessingWatchdog cancelled the CTS — let the watchdog
             // handler produce the user-facing error. Send a typed failure so the
             // actor can clean up, but the watchdog message is the authoritative timeout.
-            self.Tell(new LlmCallFailed(ex) { CallId = callId });
+            self.Tell(new LlmCallFailed(ex) { CallId = callId }, ActorRefs.NoSender);
         }
         catch (Exception ex)
         {
-            self.Tell(new LlmCallFailed(ex) { CallId = callId });
+            self.Tell(new LlmCallFailed(ex) { CallId = callId }, ActorRefs.NoSender);
         }
         finally
         {
