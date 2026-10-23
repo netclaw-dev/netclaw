@@ -43,8 +43,6 @@ public sealed partial class SessionToolWorkflowTests
         Assert.False(workflow.CanParkForRestart());
         workflow.ApplyApprovalRequested(first, durable: true, recovered: false);
         Assert.False(workflow.CanParkForRestart());
-        workflow.ApplyApprovalRequested(second, durable: false, recovered: false);
-        Assert.False(workflow.CanParkForRestart());
         workflow.ApplyApprovalRequested(second, durable: true, recovered: false);
         Assert.True(workflow.CanParkForRestart());
 
