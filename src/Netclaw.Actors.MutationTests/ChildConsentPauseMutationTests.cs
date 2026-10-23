@@ -168,23 +168,25 @@ public sealed class ChildConsentPauseMutationTests
 
     /// <summary>
     /// A person's input ends a running automation turn at the tool-batch end (<c>PersonInputEndsAutomationTurnSpecs</c>).
-    /// The flow tells the actor to start no model call: no input joins, and the next action is not ContinueModel. Each
-    /// waiting input then starts a turn with its own authority. An automation input does not join a turn that ends, so
-    /// no input is consumed without a model call. Other input keeps the join rule. A child result notice carries the
-    /// requester of its owner, but it is automated input by its kind, so it never ends a turn. The pause never holds a
-    /// person, so a person also ends the turn while the pause applies. An admitted non-operator person and a person's
-    /// slash command also end it: ending a turn early grants no authority, and the command then drains alone (#2591).
+    /// The flow tells the actor to start no model call: no input joins, and the next action is EndTurn. Each waiting
+    /// input then starts a turn with its own authority, in admission order. An automation input does not join a turn
+    /// that ends, so no input is consumed without a model call. Other input keeps the join rule. A child result notice
+    /// carries the requester of its owner, but it is automated input by its kind, so it never ends a turn. An
+    /// UntrustedExternal person waits, as before. The pause never holds a person, so a person also ends the turn while
+    /// the pause applies. A person's slash command also ends it, and the command then drains alone (#2591). A replay is
+    /// the running turn's own message, so it joins that turn.
     /// </summary>
     [Theory]
     [InlineData("reminder", "alice", false, "ends")]
     [InlineData("notice", "alice", false, "ends")]
     [InlineData("reminder", "alice", true, "ends")]
     [InlineData("reminder", "reminder alice", false, "ends")]
-    [InlineData("reminder", "stranger", false, "ends")]
+    [InlineData("reminder", "stranger", false, "waits")]
     [InlineData("reminder", "/review", false, "ends")]
     [InlineData("alice", "bob", false, "waits")]
     [InlineData("reminder", "child-result", false, "waits")]
     [InlineData("reminder", "reminder", false, "joins")]
+    [InlineData("reminder", "replay", false, "joins")]
     [InlineData("alice", "alice", false, "joins")]
     public void A_person_input_ends_an_automation_turn_at_the_tool_batch_end(string owner, string waiting, bool paused, string effect)
     {
@@ -196,16 +198,24 @@ public sealed class ChildConsentPauseMutationTests
             "notice" => NoticeContext(),
             _ => Context(owner)
         }, null);
-        var inputs = waiting.Split(' ').Select(static kind => kind switch
+        var contents = waiting.Split(' ');
+        foreach (var kind in contents)
         {
-            "reminder" => Reminder(kind),
-            "child-result" => ChildResult(kind),
-            "stranger" => Input(kind, (Context(kind) with { RequesterPrincipal = PrincipalClassification.UntrustedExternal }).ToRecord()),
-            _ when kind.StartsWith('/') => Person("alice", kind),
-            _ => Person(kind, kind)
-        }).ToArray();
-        flow.RestoreWaitingInputs(inputs, Session);
-        var contents = inputs.Select(static input => input.UserMessage.Content).ToArray();
+            if (kind == "replay")
+            {
+                flow.BufferReplay(new SendUserMessage { SessionId = Session, Content = kind });
+                continue;
+            }
+
+            flow.RestoreWaitingInputs([kind switch
+            {
+                "reminder" => Reminder(kind),
+                "child-result" => ChildResult(kind),
+                "stranger" => Input(kind, (Context(kind) with { RequesterPrincipal = PrincipalClassification.UntrustedExternal }).ToRecord()),
+                _ when kind.StartsWith('/') => Person("alice", kind),
+                _ => Person(kind, kind)
+            }], Session);
+        }
 
         // Act
         var advance = flow.AdvanceAfterToolBatch(Completion(), compactionDue: false, childConsentPaused: paused);
@@ -225,15 +235,15 @@ public sealed class ChildConsentPauseMutationTests
             return;
         }
 
-        Assert.NotEqual(ToolBatchNextAction.ContinueModel, advance.Next);
-        var served = new List<string?>();
+        Assert.Equal(ToolBatchNextAction.EndTurn, advance.Next);
+        var served = new List<string>();
         while (flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: paused) is { Batch: { } batch })
         {
             Assert.True(batch.AdoptsAuthority);
             served.AddRange(batch.Messages.Select(static message => message.Content));
         }
 
-        Assert.Equal(contents.Order(), served.Order());
+        Assert.Equal(contents, served);
     }
 
     private static SessionToolWorkflow Paused()

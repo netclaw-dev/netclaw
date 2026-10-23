@@ -6,12 +6,21 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Akka.Actor;
+using Akka.Hosting;
+using Akka.TestKit;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
+using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 
@@ -43,6 +52,10 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
     // An unblocked automation turn and an unblocked person turn each run this many tool rounds and then reply.
     private const int Rounds = 3;
     private const string FireKeyValue = "reminder-a:1792764000000";
+    private const string JobId = "preempt-job-1";
+    private const string JobKey = "bg-job:" + JobId;
+    private const string StartJob = "Start the export job.";
+    private const string ActiveJobsBlock = "[active-background-jobs]";
 
     private static readonly Regex LoopPattern = new(@"loop:([a-z0-9]+)", RegexOptions.Compiled);
 
@@ -60,6 +73,13 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
         /// </summary>
         NoticeTurnThenPerson,
 
+        /// <summary>
+        /// A background job result turn is automation. Alice's earlier turn started the job. The ended result turn must
+        /// still close the job, so the person's prompt does not list it under the active background jobs. The same stale
+        /// entry makes a later passivation report the job as killed.
+        /// </summary>
+        BackgroundJobTurnThenPerson,
+
         /// <summary>Unchanged: Bob's input waits until Alice's turn ends. A person never ends the turn of a person.</summary>
         PersonTurnThenOtherPerson,
 
@@ -73,13 +93,27 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
     private enum Effect { EndsTurn, Waits, Joins }
 
     private sealed record Case(string Running, MessageSource? RunningSource, string Buffered, MessageSource BufferedSource,
-        Effect Effect, string? FireKey);
+        Effect Effect, string? FireKey, bool StartsJob = false);
 
-    protected override void RegisterParentTools(ToolRegistry registry) => registry.RegisterCore(_probe);
+    protected override void RegisterParentTools(ToolRegistry registry)
+    {
+        registry.RegisterCore(_probe);
+        registry.RegisterCore(AIFunctionFactory.Create((string command) => $"ran {command}", ShellTool.ToolName), "shell");
+    }
+
+    // The fake job manager below needs a background launch. The real launch authorizes a real shell command, so this
+    // wrapper gives a fixed launch and sends every other call to the real executor.
+    protected override void ConfigureSessionServices(IServiceCollection services)
+    {
+        base.ConfigureSessionServices(services);
+        var inner = (IToolExecutor)services.Last(descriptor => descriptor.ServiceType == typeof(IToolExecutor)).ImplementationInstance!;
+        services.AddSingleton<IToolExecutor>(new JobLaunchExecutor(inner, TestPaths.WorkspacesDirectory));
+    }
 
     [Theory]
     [InlineData(Row.ReminderTurnThenPerson)]
     [InlineData(Row.NoticeTurnThenPerson)]
+    [InlineData(Row.BackgroundJobTurnThenPerson)]
     [InlineData(Row.PersonTurnThenOtherPerson)]
     [InlineData(Row.ReminderTurnThenReminder)]
     [InlineData(Row.PersonTurnThenSamePerson)]
@@ -100,6 +134,13 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
         {
             // Act: the first model call of the running turn holds. The second input waits in the buffer. The model then
             // asks for one tool, so the running turn reaches a tool-batch end with the input in the buffer.
+            if (spec.StartsJob)
+            {
+                ActorRegistry.For(Sys).Register<BackgroundJobManagerActorKey>(FakeJobManager().Ref, overwrite: true);
+                await SendAsync(sessionId, StartJob, Operator(Alice));
+                await ExpectTurnsAsync(subscriber, 1);
+            }
+
             if (spec.RunningSource is { } runningSource)
                 await SendAsync(sessionId, Text(spec.Running), runningSource);
             else
@@ -127,6 +168,7 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
     {
         Row.ReminderTurnThenPerson => new("reminder", Reminder(FireKeyValue), "alice", AliceSource, Effect.EndsTurn, FireKeyValue),
         Row.NoticeTurnThenPerson => new("notice", null, "alice", AliceSource, Effect.EndsTurn, null),
+        Row.BackgroundJobTurnThenPerson => new("job", JobResult(), "alice", AliceSource, Effect.EndsTurn, null, StartsJob: true),
         Row.PersonTurnThenOtherPerson => new("alice", AliceSource, "bob", OperatorWithTargets(Bob, BobTarget), Effect.Waits, null),
         Row.ReminderTurnThenReminder => new("reminder", Reminder(FireKeyValue), "reminder2", Reminder("reminder-b:1792764060000"),
             Effect.Joins, FireKeyValue),
@@ -135,6 +177,34 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
     };
 
     private static MessageSource AliceSource => OperatorWithTargets(Alice, AliceTarget);
+
+    // The source shape of BackgroundJobManagerActor.DeliverResultToSession.
+    private static MessageSource JobResult() => new()
+    {
+        ChannelType = ChannelType.SignalR, SenderId = new SenderId("background-job-system"),
+        MessageId = JobKey, TurnId = new TurnId(JobKey), BackgroundJobId = new BackgroundJobId(JobKey),
+        Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal,
+        Principal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+        {
+            SourceKind = new SourceKind(BackgroundJobManagerActor.SourceKind)
+        },
+        ReceivedAt = TimeProvider.System.GetUtcNow()
+    };
+
+    private TestProbe FakeJobManager()
+    {
+        var manager = CreateTestProbe("job-manager");
+        manager.SetAutoPilot(new DelegateAutoPilot((sender, message) =>
+        {
+            if (message is StartBackgroundJob)
+                sender.Tell(new BackgroundJobStarted(new BackgroundJobId(JobId), null));
+            else if (message is KillJobsForSession kill)
+                sender.Tell(new SessionJobsReaped(kill.SessionId, 0));
+            return AutoPilot.KeepRunning;
+        }));
+        return manager;
+    }
 
     // The thread of the delivery target that each label's requester carries. A tool context of a reminder or a notice
     // turn has no target here: the reminder source has none, and the notice copies the targets of Operator(Alice).
@@ -153,7 +223,9 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
     // - EndsTurn: the running turn made one model call and one tool call. Then a new turn for the person starts. Its
     //   first request has the tool result of the ended turn and then the person's message, with nothing between them;
     // - Joins: the same request shape, but in the running turn (one TurnCompleted);
-    // - Waits: the running turn runs all its rounds before any request carries the waiting input.
+    // - Waits: the running turn runs all its rounds before any request carries the waiting input;
+    // - no request of the second input's turn lists an active background job. In the job row, the result turn lists
+    //   the job, so the check is not empty.
     private async Task AssertOutcomeAsync(AcceptanceFault journal, SessionId sessionId, Akka.TestKit.TestProbe subscriber, Case spec)
     {
         await AwaitInputAdmittedAsync(journal, Text(spec.Buffered));
@@ -208,6 +280,12 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
                 $"The request must add only the second input after the tool result. It added [{string.Join(" | ", userTexts)}].");
         }
 
+        // A turn that ends early still closes the background job that it reports.
+        if (spec.StartsJob)
+            Assert.Contains(requests, request => OwnerLabel(request) == spec.Running && ListsActiveJob(request));
+        Assert.False(requests.Any(request => OwnerLabel(request) == spec.Buffered && ListsActiveJob(request)),
+            "A request of the second input's turn lists a background job as active after the turn that reported it ended.");
+
         // The running turn ends once.
         Assert.Equal(spec.Effect == Effect.Joins ? 1 : 2, turns.Count);
         Assert.All(turns, turn => Assert.Equal(TurnOutcome.Completed, turn.Outcome));
@@ -215,6 +293,10 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
         if (spec.FireKey is { } fireKey)
             Assert.Same(turns[0], Assert.Single(turns, turn => turn.SourceReminderId?.Value == fireKey));
     }
+
+    // The per-turn context hint ("[system: ...") stays in history, so only the fresh tail shows the current state.
+    private static bool ListsActiveJob(IReadOnlyList<ChatMessage> request)
+        => FreshTail(request).Any(message => message.Text.Contains(ActiveJobsBlock, StringComparison.Ordinal));
 
     private static IReadOnlyList<InputAdmitted> Inputs(AcceptanceFault journal, SessionId sessionId)
         => journal.Committed.OfType<InputAdmitted>().Where(admitted => admitted.SessionId == sessionId).ToArray();
@@ -247,6 +329,14 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
     // labeled message gets the base script, for instance the spawn turn of the notice row.
     private static IReadOnlyList<AIContent>? LoopReply(IReadOnlyList<ChatMessage> request)
     {
+        if (FreshUserTexts(request).Contains(StartJob))
+        {
+            return [new FunctionCallContent("start-job", ShellTool.ToolName, new Dictionary<string, object?>
+            {
+                ["command"] = "sleep 600", ["_background"] = true, ["_rationale"] = "Start the export job."
+            })];
+        }
+
         if (OwnerLabel(request) is not { } label)
             return ScriptedParentReply(request);
         var round = RoundsOf(request, label);
@@ -302,5 +392,34 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
         // Each round has new arguments, so the repeat guard of the session does not refuse the call.
         public static FunctionCallContent Call(string label, int round) => new($"loop-{label}-{round}", ToolName,
             new Dictionary<string, object?> { ["label"] = label, ["round"] = round, ["_rationale"] = "Record the turn authority." });
+    }
+
+    private sealed class JobLaunchExecutor(IToolExecutor inner, string workingDirectory) : IToolExecutor
+    {
+        public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default)
+            => inner.ExecuteAsync(toolCall, context, ct);
+
+        public IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default)
+            => inner.ExecuteStreamAsync(toolCall, context, ct);
+
+        public ToolLivenessMode GetLivenessMode(FunctionCallContent toolCall) => inner.GetLivenessMode(toolCall);
+
+        public ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall) => inner.ValidateToolCall(toolCall);
+
+        public ToolCallInterpretation InterpretToolCall(FunctionCallContent toolCall) => inner.InterpretToolCall(toolCall);
+
+        public (ToolCallMeta? Meta, FunctionCallContent Cleaned) PrepareToolCall(FunctionCallContent toolCall)
+            => inner.PrepareToolCall(toolCall);
+
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+            => Task.FromResult(new ShellProcessLaunch(
+                ToolArgumentHelper.GetString(toolCall.Arguments, "command")!,
+                workingDirectory,
+                context.Invocation,
+                new Netclaw.Security.ShellCommandPolicy(TestShellEnvironment.Current),
+                new Netclaw.Security.ToolPathPolicy(TestShellEnvironment.Current, []),
+                static _ => Task.CompletedTask));
     }
 }
