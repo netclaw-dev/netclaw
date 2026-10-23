@@ -23,26 +23,21 @@ namespace Netclaw.Actors.Sessions;
 internal sealed record PendingToolInteraction(
     ToolApprovalRequested Request,
     AuthorizationAttemptId AuthorizationAttemptId,
-    bool PersistApprovalState,
     TurnContext? TurnContext,
     string? TurnContextRestoreFailure) : INoSerializationVerificationNeeded
 {
     public bool CanRecoverAfterRestart
-        => PersistApprovalState
-           && Request.TurnContext is not null
+        => Request.TurnContext is not null
            && TurnContext is not null
            && TurnContextRestoreFailure is null;
 
-    public static PendingToolInteraction From(
-        ToolApprovalRequested evt,
-        bool persistApprovalState)
+    public static PendingToolInteraction From(ToolApprovalRequested evt)
     {
         var turnContext = ToolApprovalTurnContext.Restore(evt, out var restoreFailure);
         var authorizationAttemptId = ToolApprovalTurnContext.RestoreAuthorizationAttemptId(evt);
         return new PendingToolInteraction(
             evt,
             authorizationAttemptId,
-            persistApprovalState,
             turnContext,
             restoreFailure);
     }
@@ -265,13 +260,12 @@ internal sealed partial class SessionToolWorkflow
 
     private PendingToolInteraction Request(
         ToolApprovalRequested evt,
-        bool persistApprovalState,
         bool recovered)
     {
-        var pending = PendingToolInteraction.From(evt, persistApprovalState);
+        var pending = PendingToolInteraction.From(evt);
         _calls[evt.CallId] = new PendingToolApproval(pending);
 
-        if (evt.SourceChildRunId is null && persistApprovalState && pending.TurnContext is not null)
+        if (evt.SourceChildRunId is null && pending.TurnContext is not null)
         {
             TurnPhase = recovered
                 ? ApprovalTurnPhase.RecoveredWaiting

@@ -95,8 +95,18 @@ public sealed partial class LlmSessionActor
         });
         Command<ChildResultWritten>(HandleChildResultWritten);
         Command<ChildParkReached>(AcceptChildPark);
-        Command<ChildEventRejected>(message => EndParkedRun(message.RunId, SubAgentOutcomeReason.ToolExecutionFailed,
-            "The journal rejected a consent request or answer of the child.", ActorRefs.Nobody));
+        Command<ChildEventRejected>(message =>
+        {
+            // Race: a duplicate answer from the stash can resume the run before the rejection of the first answer
+            // arrives. Then the run has no park, and the resumed child owns its end.
+            if (!_parks.ContainsKey(message.RunId))
+            {
+                _log.Warning("A rejected consent event of child run {RunId} arrived after the park ended", message.RunId);
+                return;
+            }
+            EndParkedRun(message.RunId, SubAgentOutcomeReason.ToolExecutionFailed,
+                "The journal rejected a consent request or answer of the child.", ActorRefs.Nobody);
+        });
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
         Command<RecoverChildRuns>(_ => RecoverChildren());
         Command<StartHeldInputs>(_ => StartInputsHeldByThePause());
@@ -164,12 +174,18 @@ public sealed partial class LlmSessionActor
         {
             _state = _state.Apply(committed);
             replyTo.Tell(accepted);
-            StartChildActor(run, prepared);
+            if (StartChildActor(run, prepared))
+                EmitOutput(new SubAgentOutput
+                {
+                    SessionId = _sessionId, AgentName = run.AgentName, Phase = SubAgentPhase.Started,
+                    TimestampMs = NowMs(), ToolCount = prepared.ToolCount
+                }, OutputFilter.ToolCalls);
         });
     }
 
-    // Starts one incarnation of an accepted run: the first start, or a resume of a park.
-    private void StartChildActor(BackgroundChildRun run, PreparedChildStart prepared)
+    // Starts one incarnation of an accepted run: the first start, or a resume of a park. A failed start records the
+    // end of the run and returns false.
+    private bool StartChildActor(BackgroundChildRun run, PreparedChildStart prepared)
     {
         try
         {
@@ -182,11 +198,7 @@ public sealed partial class LlmSessionActor
                 { InteractiveApproval = _toolWorkflow.ChildApprovalCapability(run) }
             };
             child.Tell(prepared.Execution with { Scope = scope, OwnedRun = execution, Cancellation = execution.Token }, Self);
-            EmitOutput(new SubAgentOutput
-            {
-                SessionId = _sessionId, AgentName = run.AgentName, Phase = SubAgentPhase.Started,
-                TimestampMs = NowMs(), ToolCount = prepared.ToolCount
-            }, OutputFilter.ToolCalls);
+            return true;
         }
         catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
         {
@@ -196,6 +208,7 @@ public sealed partial class LlmSessionActor
                 AgentName = run.AgentName, Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnError),
                 Output = $"The accepted child could not start: {error.Message}"
             }, lost: false, warning: "No child relaunch will occur.", ActorRefs.Nobody);
+            return false;
         }
     }
 
@@ -274,7 +287,8 @@ public sealed partial class LlmSessionActor
                 error.Message, ActorRefs.Nobody);
             return;
         }
-        // The prompt counter makes each incarnation name new, so it never meets an old actor that still stops.
+        // The prompt counter makes each incarnation name new, so it never meets an old actor that still stops. A resume
+        // emits no second Started output.
         StartChildActor(run, prepared with { ActorName = $"{prepared.ActorName}-{_promptsIssued[runId]}" });
     }
 
@@ -285,6 +299,8 @@ public sealed partial class LlmSessionActor
         if (_subAgentSpawner is null || _subAgentRegistry is null ||
             !TurnContext.TryFromRecord(run.OriginalContext, out var authority, out _) || authority is null)
             throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable, "The session cannot start a child.");
+        var snapshot = run.InitialWorkingSnapshot ?? throw new ChildStartRejectedException(
+            SubAgentOutcomeReason.SpawnUnavailable, "The run has no initial working snapshot.");
         _subAgentLoader?.SyncInto(_subAgentRegistry);
         var scope = new ToolRunScope
         {
@@ -295,10 +311,10 @@ public sealed partial class LlmSessionActor
             InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
             ModelInputModalities = _model.InputModalities,
             ProjectDirectory = resume.Park.ScopeDirectories.ProjectDirectory,
-            RecentFiles = run.InitialWorkingSnapshot?.WorkingContext.RecentFiles ?? []
+            RecentFiles = snapshot.WorkingContext.RecentFiles
         };
         var profile = _subAgentRegistry.TryGetByName(run.AgentName.Value);
-        return _subAgentSpawner.PrepareResume(run, resume, profile is { Visibility: SubAgentVisibility.UserFacing } ? profile : null,
+        return _subAgentSpawner.PrepareResume(run, snapshot, resume, profile is { Visibility: SubAgentVisibility.UserFacing } ? profile : null,
             new ToolExecutionContext(scope, new ToolExecutionTimeout(_config.ToolExecutionTimeout)).Invocation);
     }
 
@@ -445,6 +461,7 @@ public sealed partial class LlmSessionActor
             // The prompts close before the run reports its end, so no channel shows a live prompt of an ended run.
             EmitClosedPrompts(withdrawn);
             _execution.ReleaseChild(runId);
+            _promptsIssued.Remove(runId);
             if (!child.Equals(ActorRefs.Nobody))
             {
                 Context.Unwatch(child);

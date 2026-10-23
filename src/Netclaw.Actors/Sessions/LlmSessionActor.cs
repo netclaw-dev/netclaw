@@ -3522,13 +3522,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         TrackStartedBackgroundJob(evt.StartedBackgroundJob);
     }
 
+    // Only a call of the session sends a dispatch here. The owner of a park writes its child requests directly.
     private void HandleToolInteractionRequestDispatch(ToolInteractionRequestDispatch dispatch)
-    {
-        if (dispatch.SourceChildRunId is { } childRunId &&
-            (!_state.ChildRuns.TryGetValue(childRunId, out var childRun) || childRun.Lifecycle is not ChildRunLifecycle.Accepted))
-            return;
-        PersistApprovalRequests([dispatch]);
-    }
+        => PersistApprovalRequests([dispatch]);
 
     // The journal stores the requests in one atomic write. A park sends all its requests here at once, so a rejected
     // write leaves no request of the park (durable-child-consent-wait, design D3).
@@ -3561,7 +3557,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     {
         var pending = _toolWorkflow.ApplyApprovalRequested(
             evt,
-            durable: true,
             recovered: _phase.Current == SessionPhase.Recovering);
 
         // Replay re-applies requests that a later record may answer, cancel, or lose. RecoveryCompleted logs the

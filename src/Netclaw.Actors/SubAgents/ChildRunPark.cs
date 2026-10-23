@@ -37,7 +37,7 @@ internal sealed record ChildRunPark
     public string? SkillOverlay { get; init; }
 
     /// <summary>One consent request for each parked call, as the gate made it.</summary>
-    public IReadOnlyList<ParentApprovalRequest> Requests { get; init; } = [];
+    public required IReadOnlyList<ParentApprovalRequest> Requests { get; init; }
 }
 
 /// <summary>The two working directories of the batch that parked (design D2).</summary>
