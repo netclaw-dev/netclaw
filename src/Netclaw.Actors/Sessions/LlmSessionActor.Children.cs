@@ -234,9 +234,9 @@ public sealed partial class LlmSessionActor
                 return;
         }
         // Security boundary: the prompts bind to the requester of the run record (ForChildCall checks it), never to
-        // the requester of the current turn.
-        if (!TurnContext.TryFromRecord(run!.OriginalContext, out var authority, out _) ||
-            authority is not { SupportsInteractiveApproval: true })
+        // the requester of the current turn. A drain park asks nobody, but a damaged authority still ends the run.
+        if (!TurnContext.TryFromRecord(run!.OriginalContext, out var authority, out _) || authority is null ||
+            !ChildParkRules.RequesterCanAnswer(message.Requests.Count, authority.SupportsInteractiveApproval))
         {
             EndParkedRun(run.RunId, SubAgentOutcomeReason.ToolExecutionFailed,
                 "The requester of the run cannot answer a consent request.", child);
@@ -283,7 +283,16 @@ public sealed partial class LlmSessionActor
             _state = _state.Apply(committed);
             foreach (var (request, dispatch) in committed.Requests.Zip(dispatches))
                 ApprovalRequestCommitted(request, PromptOf(dispatch));
+            ContinueDrainAfterChild();
         });
+    }
+
+    // Design D4: a drain acknowledgement waits for the park or terminal record of the last live child. This runs only in
+    // the journal callback, so the session never acknowledges before the record commits.
+    private void ContinueDrainAfterChild()
+    {
+        if (RestartDrainRequested && _phase.Current == SessionPhase.Passivating)
+            FinalizePassivation();
     }
 
     // Design D3, the resume gate. It runs after the journal holds an answer of a parked request, and at recovery.
@@ -522,6 +531,7 @@ public sealed partial class LlmSessionActor
             }, OutputFilter.ToolCalls);
             PrepareChildResult(_state.ChildRuns[runId], terminal, legacy: null);
             ChildApprovalsClosed(withdrawn);
+            ContinueDrainAfterChild();
         });
     }
 

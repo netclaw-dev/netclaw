@@ -54,6 +54,15 @@ internal sealed record ChildParkReached(SubAgentRunId RunId, ChildRunPark Park, 
     : INoSerializationVerificationNeeded;
 
 /// <summary>
+/// The owner tells each live child to park at a graceful drain (running-child-drain-park design D2). After it the child
+/// starts no model call and no tool batch. Actor-local.
+/// </summary>
+internal sealed record ParkForDrain : INoSerializationVerificationNeeded
+{
+    public static readonly ParkForDrain Instance = new();
+}
+
+/// <summary>
 /// The journal rejected an event of a child run (design D3). The owner records the end of the run only when the run
 /// still has the lifecycle that the event expected (<see cref="ChildParkRules.RejectedEventEnds"/>).
 /// </summary>
@@ -173,8 +182,10 @@ internal static class ChildParkRules
                 : loopGuard.Episodes.Values.Any(static episode => episode.EqualRounds is < 0 or > 2)
                     ? "an equal-round count is outside 0 to 2"
                     : null;
-    // </child-resume-gate>
 
-    // Compile shell for running-child-drain-park task 1.1. It keeps the PR 2 rule for every park.
-    public static bool RequesterCanAnswer(int requestCount, bool supportsInteractiveApproval) => supportsInteractiveApproval;
+    // Security boundary: a consent park asks the requester of the run, so that requester must be able to answer. A drain
+    // park (no request) asks nobody, so a requester with no interactive approval, such as a reminder turn, can keep it.
+    public static bool RequesterCanAnswer(int requestCount, bool supportsInteractiveApproval)
+        => requestCount == 0 || supportsInteractiveApproval;
+    // </child-resume-gate>
 }

@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Services;
 
@@ -24,8 +25,6 @@ public interface IDaemonRestartCoordinator
 /// </summary>
 public sealed class DaemonRestartCoordinator : IDaemonRestartCoordinator
 {
-    internal static readonly TimeSpan RestartDrainTimeout = TimeSpan.FromSeconds(20);
-
     private readonly SessionIngressGate _ingressGate;
     private readonly RestartManifestStore _manifestStore;
     private readonly IRequiredActor<SessionManagerActorKey> _sessionManagerProvider;
@@ -55,7 +54,9 @@ public sealed class DaemonRestartCoordinator : IDaemonRestartCoordinator
         _lifecycleNotifier = lifecycleNotifier;
         _timeProvider = timeProvider;
         _logger = logger;
-        _restartDrainTimeout = restartDrainTimeout ?? RestartDrainTimeout;
+        // Both drains share one deadline, so the child wait of a session (SessionExecutionLifetime.ChildWait) ends
+        // before it.
+        _restartDrainTimeout = restartDrainTimeout ?? DaemonConfig.BoundedDrainTimeout;
     }
 
     public async Task RequestConfigRestartAsync(CancellationToken cancellationToken)

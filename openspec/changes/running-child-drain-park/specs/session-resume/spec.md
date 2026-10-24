@@ -23,7 +23,8 @@ the session does not acknowledge the drain.
 
 - **GIVEN** a session with one child run whose tool does not end
 - **WHEN** a graceful drain starts, and the child wait ends before the drain deadline
-- **THEN** the session logs one Warning that names one live child when the child wait ends
+- **THEN** the session logs one Warning that names one live child when the child wait ends, with text that ends
+  with `child_wait_ended live_children=1`
 - **AND** the session acknowledges the drain with a restart reminder before the drain deadline
 - **AND** the shutdown alert does not name the session as timed out
 

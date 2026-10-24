@@ -111,7 +111,8 @@ so the notice of a lost child and the continuation of the parent turn (#2632) wa
   callback of `Parked` (`AcceptChildPark`) and of `TerminalRecorded` (`RecordChildTerminal`). It never runs before the
   callback: `AcceptChildPark` releases the child before `Persist`, and an acknowledgement before the write commits can
   lose the park.
-- `RestartChildWaitExpired` sets `childWaitEnded`, logs one Warning with the live child count, and calls
+- `RestartChildWaitExpired` sets `childWaitEnded`, logs one Warning with the live child count
+  (`Restart drain child_wait_ended live_children={count}`), and calls
   `FinalizePassivation()` when the phase is `Passivating`. It is handled in every phase.
 - `ClaimFinalStop` already makes the gate idempotent: a second call after the claim does nothing.
 
@@ -190,7 +191,7 @@ SubAgentActor.ResumeFromPark: transcript, loop guard, round N, file activity
 | Model call | The child waits for its first model reply. It cancels the call and parks with the task message only. | The reply arrives after the park. The child ignores it, and the transcript does not hold it. |
 | Requester rule (R2) | A reminder turn's child, with no interactive approval, makes a drain park and resumes. | The same child reaches a consent park. The run ends as failed, and no prompt shows. |
 | Child wait | A child parks at 3 s. The session acknowledges at once after the park record commits. | A child tool runs past 18 s. The session logs one Warning and acknowledges with the reminder. Recovery records the run as lost, and the tool does not run again. |
-| Authority | Bob writes after the restart. Alice's resumed child runs under Alice's recorded audience. | Bob's turn authority reaches the resumed child. This must not happen; the resume reads only `run.OriginalContext`. |
+| Authority | Bob writes after the restart, and his turn is open when Alice's child resumes. The resumed child's first model call and each later tool call run under Alice's recorded audience, boundary, and delivery targets. | Bob's turn authority reaches the resumed child. This must not happen; the resume reads only `run.OriginalContext`. |
 | At most once | A crash after the last answer of a consent park and before `Resumed`: recovery resumes. | A crash after `Resumed` of a drain park: recovery records the run as lost and starts no child. |
 
 ## Risks / Trade-offs

@@ -22,6 +22,11 @@ internal sealed record ToolPipelineStoppedForRestart(Task WorkTask, Exception? F
 
 internal sealed record RestartModelGraceExpired(long CallId) : INoSerializationVerificationNeeded;
 
+internal sealed record RestartChildWaitExpired : INoSerializationVerificationNeeded
+{
+    public static readonly RestartChildWaitExpired Instance = new();
+}
+
 internal enum RestartAction { Wait, EnterPassivation, StopToolTask, StartModelGrace }
 internal enum ModelStopAction { Ignore, CloseInputs, EnterPassivation }
 internal enum ToolStopAction { Ignore, FailTurn, EnterPassivation }
@@ -43,15 +48,21 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private static readonly TimeSpan RestartModelGracePeriod = TimeSpan.FromSeconds(2);
 
     // The child wait of a restart drain (running-child-drain-park design D3). The session acknowledges the drain
-    // before the caller deadline, so it keeps its restart reminder.
-    internal static readonly TimeSpan ChildWait = DaemonConfig.BoundedDrainTimeout - TimeSpan.FromSeconds(2);
+    // before the caller deadline, so it keeps its restart reminder. ChildWaitMargin must stay above ChildWait in the
+    // file, because static fields start in text order.
+    private static readonly TimeSpan ChildWaitMargin = TimeSpan.FromSeconds(2);
+    internal static readonly TimeSpan ChildWait = DaemonConfig.BoundedDrainTimeout - ChildWaitMargin;
 
-    // Compile shell for running-child-drain-park task 1.1. The acknowledgement does not wait for children yet.
-    internal static bool WaitsForChildren(bool drainRequested, bool hasLiveChildren, bool childWaitEnded) => false;
+    // The drain acknowledgement waits for the park or terminal record of each live child, until the child wait ends
+    // (running-child-drain-park design D4).
+    internal static bool WaitsForChildren(bool drainRequested, bool hasLiveChildren, bool childWaitEnded)
+        => drainRequested && hasLiveChildren && !childWaitEnded;
+
     private static readonly TimeSpan RestartReminderLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PassivationFinalStopDelay = TimeSpan.FromMilliseconds(100);
     private static readonly object RestartModelGraceTimerKey = new();
+    private static readonly object RestartChildWaitTimerKey = new();
     private static readonly object PassivationTimerKey = new();
     private static readonly object PassivationFinalStopTimerKey = new();
 
@@ -80,6 +91,7 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     }
 
     public bool HasLiveChildren => _children.Count > 0;
+    public int LiveChildCount => _children.Count;
     public bool OwnsChild(SubAgentRunId runId, IActorRef child)
         => _children.TryGetValue(runId, out var live) && live.Actor.Equals(child);
     public SubAgentRunId? FindChild(IActorRef child)
@@ -126,8 +138,12 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private ReapOperation? _reap;
     private PassivationAttempt? _attempt;
     private bool _idlePassivationAfterWaitingInput;
+    private bool _childWaitEnded;
 
     public bool RestartDrainRequested => _restartDrainReplyTo is not null;
+    public bool WaitsForLiveChildren => WaitsForChildren(RestartDrainRequested, HasLiveChildren, _childWaitEnded);
+
+    public void EndChildWait() => _childWaitEnded = true;
     public string RestartDrainReason => _restartDrainReason;
 
     // The idle handler closed a parked batch while an acknowledged input waited behind it. The input runs first,
@@ -151,8 +167,17 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         bool hasBufferedContinuation,
         bool canParkDurableApprovals)
     {
+        var firstRequest = !RestartDrainRequested;
         _restartDrainReplyTo = replyTo;
         _restartDrainReason = reason;
+        if (firstRequest && HasLiveChildren)
+        {
+            // Each live child parks at its next safe point. The wait ends before the caller deadline, so the session
+            // keeps its restart reminder when a child misses it.
+            foreach (var (child, _) in _children.Values)
+                child.Tell(ParkForDrain.Instance, actor);
+            timers.StartSingleTimer(RestartChildWaitTimerKey, RestartChildWaitExpired.Instance, ChildWait);
+        }
         if (phase == SessionPhase.Ready)
             return RestartAction.EnterPassivation;
 

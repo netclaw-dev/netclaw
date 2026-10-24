@@ -80,8 +80,9 @@ resumed after consent.
 #### Scenario: A resumed child keeps the recorded authority
 
 - **GIVEN** a drain park of a child run that Alice started in her thread
-- **WHEN** Bob writes in the session after the restart, and the child resumes
-- **THEN** each tool call of the resumed child runs with Alice's recorded audience, boundary, and delivery targets
+- **WHEN** Bob writes in the session after the restart, and his turn is open when the child resumes
+- **THEN** the first model call of the resumed child and each tool call after it run with Alice's recorded audience,
+  boundary, and delivery targets
 - **AND** Bob's authority does not reach the child
 
 #### Scenario: A crash after the resume record does not repeat work

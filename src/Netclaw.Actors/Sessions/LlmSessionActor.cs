@@ -1363,6 +1363,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     // aborted passivation.
     private void FinalizePassivation()
     {
+        // A restart drain waits for the park or terminal record of each live child (ContinueDrainAfterChild), or for the
+        // end of the child wait.
+        if (_execution.WaitsForLiveChildren)
+            return;
         var final = _execution.ClaimFinalStop(
             _phase.Current, _sessionId, _state.GetExecutablePendingInputs(), UnreportedRuns().ToArray());
         if (final is null)
@@ -2562,6 +2566,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Command<PrepareForDaemonRestart>(RequestRestartDrain);
         Command<ToolPipelineStoppedForRestart>(HandleToolPipelineStoppedForRestart);
         Command<RestartModelGraceExpired>(HandleRestartModelGraceExpired);
+        Command<RestartChildWaitExpired>(HandleRestartChildWaitExpired);
         Command<ModelStoppedForRestart>(HandleModelStoppedForRestart);
 
         Command<WorkingContextSnapshotReady>(HandleWorkingContextSnapshotReady);
@@ -4504,6 +4509,18 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         _log.Info("Stopping a tool batch that waits only for durable approvals before restart drain");
         return true;
+    }
+
+    // The child wait ended with a live child. The session acknowledges the drain, PostStop stops the child, and its run
+    // stays Accepted, so recovery records it as lost (owner_restarted).
+    private void HandleRestartChildWaitExpired(RestartChildWaitExpired _)
+    {
+        _execution.EndChildWait();
+        if (!_execution.HasLiveChildren)
+            return;
+        _log.Warning("Restart drain child_wait_ended live_children={LiveChildren}", _execution.LiveChildCount);
+        if (_phase.Current == SessionPhase.Passivating)
+            FinalizePassivation();
     }
 
     private void HandleRestartModelGraceExpired(RestartModelGraceExpired expired)

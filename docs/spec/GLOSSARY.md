@@ -118,6 +118,12 @@ records the resume and starts a new child from the park, under the authority of
 the run record, and runs only the parked calls, each once
 (`durable-child-consent-wait` and `durable-child-park-recovery`, #2572).
 
+A parked run can hold zero consent requests. This is a drain park: a child that
+ran at a graceful drain stopped at a safe point, after its tool batch or in
+place of its model call. A drain park asks nobody. The session resumes it after
+the restart, and the new child starts with a model call
+(`running-child-drain-park`, #2655).
+
 **Code anchors:** `ChildRunLifecycle.Parked`, `ChildRunEvent.Parked`, `ChildRunEvent.Resumed`, `ChildParkRules`
 
 ### Child journal

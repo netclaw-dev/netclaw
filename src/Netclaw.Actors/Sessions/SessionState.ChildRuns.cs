@@ -82,17 +82,18 @@ public sealed partial record SessionState
             (ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Parked, ChildRunEvent.TerminalRecorded terminal)
                 when terminal.Terminal.Result.RunId == run.RunId && terminal.Terminal.Result.ScopeId == run.ScopeId
                 => new ChildRunLifecycle.Terminal(terminal.Terminal),
-            // durable-child-park-recovery, design D3.
+            // durable-child-park-recovery, design D3. A park with no request is a drain park (running-child-drain-park
+            // design D1 R1).
             (ChildRunLifecycle.Accepted, ChildRunEvent.Parked parked)
-                when parked.Requests.Count > 0
-                     && parked.Requests.All(request => request.SourceChildRunId == run.RunId)
+                when parked.Requests.All(request => request.SourceChildRunId == run.RunId)
                 => new ChildRunLifecycle.Parked(parked.Park, [.. parked.Requests.Select(static request => new ChildParkRequest(request, null))]),
             // The resume record comes only after every answer. The checkpoint of the resume holds the round of the park,
             // so the first checkpoint of the resumed child is the next round.
             (ChildRunLifecycle.Parked current, ChildRunEvent.Resumed)
                 when current.Requests.All(static request => request.Resolution is not null)
                 => new ChildRunLifecycle.Accepted(new ChildRunCheckpoint(current.Park.LoopGuard.ToolIterationCount,
-                    "The child resumed after consent.", current.Park.FileActivity)),
+                    current.Requests.Length == 0 ? "The child resumed after the restart." : "The child resumed after consent.",
+                    current.Park.FileActivity)),
             (ChildRunLifecycle.Terminal { LegacyPrepared: null } terminal, ChildRunEvent.ResultPrepared prepared)
                 when IsCanonicalChildPair(run, prepared.Call, prepared.Result) &&
                      (terminal.Result.Result.WorkingContext is not null || prepared.ReviewedWorkingContext is null)
