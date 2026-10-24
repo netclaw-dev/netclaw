@@ -799,14 +799,14 @@ public class SubAgentActorTests : SubAgentActorTestBase
             toolExecutorLogger: logger));
 
         // The child parks the call (durable-child-consent-wait, design D1). The park request carries the gate facts.
-        var park = await RunToParkAsync(agent, SubAgentTestScope.Create(
+        var (_, park, requests) = await RunToParkAsync(agent, SubAgentTestScope.Create(
             sessionDirectory: sessionDirectory,
             projectDirectory: projectDirectory,
             inheritedCwd: projectDirectory,
             approvalBridge: new ConsentCapableBridge()), "Push to origin");
 
         Assert.False(fakeTool.WasCalled);
-        var request = Assert.Single(park.Requests);
+        var request = Assert.Single(requests);
         Assert.True(AuthorizationAttemptId.TryParse(request.AuthorizationAttemptId.Value, out _));
         Assert.NotEmpty(logger.AuthorizationAttemptIds);
         Assert.All(
@@ -1024,12 +1024,12 @@ public class SubAgentActorTests : SubAgentActorTestBase
 
         // The retry target of a parked managed temporary retry is deferred to a later PR (cut plan), so this test
         // checks only the options of the parked request.
-        var park = await RunToParkAsync(agent, SubAgentTestScope.Create(
+        var (_, park, requests) = await RunToParkAsync(agent, SubAgentTestScope.Create(
             sessionDirectory: sessionDirectory,
             approvalBridge: new ConsentCapableBridge()), "Retry the exact disposable diagnostic call if corrected.");
 
         Assert.False(fakeTool.WasCalled);
-        var request = Assert.Single(park.Requests);
+        var request = Assert.Single(requests);
         Assert.Equal("call-managed-temporary-retry", request.CallId.Value);
         Assert.Equal(
             [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
@@ -1156,8 +1156,8 @@ public class SubAgentActorTests : SubAgentActorTestBase
     }
 
     // An owned run whose owner is a probe. The probe acknowledges each checkpoint, as the session does, and the
-    // method returns the park of the child (durable-child-consent-wait, design D1).
-    private async Task<ChildRunPark> RunToParkAsync(IActorRef agent, ChildRunScope scope, string task)
+    // method returns the park of the child and its requests (durable-child-consent-wait, design D1).
+    private async Task<ChildParkReached> RunToParkAsync(IActorRef agent, ChildRunScope scope, string task)
     {
         var owner = CreateTestProbe();
         var execution = new ChildRunExecution(new SubAgentRunId("run"), owner.Ref);
@@ -1170,7 +1170,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
         {
             var message = await owner.ExpectMsgAsync<object>(ApprovalAskTimeout, cancellationToken: TestContext.Current.CancellationToken);
             if (message is ChildParkReached reached)
-                return reached.Park;
+                return reached;
             Assert.IsType<ChildCheckpointReached>(message);
             owner.Reply(SessionProtocol.CommandAck.For(new Netclaw.Actors.Protocol.SessionId("test-session")));
         }

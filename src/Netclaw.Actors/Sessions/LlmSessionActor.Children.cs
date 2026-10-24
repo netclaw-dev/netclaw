@@ -243,7 +243,7 @@ public sealed partial class LlmSessionActor
         var dispatches = new List<ToolInteractionRequestDispatch>();
         try
         {
-            foreach (var request in message.Park.Requests)
+            foreach (var request in message.Requests)
             {
                 dispatches.Add(requests.ForChildCall(ChildApprovalPrompt.CreateCallId(run.RunId.Value, ++issued), request) with
                 {

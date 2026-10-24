@@ -68,7 +68,7 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
         // Act
         var child = Launch(owner, Definition(looper, consent) with { SkillOverlay = Overlay }, client, Scope(start), null);
         watcher.Watch(child);
-        var park = await ExpectParkAsync(owner, []);
+        var (_, park, requests) = await ExpectParkAsync(owner, []);
         var identity = await child.Ask<ActorIdentity>(new Identify("parked"), Deadline, Cancellation);
         owner.Send(child, new ChildTerminalCommitted());
         await watcher.ExpectTerminatedAsync(child, Deadline, cancellationToken: Cancellation);
@@ -77,7 +77,7 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
         Assert.NotNull(identity.Subject);
         Assert.False(owner.HasMessages, "A parked child must not send a result when it stops.");
         Assert.Equal(0, consent.CallCount);
-        Assert.Equal("call-park", Assert.Single(park.Requests).CallId.Value);
+        Assert.Equal("call-park", Assert.Single(requests).CallId.Value);
         Assert.Equal(new ChildParkScopeDirectories(start, start), park.ScopeDirectories);
         Assert.Equal(1, park.LoopGuard?.ToolIterationCount);
         Assert.Equal(Overlay, park.SkillOverlay);
@@ -112,8 +112,8 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
         ], "unused");
         var owner = CreateTestProbe("resume-owner");
         Launch(owner, Definition(looper, consent) with { SkillOverlay = Overlay }, first, Scope(), null);
-        var park = await ExpectParkAsync(owner, []);
-        var request = Assert.Single(park.Requests);
+        var (_, park, requests) = await ExpectParkAsync(owner, []);
+        var request = Assert.Single(requests);
         var answer = approve
             ? new ApprovalRedriveEntry(request.AuthorizationAttemptId, OneTimeApprovalKeys.Create(request.Approval), null, null)
             : new ApprovalRedriveEntry(request.AuthorizationAttemptId, null, RefusalKind.Denied, null);
@@ -170,11 +170,11 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
         }
     }
 
-    private static async Task<ChildRunPark> ExpectParkAsync(TestProbe owner, List<ChildRunCheckpoint> checkpoints)
+    private static async Task<ChildParkReached> ExpectParkAsync(TestProbe owner, List<ChildRunCheckpoint> checkpoints)
     {
         var message = await NextOwnerMessageAsync(owner, checkpoints);
         Assert.True(message is ChildParkReached, $"The child must send its park, but it sent {Describe(message)}.");
-        return ((ChildParkReached)message).Park;
+        return (ChildParkReached)message;
     }
 
     private static string Describe(object message) => message is ChildTerminalReturned terminal

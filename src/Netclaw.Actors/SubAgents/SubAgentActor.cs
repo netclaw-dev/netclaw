@@ -867,7 +867,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _turnState.RestoreLoopGuard(park.LoopGuard);
         _checkpointRound = park.LoopGuard.ToolIterationCount;
         _fileActivity.Restore(park.FileActivity);
-        var parkedCallIds = park.Requests.Select(static request => request.CallId.Value).ToHashSet(StringComparer.Ordinal);
+        var parkedCallIds = resume.Answers.Keys.ToHashSet(StringComparer.Ordinal);
         var parkedCalls = _history.Last(static message => message.Role == Microsoft.Extensions.AI.ChatRole.Assistant)
             .Contents.OfType<FunctionCallContent>().Where(call => parkedCallIds.Contains(call.CallId)).ToList();
         _toolRegistry.CanonicalizeToolCalls(parkedCalls);
@@ -887,12 +887,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var park = new ChildRunPark
         {
             Transcript = _transcript.ToArray(), LoopGuard = _turnState.ExportLoopGuard(), ScopeDirectories = directories,
-            FileActivity = _fileActivity.BuildResult(), SkillOverlay = _definition.SkillOverlay, Requests = requests
+            FileActivity = _fileActivity.BuildResult(), SkillOverlay = _definition.SkillOverlay
         };
         EndRun();
         _log.Info("SubAgent [{AgentName}] parked {Count} call(s) for consent after {Iterations} tool iterations",
             _definition.Name, requests.Count, _turnState.ToolIterationCount);
-        HandOver(owned, new ChildParkReached(owned.RunId, park));
+        HandOver(owned, new ChildParkReached(owned.RunId, park, requests));
     }
 
     private void HandOver(ChildRunExecution owned, object message)

@@ -100,6 +100,8 @@ public readonly record struct SubAgentOutcomeReason(string Value)
     public static readonly SubAgentOutcomeReason NoToolsAvailable = new("no_tools_available");
     public static readonly SubAgentOutcomeReason SpawnError = new("spawn_error");
     public static readonly SubAgentOutcomeReason NoResultReader = new("no_result_reader");
+    public static readonly SubAgentOutcomeReason ParkTooLarge = new("park_too_large");
+    public static readonly SubAgentOutcomeReason ParkDamaged = new("park_damaged");
 
     public static explicit operator SubAgentOutcomeReason(string value) => new(value);
 
