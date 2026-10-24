@@ -720,7 +720,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 // Only "document" items are ever embedded (MemoryEmbedOnWriteCoordinator.
                 // DocumentItemKind), so embeddedItemIds needs no further kind filtering here.
                 var isCoverageGap = !embeddedItemIds.Contains(x.Item.Id);
-                if (isCoverageGap)
+                if (isCoverageGap && string.Equals(x.Item.Kind, MemoryKind.Document.ToWireValue(), StringComparison.OrdinalIgnoreCase))
                     gapCandidateCount++;
 
                 // GetValueOrDefault is exact for case 1 (cleared the TopK floor) and a harmless

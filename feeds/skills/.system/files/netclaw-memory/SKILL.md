@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, cross-session memory, memory classes, or memory types. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.14.2"
+  version: "1.14.3"
 ---
 
 # Netclaw Memory
@@ -111,9 +111,10 @@ lexical-only — same candidate pool, no vector term or cosine floor.
   retrieval calibration and no explicit `MinCosineSimilarity` override
   degrades the same way, with reason `missing_calibration` — this is
   expected for a newly-added or not-yet-calibrated model variant, not a
-  bug. A candidate with no embedding row for the current model degrades to
+  bug. A document candidate with no embedding row for the current model degrades to
   lexical-only scoring for that candidate alone (rather than being excluded)
-  and logs `memory_recall_coverage_gap`. All of these are self-healing or
+  and logs `memory_recall_coverage_gap`. Records have no embeddings by design.
+  They retain lexical admission and do not count as coverage gaps. All of these are self-healing or
   intentional, not persistent failures — see Diagnostics below.
 - **Backfilling an existing corpus**: enabling `Memory.Embeddings.Enabled`
   on a deployment that already has memories does not retroactively embed
@@ -273,7 +274,7 @@ Useful log events:
 - `turn_memory_recall` — summary event with item count and duration
 - `memory_recall_vector_degraded` — turn fell back to lexical-only recall (embedder
   unavailable, no vector index, or the query-embedding sub-budget was exceeded)
-- `memory_recall_coverage_gap` — one or more candidates had no embedding row for the
+- `memory_recall_coverage_gap` — one or more document candidates had no embedding row for the
   current model; they degrade to lexical scoring rather than being excluded, and the
   gap self-heals via embed-on-write plus `netclaw memory backfill-embeddings`
 - `memory_recall_gate_degraded` — the relevance gate was skipped for this turn (model
