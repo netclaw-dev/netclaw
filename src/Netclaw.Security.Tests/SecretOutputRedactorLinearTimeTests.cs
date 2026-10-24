@@ -213,9 +213,11 @@ internal static class RedactorTimingBudget
 
         var elapsed = stopwatch.Elapsed;
 
-        // Limit the cleanup wait. A failed guard can leave its worker active until the test process ends.
+        // Keep the cleanup wait short, so that many stalled workers cannot reach the CI job limit.
+        // A failed guard can leave its worker active until the test process ends. That worker
+        // adds CPU time to the cases that follow, so read the first failure first.
         if (!finished)
-            worker.Join(TimeSpan.FromSeconds(60));
+            worker.Join(TimeSpan.FromSeconds(5));
 
         Assert.True(finished && cpu <= budget,
             $"{shape}: {input.Length / (1024.0 * 1024.0):F1} MB did not finish within the CPU budget. "
@@ -228,6 +230,11 @@ internal static class RedactorTimingBudget
     private static TimeSpan MeasureBaseline(int length)
     {
         var benign = string.Concat(Enumerable.Repeat(BenignLine, length / BenignLine.Length + 1))[..length];
+
+        // The first Redact in the process pays the setup of the NonBacktracking regexes. Keep that
+        // cost out of the baseline.
+        SecretOutputRedactor.Redact(benign);
+
         var cpuStart = Environment.CpuUsage.TotalTime;
         for (var run = 0; run < BaselineRuns; run++)
             SecretOutputRedactor.Redact(benign);
