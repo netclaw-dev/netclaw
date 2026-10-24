@@ -27,7 +27,7 @@ namespace Netclaw.Actors.Tests.Memory;
 /// <see cref="Netclaw.Actors.Tests.Sessions.SessionMemoryObserverStorageIntegrationTests"/>'s
 /// temp-store/try-finally-cleanup shape for driving <see cref="MemoryCurationActor"/> directly.
 /// </summary>
-public sealed class MemoryCurationActorNominatorTests : TestKit
+public sealed partial class MemoryCurationActorNominatorTests : TestKit
 {
     private const string ModelId = "test-nominator-model";
     private const int Dimensions = 2;

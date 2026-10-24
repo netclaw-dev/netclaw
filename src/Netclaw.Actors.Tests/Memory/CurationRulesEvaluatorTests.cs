@@ -216,6 +216,26 @@ public sealed class CurationRulesEvaluatorTests
         Assert.Equal(CurationDecisionKind.Create, decision.Kind);
     }
 
+    [Theory]
+    [InlineData("synthetic-widget-manual", CurationDecisionKind.Ambiguous)]
+    [InlineData("synthetic-widget-manual-guide", CurationDecisionKind.Create)]
+    public void Evaluate_low_overlap_after_guard_fallthrough_keeps_exact_name_ambiguous(
+        string candidateName, CurationDecisionKind expected)
+    {
+        var proposal = MakeProposal(
+            anchor: "synthetic-widget-manual",
+            content: "Consult the device handbook for processor and storage details.");
+        var candidate = MakeCandidate(
+            anchorName: candidateName,
+            content: "Synthetic widget specifications: 16 cores, 64GB RAM.",
+            isExact: false);
+
+        // Guard fall-through clears the exact-match flag but keeps the canonical name.
+        var decision = CurationRulesEvaluator.Evaluate(proposal, [candidate]);
+
+        Assert.Equal(expected, decision.Kind);
+    }
+
     // ── Multiple exact matches: picks most recent ───────────────────
 
     [Fact]

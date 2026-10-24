@@ -238,6 +238,11 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         {
             try
             {
+                // Consolidation changes anchor state before the store batch starts.
+                // Reject the whole batch before the first such effect.
+                foreach (var (_, evaluation) in evaluations)
+                    MemoryCurationEvaluator.ValidateDecision(evaluation.Decision, evaluation.Candidates);
+
                 var skipped = 0;
                 var updated = 0;
                 var consolidated = 0;
@@ -268,9 +273,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                         case CurationDecisionKind.Create:
                         case CurationDecisionKind.Ambiguous:
                         default:
-                            // Ambiguous should not reach here — it is resolved before
-                            // writing — but ApplyDecisionAsync defaults it to Create,
-                            // so the count follows the same default.
+                            // ApplyDecisionAsync throws for unresolved decisions before this count can change.
                             created++;
                             break;
                     }
@@ -297,11 +300,11 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                     Skipped: skipped,
                     Updated: updated,
                     Consolidated: consolidated,
-                    Created: created)));
+                    Created: created)), ActorRefs.NoSender);
             }
             catch (Exception ex)
             {
-                self.Tell(new WriteBatchFailed(ex));
+                self.Tell(new WriteBatchFailed(ex), ActorRefs.NoSender);
             }
         });
     }

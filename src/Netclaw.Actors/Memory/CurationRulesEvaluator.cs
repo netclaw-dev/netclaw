@@ -126,7 +126,7 @@ public static class CurationRulesEvaluator
             return EvaluateExactMatch(proposal, exactMatches);
         }
 
-        // Phase 2: Check fuzzy matches (all candidates at this point are fuzzy)
+        // Phase 2 includes exact-name candidates whose direct update the overwrite guard rejected.
         return EvaluateFuzzyMatch(proposal, candidates);
     }
 
@@ -189,6 +189,24 @@ public static class CurationRulesEvaluator
 
         var overlap = AnchorNameMatcher.ComputeContentOverlap(proposal.Content, best.Content);
 
+        // Guard rejection clears IsExactAnchorMatch but preserves the canonical name.
+        // Another candidate's overlap cannot resolve this same-name document.
+        var sameNameMatch = fuzzyMatches.FirstOrDefault(c => string.Equals(
+            MemoryTypedId.AnchorId(c.AnchorCanonicalName),
+            MemoryTypedId.AnchorId(proposal.AnchorCanonicalName),
+            StringComparison.OrdinalIgnoreCase));
+        // <curation-same-name-condition>
+        if (sameNameMatch is not null)
+        // </curation-same-name-condition>
+        {
+            return new CurationDecision(
+                CurationDecisionKind.Ambiguous,
+                null,
+                fuzzyMatches.Select(c => c.DocumentId).ToArray(),
+                sameNameMatch.AnchorCanonicalName,
+                $"same anchor name after guard rejection + unresolved content overlap ({overlap:P0})");
+        }
+
         // High content overlap with fuzzy anchor match -> consolidation (auto-merge).
         // TargetDocumentId names the primary document the collapsed content is written
         // INTO (explicit-target overwrite, like Update): without it the store's anchor
@@ -229,8 +247,8 @@ public static class CurationRulesEvaluator
     /// <summary>
     /// Attempt to resolve an Ambiguous decision without LLM involvement.
     /// Returns a Skip decision when both content overlap and anchor Jaccard exceed
-    /// auto-resolution thresholds. Returns null if the case is too uncertain —
-    /// caller should fall back to Create.
+    /// auto-resolution thresholds. Returns null if the case is too uncertain.
+    /// The caller must keep unresolved same-name rewrites blocked; other cases can fall back to Create.
     /// </summary>
     public static CurationDecision? TryAutoResolveAmbiguous(
         SQLiteMemoryCurationOperation proposal,

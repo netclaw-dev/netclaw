@@ -312,20 +312,11 @@ public sealed class MemoryCurationEngine(
 
     private readonly ILogger<MemoryCurationEngine> _logger = logger ?? NullLogger<MemoryCurationEngine>.Instance;
 
-    // Same evaluator the inline per-session actor uses (memory-core-redesign Slice 1),
-    // constructed with no LLM client: the daemon checkpoint worker has none to give it
-    // today, so every Ambiguous decision here resolves via
-    // CurationRulesEvaluator.TryAutoResolveAmbiguous rather than escalating. This is the
-    // one place the daemon path previously performed no dedup/relationship evaluation at
-    // all beyond the fingerprint check below — routing through the shared evaluator is
-    // what makes GuardDestructiveUpdate (previously inline-actor-only; audit finding D14)
-    // apply here too.
-    //
-    // embedderHolder/vectorIndexHolder ARE wired here (memory-core-redesign Slice 3 Stage B,
-    // task 3.1): the embedding kNN nominator runs on this pipeline too, even with no LLM
-    // client — a nominee found with no LLM available forces the conservative no-auto-merge
-    // Create outcome documented on MemoryCurationEvaluator.EvaluateAsync, never a silent
-    // auto-skip/auto-merge on cosine alone.
+    // The checkpoint worker uses the shared evaluator with no LLM client today.
+    // Safe deterministic decisions remain available, but unresolved same-name rewrites stay Ambiguous.
+    // Batch preflight rejects those decisions, so the worker uses its existing retry path.
+    // The nominator also runs here. Other nominees without an LLM decision keep conservative Create.
+    // Cosine evidence alone never authorizes an automatic skip or merge.
     private readonly MemoryCurationEvaluator _evaluator =
         new(store, (ILogger)(logger ?? NullLogger<MemoryCurationEngine>.Instance), memoryConfig.Curation,
             llmClient: null, embedderHolder, vectorIndexHolder);
@@ -416,13 +407,11 @@ public sealed class MemoryCurationEngine(
     }
 
     /// <summary>
-    /// Runs each extracted candidate through the shared evaluator (dedup/relationship
-    /// decision, then the decision-to-write-operation mapping) before the caller persists
-    /// the result via <see cref="SQLiteMemoryStore.ApplyCurationBatchAsync"/> — the same
-    /// evaluate-then-apply sequence the inline actor's write phase runs. A Skip decision
-    /// drops the candidate here rather than at the caller.
+    /// Evaluates and preflights all proposals before any consolidation effect.
+    /// Converts accepted decisions into operations for <see cref="SQLiteMemoryStore.ApplyCurationBatchAsync"/>.
+    /// A Skip decision emits no operation.
     /// </summary>
-    private async Task<IReadOnlyList<SQLiteMemoryCurationOperation>> EvaluateAndApplyAsync(
+    internal async Task<IReadOnlyList<SQLiteMemoryCurationOperation>> EvaluateAndApplyAsync(
         IReadOnlyList<SQLiteMemoryCurationOperation> operations,
         SQLiteMemoryCheckpoint checkpoint,
         CancellationToken ct)
@@ -431,11 +420,18 @@ public sealed class MemoryCurationEngine(
             return operations;
 
         var sessionId = (SessionId)checkpoint.SessionId;
+        var evaluations = new List<(SQLiteMemoryCurationOperation Operation, CurationEvaluation Evaluation)>(operations.Count);
         var results = new List<SQLiteMemoryCurationOperation>(operations.Count);
 
         foreach (var operation in operations)
         {
             var evaluation = await _evaluator.EvaluateAsync(operation, sessionId, ct);
+            MemoryCurationEvaluator.ValidateDecision(evaluation.Decision, evaluation.Candidates);
+            evaluations.Add((operation, evaluation));
+        }
+
+        foreach (var (operation, evaluation) in evaluations)
+        {
             var writeOp = await _evaluator.ApplyDecisionAsync(operation, evaluation.Decision, evaluation.Candidates, ct);
             if (writeOp is not null)
                 results.Add(writeOp);

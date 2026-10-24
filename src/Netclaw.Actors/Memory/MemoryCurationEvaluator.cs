@@ -91,10 +91,10 @@ internal sealed class MicrosoftCurationLog(ILogger log) : ICurationLog
 /// nomination evidence ONLY — it never auto-merges and never auto-skips. When no nominee fires
 /// (or the embedder is unavailable, in which case the pre-Slice-3 lexical content-term search
 /// runs instead as an explicitly-logged degraded path), <see cref="CurationRulesEvaluator.Evaluate"/>
-/// runs the deterministic tier as before; an Ambiguous result escalates to the LLM tier (when
-/// available) followed by <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/>, or else
-/// falls back to <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> and finally a Create
-/// default. <see cref="ApplyDecisionAsync"/> maps the resulting decision to the operation that
+/// runs the deterministic tier as before. Ambiguous results use the LLM tier when available.
+/// Without an LLM decision, <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> can resolve a duplicate.
+/// Unresolved same-name rewrites stay Ambiguous; other unresolved proposals default to Create.
+/// <see cref="ApplyDecisionAsync"/> maps the resulting decision to the operation that
 /// should be written (or nothing, for Skip), executing Consolidate's re-anchor/tombstone side
 /// effects — this mapping is unified too, since a second, hand-copied switch statement per
 /// caller is exactly the kind of divergence this slice removes.
@@ -103,22 +103,13 @@ internal sealed class MicrosoftCurationLog(ILogger log) : ICurationLog
 /// <b>Guard fall-through (memory-core-redesign, July 2026 audit finding, eval run
 /// <c>ad9a2312</c>):</b> when the exact-anchor deterministic path picks Update and
 /// <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/> downgrades it to Skip because the
-/// proposal would not preserve the target's content, that Skip must NOT be returned as the final
-/// decision — an explicit <c>store_memory</c> proposal silently ending as a no-op (no write, no
-/// further evidence gathering) is a silent-fallback violation, observed when an LLM-emitted junk
-/// anchor (e.g. the bare stopword <c>the</c>) collided with an unrelated existing document sharing
-/// the same junk anchor text. The guard's protective effect is correct and must be kept — the
-/// mismatched target must never be overwritten — but the correct response to "this anchor match
-/// doesn't apply" is to re-run evaluation exactly as if there had been no exact anchor match at
-/// all: every candidate that carried <c>IsExactAnchorMatch</c> is demoted to an ordinary fuzzy
-/// candidate (so the rules tier cannot re-derive the same Update/guard-reject pair and loop), then
-/// the embedding nominator / lexical content-term search that the exact-match fast path had
-/// short-circuited runs for the first time, followed by the usual rules-tier/LLM-tier/auto-resolve
-/// chain with a Create default. This is deliberately NOT a fix to anchor-name hygiene — junk
-/// anchors like <c>the</c> should arguably never be stored or fuzzy-matched at all, but filtering
-/// them is a broader behavior change to anchor matching left as a follow-up; this fall-through
-/// fixes the narrower "explicit store becomes a silent no-op" failure regardless of why the guard
-/// rejected the match.
+/// proposal would not preserve the target's content, evaluation must continue with more evidence.
+/// Demotion clears <c>IsExactAnchorMatch</c> so the rules cannot repeat the rejected Update.
+/// The canonical name and document identity remain available to the rules and the existing LLM tier.
+/// Nomination or lexical search supplies more candidates before the rules run again.
+/// Safe deterministic decisions remain available, but low overlap alone cannot authorize a same-name Create.
+/// If no safe deterministic or LLM decision resolves that proposal, it stays Ambiguous.
+/// The apply boundary throws for Ambiguous so both consumers use their existing failure paths.
 /// </para>
 ///
 /// Guard-validated write routing (memory-core-redesign Slice 3, design D5): an LLM-tier
@@ -153,8 +144,8 @@ public sealed class MemoryCurationEvaluator
     /// per-session path). <paramref name="llmClient"/> is genuinely optional runtime
     /// state, not a backward-compatibility shim: absence is a real, permanent operating
     /// mode for a session whose configured provider has no compaction-role model, in
-    /// which case Ambiguous decisions resolve via
-    /// <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> only.
+    /// which case duplicate decisions use <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/>.
+    /// Unresolved same-name rewrites remain Ambiguous and fail at the apply boundary.
     /// </summary>
     /// <param name="embedderHolder">
     /// Resolves the process's <see cref="IMemoryEmbedder"/> for the kNN nominator
@@ -187,8 +178,8 @@ public sealed class MemoryCurationEvaluator
     /// placeholder to be filled in later in this slice. <paramref name="embedderHolder"/> and
     /// <paramref name="vectorIndexHolder"/> ARE wired here (memory-core-redesign Slice 3 Stage
     /// B): the nominator runs on both write pipelines even though only the inline pipeline has
-    /// an LLM client — a nominee found with no LLM available still forces the conservative
-    /// no-auto-merge Create outcome documented on <see cref="EvaluateAsync"/>.
+    /// an LLM client. Without an LLM decision, an unresolved same-name rewrite stays Ambiguous.
+    /// Other nominees keep the conservative Create outcome documented on <see cref="EvaluateAsync"/>.
     /// </summary>
     public MemoryCurationEvaluator(
         SQLiteMemoryStore store,
@@ -253,8 +244,7 @@ public sealed class MemoryCurationEvaluator
     /// The evaluation body proper, factored out of <see cref="EvaluateAsync"/> so the guard
     /// fall-through case (see this class's remarks) can re-run the same evidence-gathering and
     /// decision chain a second time with <paramref name="hasExactAnchorMatch"/> forced false —
-    /// exactly as if the anchor query at the top of <see cref="EvaluateAsync"/> had found no
-    /// exact match — without re-querying the store for anchors a second time.
+    /// without another anchor query. The candidates retain their canonical names and document identities.
     /// </summary>
     private async Task<CurationEvaluation> EvaluateCandidatesAsync(
         SQLiteMemoryCurationOperation operation,
@@ -399,8 +389,21 @@ public sealed class MemoryCurationEvaluator
             // exactly the ambiguity the May 2026 measurement showed deterministic logic cannot
             // resolve), so this does NOT call TryAutoResolveAmbiguous — doing so risks an
             // auto-Skip driven by cosine-adjacent content that is actually a distinct sibling.
-            // The conservative outcome is Create: the cost is a possible duplicate document,
-            // recoverable by a future curation pass; a wrong auto-merge is not.
+            // A same-name rewrite still needs a decision before the store can append its content.
+            var sameNameMatch = candidates.FirstOrDefault(c => string.Equals(
+                MemoryTypedId.AnchorId(c.AnchorCanonicalName),
+                MemoryTypedId.AnchorId(operation.AnchorCanonicalName),
+                StringComparison.OrdinalIgnoreCase));
+            if (sameNameMatch is not null)
+            {
+                return new CurationEvaluation(
+                    new CurationDecision(CurationDecisionKind.Ambiguous, null,
+                        candidates.Select(c => c.DocumentId).ToArray(), sameNameMatch.AnchorCanonicalName,
+                        "same anchor name: nominee present but no LLM decision available"),
+                    candidates);
+            }
+
+            // Other nominees keep Create: a possible duplicate costs less than a wrong auto-merge.
             _log.Warning(
                 "curation_nominee_no_llm_decision anchor={0} llm_available={1} — conservative create",
                 operation.AnchorCanonicalName,
@@ -451,6 +454,15 @@ public sealed class MemoryCurationEvaluator
                 return new CurationEvaluation(autoResolved, candidates);
             }
 
+            // The decision retains the same-name evidence after guard rejection.
+            // Create would let store deduplication append a second full body without a resolved decision.
+            if (rulesDecision.CanonicalAnchorName is not null
+                && string.Equals(MemoryTypedId.AnchorId(rulesDecision.CanonicalAnchorName),
+                    MemoryTypedId.AnchorId(operation.AnchorCanonicalName), StringComparison.OrdinalIgnoreCase))
+            {
+                return new CurationEvaluation(rulesDecision, candidates);
+            }
+
             _log.Warning("curation_ambiguous_create_fallback anchor={0} llm_available={1}",
                 operation.AnchorCanonicalName, _llmClient is not null);
             return new CurationEvaluation(
@@ -467,9 +479,9 @@ public sealed class MemoryCurationEvaluator
         // tier never returns Update) — so this downgrade is only reachable when
         // hasExactAnchorMatch was true for this call. Terminating on that Skip would silently
         // drop an explicit proposal with no further evidence gathering (the July 2026 audit
-        // bug); instead, demote every exact-anchor-matched candidate to an ordinary fuzzy
-        // candidate and re-run the full evaluation chain as if there had been no exact anchor
-        // match at all. The demotion is what keeps this from looping: with no candidate left
+        // bug); instead, demote each exact match and retain its canonical name and identity.
+        // The rules use that evidence after the full evaluation chain resumes.
+        // The demotion prevents a loop: with no candidate left
         // claiming IsExactAnchorMatch, CurationRulesEvaluator.Evaluate cannot re-derive the same
         // Update decision on the re-run, so this branch cannot fire twice for one proposal.
         if (hasExactAnchorMatch
@@ -631,10 +643,7 @@ public sealed class MemoryCurationEvaluator
 
             if (decision is null)
             {
-                // No silent fallback: a curation LLM that yields nothing parseable is a
-                // real signal (empty/garbled output, or a reasoning model that consumed
-                // its token budget). Surface it so the deterministic fallback that
-                // follows is observable rather than invisible.
+                // Report an invalid response before the caller tries safe deterministic rules or retains Ambiguous.
                 log.Warning(
                     "curation_llm_no_decision anchor={0} responseLength={1} — using deterministic fallback",
                     operation.AnchorCanonicalName,
@@ -642,6 +651,8 @@ public sealed class MemoryCurationEvaluator
                 return null;
             }
 
+            // SQLite existence does not grant membership in this call's candidate set.
+            ValidateDecision(decision, candidates);
             return decision;
         }
         catch (OperationCanceledException)
@@ -662,10 +673,38 @@ public sealed class MemoryCurationEvaluator
     // ── Decision application (shared write-mapping + consolidation side effects) ──
 
     /// <summary>
+    /// Rejects unresolved decisions and targets outside the exact candidate set.
+    /// Both consumers preflight every decision before any persistent effect.
+    /// A valid target needs no merged body here; MergeGuard still permits a lossless append.
+    /// </summary>
+    internal static void ValidateDecision(
+        CurationDecision decision,
+        IReadOnlyList<ExistingMemoryCandidate> candidates)
+    {
+        var resolved = decision.Kind switch
+        {
+            CurationDecisionKind.Skip or CurationDecisionKind.Create => true,
+            CurationDecisionKind.Update => candidates.Any(c =>
+                string.Equals(c.DocumentId, decision.TargetDocumentId, StringComparison.Ordinal)),
+            CurationDecisionKind.Consolidate => decision.ConsolidationTargetIds is { Count: > 0 } targets
+                && decision.TargetDocumentId is not null
+                && targets.Contains(decision.TargetDocumentId, StringComparer.Ordinal)
+                && targets.All(id => candidates.Any(c =>
+                    string.Equals(c.DocumentId, id, StringComparison.Ordinal))),
+            _ => false
+        };
+
+        if (!resolved)
+            throw new InvalidOperationException("Cannot apply an unresolved memory curation decision.");
+    }
+
+    /// <summary>
     /// Maps a decision to the operation that should be written (null for Skip), executing
     /// Consolidate's re-anchor/tombstone side effects against the store. Shared so this
     /// mapping is identical from both the actor's write phase and the daemon's
     /// checkpoint-apply phase — before this slice only the actor performed it at all.
+    /// Rejects unresolved decisions and invalid targets before any effect.
+    /// Each consumer must preflight its full batch before it calls this method.
     /// </summary>
     /// <param name="candidates">
     /// The exact candidate set <paramref name="decision"/> was evaluated against
@@ -679,6 +718,8 @@ public sealed class MemoryCurationEvaluator
         IReadOnlyList<ExistingMemoryCandidate> candidates,
         CancellationToken ct = default)
     {
+        ValidateDecision(decision, candidates);
+
         switch (decision.Kind)
         {
             case CurationDecisionKind.Skip:
@@ -709,11 +750,12 @@ public sealed class MemoryCurationEvaluator
                     decision.Reason);
                 return operation;
 
+            // <curation-unresolved-apply>
             case CurationDecisionKind.Ambiguous:
             default:
-                // Should not reach here — ambiguous is resolved before writing
-                _log.Warning("curation_unexpected_ambiguous anchor={0}, defaulting to create", operation.AnchorCanonicalName);
-                return operation;
+                // A null result means Skip to both consumers, so unresolved decisions must throw.
+                throw new InvalidOperationException("Cannot apply an unresolved memory curation decision.");
+            // </curation-unresolved-apply>
         }
     }
 
@@ -743,19 +785,8 @@ public sealed class MemoryCurationEvaluator
             return operation with { MemoryId = decision.TargetDocumentId };
         }
 
-        var target = candidates.FirstOrDefault(
+        var target = candidates.First(
             c => string.Equals(c.DocumentId, decision.TargetDocumentId, StringComparison.Ordinal));
-        if (target is null)
-        {
-            // The LLM named a document id outside the evaluated candidate set — there is no
-            // known existing body to merge with or safely append to. Rather than trust an
-            // unverified id for an overwrite, fall through as a plain create.
-            _log.Warning(
-                "curation_update_target_unknown anchor={0} targetId={1} — creating instead",
-                operation.AnchorCanonicalName,
-                decision.TargetDocumentId ?? "(null)");
-            return operation;
-        }
 
         return ApplyGuardedMergeOrAppend(
             operation, decision.MergedBody, target.DocumentId, target.Content, [target.Content, operation.Content]);
@@ -779,19 +810,9 @@ public sealed class MemoryCurationEvaluator
         var canonicalAnchor = decision.CanonicalAnchorName ?? operation.AnchorCanonicalName;
         var operationWithAnchor = operation with { AnchorCanonicalName = canonicalAnchor };
 
-        var consolidationTargets = decision.ConsolidationTargetIds is null
-            ? []
-            : candidates
-                .Where(c => decision.ConsolidationTargetIds.Contains(c.DocumentId, StringComparer.Ordinal))
-                .ToArray();
-
-        if (consolidationTargets.Length == 0)
-        {
-            // No known candidate content to merge/append against (e.g. an id the LLM invented,
-            // or a decision with no target ids at all) — nothing to preserve, so the store's
-            // own anchor-based lookup resolves the target document as it did before this slice.
-            return operationWithAnchor;
-        }
+        var consolidationTargets = candidates
+            .Where(c => decision.ConsolidationTargetIds!.Contains(c.DocumentId, StringComparer.Ordinal))
+            .ToArray();
 
         // Deterministic pick of the primary consolidation target: same ordering
         // CurationRulesEvaluator uses for "best" (confidence, then freshness). Pinning the

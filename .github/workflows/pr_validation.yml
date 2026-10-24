@@ -191,7 +191,7 @@ jobs:
           - group: child-owner-and-report
             gates: child-owner-and-report chat-close-dispatch-expiry
           - group: loopback-host-origin
-            gates: loopback-host-origin
+            gates: loopback-host-origin curation-same-name
           - group: child-consent
             gates: child-consent text-answer-guard
 

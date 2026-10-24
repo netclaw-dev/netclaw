@@ -57,9 +57,20 @@ Hosted runs from 2026-10-17 through 2026-10-23 measured these gate times (minute
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally), `stopped-turn-continuation` (10 mutants, one invocation, 2.5 locally) | 13.5 to 14.5 (estimate; hosted measurement required) |
-| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry` (one CLI invocation, UNMEASURED) | Existing gate: [3m17s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616549); new total: UNMEASURED |
-| `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
+| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry` (two mutants, one CLI invocation) | [8m14s](https://github.com/netclaw-dev/netclaw/actions/runs/40069130760/job/120798739243) |
+| `loopback-host-origin` | `loopback-host-origin` and `curation-same-name` (one mutant, one Actors invocation) | [10m59s](https://github.com/netclaw-dev/netclaw/actions/runs/40071707192/job/120806485577) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local) | 7 to 8 (estimate) |
+
+The curation gate targets only `sameNameMatch is not null` in `CurationRulesEvaluator`.
+Run `./scripts/run-curation-same-name-mutations.sh` to verify this boundary.
+The paired rules tests reject its one equality mutant, `sameNameMatch is null`.
+The script requires exactly one target mutant with `Killed` status and no other active mutant.
+An absent, ignored, uncovered, surviving, timed-out, or compile-error target fails the gate.
+Reports appear in `artifacts/stryker/curation-same-name`.
+The first local measurement took 128 seconds, including its initial build and tests.
+The [prior group job](https://github.com/netclaw-dev/netclaw/actions/runs/40069130760/job/120798739117) took 7m07s.
+The complete group took 10m59s after this addition, including setup and report upload.
+Keep the group below 15 minutes on a fast runner.
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
@@ -194,8 +205,8 @@ Other active mutants outside that comparison also fail the gate.
 Stryker records ignored and compile-error mutants outside the selected comparison; these cannot satisfy this gate.
 
 The finalized local gate killed both selected mutants in 177 seconds.
-Verify the finalized gate and record the hosted group cost before merge.
-CI places this gate in `child-owner-and-report`, whose last measured total was 3m17s.
+The finalized gate passes locally and in CI.
+CI places this gate in `child-owner-and-report`; its complete hosted job took 8m14s.
 The combined group must stay within 15 minutes on a fast runner.
 The parent must measure the combined group before acceptance and move this gate if the total exceeds that budget.
 

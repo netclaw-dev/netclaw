@@ -223,16 +223,12 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
     // ── guard downgrade: Update whose proposal drops existing body -> falls through ──
 
     /// <summary>
-    /// Guard-fallthrough fix (July 2026 audit, eval run <c>ad9a2312</c>): before this fix, a
-    /// guard-rejected anchor-matched Update terminated as Skip — an explicit proposal silently
-    /// becoming a no-op with zero writes. No other candidate exists in this store for the
-    /// fallen-through content search or embedding nominator (both unavailable/empty here) to
-    /// find, so the terminal decision is the Create default the flow's remarks document — NOT
-    /// the old Skip. This is the same fixture <c>GuardDowngrade_narrowerProposal_downgradesUpdateToSkip_identically</c>
-    /// used pre-fix (renamed here since Skip was exactly the bug).
+    /// The overwrite guard rejects a narrower proposal for an exact-name document.
+    /// Both evaluator paths must retain Ambiguous when no safe deterministic decision or LLM decision exists.
+    /// Create would bypass the LLM tier and append the proposal through store deduplication.
     /// </summary>
     [Fact]
-    public async Task GuardDowngrade_narrowerProposal_noOtherCandidates_fallsThroughToCreate_identically()
+    public async Task GuardDowngrade_narrowerProposal_noOtherCandidates_remainsAmbiguousWithoutLlm_identically()
     {
         var ct = TestContext.Current.CancellationToken;
         await _store.InitializeAsync(ct);
@@ -243,31 +239,26 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
             freshnessAtMs: 1000,
             ct);
 
-        // Newer, but narrower — the rules tier would pick Update (exact anchor, low overlap,
-        // fresher), and GuardDestructiveUpdate downgrades it on BOTH paths (audit finding D14:
-        // this guard used to run only on the inline actor path). Pre-fix, that downgrade was
-        // returned as the terminal Skip decision — the silent-fallback bug. Post-fix, the guard
-        // rejection triggers a fall-through re-evaluation (no exact anchor match, nomination/
-        // content search run for the first time, rules tier re-runs as pure fuzzy) which here
-        // finds nothing else to match against and lands on Create.
+        // The proposal omits facts from the existing body, so a direct overwrite must remain blocked.
         var operation = MakeOperation("widget-specs", "Widget pricing is TBD as of Q2.", freshnessAtMs: 2000);
+        var candidates = await _store.FindFuzzyAnchorMatchesAsync(operation.AnchorCanonicalName, ct);
+        var rawDecision = CurationRulesEvaluator.Evaluate(operation, candidates);
+        Assert.Equal(CurationDecisionKind.Update, rawDecision.Kind);
+        Assert.Equal(CurationDecisionKind.Skip,
+            CurationRulesEvaluator.GuardDestructiveUpdate(rawDecision, operation, candidates).Kind);
 
         var (fromActor, fromEngine) = await EvaluateOnBothAsync(operation, ct);
 
         AssertSameDecision(fromActor, fromEngine);
-        Assert.Equal(CurationDecisionKind.Create, fromActor.Kind);
-        Assert.Contains("fuzzy anchor match but low content overlap", fromActor.Reason);
+        Assert.Equal(CurationDecisionKind.Ambiguous, fromActor.Kind);
+        Assert.False(fromActor.FromLlmTier);
+        Assert.False(fromEngine.FromLlmTier);
     }
 
     /// <summary>
-    /// Regression companion to the Create case above: when the guard-rejected proposal IS close
-    /// enough in content to the anchor target to clear the deterministic auto-resolve thresholds
-    /// (<see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/>'s 60% content-overlap / 50%
-    /// anchor-Jaccard bars) once re-evaluated as an ordinary fuzzy candidate, the fall-through
-    /// must NOT force Create — it must let the normal ambiguous/auto-resolve machinery decide,
-    /// which correctly lands on Skip here. This proves the fix doesn't trade "always drops the
-    /// fact" for "never skips a real duplicate" — the fall-through defers to whatever the rest of
-    /// the flow genuinely produces.
+    /// A guard-rejected proposal can still satisfy the existing deterministic duplicate rule.
+    /// <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> requires 60% content overlap and 50% anchor Jaccard.
+    /// This companion to the unresolved case preserves a legitimate Skip on both evaluator paths.
     /// </summary>
     [Fact]
     public async Task GuardDowngrade_contentCloseEnoughToAutoResolve_fallsThroughToLegitimateSkip_identically()
@@ -326,7 +317,7 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
 
         var evaluation = await evaluator.EvaluateAsync(operation, TestSessionId, ct);
 
-        Assert.Equal(CurationDecisionKind.Create, evaluation.Decision.Kind);
+        Assert.Equal(CurationDecisionKind.Ambiguous, evaluation.Decision.Kind);
         Assert.Contains(
             recordingLogger.Entries,
             e => e.Contains("curation_guard_fallthrough", StringComparison.Ordinal)

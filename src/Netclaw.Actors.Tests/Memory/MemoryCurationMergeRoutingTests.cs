@@ -6,9 +6,12 @@
 using System.Runtime.CompilerServices;
 using Akka.Event;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
@@ -28,6 +31,18 @@ public sealed class MemoryCurationMergeRoutingTests : IAsyncDisposable
 {
     private static readonly SessionId TestSessionId = new("test-channel/merge-routing");
 
+    private const string RewriteAnchor = "synthetic-widget-manual";
+    private const string RewriteDocumentId = "doc-synthetic-widget";
+    private const string OriginalBody =
+        "Synthetic widget specifications: 16 cores, 64GB RAM. Documentation: https://example.invalid/widget. " +
+        "Store spare cables inside the blue cabinet.";
+    private const string RewrittenBody =
+        "Consult https://example.invalid/widget: this device provides 16 processors plus 64GB memory. " +
+        "Extra leads belong within the azure cupboard.";
+    private const string MergedBody =
+        "The synthetic widget has 16 cores and 64GB RAM; consult https://example.invalid/widget for its manual. " +
+        "Keep spare cables in the blue cabinet.";
+
     private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-curation-merge-routing-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
@@ -40,6 +55,85 @@ public sealed class MemoryCurationMergeRoutingTests : IAsyncDisposable
     }
 
     public async ValueTask DisposeAsync() => await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
+
+    [Theory]
+    [InlineData("UPDATE", false)]
+    [InlineData("SKIP", false)]
+    [InlineData("UNAVAILABLE", false)]
+    [InlineData("INVALID", false)]
+    [InlineData("ERROR", false)]
+    [InlineData("UNRESOLVED", false)]
+    [InlineData("UPDATE", true)]
+    [InlineData("SKIP", true)]
+    [InlineData("UNAVAILABLE", true)]
+    [InlineData("INVALID", true)]
+    [InlineData("ERROR", true)]
+    [InlineData("UNRESOLVED", true)]
+    public async Task ExactNameRewrite_requiresResolvedDecision_beforeStoreWrite(string outcome, bool checkpointPath)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (operation, candidate) = await PrepareExactNameRewriteAsync(ct);
+        using var client = new FakeChatClient
+        {
+            ResponseText = outcome == "UPDATE" ? $"UPDATE {RewriteDocumentId}\n---\n{MergedBody}" : outcome,
+            Failure = outcome == "ERROR" ? new InvalidOperationException("Synthetic model failure.") : null
+        };
+        var llmClient = outcome is "UNAVAILABLE" or "UNRESOLVED" ? null : client;
+        var evaluator = checkpointPath
+            ? new MemoryCurationEvaluator(_store, (ILogger)NullLogger.Instance, new MemoryCurationConfig(), llmClient)
+            : new MemoryCurationEvaluator(_store, (ILoggingAdapter)NoLogger.Instance, new MemoryCurationConfig(), llmClient);
+
+        // The direct row isolates the apply boundary from the rules and LLM paths.
+        var evaluation = outcome == "UNRESOLVED"
+            ? new CurationEvaluation(
+                new CurationDecision(CurationDecisionKind.Ambiguous, null, [RewriteDocumentId], RewriteAnchor,
+                    "Synthetic unresolved rewrite."),
+                [candidate with { IsExactAnchorMatch = false }])
+            : await evaluator.EvaluateAsync(operation, TestSessionId, ct);
+        var llmDecision = outcome switch
+        {
+            "UPDATE" => CurationDecisionKind.Update,
+            "SKIP" => CurationDecisionKind.Skip,
+            _ => CurationDecisionKind.Ambiguous
+        };
+
+        if (llmDecision == CurationDecisionKind.Ambiguous)
+        {
+            Assert.Equal(CurationDecisionKind.Ambiguous, evaluation.Decision.Kind);
+            Assert.False(evaluation.Decision.FromLlmTier);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => evaluator.ApplyDecisionAsync(operation, evaluation.Decision, evaluation.Candidates, ct));
+            Assert.Equal(llmClient is null ? 0 : 1, client.CallCount);
+            await AssertRewriteDocumentAsync(OriginalBody, ct);
+            return;
+        }
+
+        var writeOp = await evaluator.ApplyDecisionAsync(operation, evaluation.Decision, evaluation.Candidates, ct);
+        if (llmDecision == CurationDecisionKind.Update)
+        {
+            Assert.NotNull(writeOp);
+            Assert.Equal(RewriteDocumentId, writeOp.MemoryId);
+            Assert.Equal(MergedBody, writeOp.Content);
+            Assert.Equal("merge-document", writeOp.UpdateSemantics);
+        }
+        else
+        {
+            Assert.Null(writeOp);
+        }
+
+        if (writeOp is not null)
+        {
+            if (checkpointPath)
+                await _store.ApplyCurationBatchAsync("synthetic-rewrite-checkpoint", [writeOp], ct);
+            else
+                await _store.ApplyInlineCurationBatchAsync([writeOp], ct);
+        }
+
+        Assert.Equal(1, client.CallCount);
+        Assert.True(evaluation.Decision.FromLlmTier);
+        Assert.Equal(llmDecision, evaluation.Decision.Kind);
+        await AssertRewriteDocumentAsync(llmDecision == CurationDecisionKind.Update ? MergedBody : OriginalBody, ct);
+    }
 
     // ── Guard failure -> append fallback (overwrite-unreachable) ──────
 
@@ -220,6 +314,38 @@ public sealed class MemoryCurationMergeRoutingTests : IAsyncDisposable
 
     // ── helpers ──────────────────────────────────────────────────────
 
+    private async Task<(SQLiteMemoryCurationOperation Operation, ExistingMemoryCandidate Candidate)>
+        PrepareExactNameRewriteAsync(CancellationToken ct)
+    {
+        await _store.InitializeAsync(ct);
+        await SeedDocumentAsync(RewriteAnchor, RewriteDocumentId, OriginalBody, freshnessAtMs: 1000, ct);
+        await AssertRewriteDocumentAsync(OriginalBody, ct);
+        var operation = MakeOperation(RewriteAnchor, RewrittenBody, freshnessAtMs: 2000);
+        var candidate = Assert.Single(await _store.FindFuzzyAnchorMatchesAsync(RewriteAnchor, ct));
+        Assert.True(candidate.IsExactAnchorMatch);
+        Assert.True(AnchorNameMatcher.ComputeContentOverlap(RewrittenBody, OriginalBody) < 0.40);
+        var rawDecision = new CurationDecision(CurationDecisionKind.Update, RewriteDocumentId, null, null, "synthetic rewrite");
+        Assert.Equal(CurationDecisionKind.Skip,
+            CurationRulesEvaluator.GuardDestructiveUpdate(rawDecision, operation, [candidate]).Kind);
+        Assert.True(MergeGuard.Validate([OriginalBody, RewrittenBody], MergedBody).Passed);
+        return (operation, candidate);
+    }
+
+    private async Task AssertRewriteDocumentAsync(string expectedBody, CancellationToken ct)
+    {
+        await AssertDocumentAsync(RewriteDocumentId, expectedBody, ct);
+        var candidate = Assert.Single(await _store.FindFuzzyAnchorMatchesAsync(RewriteAnchor, ct));
+        Assert.Equal(RewriteDocumentId, candidate.DocumentId);
+    }
+
+    private async Task AssertDocumentAsync(string documentId, string expectedBody, CancellationToken ct)
+    {
+        var stored = await GetDocumentAsync(documentId, ct);
+        Assert.NotNull(stored);
+        Assert.Equal(expectedBody, stored.Value.Body);
+        Assert.Equal("merge-document", stored.Value.UpdateSemantics);
+    }
+
     private async Task SeedDocumentAsync(
         string anchorName, string docId, string content, long freshnessAtMs, CancellationToken ct)
     {
@@ -291,13 +417,21 @@ public sealed class MemoryCurationMergeRoutingTests : IAsyncDisposable
     /// </summary>
     private sealed class ScriptedCurationChatClient(string responseText) : IChatClient
     {
+        public int CallCount { get; private set; }
+
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-            => Task.FromResult(new ChatResponse(new AiChatMessage(AiChatRole.Assistant, responseText)));
+        {
+            CallCount++;
+            return Task.FromResult(new ChatResponse(new AiChatMessage(AiChatRole.Assistant, responseText)));
+        }
 
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-            => StreamAsync(cancellationToken);
+        {
+            CallCount++;
+            return StreamAsync(cancellationToken);
+        }
 
         private async IAsyncEnumerable<ChatResponseUpdate> StreamAsync([EnumeratorCancellation] CancellationToken cancellationToken)
         {
