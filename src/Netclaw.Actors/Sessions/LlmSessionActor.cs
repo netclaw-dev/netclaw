@@ -280,7 +280,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             if (!_toolWorkflow.HasParkedApprovals())
                 _input.ClearNoticeRuns();
             RestoreWaitingInputs();
-            Self.Tell(new RecoverChildRuns());
+            Self.Tell(new RecoverChildRuns([.. _state.GetExecutableChildRuns().Select(run =>
+                (run.RunId, ChildParkRules.RecoveryAction(run.Lifecycle, _toolWorkflow.ChildApprovalCount(run.RunId))))]));
 
             // Resolve once at recovery time. ActorRegistry returns Nobody if
             // the dispatcher hasn't been registered (unit-test scenarios that
@@ -319,8 +320,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // and does not run first.
             ResumeOrphanNotices(pausedAtRecovery);
             // A restart that withdrew the requests ends the pause, so the held input runs. An open parked request keeps
-            // the pause, so the queue holds the input until the last answer.
-            if (pausedAtRecovery || _toolWorkflow.IsChildConsentPaused)
+            // the pause: the held input goes into the queue now, before the stashed commands, so a stashed fire finds
+            // and replaces the held fire of its reminder (design F3). The queue holds it until the last answer.
+            if (_toolWorkflow.IsChildConsentPaused)
+                QueueInputsHeldByThePause();
+            else if (pausedAtRecovery)
                 Self.Tell(new StartHeldInputs(), ActorRefs.NoSender);
             if (_consentDigest.IsReady)
                 ChildConsentChanged();
@@ -2203,14 +2207,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     // Every admission comes here: an ordinary input, a fire that replaces a waiting fire, and an approval notice. One
     // atomic write holds the close of the waiting input and the admission of the newer input, so a crash keeps both or
-    // neither. The same write closes the continuation input of a stopped turn that no turn selected (#2632). The
-    // stopped turn never runs after that, so the person gets the held-back restart notice once.
+    // neither. The same write closes the continuation input of a stopped turn that no turn selected and the queue does
+    // not hold (#2632). The stopped turn never runs after that, so the person gets the held-back restart notice once. A
+    // continuation that the pause holds waits in the queue, and it runs after the last answer.
     private void PersistReplacingInput(
         InputId? waiting, InputAdmitted admitted, string replacedLogEvent, Action<InputAdmitted> onAdmitted)
     {
         var selected = _input.SelectedInputs.Ids;
         var stale = _state.GetExecutablePendingInputs()
-            .FirstOrDefault(input => SessionInputFlow.IsContinuation(input) && !selected.Contains(input.InputId))?.InputId;
+            .FirstOrDefault(input => SessionInputFlow.IsContinuation(input) && !selected.Contains(input.InputId)
+                                     && !_input.IsBuffered(input.InputId))?.InputId;
         InputId[] closes = [.. new[] { waiting, stale }.OfType<InputId>()];
         if (closes.Length == 0)
         {

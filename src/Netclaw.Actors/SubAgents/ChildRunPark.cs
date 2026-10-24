@@ -167,11 +167,9 @@ internal static class ChildParkRules
 
     // The run record holds a child request, so a snapshot keeps it. An open parent request still blocks the snapshot.
     public static bool IgnoredBySnapshot(SessionProtocol.ToolApprovalRequested request) => request.SourceChildRunId is not null;
-    // </child-resume-gate>
 
     // Returns the damage of a loop-guard state, or null when the state can be valid. A damaged state must not resume:
-    // its round could make the next checkpoint fail the reducer, which stops the session. Outside the gate span: the
-    // table checks only null or not null, and each table guard has one episode, so the text and Any/All mutants live.
+    // its round could make the next checkpoint fail the reducer, which stops the session.
     public static string? LoopGuardDamage(TurnLoopGuardState loopGuard, int? lastCheckpointRound)
         => loopGuard.ToolIterationCount < 0 || loopGuard.ToolCallCount < 0 || loopGuard.RefusedRepeatCount < 0
             ? "a count is negative"
@@ -182,4 +180,5 @@ internal static class ChildParkRules
                     : loopGuard.ToolIterationCount < lastCheckpointRound
                         ? "the round is below the last checkpoint"
                         : null;
+    // </child-resume-gate>
 }
