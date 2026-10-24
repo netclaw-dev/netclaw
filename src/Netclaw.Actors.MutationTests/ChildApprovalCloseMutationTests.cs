@@ -17,11 +17,12 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.MutationTests;
 
 /// <summary>
-/// Issue 2525. The approval table of a session holds child approvals, and <c>AllowsSnapshot</c> needs an empty
-/// table. One rule closes a child approval: the cancel record or the terminal record of its run closes every entry of
-/// that run. Live code uses it, and recovery closes the remaining child entries in <c>RecoveryCompleted</c>. A rule
-/// that misses an entry strands it, and every snapshot stays blocked. A rule that removes too much drops a prompt that is still open, so a person cannot answer it. Each test
-/// builds the table directly. No test uses an actor, a timer, or a delay.
+/// Issue 2525. The approval table of a session holds child approvals. One rule closes a child approval: the cancel
+/// record or the terminal record of its run closes every entry of that run. Live code uses it, and recovery closes the
+/// child entries of the runs that are not parked in <c>RecoveryCompleted</c>. A rule that misses an entry strands it,
+/// so the pause never ends. A rule that removes too much drops a prompt that is still open, so a person cannot answer
+/// it. A child entry does not block a snapshot (durable-child-park-recovery, design D4). Each test builds the table
+/// directly. No test uses an actor, a timer, or a delay.
 /// </summary>
 public sealed class ChildApprovalCloseMutationTests
 {
@@ -75,7 +76,6 @@ public sealed class ChildApprovalCloseMutationTests
         Assert.Equal(1, workflow.ChildApprovalCount(new SubAgentRunId("run-1")));
         Assert.True(workflow.IsChildApproval(new ToolCallId("run-1/subagent-approval/1")));
         Assert.True(workflow.IsChildApproval(new ToolCallId("run-1/subagent-approval/2")));
-        Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
     }
 
     [Fact]
@@ -90,7 +90,6 @@ public sealed class ChildApprovalCloseMutationTests
 
         Assert.True(workflow.IsChildApproval(new ToolCallId("run-10/subagent-approval/1")));
         Assert.Equal(1, workflow.ChildApprovalCount(new SubAgentRunId("run-10")));
-        Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
     }
 
     [Fact]
@@ -114,11 +113,11 @@ public sealed class ChildApprovalCloseMutationTests
         workflow.ApplyApprovalRequested(ChildRequest("run-2", "run-2/subagent-approval/1"), recovered: false);
 
         workflow.CloseChildApprovals(Cancel("run-unknown"));
-        Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
+        Assert.Equal(1, workflow.ChildApprovalCount(new SubAgentRunId("run-2")));
 
         workflow.CloseChildApprovals(Cancel("run-2"));
         workflow.CloseChildApprovals(Terminal("run-2", lost: true));
-        Assert.True(workflow.AllowsSnapshot(SessionState.Empty));
+        Assert.Equal(0, workflow.ChildApprovalCount(new SubAgentRunId("run-2")));
     }
 
     [Fact]
@@ -135,19 +134,6 @@ public sealed class ChildApprovalCloseMutationTests
         Assert.Equal(0, workflow.ChildApprovalCount(new SubAgentRunId("run-1")));
         Assert.Equal(0, workflow.ChildApprovalCount(new SubAgentRunId("run-10")));
         Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
-    }
-
-    [Fact]
-    public void A_table_with_no_entry_allows_a_snapshot()
-    {
-        var workflow = new SessionToolWorkflow();
-        Assert.True(workflow.AllowsSnapshot(SessionState.Empty));
-
-        workflow.ApplyApprovalRequested(ChildRequest("run-3", "run-3/subagent-approval/1"), recovered: false);
-        Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
-
-        workflow.ExpireRecoveredChildApprovals();
-        Assert.True(workflow.AllowsSnapshot(SessionState.Empty));
     }
 
     private static SessionToolWorkflow TwoEntriesOf(string runId)

@@ -99,29 +99,34 @@ public sealed class ChildParkRulesTests
     /// <summary>
     /// PR 2 design D7 and F6. A loop-guard state is damaged when a count is negative, the refused-repeat count is above
     /// the escalation count plus one, an equal-round count is outside 0 to 2, or the round is below the last checkpoint
-    /// round. The valid row holds each limit value.
-    /// Planted bug: a damaged park resumes and makes the reducer throw at the next checkpoint, or a valid park ends.
+    /// round. The valid rows hold each limit value. One row has a valid episode beside a damaged one, so the check must
+    /// read every episode. Each damaged row names its damage.
+    /// Planted bug: a damaged park resumes and makes the reducer throw at the next checkpoint, a valid park ends, or the
+    /// rule reads only the first episode.
     /// </summary>
     [Fact]
     public void A_damaged_loop_guard_is_found_and_a_valid_one_passes()
     {
+        const string Negative = "a count is negative";
+        const string Refused = "the refused-repeat count is above the escalation";
+        const string EqualRounds = "an equal-round count is outside 0 to 2";
         var limit = TurnStateTracker.EscalatedRefusedRepeat + 1;
-        (string Name, TurnLoopGuardState Guard, int? LastCheckpoint, bool Damaged)[] table =
+        (string Name, TurnLoopGuardState Guard, int? LastCheckpoint, string? Damage)[] table =
         [
-            ("valid", Guard(round: 3, calls: 4, refused: limit, equalRounds: 2), 3, false),
-            ("valid with no checkpoint", Guard(round: 0, calls: 0, refused: 0, equalRounds: 0), null, false),
-            ("negative round", Guard(round: -1), null, true),
-            ("negative call count", Guard(calls: -1), null, true),
-            ("negative refused repeat", Guard(refused: -1), null, true),
-            ("refused repeat above the escalation", Guard(refused: limit + 1), null, true),
-            ("equal rounds above 2", Guard(equalRounds: 3), null, true),
-            ("equal rounds below 0", Guard(equalRounds: -1), null, true),
-            ("equal rounds of 7", Guard(equalRounds: 7), null, true),
-            ("round below the last checkpoint", Guard(round: 2), 3, true)
+            ("valid", Guard(round: 3, calls: 4, refused: limit, equalRounds: [2, 0]), 3, null),
+            ("valid with no checkpoint", Guard(round: 0, calls: 0, refused: 0), null, null),
+            ("negative round", Guard(round: -1), null, Negative),
+            ("negative call count", Guard(calls: -1), null, Negative),
+            ("negative refused repeat", Guard(refused: -1), null, Negative),
+            ("refused repeat above the escalation", Guard(refused: limit + 1), null, Refused),
+            ("equal rounds above 2", Guard(equalRounds: [3]), null, EqualRounds),
+            ("equal rounds below 0", Guard(equalRounds: [-1]), null, EqualRounds),
+            ("equal rounds of 7 after a valid episode", Guard(equalRounds: [1, 7]), null, EqualRounds),
+            ("round below the last checkpoint", Guard(round: 2), 3, "the round is below the last checkpoint")
         ];
 
-        Assert.Equal(table.Select(static row => (row.Name, row.Damaged)),
-            table.Select(static row => (row.Name, ChildParkRules.LoopGuardDamage(row.Guard, row.LastCheckpoint) is not null)));
+        Assert.Equal(table.Select(static row => (row.Name, row.Damage)),
+            table.Select(static row => (row.Name, ChildParkRules.LoopGuardDamage(row.Guard, row.LastCheckpoint))));
     }
 
     /// <summary>
@@ -183,12 +188,12 @@ public sealed class ChildParkRulesTests
         Assert.Equal([true, false], new[] { child, parent }.Select(ChildParkRules.IgnoredBySnapshot));
     }
 
-    private static TurnLoopGuardState Guard(int round = 1, int calls = 1, int refused = 0, int equalRounds = 0) => new(
+    // One episode for each equal-round count, in order. The default is one episode with the count 0.
+    private static TurnLoopGuardState Guard(int round = 1, int calls = 1, int refused = 0, int[]? equalRounds = null) => new(
         round, calls, [], null,
-        new Dictionary<ToolRecurrenceKey, ToolRecurrenceEpisode>
-        {
-            [new ToolRecurrenceKey(new ToolName("authority_probe"), "hash")] = new("ok", equalRounds, false, false)
-        },
+        (equalRounds ?? [0]).Select((count, index) => (count, index)).ToDictionary(
+            static episode => new ToolRecurrenceKey(new ToolName("authority_probe"), $"hash-{episode.index}"),
+            static episode => new ToolRecurrenceEpisode("ok", episode.count, false, false)),
         refused);
 
     private static ChildRunLifecycle.Parked Parked() => new(new ChildRunPark

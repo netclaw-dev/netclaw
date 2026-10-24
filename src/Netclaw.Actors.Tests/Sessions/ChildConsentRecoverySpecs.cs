@@ -17,65 +17,14 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
 /// Tasks 1.8 and 1.9. Approval notices reach the model at most once. Recovery closes every pending notice with no turn
-/// and rebuilds the digest from the open requests. In PR 1 a restart withdraws every child request, so the rebuilt
-/// open set is empty and recovery admits no notice. A pending notice is an ordinary automated input, so a binary
-/// without this change reads it as automation by its principal alone.
+/// and rebuilds the digest from the open requests. A parked request stays open across a restart
+/// (durable-child-park-recovery). A pending notice is an ordinary automated input, so a binary without this change reads
+/// it as automation by its principal alone.
 /// Source: agent-event-channel "Delivery order and guarantees", "An older binary treats a notice as automation",
 /// design D4 "Recovery (PR 1, Cut 4)".
 /// </summary>
 public sealed class ChildConsentRecoverySpecs(ITestOutputHelper output) : ChildConsentTestBase(output)
 {
-    /// <summary>
-    /// Scenario "Recovery replaces a pending notice with the true state". A notice is admitted, and its turn waits in
-    /// the model call when the session crashes. Recovery closes the notice with InputClosed and no turn. The restart
-    /// withdrew the child request, so no request is open, and recovery admits no new notice.
-    /// Planted bug: recovery resumes the notice like a child result notice, or admits a notice for an empty open set.
-    /// </summary>
-    [Fact]
-    public async Task Recovery_closes_a_pending_notice_with_no_turn_and_admits_none_for_an_empty_open_set()
-    {
-        // Arrange: the notice turn waits in its model call.
-        var sessionId = new SessionId("consent/recovery-closes");
-        var journal = await JournalAsync();
-        ScriptParent();
-        ScriptChildren();
-        var subscriber = await JoinAsync(sessionId);
-        var (asking, gate) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-recover");
-        var hold = NewGate();
-        var entered = ParentGate.Arm(request => FreshUserTexts(request)
-            .Any(text => text.StartsWith(OpenNoticeHeading, StringComparison.Ordinal)), hold);
-
-        try
-        {
-            gate.TrySetResult();
-            await FishChildPromptAsync(subscriber, asking.Run.RunId);
-            await entered.WaitAsync(Deadline, Cancellation);
-            var notice = Assert.Single(ConsentNotices(journal, sessionId));
-            Assert.Equal(-1, ConsumedAt(journal, notice.InputId));
-
-            // Act: a crash, and then a recovery.
-            await StopAsync(await ResolveSessionAsync(sessionId));
-            hold.TrySetResult();
-            await JoinAsync(sessionId);
-            await AwaitAssertAsync(() => Assert.True(IsResultReady(journal, asking.Run.RunId),
-                "The recovery must record the lost child."), Deadline, cancellationToken: Cancellation);
-            await AwaitAssertAsync(async () => Assert.True(await IsIdleAsync(sessionId)), Deadline, cancellationToken: Cancellation);
-            await BarrierAsync(sessionId, asking);
-
-            // Assert
-            var closedBy = journal.Committed.Where(evt => ConsumedBy(evt).Contains(notice.InputId)).ToArray();
-            var closed = Assert.IsType<InputClosed>(Assert.Single(closedBy));
-            Assert.Contains(notice.InputId, closed.InputIds);
-            Assert.Single(ConsentNotices(journal, sessionId));
-        }
-        finally
-        {
-            hold.TrySetResult();
-            gate.TrySetResult();
-            ParentGate.Disarm();
-        }
-    }
-
     /// <summary>
     /// The baseline rule: when recovery closes no pending notice, the rebuilt digest does not wake the parent. The
     /// model saw the requests in a consumed notice already.
@@ -99,8 +48,6 @@ public sealed class ChildConsentRecoverySpecs(ITestOutputHelper output) : ChildC
 
         // Act
         await RestartSessionAsync(sessionId);
-        await AwaitAssertAsync(() => Assert.True(IsResultReady(journal, asking.Run.RunId),
-            "The recovery must record the lost child."), Deadline, cancellationToken: Cancellation);
         await AwaitAssertAsync(async () => Assert.True(await IsIdleAsync(sessionId)), Deadline, cancellationToken: Cancellation);
         await BarrierAsync(sessionId, asking);
 
@@ -200,8 +147,8 @@ public sealed class ChildConsentRecoverySpecs(ITestOutputHelper output) : ChildC
 
     /// <summary>
     /// Round 3 review. The journal rejects the admission of an approval notice while the session is idle and paused,
-    /// and a reminder fire waits for the pause. The session stops. The next join recovers it: recovery withdraws the
-    /// child requests, the pause ends, and the held fire runs.
+    /// and a reminder fire waits for the pause. The session stops. The next join recovers it. The parked requests stay
+    /// open, so the pause holds. After Alice answers both requests, the pause ends, and the held fire runs.
     /// Planted bug: in Ready the rejection only writes a log line. The session keeps the pause with no notice, so the
     /// held fire never runs.
     /// </summary>
@@ -224,7 +171,7 @@ public sealed class ChildConsentRecoverySpecs(ITestOutputHelper output) : ChildC
         try
         {
             firstGate.TrySetResult();
-            await FishChildPromptAsync(subscriber, first.Run.RunId);
+            var firstPrompt = await FishChildPromptAsync(subscriber, first.Run.RunId);
             await SettleAfterRequestAsync(journal, sessionId, first);
             AssertAck(await AskManagerAsync<ISessionResponse>(new SendUserMessage
             {
@@ -238,10 +185,13 @@ public sealed class ChildConsentRecoverySpecs(ITestOutputHelper output) : ChildC
             journal.RejectNextConsentNotice();
             secondGate.TrySetResult();
             await journal.ConsentNoticeRejected.Task.WaitAsync(Deadline, Cancellation);
+            var secondPrompt = await FishChildPromptAsync(subscriber, second.Run.RunId);
 
-            // Assert: the session stops. The next join recovers it, and the held fire runs.
+            // Assert: the session stops. The next join recovers it, and the held fire runs after the answers.
             await watcher.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
             await JoinAsync(sessionId);
+            AssertAck(await AnswerAsync(sessionId, firstPrompt.CallId, Alice));
+            AssertAck(await AnswerAsync(sessionId, secondPrompt.CallId, Alice));
             await AwaitAssertAsync(() => Assert.Contains(journal.Committed.OfType<TurnRecorded>(),
                     turn => turn.ConsumedInputIds.Contains(fire.InputId)),
                 Deadline, cancellationToken: Cancellation);
@@ -331,6 +281,7 @@ public sealed class ChildConsentRecoverySpecs(ITestOutputHelper output) : ChildC
 /// <summary>
 /// Round 4 review. A graceful restart of a session with a child consent request. The daemon restart drain waits for a
 /// grace period before it stops a model call. This class runs on the virtual scheduler, so a spec advances that period.
+/// A parked request stays open across the restart (durable-child-park-recovery), so the pause holds after it.
 /// </summary>
 public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : ChildConsentTestBase(output)
 {
@@ -344,8 +295,9 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
     /// <summary>
     /// Round 4 blocker. Alice's model call runs, and a child asks, so the session pauses. Reminder fire F waits for the
     /// pause. The daemon drains for a restart: Alice's input P stays pending, and the drain writes a restart reminder.
-    /// After the restart, the reminder wakes the session. Recovery withdraws the child request, and both P and F must
-    /// run, each in a turn that the journal records. The spec covers the admission orders [P, F] and [F, P].
+    /// After the restart, the reminder wakes the session, and P runs while the pause holds. F waits until Alice answers
+    /// the child request, and then it runs. Each runs in a turn that the journal records. The spec covers the admission
+    /// orders [P, F] and [F, P].
     /// Planted bug: recovery starts F because the session was paused, so the session is busy when the stashed restart
     /// reminder runs. The reminder then resumes nothing, and P never runs.
     /// </summary>
@@ -362,6 +314,7 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
         var subscriber = await JoinAsync(sessionId);
         var (asking, gate) = await StartConsentChildAsync(sessionId, subscriber, Operator(Alice), "ask-restart");
         var busy = NewGate();
+        ToolInteractionRequest prompt;
 
         try
         {
@@ -370,7 +323,7 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
                 // Alice's model call runs, the child asks during it, and then F arrives and waits for the pause.
                 await StartBusyAliceTurnAsync(sessionId, busy);
                 gate.TrySetResult();
-                await FishChildPromptAsync(subscriber, asking.Run.RunId);
+                prompt = await FishChildPromptAsync(subscriber, asking.Run.RunId);
                 await BarrierAsync(sessionId, asking);
                 AssertAck(await SendFireAsync(sessionId));
             }
@@ -379,7 +332,7 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
                 // The child asks while the session is idle, and its notice runs. F waits for the pause. Then Alice's
                 // input starts a turn, because a person turn runs while the session is paused.
                 gate.TrySetResult();
-                await FishChildPromptAsync(subscriber, asking.Run.RunId);
+                prompt = await FishChildPromptAsync(subscriber, asking.Run.RunId);
                 await SettleAfterRequestAsync(journal, sessionId, asking);
                 AssertAck(await SendFireAsync(sessionId));
                 await StartBusyAliceTurnAsync(sessionId, busy);
@@ -394,12 +347,14 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
             // Act: the daemon drains and restarts. The restart reminder wakes the session.
             await DrainAndResumeAsync(sessionId);
 
-            // Assert: a recorded turn consumes P, and a recorded turn consumes F.
-            await AwaitAssertAsync(() =>
-            {
-                Assert.True(TurnConsumed(journal, person.InputId), "The interrupted input of Alice must run after the restart.");
-                Assert.True(TurnConsumed(journal, fire.InputId), "The held fire must run after the restart.");
-            }, Deadline, cancellationToken: Cancellation);
+            // Assert: a recorded turn consumes P while the pause holds. After the answer, a recorded turn consumes F.
+            await AwaitAssertAsync(() => Assert.True(TurnConsumed(journal, person.InputId),
+                "The interrupted input of Alice must run after the restart."), Deadline, cancellationToken: Cancellation);
+            await BarrierAsync(sessionId, asking);
+            Assert.False(TurnConsumed(journal, fire.InputId), "The held fire must wait while the request is open.");
+            AssertAck(await AnswerAsync(sessionId, prompt.CallId, Alice));
+            await AwaitAssertAsync(() => Assert.True(TurnConsumed(journal, fire.InputId),
+                "The held fire must run after the last answer."), Deadline, cancellationToken: Cancellation);
         }
         finally
         {
@@ -472,7 +427,8 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
     /// <summary>
     /// Round 6, N1, case [N, P, F]. The session is paused. Child B ends, so its result notice N waits for the pause.
     /// Alice's input P starts a turn, and fire F waits for the pause. The daemon drains for a restart. After the
-    /// restart, the turns run in admission order: the turn record of P comes before the turn record of F.
+    /// restart, P runs while the parked request of child A keeps the pause. After Alice answers it, F runs. The turn
+    /// record of P comes before the turn record of F.
     /// Planted bug: recovery queues the held input (N and F) before the stashed restart reminder appends P, so F runs
     /// before P.
     /// </summary>
@@ -492,7 +448,7 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
         try
         {
             gateA.TrySetResult();
-            await FishChildPromptAsync(subscriber, childA.Run.RunId);
+            var prompt = await FishChildPromptAsync(subscriber, childA.Run.RunId);
             await SettleAfterRequestAsync(journal, sessionId, childA);
             gateB.TrySetResult();
             await AwaitAssertAsync(() => Assert.Single(ResultNoticesOf(journal, childB.Run.RunId)), Deadline, cancellationToken: Cancellation);
@@ -511,11 +467,11 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
             await DrainAndResumeAsync(sessionId);
 
             // Assert
-            await AwaitAssertAsync(() =>
-            {
-                Assert.True(TurnConsumed(journal, person.InputId), "The interrupted input of Alice must run after the restart.");
-                Assert.True(TurnConsumed(journal, fire.InputId), "The held fire must run after the restart.");
-            }, Deadline, cancellationToken: Cancellation);
+            await AwaitAssertAsync(() => Assert.True(TurnConsumed(journal, person.InputId),
+                "The interrupted input of Alice must run after the restart."), Deadline, cancellationToken: Cancellation);
+            AssertAck(await AnswerAsync(sessionId, prompt.CallId, Alice));
+            await AwaitAssertAsync(() => Assert.True(TurnConsumed(journal, fire.InputId),
+                "The held fire must run after the last answer."), Deadline, cancellationToken: Cancellation);
             Assert.True(TurnRecordedAt(journal, person.InputId) < TurnRecordedAt(journal, fire.InputId),
                 "P was admitted before F, so the turn record of P must come before the turn record of F.");
         }
