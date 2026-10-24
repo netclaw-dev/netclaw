@@ -170,6 +170,11 @@ public sealed class ChildNoticeAdmissionSpecs(ITestOutputHelper output) : ChildN
         ToolInteractionRequest? approval = null;
         if (boundary == "tool-batch")
             approval = await FishApprovalAsync(subscriber, "boundary-probe");
+        else
+            // The journal holds ChildRunAccepted before the spawn tool batch ends. A child that ends in that window
+            // gives a notice that the batch boundary sends in model call 2, before the operator text exists.
+            // The gate is null after call 2 is recorded and held, so the turn end is the next boundary.
+            await AwaitAssertAsync(() => Assert.Null(Clients.Parent.NextResponseGate), Deadline, cancellationToken: Cancellation);
 
         try
         {
