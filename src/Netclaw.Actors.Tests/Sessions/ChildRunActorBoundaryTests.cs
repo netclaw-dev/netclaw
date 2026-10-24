@@ -290,11 +290,8 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
         await StopAsync(session);
 
         // Act + Assert: replay of the cancel and terminal records closes the entry. The journal still holds the
-        // approval request, and replay must not log it as a request.
-        await EventFilter.Info(contains: "Tool approval requested").ExpectAsync(0, async () =>
-        {
-            await JoinAsync(sessionId);
-        }, Deadline, Cancellation);
+        // approval request, and recovery must not log it as an open request.
+        Assert.Empty(await RecoveryLogLinesAsync(sessionId, "Tool approval requested", () => JoinAsync(sessionId)));
         Assert.Empty(_tool.Contexts);
     }
 

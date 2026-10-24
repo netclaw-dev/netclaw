@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
@@ -317,25 +316,8 @@ public sealed class ChildParkRecoverySpecs(ITestOutputHelper output) : ChildPark
         }
         await StopAsync(await ResolveSessionAsync(id));
 
-        // Act: the join recovers the session. The session logs the park line in its recovery handler and the join line
-        // after it, and the event stream keeps that order, so the join line ends the search with no deadline.
-        var logs = CreateTestProbe();
-        Sys.EventStream.Subscribe(logs.Ref, typeof(Akka.Event.Info));
-        await JoinRecorderAsync(id);
-        var source = $"/session-manager/{Uri.EscapeDataString(id.Value)}";
-        var lines = new List<string>();
-        while (true)
-        {
-            var info = await logs.ExpectMsgAsync<Akka.Event.Info>(Deadline, cancellationToken: Cancellation);
-            var text = info.Message?.ToString() ?? string.Empty;
-            if (!info.LogSource.EndsWith(source, StringComparison.Ordinal))
-                continue;
-            if (text.Contains(" joined (filter=", StringComparison.Ordinal))
-                break;
-            if (text.Contains("child_parks_recovered", StringComparison.Ordinal))
-                lines.Add(text);
-        }
-        Sys.EventStream.Unsubscribe(logs.Ref);
+        // Act: the join recovers the session. The park line is a recovery line, so the join line ends the search.
+        var lines = await RecoveryLogLinesAsync(id, "child_parks_recovered", () => JoinRecorderAsync(id));
 
         // Assert
         if (parks == 0)

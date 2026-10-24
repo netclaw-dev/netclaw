@@ -152,6 +152,40 @@ public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
     protected virtual void ConfigureSessionServices(IServiceCollection services) { }
 
     /// <summary>
+    /// Runs <paramref name="join"/>, which recovers the session, and returns the Info lines of the session that contain
+    /// <paramref name="text"/> and come before its join line. The session logs its recovery lines before it handles the
+    /// stashed join, and the event stream keeps that order. So the join line ends the search, and a spec can show that a
+    /// recovery line is absent without a wait for a deadline.
+    /// </summary>
+    protected async Task<IReadOnlyList<string>> RecoveryLogLinesAsync(SessionId sessionId, string text, Func<Task> join)
+    {
+        var logs = CreateTestProbe();
+        Sys.EventStream.Subscribe(logs.Ref, typeof(Akka.Event.Info));
+        try
+        {
+            await join();
+            var source = $"/session-manager/{Uri.EscapeDataString(sessionId.Value)}";
+            var lines = new List<string>();
+            while (true)
+            {
+                var info = await logs.ExpectMsgAsync<Akka.Event.Info>(ColdRecoveryCeiling,
+                    cancellationToken: TestContext.Current.CancellationToken);
+                var line = info.Message?.ToString() ?? string.Empty;
+                if (!info.LogSource.EndsWith(source, StringComparison.Ordinal))
+                    continue;
+                if (line.Contains(" joined (filter=", StringComparison.Ordinal))
+                    return lines;
+                if (line.Contains(text, StringComparison.Ordinal))
+                    lines.Add(line);
+            }
+        }
+        finally
+        {
+            Sys.EventStream.Unsubscribe(logs.Ref);
+        }
+    }
+
+    /// <summary>
     /// Deletes the directories that a derived class owns outside <see cref="TestPaths"/>.
     /// Runs after TestKit has disposed. A derived class cannot re-implement
     /// <see cref="IAsyncDisposable.DisposeAsync"/> without skipping the cleanup below.
