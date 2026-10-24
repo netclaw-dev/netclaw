@@ -441,6 +441,32 @@ public sealed class ModelManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ClearRole_MixedLegacyAndNamedModels_ReportsErrorInsteadOfThrowing()
+    {
+        // Models mixes legacy role keys with the Definitions/Roles shape. The writer
+        // throws ModelConfigurationException; the TUI must surface it as a status
+        // message, not let it escape through the key handler.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Main"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "my-ollama",
+                    ["ModelId"] = "qwen3:30b"
+                },
+                ["Roles"] = new Dictionary<string, object> { ["Fallback"] = "x" }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        vm.ClearRole("Fallback");
+
+        Assert.StartsWith("Cannot clear Fallback", vm.StatusMessage.Value);
+    }
+
+    [Fact]
     public void GoBack_FromSelectProvider_ReturnsToRoleOverview()
     {
         WriteConfig(new Dictionary<string, object>
