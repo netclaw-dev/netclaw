@@ -11,6 +11,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -61,18 +62,18 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
     protected IReadOnlyList<T> Outputs<T>() => _outputs.OfType<T>().ToArray();
 
     /// <summary>
-    /// Starts a child of Alice. The child waits at its first model call until the spawn turn ends and
-    /// <paramref name="beforeChildRuns"/> ran. The agent child-b uses the second model client.
+    /// Starts a child of Alice, or of <paramref name="source"/>. The child waits at its first model call until the spawn
+    /// turn ends and <paramref name="beforeChildRuns"/> ran. The agent child-b uses the second model client.
     /// </summary>
     private protected async Task<ChildRunAccepted> StartAsync(SessionId id, string label, string agent = "child-a",
-        Func<Task>? beforeChildRuns = null)
+        Func<Task>? beforeChildRuns = null, MessageSource? source = null)
     {
         var journal = await JournalAsync();
         ApprovalTool.Entered = () => _resumedAtProbe.Enqueue(journal.Committed.OfType<ChildRunEvent.Resumed>().Count());
         var started = Accepted(journal, id).Count;
         var gate = NewGate();
         (agent == "child-b" ? Clients.B : Clients.A).NextResponseGate = gate;
-        await SendAsync(id, $"spawn:{agent}:{label}", AliceSource);
+        await SendAsync(id, $"spawn:{agent}:{label}", source ?? AliceSource);
         await AwaitAssertAsync(() => Assert.Equal(started + 1, Accepted(journal, id).Count), Deadline, cancellationToken: Cancellation);
         await SettleNoticesAsync(journal, id);
         if (beforeChildRuns is not null)
@@ -110,7 +111,7 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
     {
         await AwaitAssertAsync(() => Assert.Equal(requests, RequestsOf(journal, run.Run.RunId).Count), Deadline,
             cancellationToken: Cancellation);
-        await AwaitAssertAsync(async () => Assert.False(await ChildActorExistsAsync(id, run, null),
+        await AwaitAssertAsync(async () => Assert.False(await ChildActorExistsAsync(journal, id, run),
             "The child must park and stop."), TimeSpan.FromSeconds(10), cancellationToken: Cancellation);
     }
 
@@ -143,19 +144,118 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
             Assert.Contains(Outputs<ToolInteractionClosed>(), closed => closed.CallId.Value == request.CallId)),
             Deadline, cancellationToken: Cancellation);
         Assert.DoesNotContain(Outputs<TurnCompleted>(), static turn => turn.Outcome == TurnOutcome.Failed);
-        for (var incarnation = 0; incarnation <= RequestsOf(journal, run.Run.RunId).Count; incarnation++)
-            Assert.False(await ChildActorExistsAsync(id, run, incarnation == 0 ? null : incarnation),
-                $"Child actor {incarnation} of the run is still alive after the run ended.");
+        Assert.False(await ChildActorExistsAsync(journal, id, run), "A child actor of the run is still alive after the run ended.");
         return terminal;
     }
 
-    // The spawner names the first actor after the agent and the run. A resumed actor adds the prompt counter (D3).
-    private async Task<bool> ChildActorExistsAsync(SessionId id, ChildRunAccepted run, int? incarnation)
+    // The spawner names the first actor after the agent and the run. A resumed actor adds the prompt counter (D3). A
+    // drain park adds no request, so its resume can take the suffix -0 (running-child-drain-park design D1).
+    private async Task<bool> ChildActorExistsAsync(AcceptanceFault journal, SessionId id, ChildRunAccepted run)
     {
-        var path = $"/user/session-manager/{Uri.EscapeDataString(id.Value)}/subagent-{run.Run.AgentName.Value}-{run.Run.RunId.Value}"
-                   + (incarnation is { } number ? $"-{number}" : string.Empty);
-        return (await Sys.ActorSelection(path).Ask<ActorIdentity>(new Identify(path), Deadline, Cancellation)).Subject is not null;
+        var name = $"/user/session-manager/{Uri.EscapeDataString(id.Value)}/subagent-{run.Run.AgentName.Value}-{run.Run.RunId.Value}";
+        var paths = Enumerable.Range(0, RequestsOf(journal, run.Run.RunId).Count + 1).Select(prompts => $"{name}-{prompts}").Prepend(name);
+        foreach (var path in paths)
+        {
+            if ((await Sys.ActorSelection(path).Ask<ActorIdentity>(new Identify(path), Deadline, Cancellation)).Subject is not null)
+                return true;
+        }
+
+        return false;
     }
+
+    /// <summary>The drain request, the virtual time when it started, and the child model calls at that time.</summary>
+    private protected sealed record DrainStart(Task<DaemonRestartPrepared> Ack, DateTimeOffset StartedAt, int ChildCalls);
+
+    /// <summary>The drain park of the run (null when the child did not park), and the child model calls at the park.</summary>
+    private protected sealed record DrainPark(ChildRunEvent.Parked? Park, int ChildCalls);
+
+    /// <summary>
+    /// The daemon drains the session. The method returns after the session took the drain request and logged its move to
+    /// Passivating. The session sends the park signal to each live child in that same message (design D4), so the
+    /// signal is in the child mailbox before the caller releases a held tool.
+    /// </summary>
+    private protected async Task<DrainStart> BeginDrainAsync(SessionId id)
+    {
+        var started = new DrainStart(AskManagerAsync<DaemonRestartPrepared>(new PrepareForDaemonRestart(id, "daemon-stop")),
+            Sys.Scheduler.Now, Clients.A.CallCount);
+        await AwaitAssertAsync(async () => Assert.Equal("Passivating", await PhaseOfAsync(id)), Deadline,
+            cancellationToken: Cancellation);
+        return started;
+    }
+
+    /// <summary>
+    /// The precondition of a drain park (running-child-drain-park task 1.3), after the drain acknowledgement:
+    /// <list type="bullet">
+    /// <item>the acknowledgement arrived before the drain deadline;</item>
+    /// <item>it carries a restart reminder when no request of the run is open (PR 2 CountsAsUnreported);</item>
+    /// <item>the journal holds one Parked record of the run with <paramref name="requests"/> requests, or none when
+    /// <paramref name="requests"/> is null, and no Resumed or terminal record of the run;</item>
+    /// <item>the child started no model call after the drain, and no child actor of the run and no session is alive.</item>
+    /// </list>
+    /// </summary>
+    private protected async Task<DrainPark> AssertDrainParkAsync(AcceptanceFault journal, SessionId id, ChildRunAccepted run,
+        int? requests, DrainStart drain)
+    {
+        var ack = await drain.Ack;
+        var waited = Sys.Scheduler.Now - drain.StartedAt;
+        Assert.True(waited < DaemonConfig.BoundedDrainTimeout, $"The session acknowledged the drain after {waited}.");
+        var parks = journal.Committed.OfType<ChildRunEvent.Parked>().Where(evt => evt.RunId == run.Run.RunId).ToArray();
+        ChildRunEvent.Parked? park = null;
+        if (requests is { } count)
+            Assert.Equal(count, (park = Assert.Single(parks)).Requests.Count);
+        else
+            Assert.Empty(parks);
+        if (requests is null or 0)
+            Assert.NotNull(ack.RestartReminder);
+        else
+            Assert.Null(ack.RestartReminder);
+        Assert.DoesNotContain(journal.Committed.OfType<ChildRunEvent.Resumed>(), evt => evt.RunId == run.Run.RunId);
+        Assert.Empty(TerminalsOf(journal, run.Run.RunId));
+        Assert.Equal(drain.ChildCalls, Clients.A.CallCount);
+        var session = $"/user/session-manager/{Uri.EscapeDataString(id.Value)}";
+        await AwaitAssertAsync(async () =>
+        {
+            Assert.False(await ChildActorExistsAsync(journal, id, run), "A child actor of the run is alive after the drain.");
+            Assert.Null((await Sys.ActorSelection(session).Ask<ActorIdentity>(new Identify(session), Deadline, Cancellation)).Subject);
+        }, Deadline, cancellationToken: Cancellation);
+        return new DrainPark(park, Clients.A.CallCount);
+    }
+
+    /// <summary>
+    /// The postcondition of a drain park (running-child-drain-park task 1.3), after the run ended: the run invariants;
+    /// each sibling call ID ran at most once over all incarnations, under the recorded authority of the run; and the
+    /// first model request of a child that resumed a drain park holds the transcript of the park. With no park, no child
+    /// started again.
+    /// </summary>
+    private protected async Task<ChildRunTerminal> AssertDrainResumeAsync(AcceptanceFault journal, SessionId id,
+        ChildRunAccepted run, DrainPark park, int probeRuns)
+    {
+        var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns);
+        Assert.All(Sibling.Calls.GroupBy(static call => call.CallId), calls => Assert.Single(calls));
+        var authority = run.Run.OriginalContext;
+        Assert.All(Sibling.Calls, call =>
+        {
+            Assert.Equal(authority.Audience, call.Context.Audience);
+            Assert.Equal(authority.Boundary, call.Context.Boundary);
+            Assert.Equal(authority.DefaultDeliveryTarget, call.Context.DefaultDeliveryTarget);
+            Assert.Equal(authority.RequestedDeliveryTarget, call.Context.RequestedDeliveryTarget);
+        });
+        if (park.Park is null)
+            Assert.Equal(park.ChildCalls, Clients.A.CallCount);
+        else if (park.Park.Requests.Count == 0)
+        {
+            // The request holds the system message of the child and then the transcript of the park.
+            var resumed = Clients.A.ReceivedMessages[park.ChildCalls];
+            Assert.Equal(park.Park.Park.Transcript.Select(static message => Shape(ChatMessageConverter.ToAiMessage(message))),
+                resumed.Skip(1).Select(Shape));
+        }
+        return terminal;
+    }
+
+    // The parts of a model message that the park keeps: the role, the text, and the call IDs of each call and result.
+    private static string Shape(ChatMessage message) => string.Join('|', message.Role.Value, message.Text,
+        string.Join(',', message.Contents.OfType<FunctionCallContent>().Select(static call => call.CallId)),
+        string.Join(',', message.Contents.OfType<FunctionResultContent>().Select(static result => result.CallId)));
 
     private protected static IReadOnlyList<ChildRunEvent.TerminalRecorded> TerminalsOf(AcceptanceFault journal, SubAgentRunId runId)
         => journal.Committed.OfType<ChildRunEvent.TerminalRecorded>().Where(evt => evt.RunId == runId).ToArray();
@@ -180,18 +280,23 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
         }, Deadline, cancellationToken: Cancellation);
     }
 
+    // The call ID travels as an argument too, because the tool context does not hold it.
     protected static FunctionCallContent SiblingCall(string callId) => new(callId, SiblingTool.ToolName,
-        new Dictionary<string, object?> { ["_rationale"] = "Run beside the consent call." });
+        new Dictionary<string, object?> { ["call"] = callId, ["_rationale"] = "Run beside the consent call." });
 
     private sealed class OutputRecorder : ReceiveActor
     {
         public OutputRecorder(ConcurrentQueue<object> outputs) => ReceiveAny(outputs.Enqueue);
     }
 
-    /// <summary>A tool that runs beside a consent call. A spec can hold its next call until it releases it.</summary>
+    /// <summary>
+    /// A tool that runs beside a consent call. A spec can hold its next call until it releases it. The tool records each
+    /// call that starts, with its call ID and its context.
+    /// </summary>
     internal sealed class SiblingTool : INetclawTool
     {
         public const string ToolName = "sibling_probe";
+        public ConcurrentQueue<(string? CallId, ToolInvocationContext Context)> Calls { get; } = new();
         private TaskCompletionSource? _entered;
         private TaskCompletionSource? _release;
         // The gate of the held call. The call takes _release, so Release needs its own reference.
@@ -211,6 +316,7 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
         public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context,
             CancellationToken ct = default)
         {
+            Calls.Enqueue((arguments?.TryGetValue("call", out var call) == true ? call?.ToString() : null, context));
             _entered?.TrySetResult();
             if (Interlocked.Exchange(ref _release, null) is { } release)
                 await release.Task.WaitAsync(ct);

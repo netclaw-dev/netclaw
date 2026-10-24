@@ -81,6 +81,19 @@ public sealed class ChildParkRulesTests
     }
 
     /// <summary>
+    /// running-child-drain-park design D1 R2. A drain park asks nobody, so it needs no requester who can answer. A
+    /// consent park still needs one.
+    /// Planted bug: every drain park of an automation turn fails, or a consent park of an automation turn shows a prompt.
+    /// </summary>
+    [Theory]
+    [InlineData("drain-park-no-approval", 0, false, true)]
+    [InlineData("drain-park-approval", 0, true, true)]
+    [InlineData("consent-park-approval", 1, true, true)]
+    [InlineData("consent-park-no-approval", 1, false, false)]
+    public void A_park_needs_a_requester_who_can_answer_only_when_it_asks(string row, int requests, bool interactive, bool expected)
+        => Assert.Equal((row, expected), (row, ChildParkRules.RequesterCanAnswer(requests, interactive)));
+
+    /// <summary>
     /// PR 2 design D4. A park of exactly the cap fits. One byte more does not.
     /// Planted bug: the cap is off by one, or the owner never refuses a park.
     /// </summary>

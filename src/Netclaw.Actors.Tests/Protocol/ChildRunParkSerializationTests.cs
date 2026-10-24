@@ -29,8 +29,8 @@ namespace Netclaw.Actors.Tests.Protocol;
 /// </summary>
 public sealed class ChildRunParkSerializationTests : TestKit
 {
-    private static readonly SessionId Owner = new("test/park-wire");
-    private static readonly SubAgentRunId RunId = new("park-run");
+    internal static readonly SessionId Owner = new("test/park-wire");
+    internal static readonly SubAgentRunId RunId = new("park-run");
 
     public ChildRunParkSerializationTests(ITestOutputHelper output) : base(output: output) { }
 
@@ -38,15 +38,19 @@ public sealed class ChildRunParkSerializationTests : TestKit
         => builder.WithNetclawSerialization();
 
     /// <summary>
-    /// The Parked and Resumed events travel with the cre-v2 manifest and come back equal.
-    /// Planted bug: the mapper drops a field of the park or of a request, or a new manifest appears.
+    /// The Parked and Resumed events travel with the cre-v2 manifest and come back equal. Rows: a consent park with two
+    /// requests; a drain park with no request (running-child-drain-park task 3.4).
+    /// Planted bug: the mapper drops a field of the park or of a request, a new manifest appears, or a park with no
+    /// request does not come back.
     /// </summary>
-    [Fact]
-    public void The_park_and_resume_events_round_trip_with_the_cre_v2_manifest()
+    [Theory]
+    [InlineData("two-requests")]
+    [InlineData("zero-requests")]
+    public void The_park_and_resume_events_round_trip_with_the_cre_v2_manifest(string row)
     {
         // Arrange
         var serializer = Codec();
-        var parked = new ChildRunEvent.Parked(FullPark(), [Request(1), Request(2)])
+        var parked = new ChildRunEvent.Parked(FullPark(), row == "zero-requests" ? [] : [Request(1), Request(2)])
         { SessionId = Owner, RunId = RunId, RecordedAtMs = 10 };
         var resumed = new ChildRunEvent.Resumed { SessionId = Owner, RunId = RunId, RecordedAtMs = 11 };
         AssertNoDefaults(parked.Park, nameof(ChildRunPark));
@@ -62,16 +66,20 @@ public sealed class ChildRunParkSerializationTests : TestKit
     /// <summary>
     /// A snapshot keeps a parked run with its park, its requests, the answer of the first request, and its prompt
     /// counter. The walk proves that each park field and list element holds a value before the trip, so a field that the
-    /// mapper drops cannot pass as a default.
-    /// Planted bug: the snapshot drops the answer of a parked request, the prompt counter, or a park field.
+    /// mapper drops cannot pass as a default. Rows: an answered and an open request; a drain park with no request
+    /// (running-child-drain-park task 3.4).
+    /// Planted bug: the snapshot drops the answer of a parked request, the prompt counter, or a park field, or it
+    /// refuses a park with no request.
     /// </summary>
-    [Fact]
-    public void A_parked_run_record_round_trips_through_the_snapshot()
+    [Theory]
+    [InlineData("answered-and-open")]
+    [InlineData("zero-requests")]
+    public void A_parked_run_record_round_trips_through_the_snapshot(string row)
     {
         // Arrange
         var serializer = Codec();
-        var lifecycle = new ChildRunLifecycle.Parked(FullPark(),
-            [new ChildParkRequest(Request(1), Resolution(1)), new ChildParkRequest(Request(2), null)]);
+        var lifecycle = new ChildRunLifecycle.Parked(FullPark(), row == "zero-requests" ? []
+            : [new ChildParkRequest(Request(1), Resolution(1)), new ChildParkRequest(Request(2), null)]);
         var run = Run(lifecycle) with { PromptsIssued = 2 };
         AssertNoDefaults(lifecycle.Park, nameof(ChildRunPark));
         Assert.All(lifecycle.Requests, request => Assert.NotNull(request.Request));
@@ -169,8 +177,8 @@ public sealed class ChildRunParkSerializationTests : TestKit
         }
     }
 
-    // A park with a value in each field.
-    private static ChildRunPark FullPark() => new()
+    // A park with a value in each field. ChildRunReducerTests uses the same records.
+    internal static ChildRunPark FullPark() => new()
     {
         Transcript =
         [
@@ -197,7 +205,7 @@ public sealed class ChildRunParkSerializationTests : TestKit
         SkillOverlay = "Follow the release checklist."
     };
 
-    private static ToolApprovalRequested Request(int number) => new()
+    internal static ToolApprovalRequested Request(int number) => new()
     {
         SessionId = Owner,
         CallId = $"{RunId.Value}/subagent-approval/{number}",
@@ -217,7 +225,7 @@ public sealed class ChildRunParkSerializationTests : TestKit
         RequestedAtMs = 5
     };
 
-    private static ToolApprovalResolved Resolution(int number) => new()
+    internal static ToolApprovalResolved Resolution(int number) => new()
     {
         SessionId = Owner,
         CallId = $"{RunId.Value}/subagent-approval/{number}",
@@ -234,7 +242,7 @@ public sealed class ChildRunParkSerializationTests : TestKit
         Boundary = TrustBoundary.Personal, ChannelType = "signalr", SupportsInteractiveApproval = true
     };
 
-    private static BackgroundChildRun Run(ChildRunLifecycle lifecycle) => new()
+    internal static BackgroundChildRun Run(ChildRunLifecycle lifecycle) => new()
     {
         RunId = RunId,
         ScopeId = new SubAgentScopeId("park-scope"),

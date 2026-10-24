@@ -18,6 +18,20 @@ public sealed class SessionExecutionLifetimeTests(ITestOutputHelper output) : Te
     {
     }
 
+    /// <summary>
+    /// running-child-drain-park design D4. The drain acknowledgement waits while a live child exists and the child wait
+    /// has not ended. With no drain, no live child, or an ended wait, it does not wait.
+    /// Planted bug: the session acknowledges before the child parks, or a stuck child holds the drain past the deadline.
+    /// </summary>
+    [Theory]
+    [InlineData("no-drain", false, true, false, false)]
+    [InlineData("live-child", true, true, false, true)]
+    [InlineData("no-live-child", true, false, false, false)]
+    [InlineData("wait-ended", true, true, true, false)]
+    public void The_drain_acknowledgement_waits_only_for_live_children_inside_the_wait(string row, bool drain,
+        bool liveChildren, bool waitEnded, bool expected)
+        => Assert.Equal((row, expected), (row, SessionExecutionLifetime.WaitsForChildren(drain, liveChildren, waitEnded)));
+
     [Theory]
     [InlineData("success")]
     [InlineData("cancelled")]
