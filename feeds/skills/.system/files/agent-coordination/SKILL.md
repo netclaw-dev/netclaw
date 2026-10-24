@@ -3,7 +3,7 @@ name: agent-coordination
 description: "Coordinate substantial code tasks, architecture plans, independent research, and defect repairs through scoped child tasks and reviewed artifacts."
 metadata:
   author: netclaw
-  version: "1.5.1"
+  version: "1.5.2"
 ---
 
 # Agent Coordination
@@ -82,6 +82,10 @@ Commands that create build output need an authorized isolated workspace.
 ## Background Runs And Cancellation
 
 `spawn_agent` returns an accepted run ID before child completion.
+Long child runs with many tool rounds are normal and expected.
+The runtime uses liveness checks: the first-output wait, the gap between outputs, and an optional no-progress deadline.
+Child runs and session turns have no total time, tool-call, or round cap.
+Label your own estimates as estimates, not system limits.
 Continue independent parent work. A notice arrives later when the child ends.
 The notice names the agent, the run, the outcome, and the path of `result.md`. It holds no child output.
 When an accepted child blocks the next step, check for useful independent work.
@@ -124,6 +128,8 @@ Load `netclaw-operations` and read `references/child-runs.md` for the notice and
 
 ### Cancellation
 
+Cancel a child only when the operator asks, the child does the wrong work, or the child makes no progress.
+Never cancel a child for run length or round count alone.
 A cancellation acknowledgement records intent. It does not mean terminal completion.
 Wait for the notice and read `result.md` before you report that the child stopped.
 Inspect confirmed effects, unknown effects, and partial artifacts before a replacement task.

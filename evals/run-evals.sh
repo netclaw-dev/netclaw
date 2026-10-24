@@ -4545,6 +4545,7 @@ main() {
 
     local cycle_cases=false
     local spill_cases=false
+    local progress_case=false
     if [[ "$FILTER_CASE" == tool_cycle_* || "${FILTER_CATEGORY,,}" == "tool cycles" ]]; then
         source "$REPO_ROOT/evals/cycle_evals.sh"
         start_cycle_fixture
@@ -4554,6 +4555,11 @@ main() {
         source "$REPO_ROOT/evals/coordination_spill_evals.sh"
         start_coordination_spill_fixture
         spill_cases=true
+    fi
+    if [[ "$FILTER_CASE" == coordination_productive_long_child || "${FILTER_CATEGORY,,}" == "coordination child progress" ]]; then
+        source "$REPO_ROOT/evals/coordination_spill_evals.sh"
+        start_coordination_progress_fixture
+        progress_case=true
     fi
     start_eval_daemon
     init_db
@@ -4579,6 +4585,8 @@ main() {
         run_cycle_cases
     elif [[ "$spill_cases" == true ]]; then
         run_coordination_spill_hint_cases
+    elif [[ "$progress_case" == true ]]; then
+        run_coordination_progress_case
     else
         run_all
     fi

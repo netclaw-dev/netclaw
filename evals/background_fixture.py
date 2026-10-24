@@ -194,9 +194,11 @@ def handler_for(fixture):
                     fixture.arrive(body, self.path.endswith("hold"))
                     self.send_json(200, {"released": True})
                 elif self.path == "/v1/chat/completions":
-                    message = fixture.completion(body)
+                    with fixture.condition:
+                        nonce = fixture.nonce
+                        message = fixture.completion(body)
                     if message is None:
-                        self.forward(body)
+                        self.forward(body, nonce)
                     else:
                         self.reply(body, message)
                 else:
@@ -233,7 +235,7 @@ def handler_for(fixture):
             self.end_headers()
             self.wfile.write(content)
 
-        def forward(self, body):
+        def forward(self, body, nonce):
             headers = {"Content-Type": "application/json"}
             if fixture.api_key:
                 headers["Authorization"] = "Bearer " + fixture.api_key
@@ -244,13 +246,19 @@ def handler_for(fixture):
                 self.send_json(502, {"error": "The configured eval provider request failed."})
                 return
             with response:
+                observer = getattr(fixture, "observe_forwarded", None)
+                captured = bytearray()
                 self.send_response(response.status)
                 self.send_header("Content-Type", response.headers.get("Content-Type", "application/json"))
                 self.send_header("Connection", "close")
                 self.end_headers()
                 self.close_connection = True
                 while chunk := response.read1(65536):
+                    if observer is not None:
+                        captured.extend(chunk)
                     self.wfile.write(chunk)
                     self.wfile.flush()
+                if observer is not None:
+                    observer(nonce, bytes(captured), response.headers.get("Content-Type", ""))
 
     return Handler
