@@ -294,18 +294,34 @@ public sealed partial class LlmSessionActor
         if (ChildParkRules.ResumeGate(parked is not null, _toolWorkflow.ChildApprovalCount(runId), RestartDrainRequested)
             != ChildResumeDecision.Resume)
             return;
+        IReadOnlyDictionary<string, ApprovalRedriveEntry> answers;
+        try
+        {
+            answers = _toolWorkflow.TakeParkedAnswers(runId, parked!.Park);
+        }
+        catch (InvalidOperationException error)
+        {
+            // An answer that does not bind to its parked call (a missing call, a duplicate call ID, or a shell call with
+            // no source key) is a consent that the session cannot honour. An operator must see it.
+            _log.Error(error, "Parked child run {RunId} cannot bind its answers", runId);
+            EndParkedRun(runId, SubAgentOutcomeReason.ParkDamaged, error.Message, ActorRefs.Nobody);
+            return;
+        }
         PreparedChildStart prepared;
         try
         {
-            // A park with no original call for an approved shell request cannot bind its consent, so the run ends.
-            var resume = new ChildRunResume(parked!.Park, _toolWorkflow.TakeParkedAnswers(runId, parked.Park));
-            prepared = PrepareResume(run, resume);
+            prepared = PrepareResume(run, new ChildRunResume(parked.Park, answers));
+        }
+        catch (ChildStartRejectedException rejected)
+        {
+            _log.Warning("Parked child run {RunId} cannot resume: {Reason}", runId, rejected.Message);
+            EndParkedRun(runId, rejected.Reason, rejected.Message, ActorRefs.Nobody);
+            return;
         }
         catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
         {
-            _log.Warning("Parked child run {RunId} cannot resume: {Reason}", runId, error.Message);
-            EndParkedRun(runId, error is ChildStartRejectedException rejected ? rejected.Reason : SubAgentOutcomeReason.SpawnError,
-                error.Message, ActorRefs.Nobody);
+            _log.Error(error, "Parked child run {RunId} cannot resume", runId);
+            EndParkedRun(runId, SubAgentOutcomeReason.SpawnError, error.Message, ActorRefs.Nobody);
             return;
         }
         // At most once: the Resumed record is in the journal before any parked call runs. A crash after it records the

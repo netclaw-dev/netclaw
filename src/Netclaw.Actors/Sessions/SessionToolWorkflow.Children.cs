@@ -77,7 +77,13 @@ internal sealed partial class SessionToolWorkflow
                 throw new InvalidOperationException($"A {evt.GetType().Name} record closes no child approval.");
         }
 
-        return RememberClosedChildCalls(CloseChildApprovals(evt), _ => reason)
+        var closedEntries = CloseChildApprovals(evt);
+        var withdrawn = RememberClosedChildCalls(closedEntries, _ => reason);
+        // A resume takes the answers of its park first, so an answer that is still here was never used. A late click
+        // gets the reason of the run end, not "already answered".
+        foreach (var (callId, _) in closedEntries.Where(static pair => pair.Value is ResolvedToolApproval))
+            _closedChildCalls[callId] = new ChildApprovalResolution.Withdrawn(reason);
+        return withdrawn
             .Select(closed => AgentEventFactory.ApprovalResolved(owner, run, closed.CallId,
                 new ChildApprovalResolution.Withdrawn(closed.Reason), at))
             .ToArray();
@@ -195,17 +201,15 @@ internal sealed partial class SessionToolWorkflow
     /// entries close, so a later click on a prompt of the park gets "already answered".
     /// </summary>
     /// <exception cref="InvalidOperationException">
-    /// The park does not hold the original call of an approved shell request, so no consent can bind its source.
+    /// The park cannot bind a recorded answer to its call. The entries stay, so the run end withdraws them and no
+    /// answer counts as used.
     /// </exception>
     public IReadOnlyDictionary<string, ApprovalRedriveEntry> TakeParkedAnswers(SubAgentRunId runId, ChildRunPark park)
     {
         var answered = _calls.Where(pair => pair.Value is ResolvedToolApproval && pair.Value.Pending.Request.SourceChildRunId == runId)
             .ToArray();
-        foreach (var pair in answered)
-            _calls.Remove(pair.Key);
-        RememberClosedChildCalls(answered, static _ => throw new InvalidOperationException("A parked run has an open request."));
-        var parkedCalls = ReadParkedCalls(park);
         var answers = new Dictionary<string, ApprovalRedriveEntry>(StringComparer.Ordinal);
+        var parkedCalls = ReadParkedCalls(park);
         foreach (var pair in answered)
         {
             var resolved = (ResolvedToolApproval)pair.Value;
@@ -215,9 +219,14 @@ internal sealed partial class SessionToolWorkflow
             var shellSourceKey = GetShellSourceKey(childCallId, resolved, parkedCalls, out var failure);
             if (failure is not null)
                 throw new InvalidOperationException($"The parked call {childCallId} cannot resume: {failure}.");
-            answers.Add(childCallId, ApprovalRedriveEntry.From(resolved, shellSourceKey));
+            if (!answers.TryAdd(childCallId, ApprovalRedriveEntry.From(resolved, shellSourceKey)))
+                throw new InvalidOperationException($"The parked call ID {childCallId} is not unique.");
         }
 
+        // Only a bound resume uses the answers. A failure above leaves the entries for the run end to withdraw.
+        foreach (var pair in answered)
+            _calls.Remove(pair.Key);
+        RememberClosedChildCalls(answered, static _ => throw new InvalidOperationException("A parked run has an open request."));
         return answers;
     }
 
