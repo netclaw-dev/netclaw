@@ -12,9 +12,9 @@ using Netclaw.Cli.Daemon;
 using R3;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
-if (args.Length != 4 || !int.TryParse(args[1], out var timeoutSeconds) || !int.TryParse(args[2], out var requiredChildren))
+if (args.Length != 5 || !int.TryParse(args[1], out var timeoutSeconds) || !int.TryParse(args[2], out var requiredChildren))
 {
-    Console.Error.WriteLine("Usage: coordination-observer <daemon-endpoint> <timeout-seconds> <required-children> <prompt>");
+    Console.Error.WriteLine("Usage: coordination-observer <daemon-endpoint> <timeout-seconds> <required-children> <prompt> <log-path>");
     return 2;
 }
 
@@ -33,6 +33,7 @@ var receivedTextDelta = false;
 var completed = false;
 var timedOut = false;
 
+using var log = new StreamWriter(args[4], append: false) { AutoFlush = true };
 await using var client = new DaemonClient(args[0]);
 using var subscription = client.SessionOutput.Subscribe(output => outputs.Writer.TryWrite(output));
 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
@@ -43,6 +44,7 @@ try
     await client.ConnectAsync(cancellationToken);
     var sessionId = await client.CreateSessionAsync(ChannelType.Headless, cancellationToken);
     sessionIdValue = sessionId;
+    log.WriteLine($"[{TimeProvider.System.GetUtcNow():o}] Headless session started: {sessionId}");
     await client.SendAsync(
         args[3],
         cancellationToken);
@@ -73,7 +75,8 @@ try
             case SubAgentOutput child when child.Phase == SubAgentPhase.Completed:
                 completedChildren++;
                 break;
-            case TurnCompleted:
+            case TurnCompleted turn:
+                log.WriteLine($"[{TimeProvider.System.GetUtcNow():o}] TURN_COMPLETED: turn={turn.TurnNumber}");
                 turnCompletions++;
                 finalResponse = currentResponse.ToString();
                 turnResponses.Add(finalResponse);
@@ -86,6 +89,7 @@ try
                 receivedTextDelta = false;
                 break;
             case ErrorOutput error:
+                log.WriteLine($"[{TimeProvider.System.GetUtcNow():o}] ERROR: {error.Message}");
                 throw new InvalidOperationException(error.Message);
         }
 

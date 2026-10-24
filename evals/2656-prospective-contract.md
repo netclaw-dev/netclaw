@@ -332,3 +332,20 @@ These SHA-256 hashes identify the source evidence:
 | Prior `test_coordination_evals.py` | `7dc73875182a5530e1a856e54b6ddd562d81b872095ef9a8b9d5884cb580ec11` |
 
 The test author reports final file hashes and actual static checks separately.
+
+## Response integrity correction before the next comparison
+
+The prior instrument allowed a finish marker from another SSE choice to complete the measured response.
+Retain all 20 trials from that instrument as exploratory evidence.
+They do not establish prospective acceptance.
+The next comparison requires one explicit, consistent, nonnegative integer choice identity and its own finish marker.
+Retain `raw_choice_indices` beside `raw_complete` in each measured response.
+Missing, invalid, or mixed choice identities remain inconclusive.
+The historical strict evaluator and archived verdicts remain unchanged.
+
+Repeat all four cells with the corrected instrument after independent review and a new source freeze.
+Keep the existing outcome, thresholds, denominators, prompt, models, and resources.
+The seed selects prompt variants; the provider receives no inference seed.
+Both arms use the same provider request behavior.
+Use identical image configuration and OS layers; replace only the daemon binary that embeds the coordination resource.
+Record actual forwarded parameter and tool-hash parity for each endpoint pair.

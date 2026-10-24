@@ -82,8 +82,8 @@ class ProductiveChildTests(unittest.TestCase):
                     deltas.append({"tool_calls": [
                         {"index": index, "function": {"arguments": call["function"]["arguments"][8:]}}
                         for index, call in enumerate(calls)]})
-                events = [{"choices": [{"delta": delta, "finish_reason": None}]} for delta in deltas]
-                events.append({"choices": [{"delta": {}, "finish_reason": finish}]})
+                events = [{"choices": [{"index": 0, "delta": delta, "finish_reason": None}]} for delta in deltas]
+                events.append({"choices": [{"index": 0, "delta": {}, "finish_reason": finish}]})
                 content = ("".join("data: " + json.dumps(event) + "\n\n" for event in events)
                            + "data: [DONE]\n\n").encode()
                 content_type = "text/event-stream"
@@ -178,6 +178,47 @@ class ProductiveChildTests(unittest.TestCase):
                     self.assertEqual("inconclusive", result["status"])
                     self.assertFalse(result["passed"])
                     self.assertEqual(complete["strict_contract"], result["strict_contract"])
+
+    def test_sse_primary_requires_one_choice_identity_and_its_own_finish(self):
+        text = self.evidence()[0]["parent_decision"]
+        content = {"index": 0, "delta": {"content": text}, "finish_reason": None}
+        finish = {"index": 0, "delta": {}, "finish_reason": "stop"}
+        call = {"index": 0, "id": "model-status-call", "type": "function", "function": {
+            "name": "check_agent_run", "arguments": '{"RunId":"owned-run"}'}}
+        cases = [
+            ("choice 0 and its finish", [content, finish], True, [0]),
+            ("choice 0 and choice 1 finish", [content, {**finish, "index": 1}], False, [0, 1]),
+            ("choice 0 text and choice 1 tool call", [content,
+             {"index": 1, "delta": {"tool_calls": [call]}, "finish_reason": None},
+             {**finish, "index": 1, "finish_reason": "tool_calls"}], False, [0, 1]),
+        ]
+        for position in (0, 1):
+            for defect, fields in [("missing", {})] + [
+                (repr(index), {"index": index}) for index in (None, False, True, -1, 0.0, "0", [], {})
+            ]:
+                choices = [content.copy(), finish.copy()]
+                choices[position].pop("index")
+                choices[position].update(fields)
+                cases.append((f"event {position} index {defect}", choices, False, None))
+        for name, choices, complete, indices in cases:
+            with self.subTest(name=name):
+                body = ("".join("data: " + json.dumps({"choices": [choice]}) + "\n\n" for choice in choices)
+                        + "data: [DONE]\n\n").encode()
+                response = ProgressFixture.read_response(body, "text/event-stream")
+                snapshot, output = self.evidence()
+                snapshot.update(model_responses=[response], parent_decision=response["text"])
+                if response["tool_calls"]:
+                    output["toolCalls"].append({"callId": call["id"], "toolName": call["function"]["name"],
+                                                "argumentsJson": call["function"]["arguments"]})
+                result = verdict(snapshot, output)
+                self.assertIs(response["finished"], True)
+                self.assertEqual("fail" if response["tool_calls"] else "pass", result["strict_contract"]["status"])
+                self.assertEqual("pass" if complete else "inconclusive", result["status"])
+                self.assertIs(result["passed"], complete)
+                self.assertIs(response["raw_complete"], complete)
+                self.assertIsInstance(response.get("raw_choice_indices"), list)
+                if indices is not None:
+                    self.assertEqual(indices, response["raw_choice_indices"])
 
     def test_status_primary_requires_complete_correlated_raw_calls_and_no_public_claims(self):
         for defect in ("silence", "whitespace", "public claim", "JSON beside tools", "unrelated tool", "two calls",
@@ -345,8 +386,8 @@ class ProductiveChildTests(unittest.TestCase):
             message["tool_calls"] = [{"id": "model-status-call", "function": {"name": "check_agent_run"}}]
         finish = "tool_calls" if tool_calls else "stop"
         if stream:
-            events = [{"choices": [{"delta": message, "finish_reason": None}]},
-                      {"choices": [{"delta": {}, "finish_reason": finish}]}]
+            events = [{"choices": [{"index": 0, "delta": message, "finish_reason": None}]},
+                      {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}]}]
             return ("".join("data: " + json.dumps(e) + "\n\n" for e in events)
                     + "data: [DONE]\n\n").encode(), "text/event-stream"
         return json.dumps({"choices": [{"message": message, "finish_reason": finish}]}).encode(), "application/json"
@@ -430,8 +471,8 @@ class ProductiveChildTests(unittest.TestCase):
                                    "type": "function", "function": {"name": name, "arguments": call["function"]["arguments"][:8]}}]},
                                   {"content": text[12:], "tool_calls": [{"index": 0,
                                    "function": {"arguments": call["function"]["arguments"][8:]}}]}]
-                        events = [{"choices": [{"delta": d, "finish_reason": None}]} for d in deltas]
-                        events.append({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})
+                        events = [{"choices": [{"index": 0, "delta": d, "finish_reason": None}]} for d in deltas]
+                        events.append({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]})
                         body = ("".join("data: " + json.dumps(e) + "\n\n" for e in events)
                                 + "data: [DONE]\n\n").encode()
                         content_type = "text/event-stream"
@@ -611,9 +652,9 @@ exit "$rc"
                             fixture.observe_forwarded(fixture.nonce, *self.public_reply(text, tool_calls=True, stream=child_needs_load),
                                                       forwarded_request=request)
                         elif child_needs_load:
-                            events = [{"choices": [{"delta": {"content": text[:20]}, "finish_reason": None}]},
-                                      {"choices": [{"delta": {"content": text[20:]}, "finish_reason": None}]},
-                                      {"choices": [{"delta": {}, "finish_reason": "stop"}]}]
+                            events = [{"choices": [{"index": 0, "delta": {"content": text[:20]}, "finish_reason": None}]},
+                                      {"choices": [{"index": 0, "delta": {"content": text[20:]}, "finish_reason": None}]},
+                                      {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}]
                             content = "".join("data: " + json.dumps(e) + "\n\n" for e in events) + "data: [DONE]\n\n"
                             fixture.observe_forwarded(fixture.nonce, content.encode(), "text/event-stream",
                                                       forwarded_request=request)

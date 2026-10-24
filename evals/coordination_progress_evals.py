@@ -213,12 +213,19 @@ class ProgressFixture(Fixture):
         complete = True
         if "text/event-stream" in content_type:
             assembled = {}
+            raw_choice_indices = []
             events = [json.loads(line[5:].strip(), object_pairs_hook=unique_object) for line in content.decode().splitlines()
                       if line.startswith("data:") and line[5:].strip() not in {"", "[DONE]"}]
             for event in events:
                 complete &= len(event.get("choices", [])) <= 1
                 for choice in event.get("choices", []):
                     complete &= not finished
+                    choice_index = choice.get("index")
+                    if type(choice_index) is not int or choice_index < 0:
+                        complete = False
+                    elif choice_index not in raw_choice_indices:
+                        raw_choice_indices.append(choice_index)
+                    complete &= len(raw_choice_indices) <= 1
                     delta = choice.get("delta", {})
                     complete &= (delta.get("content") is None or isinstance(delta["content"], str))
                     complete &= not bool(delta.get("refusal"))
@@ -244,6 +251,7 @@ class ProgressFixture(Fixture):
                                     continue
                                 target["function"][field] = target["function"].get(field, "") + part
                     finished |= choice.get("finish_reason") in {"stop", "tool_calls"}
+            complete &= len(raw_choice_indices) == 1 and finished
             complete &= sorted(assembled) == list(range(len(assembled)))
             raw_calls = [assembled[index] for index in sorted(assembled)]
         else:
@@ -260,7 +268,8 @@ class ProgressFixture(Fixture):
             finished = choice.get("finish_reason") in {"stop", "tool_calls"}
         # The strict measure keeps its original completion flag. The primary measure also requires raw-call proof.
         return {"text": text, "tool_calls": tool_calls, "call_ids": call_ids,
-                "finished": finished, "raw_complete": complete, "raw_tool_calls": raw_calls}
+                "finished": finished, "raw_complete": complete, "raw_tool_calls": raw_calls,
+                **({"raw_choice_indices": raw_choice_indices} if "text/event-stream" in content_type else {})}
 
 
 def strict_verdict(snapshot, output):
