@@ -9,8 +9,8 @@ namespace Netclaw.Tools.Authorization.Consent;
 
 /// <summary>
 /// The operator's "Once" answer for one exact prompt. It names the tool and the
-/// keys of the approval units that the operator saw: the authored patterns and
-/// one digest for each candidate with its effective directory.
+/// key set for the prompt. Keys can name authored patterns, approval candidates,
+/// or an exact call identity.
 /// </summary>
 /// <remarks>
 /// The retry passes only when the new prompt produces the same key set. A

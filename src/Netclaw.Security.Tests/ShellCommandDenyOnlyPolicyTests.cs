@@ -242,6 +242,7 @@ public sealed class ShellCommandDenyOnlyPolicyTests
             "netclaw daemon stop",
             @"C:\work",
             commands: [],
+            syntaxRoots: [],
             clauses,
             ShellAnalysisFailure.Unresolved,
             new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance),

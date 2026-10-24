@@ -296,6 +296,9 @@ internal sealed class ShellPolicyCoordinator(
             // unusable input keeps failing closed.
             if (candidate.Candidate.VerbTokens is not { } tokens)
             {
+                if (candidate.SourceCompoundOwner is not null)
+                    continue;
+
                 // A redirect-only command has no parser verb. It never asks
                 // for a grant, so it needs no command identity.
                 if (candidate.Candidate.RunsNoProgram

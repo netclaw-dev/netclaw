@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.132.0"
+  version: "2.134.0"
 ---
 
 # Netclaw Operations
@@ -129,6 +129,10 @@ Keep shell approval friction bounded:
 13. Reviewed diagnostics without file output do not receive temporary relocation advice. Normal approval and denial rules still apply.
 14. Write long text (PR bodies, issue bodies, commit messages, file contents) to a file first, then pass the file to the command (for example `gh pr create --body-file <file>`, `gh issue create --body-file <file>`, `git commit -F <file>`). Do not inline long text in a shell command: a command that needs approval and is longer than 900 characters gets a `shorten_shell_command` correction, not a prompt.
 15. To send fixed text on stdin, quote the heredoc delimiter (`python3 - <<'EOF'`) or use a literal here string (`<<< 'text'`). Such a call gets the same approval as the same text in an argument (`python3 -c '...'`), so a saved grant can cover it. Put each file redirect before the heredoc operator (`cat > out.txt <<'EOF'`), and put the next command on a new line after the end word. Use only literal arguments with the heredoc. An unquoted delimiter, a here string with a variable, a pipe or `&&` on the operator line, a loop variable in the command, stdin text to a shell (`bash`, `sh`), and an argument that holds a shell name (`ssh host 'bash -s'`, `grep 'run bash now'`) get a one-time prompt.
+
+A Bash loop or other compound command can have an outer file redirect. Netclaw
+checks that target and the file tool rules before it asks for shell consent. A
+shell grant does not grant file access.
 
 For command output that needs a shell redirect, use `"$TMPDIR/result.txt"` in a Bash call.
 Keep the command's project directory unchanged.
@@ -612,6 +616,9 @@ A changed assignment needs a separate approval.
 An unqualified grant cannot cover an assignment-qualified command.
 The reviewed-safe list does not cover an assignment-qualified command.
 An incomplete assignment gets only `Once` and `Deny`.
+On Bash 5.2 or 5.3, an exact effective value can give a launch-variable form
+the same digest as its literal twin. A `HOME` change before the export stays
+one-time.
 On a Bash 5.2 or 5.3 host, an assignment that stays in the shell does not
 qualify a command (decision F3). Netclaw gives the parser the names of the
 daemon environment, never the values. An assignment stays in the shell when
@@ -665,7 +672,7 @@ Netclaw does not automatically clean managed temporary storage yet.
    verbs (`printenv`, `ps`) are never on the list — the safe-space gate
    cannot scope a verb that dumps the environment or the process table.
 3. **Interactive prompt** — everything else. A registered worktree can show six choices:
-   - **Once** — run this one time, persist nothing.
+   - **Once** — run this one time, persist nothing. A retry must use the exact shell command that received consent.
    - **This chat** — allow the verbs in this directory for the rest of the
      session.
    - **Always here** — persist `(verb, effective directory)`. The
@@ -817,8 +824,10 @@ outcome=<outcome>` with an `authorizationAttemptId`; a denial also logs
 for a covered candidate names its coverage, for example `PersistentFolder`. If
 the daemon prompts despite a same-verb saved grant, the `StoredGrantMatch` row
 gives the near-miss reason (`TokenMismatch`, `ShellMismatch`,
-`OutsideDirectory`, or `Symlink`) and the grant creation time. The trace never
-holds raw paths or arguments.
+`AssignmentMismatch`, `OutsideDirectory`, or `Symlink`) and the grant creation
+time. A `LegacyExact` grant also uses this diagnostic. Netclaw reads its
+command words from the stored phrase. The saved phrase does not change. The
+trace never holds raw paths or arguments.
 
 Each tool call also logs `Invoking tool [<tool>] (call=<id>) args=<json>
 rationale=<text>` with the same `authorizationAttemptId` and the `sessionId`.

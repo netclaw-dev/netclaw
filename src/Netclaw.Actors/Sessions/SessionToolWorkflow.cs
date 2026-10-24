@@ -375,14 +375,47 @@ internal sealed partial class SessionToolWorkflow
         TurnPhase = ApprovalTurnPhase.Running;
     }
 
-    private ApprovalRedrivePlan BuildRedrivePlan(IEnumerable<string> callIds)
+    private ApprovalRedrivePlan BuildRedrivePlan(
+        IEnumerable<string> callIds,
+        IReadOnlyDictionary<string, FunctionCallContent> originalCalls,
+        out string? failure)
     {
         var builder = new ApprovalRedrivePlanBuilder();
+        failure = null;
 
         foreach (var callId in callIds)
         {
             if (TryGetResolved(callId, out var resolved))
-                builder.Add(callId, resolved);
+            {
+                string? shellSourceKey = null;
+                if (resolved.Answer is not ConsentAnswer.Refused
+                    && string.Equals(resolved.Pending.Request.ToolName, "shell_execute", StringComparison.Ordinal))
+                {
+                    if (!originalCalls.TryGetValue(callId, out var originalCall))
+                    {
+                        failure = "original shell call is missing from history";
+                        return builder.Build();
+                    }
+                    if (!string.Equals(
+                            originalCall.Name,
+                            resolved.Pending.Request.ToolName,
+                            StringComparison.Ordinal))
+                    {
+                        failure = "original shell tool name does not match the recovered approval";
+                        return builder.Build();
+                    }
+
+                    var command = ToolAccessPolicy.ExtractShellCommand(originalCall.Arguments);
+                    shellSourceKey = OneTimeApprovalKeys.CreateShellSourceKey(command);
+                    if (shellSourceKey is null)
+                    {
+                        failure = "original shell command is missing from history";
+                        return builder.Build();
+                    }
+                }
+
+                builder.Add(callId, resolved, shellSourceKey);
+            }
         }
 
         return builder.Build();
@@ -404,7 +437,7 @@ internal sealed partial class SessionToolWorkflow
         private readonly Dictionary<string, string> _managedTemporaryDenialDirectories = new(StringComparer.Ordinal);
         private readonly Dictionary<string, AuthorizationAttemptId> _authorizationAttemptIds = new(StringComparer.Ordinal);
 
-        public void Add(string callId, ResolvedToolApproval resolved)
+        public void Add(string callId, ResolvedToolApproval resolved, string? shellSourceKey)
         {
             var request = resolved.Pending.Request;
             _authorizationAttemptIds[callId] = resolved.Pending.AuthorizationAttemptId;
@@ -416,7 +449,8 @@ internal sealed partial class SessionToolWorkflow
                 _preSeed[callId] = OneTimeApprovalKeys.Create(
                     request.Patterns,
                     request.Candidates,
-                    request.Cwd);
+                    request.Cwd,
+                    shellSourceKey);
                 return;
             }
 

@@ -56,6 +56,57 @@ public sealed class ShellAssignmentMutationTests
     }
 
     [Fact]
+    public void Effective_launch_value_digest_accepts_unknown_authorship_only_for_bash()
+    {
+        var bash = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2),
+            [new("HOME", "/home/test"), new("PATH", "/usr/bin")]);
+        var bashAnalysis = new ShellCommandAnalyzer(bash).Analyze(
+            "export DOTNET_ROOT=$HOME/.dotnet; dotnet test",
+            "/work");
+        var bashAssignment = Assert.Single(Assert.Single(
+            bashAnalysis.Commands,
+            static command => command.Assignments.Count > 0).Assignments);
+        Assert.IsType<ShellValueDomain.Unknown>(bashAssignment.AuthoredValue);
+        Assert.IsType<ShellValueDomain.Exact>(bashAssignment.EffectiveValue);
+        Assert.True(ShellAssignmentDigestFactory.TryCreate(
+            ApprovalShell.Bash,
+            [bashAssignment],
+            out var bashDigest));
+        Assert.NotNull(bashDigest);
+
+        var powerShell = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var powerShellAnalysis = new ShellCommandAnalyzer(powerShell).Analyze(
+            "$mode='fast'; inspect item",
+            @"C:\work");
+        var powerShellAssignment = Assert.Single(
+            Assert.Single(powerShellAnalysis.Commands).Assignments);
+        Assert.IsType<ShellValueDomain.Exact>(powerShellAssignment.AuthoredValue);
+        Assert.IsType<ShellValueDomain.Exact>(powerShellAssignment.EffectiveValue);
+
+        // This future fact pair tests the factory guard without adding a parser
+        // rule or changing the pinned PowerShell syntax contract.
+        var substitutionAnalysis = new ShellCommandAnalyzer(bash).Analyze(
+            "mode=$(printf fast); inspect item",
+            "/work");
+        var unknownAuthorship = Assert.IsType<ShellValueDomain.Unknown>(Assert.Single(
+            Assert.Single(
+                substitutionAnalysis.Commands,
+                static command => command.Assignments.Count > 0).Assignments).AuthoredValue);
+        var futurePowerShellAssignment = CloneWithAuthoredValue(
+            powerShellAssignment,
+            unknownAuthorship);
+
+        Assert.False(ShellAssignmentDigestFactory.TryCreate(
+            ApprovalShell.PowerShell,
+            [futurePowerShellAssignment],
+            out _));
+    }
+
+    [Fact]
     public void Reviewed_safe_policy_rejects_an_assignment_constraint()
     {
         // The daemon environment holds "mode", so the assignment reaches the
@@ -456,5 +507,18 @@ public sealed class ShellAssignmentMutationTests
             null,
             ImmutableDictionary<string, string>.Empty,
         ]));
+    }
+
+    private static ShellVariableAssignment CloneWithAuthoredValue(
+        ShellVariableAssignment assignment,
+        ShellValueDomain authoredValue)
+    {
+        var clone = Assert.IsType<ShellVariableAssignment>(typeof(object)
+            .GetMethod("MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(assignment, null));
+        typeof(ShellVariableAssignment)
+            .GetProperty(nameof(ShellVariableAssignment.AuthoredValue))!
+            .SetValue(clone, authoredValue);
+        return clone;
     }
 }

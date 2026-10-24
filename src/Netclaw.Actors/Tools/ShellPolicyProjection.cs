@@ -7,6 +7,8 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 using Netclaw.Tools.Authorization.Consent;
+using System.Diagnostics.CodeAnalysis;
+using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tools;
 
@@ -40,16 +42,22 @@ internal sealed record ShellPolicyCandidate(
 {
     internal ShellPolicyCandidateRole Role { get; init; }
 
+    internal ShellSyntaxTree.RedirectedCompoundSyntax? SourceCompoundOwner { get; init; }
+
+    internal ShellSyntaxTree.CompoundRedirect? SourceCompoundRedirect { get; init; }
+
     /// <summary>The directory that a causal list changed to before this diagnostic, or null.</summary>
     internal string? IntentDirectory { get; init; }
 
     // A command that runs no program needs no grant: the file rules judge its redirects.
     internal bool CanRequestStoredGrant =>
-        !ApprovalPatternMatching.IsPureSideEffect(Candidate)
+        SourceCompoundOwner is null
+        && !ApprovalPatternMatching.IsPureSideEffect(Candidate)
         && !Candidate.RunsNoProgram;
 
     internal bool CanUseRealReviewedSafePolicy =>
         Role == ShellPolicyCandidateRole.Ordinary
+        && SourceCompoundOwner is null
         && Candidate.AssignmentDigest is null;
 }
 
@@ -89,14 +97,19 @@ internal sealed record ShellPolicyProjection
         ToolApprovalContext approvalContext,
         BashDirectoryScopeProjection? directoryScopes,
         ToolExecutionContext context,
+        ShellCommandAnalysis analysis,
         out ShellPolicyProjection? projection)
     {
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(approvalContext);
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(analysis);
 
         projection = null;
         if (approvalContext.Candidates is null)
+            return false;
+
+        if (!ShellPolicyPathFacts.TryCreateCompoundRedirectViews(analysis, out var compoundViews))
             return false;
 
         var isCausalList = directoryScopes?.IsCausalList == true;
@@ -106,6 +119,9 @@ internal sealed record ShellPolicyProjection
         {
             var source = approvalContext.Candidates[index];
             if (source is null)
+                return false;
+
+            if (!HasValidCompoundCandidate(source, analysis, compoundViews))
                 return false;
 
             var role = ShellPolicyCandidateRole.Ordinary;
@@ -127,7 +143,9 @@ internal sealed record ShellPolicyProjection
                 VerbTokens = source.VerbTokens is null
                     ? null
                     : Array.AsReadOnly(source.VerbTokens.ToArray()),
-                SourceOccurrence = null
+                SourceOccurrence = null,
+                SourceCompoundOwner = null,
+                SourceCompoundRedirect = null
             };
             candidateCopies[index] = copy;
             candidates[index] = new ShellPolicyCandidate(
@@ -136,7 +154,9 @@ internal sealed record ShellPolicyProjection
                 source.SourceOccurrence)
             {
                 Role = role,
-                IntentDirectory = intentDirectory
+                IntentDirectory = intentDirectory,
+                SourceCompoundOwner = source.SourceCompoundOwner,
+                SourceCompoundRedirect = source.SourceCompoundRedirect
             };
         }
 
@@ -147,6 +167,62 @@ internal sealed record ShellPolicyProjection
             candidates,
             candidateCopies);
         return true;
+    }
+
+    private static bool HasValidCompoundCandidate(
+        ApprovalCandidate candidate,
+        ShellCommandAnalysis analysis,
+        IReadOnlyList<ShellPolicyCompoundRedirectPathFacts> compoundViews)
+    {
+        var owner = candidate.SourceCompoundOwner;
+        if (owner is null && candidate.SourceCompoundRedirect is null)
+            return true;
+
+        if (owner is null
+            || candidate.SourceOccurrence is not null
+            || candidate.Shell != ApprovalShell.Bash
+            || candidate.VerbTokens is not null
+            || candidate.Unresolved != ShellUnresolvedPart.Command
+            || candidate.RunsNoProgram)
+        {
+            return false;
+        }
+
+        if (!compoundViews.Any(view => ReferenceEquals(view.Owner.Syntax, owner)))
+            return false;
+
+        var redirect = candidate.SourceCompoundRedirect;
+        if (redirect is null)
+            return string.Equals(candidate.Verb, analysis.Source, StringComparison.Ordinal)
+                   && !candidate.UsesFileToolRedirects
+                   && string.Equals(candidate.Directory, analysis.WorkingDirectory, StringComparison.Ordinal);
+
+        if (!candidate.UsesFileToolRedirects)
+            return false;
+
+        foreach (var view in compoundViews)
+        {
+            var mode = view.PathFact.Source.RedirectMode;
+            if (!ReferenceEquals(view.Owner.Syntax, owner)
+                || !ReferenceEquals(view.Redirect, redirect)
+                || mode is null
+                || view.PathFact.State != ShellPolicyPathResolutionState.Known)
+            {
+                continue;
+            }
+
+            var tool = mode.Value == FileRedirectMode.Input ? "read" : "write";
+            var workingDirectory = (owner.WorkingDirectory as ShellValueDomain.Exact)?.Value;
+            if (view.PathFact.Paths.Any(path =>
+                    !ShellRedirectPolicyFacts.IsNullDevice(path)
+                    && string.Equals(candidate.Verb, $"{tool} {path.Value}", StringComparison.Ordinal)
+                    && string.Equals(candidate.Directory, workingDirectory, StringComparison.Ordinal)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static ShellPolicyProjection Create(

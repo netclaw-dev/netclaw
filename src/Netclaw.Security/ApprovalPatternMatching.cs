@@ -183,8 +183,9 @@ public static class ApprovalPatternMatching
         out ShellApprovalNearMissReason reason)
     {
         reason = default;
+        var grantProgram = GetGrantProgram(entry);
         if (candidate.VerbTokens is not { Count: > 0 }
-            || entry.VerbTokens is not { Count: > 0 }
+            || grantProgram is null
             || entry.Shell is null)
         {
             return false;
@@ -192,7 +193,7 @@ public static class ApprovalPatternMatching
 
         var sameExecutable = string.Equals(
             candidate.VerbTokens[0],
-            entry.VerbTokens[0],
+            grantProgram,
             StringComparison.OrdinalIgnoreCase);
         if (!sameExecutable)
             return false;

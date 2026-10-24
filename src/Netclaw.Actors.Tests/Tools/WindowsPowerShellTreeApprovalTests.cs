@@ -243,6 +243,7 @@ public sealed class WindowsPowerShellTreeApprovalTests(
         return OneTimeApprovalKeys.Create(
             approval.Patterns,
             approval.Candidates,
-            Scope.ProjectDirectory);
+            Scope.ProjectDirectory,
+            OneTimeApprovalKeys.CreateShellSourceKey(command));
     }
 }

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics.CodeAnalysis;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Security.Authorization.Filesystem;
@@ -64,8 +65,96 @@ internal sealed record ShellPolicyCandidatePathFacts(
     ShellPolicyResolvedPathView Real,
     ShellPolicyResolvedPathView? Intent);
 
+internal sealed record ShellPolicyCompoundRedirectPathFacts(
+    ShellCompoundRedirectOwner Owner,
+    CompoundRedirect Redirect,
+    ShellPolicyScopePathFact WorkingDirectory,
+    ShellPolicyResolvedPathFact PathFact);
+
 internal static class ShellPolicyPathFacts
 {
+    internal static bool TryCreateCompoundRedirectViews(
+        ShellCommandAnalysis analysis,
+        [NotNullWhen(true)] out IReadOnlyList<ShellPolicyCompoundRedirectPathFacts>? views)
+    {
+        ArgumentNullException.ThrowIfNull(analysis);
+
+        if (!analysis.TryGetCompoundRedirectOwners(out var owners))
+        {
+            views = null;
+            return false;
+        }
+
+        var resolved = new List<ShellPolicyCompoundRedirectPathFacts>();
+        foreach (var owner in owners)
+        {
+            var workingDirectory = owner.Syntax.WorkingDirectory as ShellValueDomain.Exact;
+            var scope = ResolveScope(workingDirectory?.Value, analysis.Environment.PathStyle);
+
+            foreach (var redirect in owner.Syntax.Redirects)
+            {
+                var analysisFact = redirect.Analysis;
+                if (!analysisFact.IsComplete)
+                {
+                    views = null;
+                    return false;
+                }
+
+                if (analysisFact is DescriptorDuplicateRedirectAnalysis
+                    or DescriptorMoveRedirectAnalysis
+                    or DescriptorCloseRedirectAnalysis)
+                {
+                    continue;
+                }
+
+                if (analysisFact is not FileRedirectAnalysis file
+                    || file.Mode is not (FileRedirectMode.Input
+                        or FileRedirectMode.Output
+                        or FileRedirectMode.Append
+                        or FileRedirectMode.CombinedOutput
+                        or FileRedirectMode.CombinedOutputAppend)
+                    || file.Target is not ShellValueDomain.Exact { Value.Length: > 0 } targetValue)
+                {
+                    views = null;
+                    return false;
+                }
+
+                var absolute = analysis.Environment.PathStyle == ShellPathStyle.Posix
+                    ? targetValue.Value.StartsWith("/", StringComparison.Ordinal)
+                    : Path.IsPathFullyQualified(targetValue.Value);
+                var resolutionBase = absolute ? null : workingDirectory?.Value;
+                if (!absolute && resolutionBase is null
+                    || !ShellCommandAnalysis.TryResolvePlainFileTarget(
+                        file,
+                        resolutionBase,
+                        analysis.Environment.PathStyle,
+                        out var canonicalTarget))
+                {
+                    views = null;
+                    return false;
+                }
+
+                var source = new ShellPolicySourcePathFact(
+                    ShellPolicyPathOrigin.Redirect,
+                    file.Target,
+                    ShellPathShape.Unknown)
+                {
+                    ParserResolvedPath = canonicalTarget.Value,
+                    RedirectMode = file.Mode,
+                    RedirectIsComplete = file.IsComplete
+                };
+                var pathFact = ShellPolicyOccurrencePathFacts.Resolve(
+                    source,
+                    resolutionBase,
+                    analysis.Environment.PathStyle);
+                resolved.Add(new ShellPolicyCompoundRedirectPathFacts(owner, redirect, scope, pathFact));
+            }
+        }
+
+        views = Array.AsReadOnly(resolved.ToArray());
+        return true;
+    }
+
     internal static IReadOnlyList<ShellPolicyResolvedPathView> CreateExecutionViews(
         ShellCommandAnalysis analysis)
     {
@@ -321,7 +410,7 @@ internal sealed class ShellPolicyOccurrencePathFacts
         ShellPathShape authoredPathShape)
         => new(origin, domain, authoredPathShape);
 
-    private static ShellPolicyResolvedPathFact Resolve(
+    internal static ShellPolicyResolvedPathFact Resolve(
         ShellPolicySourcePathFact fact,
         string? resolutionBase,
         ShellPathStyle pathStyle)

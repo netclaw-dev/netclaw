@@ -397,6 +397,10 @@ The store keeps itself clean when it saves a grant:
 - It never removes a stored grant when it saves one, so a later revoke keeps
   its meaning.
 
+For Bash 5.2 or 5.3, an exact effective assignment value can give two source
+forms the same digest. For example, `$HOME/.dotnet` can match its exact launch
+value. A source change that makes the effective value unknown stays one-time.
+
 ### Upgrade, rollback, and repair
 
 - On the first load of a version 2 file, Netclaw writes a byte-identical
@@ -539,8 +543,10 @@ Read a trace from the last row back:
 1. `Completion/RequiresApproval/UncoveredCandidates` means at least one
    command had no coverage.
 2. Find that candidate ID in the `StoredGrantMatch` rows. `NoGrant` means no
-   saved grant matched. `TokenMismatch`, `ShellMismatch`, `OutsideDirectory`,
-   or `Symlink` explains a near miss.
+   saved grant matched the candidate. A `LegacyExact` grant can still appear
+   as a near miss when its command words differ. Netclaw reads those words
+   from the stored phrase. `TokenMismatch`, `ShellMismatch`,
+   `AssignmentMismatch`, `OutsideDirectory`, or `Symlink` explains a near miss.
 3. A `ReviewedSafePolicy` or `OneTimeApproval` row for that ID means a later
    stage covered it.
 4. `Completion/Deny/InternalPolicyFailure` is a defect, not an approval case.

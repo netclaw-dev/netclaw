@@ -255,7 +255,12 @@ public sealed class ShellExecutionEnvironment
     /// Parses source with the environment's grammar, dialect, directory, and selected bounded initial state.
     /// </summary>
     public ParsedCommand Parse(string source, string? workingDirectory = null)
-        => ParseForApproval(source, workingDirectory, publishAuthoredSourceFacts: false, launchEnvironment: null);
+        => ParseForApproval(
+            source,
+            workingDirectory,
+            publishAuthoredSourceFacts: false,
+            launchEnvironment: null,
+            parseCompoundRedirects: false);
 
     /// <summary>
     /// Parses source for internal approval analysis with optional authored-source facts.
@@ -269,7 +274,8 @@ public sealed class ShellExecutionEnvironment
         string source,
         string? workingDirectory,
         bool publishAuthoredSourceFacts,
-        ShellLaunchEnvironment? launchEnvironment)
+        ShellLaunchEnvironment? launchEnvironment,
+        bool parseCompoundRedirects)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -278,7 +284,8 @@ public sealed class ShellExecutionEnvironment
             ShellGrammar.Bash => CreateBashParser(
                 workingDirectory,
                 publishAuthoredSourceFacts,
-                launchEnvironment).Parse(source),
+                launchEnvironment,
+                parseCompoundRedirects).Parse(source),
             ShellGrammar.PowerShell when PowerShellDialect is { } dialect =>
                 new PwshParser(new PwshParserOptions
                 {
@@ -476,7 +483,8 @@ public sealed class ShellExecutionEnvironment
         return CreateBashParser(
                 workingDirectory,
                 publishAuthoredSourceFacts: true,
-                CreateLaunchEnvironment(temporary))
+                CreateLaunchEnvironment(temporary),
+                parseCompoundRedirects: false)
             .TryProjectFiniteScopes(source, out projection);
     }
 
@@ -507,20 +515,23 @@ public sealed class ShellExecutionEnvironment
         return CreateBashParser(
                 workingDirectory,
                 publishAuthoredSourceFacts: true,
-                CreateLaunchEnvironment(temporary))
+                CreateLaunchEnvironment(temporary),
+                parseCompoundRedirects: false)
             .TryProjectLiteralTwins(source, out projection);
     }
 
     private BashParser CreateBashParser(
         string? workingDirectory,
         bool publishAuthoredSourceFacts,
-        ShellLaunchEnvironment? launchEnvironment)
+        ShellLaunchEnvironment? launchEnvironment,
+        bool parseCompoundRedirects)
         => new(new BashParserOptions
         {
             WorkingDirectory = workingDirectory,
             InitialStateMode = BashInitialStateMode,
             PublishAuthoredSourceFacts = publishAuthoredSourceFacts,
-            LaunchEnvironment = launchEnvironment
+            LaunchEnvironment = launchEnvironment,
+            ParseCompoundRedirects = parseCompoundRedirects
         });
 
     private BashInitialStateMode BashInitialStateMode =>

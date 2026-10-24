@@ -401,7 +401,8 @@ public sealed class ToolPathPolicy
         if (MentionsGuardedDirectory(screened))
             return true;
 
-        if (StructuredAnalysisReferencesDeniedPath(analysis, shell)
+        if (CompoundRedirectReferencesDeniedPath(analysis, shell)
+            || StructuredAnalysisReferencesDeniedPath(analysis, shell)
             || PlainWordLinkReachesDeniedPath(analysis, shell))
         {
             return true;
@@ -439,6 +440,42 @@ public sealed class ToolPathPolicy
                 || screened.Contains(".netclaw/config", StringComparison.OrdinalIgnoreCase)))
         {
             return true;
+        }
+
+        return false;
+    }
+
+    private bool CompoundRedirectReferencesDeniedPath(
+        ShellCommandAnalysis analysis,
+        FileSystemAuthority shell)
+    {
+        if (!analysis.TryGetCompoundRedirectOwners(out var owners))
+            return true;
+
+        foreach (var owner in owners)
+        foreach (var redirect in owner.Syntax.Redirects)
+        {
+            if (redirect.Analysis is not FileRedirectAnalysis file)
+                continue;
+
+            var resolutionBase = owner.Syntax.WorkingDirectory is ShellValueDomain.Exact cwd
+                ? cwd.Value
+                : null;
+            var values = file.Target switch
+            {
+                ShellValueDomain.Exact exact => [exact.Value],
+                ShellValueDomain.FiniteSet finite => finite.Values,
+                ShellValueDomain.PathPattern pattern => [pattern.CoveringDirectory],
+                _ => Array.Empty<string>()
+            };
+            foreach (var value in values)
+            {
+                if (!CanonicalPath.TryCreate(value, resolutionBase, Environment.PathStyle, out var path))
+                    continue;
+
+                if (IsShellDenied(shell, path.Value))
+                    return true;
+            }
         }
 
         return false;

@@ -2443,6 +2443,70 @@ public partial class DispatchingToolExecutorTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("# approved prefix\ngit status", "# changed prefix\ngit status")]
+    [InlineData("git status # source-A", "git status # source-a")]
+    [MemberData(nameof(HostGrammarContinuationCases))]
+    public async Task One_time_shell_approval_does_not_cover_changed_source_with_same_candidates(
+        string approvedSource,
+        string changedSource)
+    {
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
+        var executor = new DispatchingToolExecutor(registry, policy);
+        var approvedCall = CreateToolCall(
+            "call-source-approved",
+            "shell_execute",
+            ToolInput.Create("Command", approvedSource));
+        var changedCall = CreateToolCall(
+            "call-source-changed",
+            "shell_execute",
+            ToolInput.Create("Command", changedSource));
+        var approvedContext = CreateInteractivePersonalExecutionContext("signalr/source-approved");
+        var changedContext = CreateInteractivePersonalExecutionContext("signalr/source-changed");
+
+        var approvedDecision = await executor.EvaluateAuthorizationAsync(
+            approvedCall,
+            approvedContext,
+            TestContext.Current.CancellationToken);
+        var changedDecision = await executor.EvaluateAuthorizationAsync(
+            changedCall,
+            changedContext,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(
+            approvedDecision.Outcome == ToolAuthorizationOutcome.RequiresApproval,
+            $"The approved source did not request consent: {approvedDecision.DenyReason}");
+        Assert.True(
+            changedDecision.Outcome == ToolAuthorizationOutcome.RequiresApproval,
+            $"The changed source did not request consent: {changedDecision.DenyReason}");
+        var approved = Assert.IsType<ToolApprovalContext>(approvedDecision.ApprovalContext);
+        var changed = Assert.IsType<ToolApprovalContext>(changedDecision.ApprovalContext);
+        Assert.Equal(approved.Candidates!.Count, changed.Candidates!.Count);
+        Assert.All(approved.Candidates.Zip(changed.Candidates), pair =>
+            Assert.True(pair.Item1.HasSameApprovalFacts(pair.Item2)));
+
+        approvedContext.Approval.SeedOneTimeConsent(
+            new OneTimeConsent(approvedCall.Name, OneTimeApprovalKeys.Create(approved)));
+
+        var retry = await executor.EvaluateAuthorizationAsync(
+            changedCall,
+            approvedContext,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, retry.Outcome);
+    }
+
+    public static TheoryData<string, string> HostGrammarContinuationCases =>
+        TestShellEnvironment.Current.Grammar == ShellGrammar.PowerShell
+            ? new TheoryData<string, string>
+            {
+                { "git status `\n", "git status" }
+            }
+            : new TheoryData<string, string>
+            {
+                { "git status \\\n", "git status" }
+            };
+
     [Fact]
     public async Task One_time_approval_bypasses_policy_for_matching_shell_patterns()
     {
@@ -3199,9 +3263,10 @@ public partial class DispatchingToolExecutorTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Approved_shell_without_command_reaches_argument_error(bool includeNullCommand)
+    public async Task Shell_once_without_command_does_not_bypass_authorization(bool includeNullCommand)
     {
-        var executor = CreateApprovalGatedShellExecutor();
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
+        var executor = new DispatchingToolExecutor(registry, policy);
         var arguments = includeNullCommand
             ? ToolInput.Create("Command", null, "_rationale", "Probe argument error handling.")
             : ToolInput.Create("_rationale", "Probe argument error handling.");
@@ -3213,15 +3278,15 @@ public partial class DispatchingToolExecutorTests : IDisposable
 
         var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
             executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
+        Assert.Null(firstAttempt.ApprovalContext.ShellSourceKey);
         context.Approval.SeedOneTimeConsent(
             OneTimeApprovalKeys.CreateConsent(call.Name, firstAttempt.ApprovalContext));
 
-        var result = await executor.ExecuteAsync(
+        var retry = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() => executor.ExecuteAsync(
             call,
             context,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(MissingShellCommandError, result);
+            TestContext.Current.CancellationToken));
+        Assert.Null(retry.ApprovalContext.ShellSourceKey);
     }
 
     [Fact]

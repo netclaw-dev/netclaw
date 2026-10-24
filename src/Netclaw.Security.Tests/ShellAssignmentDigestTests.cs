@@ -90,6 +90,198 @@ public sealed class ShellAssignmentDigestTests
         Assert.NotEqual(first.AssignmentDigest, reassigned.AssignmentDigest);
     }
 
+    [Fact]
+    public void Bash_launch_proved_assignment_value_can_qualify_a_digest()
+    {
+        const string Command = "export DOTNET_ROOT=$HOME/.dotnet; dotnet test";
+        var environment = CreateBash52([new("PATH", "/usr/bin")]);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(Command, "/work");
+        Assert.True(analysis.IsResolved);
+
+        var occurrence = Assert.Single(analysis.Commands, static command =>
+            command.Clause.Verb.Tokens.FirstOrDefault() == "dotnet");
+        var assignment = Assert.Single(occurrence.Assignments);
+        Assert.Equal("DOTNET_ROOT", assignment.Name);
+        Assert.IsType<ShellValueDomain.Unknown>(assignment.AuthoredValue);
+        Assert.Equal(
+            "DOTNET_ROOT=$HOME/.dotnet",
+            Command.Substring(assignment.SourceStart, assignment.SourceLength));
+        Assert.Equal(
+            environment.HomeDirectory + "/.dotnet",
+            Assert.IsType<ShellValueDomain.Exact>(assignment.EffectiveValue).Value);
+        Assert.Equal(ShellVariableAssignmentScope.ShellState, assignment.Scope);
+        Assert.True(assignment.MayAffectProcessEnvironment);
+
+        Assert.True(ShellAssignmentDigestFactory.TryCreate(
+            ApprovalShell.Bash,
+            [assignment],
+            out var digest));
+        Assert.NotNull(digest);
+
+        var matcher = new ShellApprovalMatcher(environment);
+        var matcherAnalysis = matcher.AnalyzeInvocation(
+            ShellToolName,
+            Args(Command, "/work"),
+            analysis);
+        var candidate = Assert.Single(matcherAnalysis.Candidates, static item =>
+            item.VerbTokens?.FirstOrDefault() == "dotnet");
+        Assert.Equal(digest, candidate.AssignmentDigest);
+
+        var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(candidate.VerbTokens);
+        var qualifiedGrant = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.Bash,
+            tokens,
+            candidate.Directory,
+            assignmentDigest: digest);
+        var plainGrant = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.Bash,
+            tokens,
+            candidate.Directory);
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+            candidate,
+            cwd: "/work",
+            [qualifiedGrant]));
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
+            candidate,
+            cwd: "/work",
+            [plainGrant]));
+    }
+
+    [Fact]
+    public void Bash_assignment_digest_binds_the_effective_launch_and_source_values()
+    {
+        var environment = CreateBash52([new("PATH", "/usr/bin")]);
+        var home = environment.HomeDirectory;
+        Assert.NotNull(home);
+
+        var launchValue = ExtractAssignmentDigest(
+            environment,
+            "export DOTNET_ROOT=$HOME/.dotnet; dotnet test");
+        var literalValue = ExtractAssignmentDigest(
+            environment,
+            $"export DOTNET_ROOT='{home}/.dotnet'; dotnet test");
+        var differentLiteralValue = ExtractAssignmentDigest(
+            environment,
+            "export DOTNET_ROOT='/other/.dotnet'; dotnet test");
+        const string changedHomeCommand =
+            "HOME=/other; export DOTNET_ROOT=$HOME/.dotnet; dotnet test";
+        var changedHomeParsed = environment.ParseForApproval(
+            changedHomeCommand,
+            "/work",
+            publishAuthoredSourceFacts: true,
+            environment.CreateLaunchEnvironment(temporary: null),
+            parseCompoundRedirects: false);
+        var changedHomeShellAnalysis = new ShellCommandAnalyzer(environment)
+            .Analyze(changedHomeCommand, "/work");
+        var changedHomeAnalysis = new ShellApprovalMatcher(environment).AnalyzeInvocation(
+            ShellToolName,
+            Args(changedHomeCommand, "/work"),
+            changedHomeShellAnalysis);
+
+        Assert.Equal(launchValue, literalValue);
+        Assert.NotEqual(launchValue, differentLiteralValue);
+        Assert.True(changedHomeParsed.IsUnparseable);
+        Assert.Equal(
+            "bounded Bash assignment names must use the ordinary scalar boundary",
+            changedHomeParsed.UnparseableReason);
+        Assert.False(changedHomeShellAnalysis.IsResolved);
+        Assert.True(changedHomeAnalysis.IsMessy);
+        Assert.Empty(changedHomeAnalysis.Candidates);
+    }
+
+    [Fact]
+    public void Launch_derived_git_directory_changes_keep_a_digest()
+    {
+        var environment = CreateBash52([new("PATH", "/usr/bin"), new("GIT_DIR", "/work/.git")]);
+        const string command = "export GIT_DIR=$HOME/.launch-value; git status";
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
+        Assert.True(analysis.IsResolved);
+
+        var occurrence = Assert.Single(analysis.Commands, static item =>
+            item.Clause.Verb.Tokens.FirstOrDefault() == "git");
+        var assignment = Assert.Single(occurrence.Assignments, item => item.Name == "GIT_DIR");
+        Assert.IsType<ShellValueDomain.Unknown>(assignment.AuthoredValue);
+        Assert.Equal(
+            environment.HomeDirectory + "/.launch-value",
+            Assert.IsType<ShellValueDomain.Exact>(assignment.EffectiveValue).Value);
+        Assert.True(assignment.MayAffectProcessEnvironment);
+        Assert.True(ShellAssignmentDigestFactory.TryCreate(
+            ApprovalShell.Bash,
+            [assignment],
+            out var digest));
+        Assert.NotNull(digest);
+    }
+
+    [Theory]
+    [InlineData("PATH")]
+    [InlineData("LD_PRELOAD")]
+    public void Launch_derived_loader_and_search_path_changes_stay_one_time(string name)
+    {
+        var environment = CreateBash52([new("PATH", "/usr/bin")]);
+        var command = $"export {name}=$HOME/.launch-value; dotnet test";
+        var parsed = environment.ParseForApproval(
+            command,
+            "/work",
+            publishAuthoredSourceFacts: true,
+            environment.CreateLaunchEnvironment(temporary: null),
+            parseCompoundRedirects: false);
+        var shellAnalysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
+        var analysis = new ShellApprovalMatcher(environment).AnalyzeInvocation(
+            ShellToolName,
+            Args(command, "/work"),
+            shellAnalysis);
+
+        Assert.True(parsed.IsUnparseable, parsed.UnparseableReason);
+        Assert.Equal(
+            "bounded Bash assignment names must use the ordinary scalar boundary",
+            parsed.UnparseableReason);
+        Assert.False(shellAnalysis.IsResolved);
+        Assert.Equal(ShellAnalysisFailure.Unresolved, shellAnalysis.Failure);
+        Assert.True(analysis.IsMessy);
+        Assert.Empty(analysis.Candidates);
+    }
+
+    [Theory]
+    [InlineData("export DOTNET_ROOT=$(printf /tmp); dotnet test")]
+    [InlineData("unset HOME; export DOTNET_ROOT=$HOME/.dotnet; dotnet test")]
+    [InlineData("read HOME; export DOTNET_ROOT=$HOME/.dotnet; dotnet test")]
+    [InlineData("if grep needle file; then HOME=/other; fi; export DOTNET_ROOT=$HOME/.dotnet; dotnet test")]
+    [InlineData(". /tmp/netclaw.env; export DOTNET_ROOT=$HOME/.dotnet; dotnet test")]
+    public void Bash_assignment_digest_rejects_values_without_exact_effect_facts(string command)
+    {
+        var environment = CreateBash52([new("PATH", "/usr/bin")]);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
+        var occurrence = analysis.Commands.SingleOrDefault(static item =>
+            item.Clause.Verb.Tokens.FirstOrDefault() == "dotnet");
+        if (occurrence is null)
+        {
+            Assert.False(analysis.IsResolved);
+            return;
+        }
+
+        Assert.NotEmpty(occurrence.Assignments);
+        Assert.Contains(occurrence.Assignments, static assignment =>
+            assignment.EffectiveValue is ShellValueDomain.Unknown);
+        Assert.False(ShellAssignmentDigestFactory.TryCreate(
+            ApprovalShell.Bash,
+            occurrence.Assignments,
+            out _));
+    }
+
+    [Fact]
+    public void Bash_launch_proved_assignment_does_not_hide_a_protected_path()
+    {
+        const string Command =
+            "export TOKEN=$HOME/protected.txt; cat \"$TOKEN\"";
+        var environment = CreateBash52([new("PATH", "/usr/bin")]);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(Command, "/work");
+        Assert.True(analysis.IsResolved);
+        var protectedPath = environment.HomeDirectory + "/protected.txt";
+
+        Assert.True(new ToolPathPolicy(environment, [protectedPath])
+            .CommandReferencesDeniedPath(analysis));
+    }
+
     [Theory]
     [InlineData(PwshDialect.PowerShell7, "C:\\PowerShell\\7\\pwsh.exe")]
     [InlineData(
@@ -111,6 +303,117 @@ public sealed class ShellAssignmentDigestTests
             "sha256:9f7f62fe7f1f23b11f416a1f3e7babaed28073eb2c50e926291f808c87267fd2",
             Assert.IsType<ApprovalAssignmentDigest>(
                 candidate.AssignmentDigest).Value);
+    }
+
+    [Theory]
+    [InlineData(PwshDialect.PowerShell7, "C:\\PowerShell\\7\\pwsh.exe")]
+    [InlineData(
+        PwshDialect.WindowsPowerShell51,
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")]
+    public void PowerShell_bounded_assignment_has_matching_authored_and_effective_values(
+        PwshDialect dialect,
+        string executable)
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(executable, dialect);
+        var analysis = new ShellCommandAnalyzer(environment)
+            .Analyze("$mode='fast'; inspect item", "C:/work");
+
+        Assert.True(analysis.IsResolved);
+        var occurrence = Assert.Single(analysis.Commands, static command =>
+            command.Clause.Verb.Tokens.FirstOrDefault() == "inspect");
+        var assignment = Assert.Single(occurrence.Assignments);
+        var authored = Assert.IsType<ShellValueDomain.Exact>(assignment.AuthoredValue);
+        var effective = Assert.IsType<ShellValueDomain.Exact>(assignment.EffectiveValue);
+        Assert.Equal(authored.Value, effective.Value);
+        Assert.Equal("fast", effective.Value);
+    }
+
+    [Fact]
+    public void Unknown_Bash_host_does_not_use_a_launch_value_for_an_assignment_digest()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        const string Command = "export DOTNET_ROOT=$HOME/.dotnet; dotnet test";
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(Command, "/work");
+        var occurrence = analysis.Commands.SingleOrDefault(static command =>
+            command.Clause.Verb.Tokens.FirstOrDefault() == "dotnet");
+        if (occurrence is null)
+        {
+            Assert.False(analysis.IsResolved);
+            return;
+        }
+
+        Assert.NotEmpty(occurrence.Assignments);
+        Assert.Contains(occurrence.Assignments, static assignment =>
+            assignment.EffectiveValue is ShellValueDomain.Unknown);
+        Assert.False(ShellAssignmentDigestFactory.TryCreate(
+            ApprovalShell.Bash,
+            occurrence.Assignments,
+            out _));
+    }
+
+    [Theory]
+    [InlineData("mode=fast; export other=$mode; inspect item")]
+    [InlineData("export mode=fast; export other=$mode; inspect item")]
+    public void Bash_source_binding_exact_value_keeps_unproved_command_one_time(string command)
+    {
+        var environment = CreateBash52([new("PATH", "/usr/bin")]);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
+        Assert.True(analysis.IsResolved);
+
+        var occurrence = Assert.Single(analysis.Commands, static item =>
+            item.Clause.Verb.Tokens.FirstOrDefault() == "inspect");
+        var assignment = Assert.Single(occurrence.Assignments, static item => item.Name == "other");
+        Assert.IsType<ShellValueDomain.Unknown>(assignment.AuthoredValue);
+        Assert.Equal("fast", Assert.IsType<ShellValueDomain.Exact>(assignment.EffectiveValue).Value);
+        Assert.True(assignment.MayAffectProcessEnvironment);
+
+        var matcher = new ShellApprovalMatcher(environment);
+        var invocation = matcher.AnalyzeInvocation(
+            ShellToolName,
+            Args(command, "/work"),
+            analysis);
+        Assert.True(invocation.IsMessy);
+        Assert.Empty(invocation.Candidates);
+        Assert.NotEmpty(invocation.CommandCandidates);
+        Assert.Contains(invocation.CommandCandidates, static candidate =>
+            candidate.VerbTokens is null or { Count: 0 });
+    }
+
+    [Theory]
+    [InlineData("mode=fast; export other=$mode; inspect item")]
+    [InlineData("export mode=fast; export other=$mode; inspect item")]
+    public void Unknown_Bash_state_rejects_source_bound_effective_values(string command)
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
+
+        Assert.False(analysis.IsResolved);
+        var invocation = new ShellApprovalMatcher(environment).AnalyzeInvocation(
+            ShellToolName,
+            Args(command, "/work"),
+            analysis);
+        Assert.True(invocation.IsMessy);
+        Assert.Empty(invocation.Candidates);
+        Assert.Empty(invocation.CommandCandidates);
+    }
+
+    [Theory]
+    [InlineData("$first='fast'; $mode=$first; inspect item")]
+    [InlineData("$env:MODE=$HOME; inspect item")]
+    public void PowerShell_dynamic_assignment_sources_keep_the_call_one_time(string command)
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            "C:\\PowerShell\\7\\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "C:/work");
+
+        Assert.False(analysis.IsResolved);
+        var invocation = new ShellApprovalMatcher(environment).AnalyzeInvocation(
+            ShellToolName,
+            Args(command, "C:/work"),
+            analysis);
+        Assert.True(invocation.IsMessy);
+        Assert.Empty(invocation.Candidates);
     }
 
     [Fact]
@@ -161,6 +464,7 @@ public sealed class ShellAssignmentDigestTests
     [InlineData("/bin/dash -c \"mode='fast'; inspect item\"")]
     [InlineData("ksh -c \"mode='fast'; inspect item\"")]
     [InlineData("command bash -lc \"mode='fast'; inspect item\"")]
+    [InlineData("bash -lc \"export DOTNET_ROOT=$HOME/.dotnet; dotnet test\"")]
     public void Assignment_in_a_fallback_shell_wrapper_stays_one_time(string command)
     {
         var analysis = BashMatcher.AnalyzeInvocation(
@@ -410,6 +714,21 @@ public sealed class ShellAssignmentDigestTests
 
         Assert.False(analysis.IsMessy, analysis.DisplayText);
         return Assert.Single(analysis.Candidates, static candidate => candidate.VerbTokens?[0] == "inspect");
+    }
+
+    private static ApprovalAssignmentDigest ExtractAssignmentDigest(
+        ShellExecutionEnvironment environment,
+        string command)
+    {
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
+        Assert.True(analysis.IsResolved);
+        var occurrence = Assert.Single(analysis.Commands, static item =>
+            item.Clause.Verb.Tokens.FirstOrDefault() == "dotnet");
+        Assert.True(ShellAssignmentDigestFactory.TryCreate(
+            ApprovalShell.Bash,
+            occurrence.Assignments,
+            out var digest));
+        return Assert.IsType<ApprovalAssignmentDigest>(digest);
     }
 
     private static ShellExecutionEnvironment CreateBash52(IEnumerable<KeyValuePair<string, string>> environment)

@@ -57,6 +57,78 @@ public sealed class ShellCommandAnalysisTests
         Assert.Empty(analysis.Commands);
     }
 
+    [Fact]
+    public void Approval_analysis_opts_into_compound_redirects_and_retains_its_parser_root()
+    {
+        const string command = "for item in one; do cat; done < input.txt";
+
+        var defaultParse = BashEnvironment.Parse(command, "/work");
+        var analysis = _analyzer.Analyze(command, "/work");
+
+        Assert.True(defaultParse.IsUnparseable);
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Single(analysis.SyntaxRoots);
+        Assert.Equal(command, analysis.SyntaxRoots[0].Source);
+        Assert.NotNull(analysis.SyntaxRoots[0].Syntax);
+    }
+
+    [Fact]
+    public void Approval_analysis_keeps_compound_redirects_in_decoded_child_sources_unresolved()
+    {
+        const string command = "bash --noprofile --norc -c 'for item in one; do cat; done < input.txt'";
+
+        var analysis = _analyzer.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
+        Assert.Empty(analysis.Commands);
+    }
+
+    [Theory]
+    [InlineData("if true; then for item in one; do :; done < input.txt; fi")]
+    [InlineData("VALUE=$(for item in one; do :; done < input.txt)")]
+    public void Compound_owner_collection_walks_nested_syntax_children(string command)
+    {
+        var knownBashAnalyzer = new ShellCommandAnalyzer(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+        var analysis = knownBashAnalyzer.Analyze(command, "/work");
+
+        Assert.True(analysis.TryGetCompoundRedirectOwners(out var owners));
+        var owner = Assert.Single(Assert.IsAssignableFrom<IReadOnlyList<ShellCompoundRedirectOwner>>(owners));
+        Assert.Equal(command, owner.Source);
+        Assert.Single(owner.Syntax.Redirects);
+    }
+
+    [Fact]
+    public void Unknown_bash_state_keeps_assignment_substitution_unresolved_without_roots()
+    {
+        const string command = "VALUE=$(for item in one; do :; done < input.txt)";
+
+        var analysis = _analyzer.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
+        Assert.Empty(analysis.SyntaxRoots);
+        Assert.True(analysis.TryGetCompoundRedirectOwners(out var owners));
+        Assert.Empty(owners!);
+    }
+
+    [Fact]
+    public void Compound_owner_collection_rejects_an_invalid_retained_root()
+    {
+        var analysis = new ShellCommandAnalysis(
+            BashEnvironment,
+            source: "for item in one; do :; done < input.txt",
+            "/work",
+            commands: [],
+            syntaxRoots: [("for item in one; do :; done < input.txt", null!)],
+            denyOnlyClauses: [],
+            ShellAnalysisFailure.None,
+            new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance),
+            syntaxProofComplete: true);
+
+        Assert.False(analysis.TryGetCompoundRedirectOwners(out var owners));
+        Assert.Null(owners);
+    }
+
     [Theory]
     [InlineData("sudo bash -lc", "sudo")]
     [InlineData("sudo /bin/bash -lc", "sudo")]
@@ -224,6 +296,7 @@ public sealed class ShellCommandAnalysisTests
             "Get-Date",
             @"C:\work",
             commands,
+            syntaxRoots: [],
             denyOnlyClauses: [],
             ShellAnalysisFailure.None,
             new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance),

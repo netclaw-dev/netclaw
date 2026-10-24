@@ -1467,6 +1467,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
             source: string.Empty,
             analysis.WorkingDirectory,
             analysis.Commands,
+            syntaxRoots: [],
             denyOnlyClauses: [],
             ShellAnalysisFailure.None,
             new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance),

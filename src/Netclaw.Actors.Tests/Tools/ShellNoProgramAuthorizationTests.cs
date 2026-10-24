@@ -88,6 +88,415 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
         Assert.Empty(observed.ApprovalMatches);
     }
 
+    // A compound body command grant does not cover the compound's output file.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_output_redirect_outside_write_roots_is_denied_with_a_body_grant()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            ConfineWritesToProject,
+            initialApprovals: Approvals.PersistentAnywhere("printf"));
+        var harness = scope.Harness;
+        var command = Expand(
+            harness,
+            "while read value; do printf '%s' \"$value\"; done > {X}/result.txt");
+
+        var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
+        Assert.Equal("shell_path_outside_trusted_roots", observed.DenyReason);
+        Assert.Equal(0, harness.ApprovalService.CheckCount);
+    }
+
+    // A loop with no command still opens its outer input redirect.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [InlineData(ToolApprovalMode.Approval)]
+    [InlineData(ToolApprovalMode.Auto)]
+    public async Task Compound_with_no_body_command_checks_file_tool_deny_mode(ToolApprovalMode shellMode)
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_read"] = ToolApprovalMode.Deny },
+            shellApprovalMode: shellMode);
+        var harness = scope.Harness;
+
+        var observed = await harness.EvaluateShellAsync(
+            "for item in one; do value=1; done < notes.txt",
+            Ct);
+
+        Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
+        Assert.Equal("shell_redirect_file_tool_denied", observed.DenyReason);
+    }
+
+    // No external program runs, but the shell still opens the input file.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_with_no_body_command_uses_file_read_authority()
+    {
+        await using var scope = await CreateHarnessAsync(attended: true);
+        var harness = scope.Harness;
+
+        var observed = await harness.EvaluateShellAsync(
+            "for item in one; do value=1; done < notes.txt",
+            Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, observed.Outcome);
+        Assert.Equal(0, harness.ApprovalService.CheckCount);
+    }
+
+    // A no-command owner still needs the file tool's approval for its redirect.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_with_no_body_command_prompts_for_file_read_approval()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_read"] = ToolApprovalMode.Approval });
+        var harness = scope.Harness;
+        const string command = "for item in one; do value=1; done < notes.txt";
+        var initial = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, initial.Outcome);
+        Assert.Equal(2, initial.Prompt!.CandidateVerbs.Count);
+        Assert.Contains(command, initial.Prompt.CandidateVerbs);
+        Assert.Contains(Expand(harness, "read {P}/notes.txt"), initial.Prompt.CandidateVerbs);
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], initial.Prompt.OptionKeys);
+
+        harness.SeedOneTimeApproval(initial.Prompt);
+        var retry = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, retry.Outcome);
+    }
+
+    // Descriptor-only redirects do not open a file and need no file-tool consent.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_descriptor_redirect_does_not_create_a_file_consent_candidate()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new()
+            {
+                ["file_read"] = ToolApprovalMode.Approval,
+                ["file_write"] = ToolApprovalMode.Approval
+            });
+        var harness = scope.Harness;
+
+        var observed = await harness.EvaluateShellAsync(
+            "for item in one; do value=1; done 2>&1",
+            Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, observed.Outcome);
+        Assert.Equal(0, harness.ApprovalService.CheckCount);
+    }
+
+    // One compound owner can hold read and write redirects in source order.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_with_multiple_redirects_checks_each_file_operation()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new()
+            {
+                ["file_read"] = ToolApprovalMode.Approval,
+                ["file_write"] = ToolApprovalMode.Approval
+            });
+        var harness = scope.Harness;
+        const string command = "for item in one; do value=1; done < input.txt 2> errors.txt";
+
+        var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+        Assert.Equal(3, observed.Prompt!.CandidateVerbs.Count);
+        Assert.Contains(command, observed.Prompt.CandidateVerbs);
+        Assert.Contains(Expand(harness, "read {P}/input.txt"), observed.Prompt.CandidateVerbs);
+        Assert.Contains(Expand(harness, "write {P}/errors.txt"), observed.Prompt.CandidateVerbs);
+    }
+
+    // Each nested owner keeps its own redirect and file operation.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Nested_compound_owners_keep_independent_redirects()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new()
+            {
+                ["file_read"] = ToolApprovalMode.Approval,
+                ["file_write"] = ToolApprovalMode.Approval
+            });
+        var harness = scope.Harness;
+        const string command = "for outer in one; do for inner in two; do value=1; done > inner.txt; done < outer.txt";
+
+        var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+        Assert.Equal(3, observed.Prompt!.CandidateVerbs.Count);
+        Assert.Contains(command, observed.Prompt.CandidateVerbs);
+        Assert.Contains(Expand(harness, "read {P}/outer.txt"), observed.Prompt.CandidateVerbs);
+        Assert.Contains(Expand(harness, "write {P}/inner.txt"), observed.Prompt.CandidateVerbs);
+    }
+
+    // Compound redirects must pass protected-path checks before grant lookup.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_redirect_to_a_protected_path_denies_before_grant_lookup()
+    {
+        await using var scope = await CreateHarnessAsync(attended: true);
+        var harness = scope.Harness;
+        var temporary = await harness.EvaluateShellAsync(
+            "cd /tmp && gh api repos/example/project > /tmp/result.log",
+            Ct);
+        var command = Expand(
+            harness,
+            "cd /tmp && gh api repos/example/project > /tmp/result.log && while false; do :; done > {C}/secrets.json");
+        var checksBeforeProtectedCall = harness.ApprovalService.CheckCount;
+
+        var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, temporary.Outcome);
+        Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
+        Assert.Contains(observed.DenyReason, new[] { "shell_path_protected", "shell_references_protected_path" });
+        Assert.Null(observed.AgentCorrection);
+        Assert.Equal(checksBeforeProtectedCall, harness.ApprovalService.CheckCount);
+    }
+
+    // A file-read grant covers the input operation but does not cover `cat`.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Stored_file_tool_grant_covers_only_a_compound_redirect()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_read"] = ToolApprovalMode.Approval });
+        var harness = scope.Harness;
+        await harness.ApprovalService.RecordApprovalCandidatesAsync(
+            (ToolApprovalSessionId)SessionId,
+            TrustAudience.Personal,
+            new ToolName("file_read"),
+            [new ToolApprovalGrant(new ApprovalCandidate("file_read", Directory: null), GrantScope.Session.Instance)],
+            Ct);
+        const string command = "for item in one; do cat; done < input.txt";
+
+        var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+        Assert.Equal(["cat"], observed.Prompt!.CandidateVerbs);
+    }
+
+    // Shell Auto must not bypass an outer file operation in Approval mode.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Shell_auto_prompts_for_a_compound_file_operation()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_write"] = ToolApprovalMode.Approval },
+            shellApprovalMode: ToolApprovalMode.Auto);
+        var harness = scope.Harness;
+        const string command = "while read value; do cat; done > result.txt";
+
+        var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+        Assert.Contains(command, observed.Prompt!.CandidateVerbs);
+        Assert.Contains(Expand(harness, "write {P}/result.txt"), observed.Prompt.CandidateVerbs);
+    }
+
+    // Shell Auto and the no-command rule must both defer to an outer file operation.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Shell_auto_prompts_for_a_compound_file_operation_with_no_body_command()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_write"] = ToolApprovalMode.Approval },
+            shellApprovalMode: ToolApprovalMode.Auto);
+        var harness = scope.Harness;
+        const string command = "for item in one; do value=1; done > result.txt";
+
+        var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+        Assert.Contains(command, observed.Prompt!.CandidateVerbs);
+        Assert.Contains(Expand(harness, "write {P}/result.txt"), observed.Prompt.CandidateVerbs);
+    }
+
+    // File Auto needs no extra candidate, and shell Auto still allows a proved compound.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Shell_auto_and_file_auto_allow_a_proved_compound_without_a_prompt()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_write"] = ToolApprovalMode.Auto },
+            shellApprovalMode: ToolApprovalMode.Auto);
+
+        var observed = await scope.Harness.EvaluateShellAsync(
+            "while read value; do cat; done > result.txt",
+            Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, observed.Outcome);
+        Assert.Equal(ApprovalAllowReason.PolicyAuto, observed.AllowReason);
+        Assert.Null(observed.Prompt);
+        Assert.Equal(0, scope.Harness.ApprovalService.CheckCount);
+    }
+
+    // An exact prompt for a body command must bind the outer compound source too.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_once_identity_keeps_the_outer_source_when_file_mode_is_auto()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_write"] = ToolApprovalMode.Auto });
+        var harness = scope.Harness;
+        const string command = "for item in one; do gh api repos/example/project; done > result.txt";
+        var initial = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, initial.Outcome);
+        Assert.Equal(["gh api repos/example/project"], initial.Prompt!.CandidateVerbs);
+
+        harness.SeedOneTimeApproval(initial.Prompt);
+        var same = await harness.EvaluateShellAsync(command, Ct);
+        var changedTarget = await harness.EvaluateShellAsync(
+            "for item in one; do gh api repos/example/project; done > other.txt",
+            Ct);
+        var changedLoop = await harness.EvaluateShellAsync(
+            "for other in one; do gh api repos/example/project; done > result.txt",
+            Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, same.Outcome);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, changedTarget.Outcome);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, changedLoop.Outcome);
+        Assert.Equal(["gh api repos/example/project"], changedTarget.Prompt!.CandidateVerbs);
+        Assert.Equal(["gh api repos/example/project"], changedLoop.Prompt!.CandidateVerbs);
+    }
+
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_once_identity_rejects_a_case_only_source_change()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_write"] = ToolApprovalMode.Approval });
+        var harness = scope.Harness;
+        const string command = "for item in one; do gh api repos/example/project; done > result.txt";
+        var initial = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, initial.Outcome);
+        harness.SeedOneTimeApproval(initial.Prompt!);
+
+        var same = await harness.EvaluateShellAsync(command, Ct);
+        var changed = await harness.EvaluateShellAsync(
+            "for ITEM in one; do gh api repos/example/project; done > result.txt",
+            Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, same.Outcome);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, changed.Outcome);
+    }
+
+    [SlopwatchSuppress("SW001", "This test needs POSIX symbolic-link semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This test needs POSIX symbolic-link semantics.")]
+    public async Task Compound_file_consent_rechecks_a_link_target_before_the_once_retry()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            configure: ConfineWritesToProject,
+            fileToolModes: new() { ["file_write"] = ToolApprovalMode.Approval });
+        var harness = scope.Harness;
+        const string command = "while false; do :; done > result.txt";
+        var initial = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, initial.Outcome);
+        harness.SeedOneTimeApproval(initial.Prompt!);
+        var outsideTarget = Path.Combine(OutsideDirectory(harness), "notes.txt");
+        await File.WriteAllTextAsync(outsideTarget, "outside", Ct);
+        File.CreateSymbolicLink(Path.Combine(harness.ProjectDirectory, "result.txt"), outsideTarget);
+
+        var retry = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.Denied, retry.Outcome);
+        Assert.Equal("shell_path_outside_trusted_roots", retry.DenyReason);
+    }
+
+    // An outer redirect with an unproved target cannot use a body command grant.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_redirect_with_unknown_target_is_denied_before_grant_lookup()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            initialApprovals: Approvals.PersistentAnywhere("printf"));
+        var harness = scope.Harness;
+
+        var observed = await harness.EvaluateShellAsync(
+            "while read value; do printf '%s' \"$value\"; done > \"$output\"",
+            Ct);
+
+        Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
+        Assert.Equal("shell_redirect_unproved", observed.DenyReason);
+        Assert.Equal(0, harness.ApprovalService.CheckCount);
+    }
+
+    // The existing one-time key must bind the full source and the file operation.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_file_consent_once_does_not_cover_a_changed_target()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_write"] = ToolApprovalMode.Approval },
+            initialApprovals: Approvals.PersistentAnywhere("gh api"));
+        var harness = scope.Harness;
+        const string command = "for item in one; do gh api repos/example/project; done > result.txt";
+        var first = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, first.Outcome);
+        var prompt = Assert.IsType<ApprovalPromptObservation>(first.Prompt);
+        Assert.Contains(command, prompt.CandidateVerbs);
+        Assert.Contains(Expand(harness, "write {P}/result.txt"), prompt.CandidateVerbs);
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], prompt.OptionKeys);
+
+        harness.SeedOneTimeApproval(prompt);
+        var same = await harness.EvaluateShellAsync(command, Ct);
+        var changed = await harness.EvaluateShellAsync(
+            "for item in one; do gh api repos/example/project; done > other.txt",
+            Ct);
+        var changedSource = await harness.EvaluateShellAsync(
+            "for other in one; do gh api repos/example/project; done > result.txt",
+            Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, same.Outcome);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, changed.Outcome);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, changedSource.Outcome);
+    }
+
+    // A legacy exact shell grant is not a grant for the output file operation.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Compound_file_operation_requires_consent_despite_a_legacy_exact_shell_grant()
+    {
+        await using var scope = await CreateHarnessAsync(
+            attended: true,
+            fileToolModes: new() { ["file_write"] = ToolApprovalMode.Approval },
+            initialApprovals: Approvals.PersistentAnywhere("read", "printf"));
+        var harness = scope.Harness;
+        const string command = "while read value; do printf '%s' \"$value\"; done > result.txt";
+        harness.AddStoredShellEntry(
+            TrustAudience.Personal,
+            ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, command));
+
+        var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+        Assert.Contains(Expand(harness, "write {P}/result.txt"), observed.Prompt!.CandidateVerbs);
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], observed.Prompt.OptionKeys);
+    }
+
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData(": < {X}/notes.txt", true)]
@@ -523,7 +932,9 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
     private async Task<HarnessScope> CreateHarnessAsync(
         bool attended,
         Action<ToolConfig, string>? configure = null,
-        Dictionary<string, ToolApprovalMode>? fileToolModes = null)
+        Dictionary<string, ToolApprovalMode>? fileToolModes = null,
+        ApprovalState? initialApprovals = null,
+        ToolApprovalMode? shellApprovalMode = null)
     {
         var root = Directory.CreateTempSubdirectory("netclaw-no-program-");
         try
@@ -536,10 +947,11 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
             var harness = await ShellApprovalHarness.CreateAsync(
                 "no-program",
                 new ShellApprovalInvocation("true", Interactive: attended, Host: ShellApprovalHost.Bash52),
-                Approvals.None,
+                initialApprovals ?? Approvals.None,
                 fixture.ActorSystem,
                 Ct,
                 scope: new ShellApprovalHarnessScope(project, session, SessionId, []),
+                shellApprovalMode: shellApprovalMode,
                 policy: new ShellApprovalHarnessPolicy
                 {
                     PersonalApprovalOverrides = fileToolModes ?? [],
