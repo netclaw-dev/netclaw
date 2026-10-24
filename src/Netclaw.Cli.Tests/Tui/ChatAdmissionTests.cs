@@ -46,20 +46,27 @@ public sealed class ChatAdmissionTests : IDisposable
         var navigation = new ChatNavigationState();
         var input = new VirtualInputSource();
         using var chat = new ChatViewModel(client, TimeProvider.System, new ModelCapabilities { ModelId = "test" }, navigation, Paths);
+        var ready = Gate();
+        using var statusSub = chat.StatusMessage.Subscribe(value =>
+        {
+            if (value == "Ready") ready.TrySetResult();
+        });
         await using var provider = CreateHost(chat, input, new VirtualTerminal(100, 30));
-        input.EnqueueString("typed-before-quit");
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.Q, false, false, true);
-        input.EnqueueKey(ConsoleKey.Q, false, false, true);
-        input.EnqueueString("rejected-after-quit");
-        input.EnqueueKey(ConsoleKey.Enter);
         var run = provider.GetRequiredService<TerminaApplication>().RunAsync(TestContext.Current.CancellationToken);
         try
         {
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            var cancellationToken = TestContext.Current.CancellationToken;
+            await ready.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            input.EnqueueString("typed-before-quit");
+            input.EnqueueKey(ConsoleKey.Enter);
+            input.EnqueueKey(ConsoleKey.Q, false, false, true);
+            input.EnqueueKey(ConsoleKey.Q, false, false, true);
+            input.EnqueueString("rejected-after-quit");
+            input.EnqueueKey(ConsoleKey.Enter);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
             if (heldAdmission) Assert.False(run.IsCompleted);
             release.TrySetResult();
-            await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await run.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
             Assert.Empty(Assert.IsType<ChatCloseReceipt>(navigation.CloseReceipt).Inputs);
             Assert.Same(client.CloseReceipt, navigation.CloseReceipt);
             var send = Assert.Single(transport.Invocations, call => call.Method == "SendMessage");
