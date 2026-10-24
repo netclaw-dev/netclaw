@@ -174,4 +174,7 @@ internal static class ChildParkRules
                     ? "an equal-round count is outside 0 to 2"
                     : null;
     // </child-resume-gate>
+
+    // Compile shell for running-child-drain-park task 1.1. It keeps the PR 2 rule for every park.
+    public static bool RequesterCanAnswer(int requestCount, bool supportsInteractiveApproval) => supportsInteractiveApproval;
 }

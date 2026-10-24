@@ -41,6 +41,13 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
         "Resume the work that was interrupted by the daemon restart.";
 
     private static readonly TimeSpan RestartModelGracePeriod = TimeSpan.FromSeconds(2);
+
+    // The child wait of a restart drain (running-child-drain-park design D3). The session acknowledges the drain
+    // before the caller deadline, so it keeps its restart reminder.
+    internal static readonly TimeSpan ChildWait = DaemonConfig.BoundedDrainTimeout - TimeSpan.FromSeconds(2);
+
+    // Compile shell for running-child-drain-park task 1.1. The acknowledgement does not wait for children yet.
+    internal static bool WaitsForChildren(bool drainRequested, bool hasLiveChildren, bool childWaitEnded) => false;
     private static readonly TimeSpan RestartReminderLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PassivationFinalStopDelay = TimeSpan.FromMilliseconds(100);
