@@ -109,6 +109,44 @@ public sealed class ChildRunParkSerializationTests : TestKit
         Assert.Equal(0, restored.PromptsIssued);
     }
 
+    /// <summary>
+    /// "An older binary refuses a park record" (design Migration Plan), as a proxy. A binary reads a fact or a lifecycle
+    /// case that it does not know as none, and its mapper then fails loudly. 0.28.0-beta.2 reads fact 8 or 9 and
+    /// lifecycle 21 this way, so it fails the recovery of such a session and runs no parked call. A second binary is not
+    /// in the test run, so the spec writes field 30, which this binary does not know, and proves the same rule.
+    /// Planted bug: the mapper skips a record with no known case or maps it to a default.
+    /// </summary>
+    [Fact]
+    public void A_record_with_an_unknown_fact_or_lifecycle_fails_loudly()
+    {
+        // Arrange
+        var evt = NetclawProtoMapper.ToProto(new ChildRunEvent.Resumed { SessionId = Owner, RunId = RunId, RecordedAtMs = 1 });
+        evt.ClearFact();
+        var snapshot = NetclawProtoMapper.ToProtoV2(new SessionSnapshot { ChildRuns = [Run(new ChildRunLifecycle.Accepted(null))] });
+        var run = snapshot.ChildRuns.Single();
+        run.ClearLifecycle();
+        snapshot.ChildRuns.Clear();
+        snapshot.ChildRuns.Add(Serialization.Proto.BackgroundChildRunV2Proto.Parser.ParseFrom(WithUnknownField(run.ToByteArray())));
+
+        // Act + Assert
+        var unknownFact = Serialization.Proto.ChildRunEventV2Proto.Parser.ParseFrom(WithUnknownField(evt.ToByteArray()));
+        Assert.Throws<InvalidDataException>(() => NetclawProtoMapper.FromProto(unknownFact));
+        Assert.Throws<InvalidDataException>(() => NetclawProtoMapper.FromProto(
+            Serialization.Proto.SessionSnapshotV2Proto.Parser.ParseFrom(snapshot.ToByteArray())));
+    }
+
+    // The bytes of a message with field 30 added: an empty embedded message that this binary does not know.
+    private static byte[] WithUnknownField(byte[] bytes)
+    {
+        using var buffer = new MemoryStream();
+        buffer.Write(bytes);
+        var output = new CodedOutputStream(buffer);
+        output.WriteTag(30, WireFormat.WireType.LengthDelimited);
+        output.WriteLength(0);
+        output.Flush();
+        return buffer.ToArray();
+    }
+
     private NetclawProtobufSerializer Codec() => new((Akka.Actor.ExtendedActorSystem)Sys);
 
     private static T RoundTrip<T>(NetclawProtobufSerializer serializer, T value) where T : notnull

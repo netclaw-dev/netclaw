@@ -44,9 +44,12 @@ public sealed class ChildParkRecoverySpecs(ITestOutputHelper output) : ChildPark
     /// notice for the open request (#2617).</item>
     /// <item>automation-continuation: a drain stops a reminder turn after its tool batch. The restart reminder starts no
     /// turn for its continuation input while the request is open (#2651).</item>
+    /// <item>passivated-fire: fire 1 of reminder M waits for the pause, and the session passivates. Fire 2 of M wakes
+    /// the session. It replaces fire 1, so one fire of M runs.</item>
     /// </list>
     /// The shared postcondition: after the restart the prompt is still open and no automated turn runs. After Alice's
-    /// answer the child resumes, and each held fire or continuation runs once.
+    /// answer the child resumes, and each held fire or continuation runs once in a turn. No close takes the place of
+    /// that turn.
     /// Planted bug: a restart loses the pause, a stashed fire runs before the held inputs, a restart reminder starts a
     /// held input, or a crash gives no notice or two notices.
     /// </summary>
@@ -57,6 +60,7 @@ public sealed class ChildParkRecoverySpecs(ITestOutputHelper output) : ChildPark
     [InlineData("reminder-person")]
     [InlineData("notice")]
     [InlineData("automation-continuation")]
+    [InlineData("passivated-fire")]
     public async Task A_restart_keeps_the_child_consent_pause(string row)
     {
         // Arrange
@@ -109,6 +113,11 @@ public sealed class ChildParkRecoverySpecs(ITestOutputHelper output) : ChildPark
             case "automation-continuation":
                 reminder = await DrainAsync(id);
                 break;
+            case "passivated-fire":
+                AssertAck(await SendFireAsync(id, FireMs));
+                await PassivateAsync(id);
+                AssertAck(await SendFireAsync(id, FireMs + 60_000));
+                break;
         }
         held?.TrySetResult();
         await JoinRecorderAsync(id);
@@ -135,6 +144,10 @@ public sealed class ChildParkRecoverySpecs(ITestOutputHelper output) : ChildPark
         Assert.DoesNotContain(Clients.Parent.ReceivedMessages.Skip(requestsAtRestart), CarriesFire);
         if (row == "notice")
         {
+            // The notice that waited in its turn closes with no turn, and one new notice lists the open request.
+            var pending = ConsentNotices(journal, id)[notices - 1];
+            Assert.Equal(1, ConsumptionCount(journal, pending.InputId));
+            Assert.Contains(journal.Committed.OfType<InputClosed>(), closed => closed.InputIds.Contains(pending.InputId));
             var after = ConsentNotices(journal, id).Skip(notices).ToArray();
             Assert.StartsWith(OpenNoticeHeading, Assert.Single(after).UserMessage.Content, StringComparison.Ordinal);
         }
@@ -145,11 +158,24 @@ public sealed class ChildParkRecoverySpecs(ITestOutputHelper output) : ChildPark
         // Assert: the child resumes once, and each held fire or continuation runs once.
         var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: 1);
         Assert.True(terminal.Result.Success, terminal.Result.Output);
-        var heldInputs = FireAdmissions(journal, id, FireKey(Sweep, FireMs))
-            .Concat(journal.Committed.OfType<InputAdmitted>().Where(input => input.SessionId == id && IsContinuation(input)))
-            .ToArray();
-        await AwaitAssertAsync(() => Assert.All(heldInputs, input => Assert.Equal(1, ConsumptionCount(journal, input.InputId))),
-            Deadline, cancellationToken: Cancellation);
+        await AwaitAssertAsync(() =>
+        {
+            if (row == "passivated-fire")
+                Assert.True(HeldInputs(journal, id).Sum(input => TurnRuns(journal, input)) > 0, "No fire of M ran after the last answer.");
+            else
+                Assert.All(HeldInputs(journal, id), input => Assert.True(TurnRuns(journal, input) > 0,
+                    $"The held input {input.InputId} did not run in a turn."));
+        }, Deadline, cancellationToken: Cancellation);
+        await SettleNoticesAsync(journal, id);
+        var waited = HeldInputs(journal, id);
+        if (row == "passivated-fire")
+            Assert.Equal(1, waited.Sum(input => TurnRuns(journal, input)));
+        else
+        {
+            Assert.All(waited, input => Assert.Equal(1, TurnRuns(journal, input)));
+            Assert.All(waited, input => Assert.DoesNotContain(journal.Committed.OfType<InputClosed>(),
+                closed => closed.InputIds.Contains(input.InputId)));
+        }
     }
 
     /// <summary>
@@ -339,6 +365,16 @@ public sealed class ChildParkRecoverySpecs(ITestOutputHelper output) : ChildPark
 
     // The continuation input of a stopped turn has no text (#2632).
     private static bool IsContinuation(InputAdmitted input) => string.IsNullOrEmpty(input.UserMessage.Content);
+
+    // The fires of reminder M and the continuation inputs of the session, in journal order.
+    private static IReadOnlyList<InputAdmitted> HeldInputs(AcceptanceFault journal, SessionId id)
+        => journal.Committed.OfType<InputAdmitted>().Where(input => input.SessionId == id
+            && (input.SourceMessageId?.StartsWith($"{Sweep}:", StringComparison.Ordinal) == true || IsContinuation(input))).ToArray();
+
+    // How many turns consumed the input: a turn record or a tool batch. A close is not a turn.
+    private static int TurnRuns(AcceptanceFault journal, InputAdmitted input) => journal.Committed.ToArray().Count(evt =>
+        evt is TurnRecorded turn && turn.ConsumedInputIds.Contains(input.InputId)
+        || evt is ToolBatchStarted batch && batch.ConsumedInputIds.Contains(input.InputId));
 
     // A model request of a turn that the held fire started, or of its continuation.
     private static bool CarriesFire(IReadOnlyList<ChatMessage> request)
