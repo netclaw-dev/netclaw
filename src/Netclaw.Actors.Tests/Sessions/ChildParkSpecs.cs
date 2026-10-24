@@ -323,6 +323,9 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     /// <item>wrong-user: Bob answers after the restart. He gets the nack, and nothing persists.</item>
     /// <item>damaged: the stored park has EqualRounds = 7. Recovery completes, and the prompt stays open. The answer
     /// ends the run with park_damaged, and the call does not run.</item>
+    /// <item>unbound: the stored park has a shell request whose call is not in the park transcript, so no one-time
+    /// consent can bind its shell source (#2665). The answer ends the run with park_damaged, no call runs, and a late
+    /// click does not get "already answered".</item>
     /// <item>counter: the resumed child parks again after a restart. No prompt of the second park reuses a call ID.</item>
     /// <item>late-click: after the resume, the end, and a snapshot, a click on the old prompt gets the closed-call reply.
     /// Nothing runs again.</item>
@@ -343,6 +346,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     [InlineData("crash-notice")]
     [InlineData("wrong-user")]
     [InlineData("damaged")]
+    [InlineData("unbound")]
     [InlineData("counter")]
     [InlineData("late-click")]
     [InlineData("wake")]
@@ -362,6 +366,8 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         });
         if (row == "damaged")
             journal.RewriteNextStored(static evt => evt is ChildRunEvent.Parked parked ? WithEqualRounds(parked, 7) : null);
+        if (row == "unbound")
+            journal.RewriteNextStored(static evt => evt is ChildRunEvent.Parked parked ? WithoutTheShellCall(parked) : null);
         await JoinRecorderAsync(id);
         var run = await StartAsync(id, $"park-{row}");
         var prompts = await AwaitPromptsAsync(run.Run.RunId, row == "compaction" ? 2 : 1);
@@ -464,7 +470,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         var answers = journal.Committed.OfType<ToolApprovalResolved>().Count();
         switch (row)
         {
-            case "passivating" or "wrong-user" or "damaged":
+            case "passivating" or "wrong-user" or "damaged" or "unbound":
                 if (row == "wrong-user")
                 {
                     Assert.Equal(ApprovalNackReasons.WrongRequester,
@@ -514,7 +520,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         // Assert
         var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: row switch
         {
-            "damaged" => 0,
+            "damaged" or "unbound" => 0,
             "compaction" or "counter" => 2,
             _ => 1
         });
@@ -525,6 +531,11 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
                 break;
             case "damaged":
                 Assert.Equal(SubAgentOutcomeReason.ParkDamaged, terminal.Result.OutcomeReason);
+                break;
+            case "unbound":
+                Assert.Equal(SubAgentOutcomeReason.ParkDamaged, terminal.Result.OutcomeReason);
+                Assert.NotEqual(ApprovalNackReasons.AlreadyAnswered,
+                    Assert.IsType<CommandNack>(await AnswerAsync(id, prompts[0].CallId, Alice)).Reason);
                 break;
             default:
                 Assert.True(terminal.Result.Success, terminal.Result.Output);
@@ -546,6 +557,16 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     }
 
     // A park whose stored loop guard has an equal-round count that no live loop guard can reach (PR 2 design D7).
+    // A park whose request is a shell request, and whose transcript holds no assistant call for it.
+    private static ChildRunEvent.Parked WithoutTheShellCall(ChildRunEvent.Parked parked) => parked with
+    {
+        Park = parked.Park with
+        {
+            Transcript = [.. parked.Park.Transcript.Where(static message => message.Role != Netclaw.Actors.Protocol.ChatRole.Assistant)]
+        },
+        Requests = [.. parked.Requests.Select(static request => request with { ToolName = "shell_execute" })]
+    };
+
     private static ChildRunEvent.Parked WithEqualRounds(ChildRunEvent.Parked parked, int equalRounds) => parked with
     {
         Park = parked.Park with

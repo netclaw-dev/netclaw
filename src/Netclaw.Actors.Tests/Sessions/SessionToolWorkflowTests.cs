@@ -9,7 +9,9 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Sessions.Pipelines;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Tools;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -630,6 +632,60 @@ public sealed partial class SessionToolWorkflowTests
             }).ToArray()
         };
         return SessionState.Empty with { History = SessionState.Empty.History.Add(assistant) };
+    }
+
+    /// <summary>
+    /// Issue #2665 on the child resume (durable-child-park-recovery). An approved parked shell call resumes with a one-time
+    /// consent that binds the shell source key of the command in the park transcript. Rows: the transcript holds the
+    /// call; the transcript holds another call; the call has no command. With no source for the key, the method gives no
+    /// answer, so TryResumeParkedRun ends the run as failed, no consent is seeded, and no call runs.
+    /// Planted bug: the child resume seeds a consent with no source key, so the consent also matches another source.
+    /// </summary>
+    [Theory]
+    [InlineData("call")]
+    [InlineData("missing-call")]
+    [InlineData("missing-command")]
+    public void A_parked_shell_answer_binds_the_source_key_of_the_park_transcript(string row)
+    {
+        // Arrange: Alice approved the parked request once.
+        const string Command = "git push origin main";
+        var runId = new SubAgentRunId("run-1");
+        var request = CreateRequest("run-1/subagent-approval/1", requestedAtMs: 10) with
+        {
+            SourceChildRunId = runId, OriginalChildCallId = new ToolCallId("child-call-1")
+        };
+        var workflow = new SessionToolWorkflow();
+        workflow.ApplyApprovalRequested(request, recovered: false);
+        workflow.ApplyResolvedResponse(new ToolApprovalResolved
+        {
+            SessionId = request.SessionId, CallId = request.CallId, SourceChildRunId = runId,
+            Decision = ConsentAnswerCodec.ToJournalText(ConsentAnswer.Once.Instance), ResolvedAtMs = 20
+        });
+        var call = new SerializableToolCall
+        {
+            CallId = new ToolCallId(row == "missing-call" ? "child-call-2" : "child-call-1"),
+            Name = new ToolName("shell_execute"),
+            ArgumentsJson = row == "missing-command" ? "{}" : JsonSerializer.Serialize(new { command = Command })
+        };
+        var park = new ChildRunPark
+        {
+            Transcript = [new SerializableChatMessage { Role = ChatRole.Assistant, ToolCalls = [call] }],
+            LoopGuard = new TurnLoopGuardState(1, 1, [], null, new Dictionary<ToolRecurrenceKey, ToolRecurrenceEpisode>(), 0),
+            ScopeDirectories = new ChildParkScopeDirectories(null, null),
+            FileActivity = WorkingContextDelta.Empty
+        };
+
+        // Act + Assert
+        if (row != "call")
+        {
+            Assert.Throws<InvalidOperationException>(() => workflow.TakeParkedAnswers(runId, park));
+            return;
+        }
+        var answer = Assert.Single(workflow.TakeParkedAnswers(runId, park));
+        Assert.Equal("child-call-1", answer.Key);
+        Assert.Equal(
+            OneTimeApprovalKeys.Create(request.Patterns, request.Candidates, request.Cwd, OneTimeApprovalKeys.CreateShellSourceKey(Command)),
+            answer.Value.ApprovedConsentKeys);
     }
 
     private static PendingToolInteraction ResolveRecovered(
