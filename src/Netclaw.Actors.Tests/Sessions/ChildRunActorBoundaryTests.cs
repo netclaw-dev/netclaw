@@ -453,6 +453,10 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
     internal sealed class AuthorityTool : INetclawTool
     {
         public ConcurrentQueue<ToolInvocationContext> Contexts { get; } = new();
+
+        // A spec can observe each run of the probe, for instance to read the journal at that moment.
+        public Action? Entered { get; set; }
+
         public string Name => "authority_probe";
         public LlmFacingToolName LlmFacingName => LlmFacingToolName.FromCanonical(Name);
         public string Description => "Observe original child authority.";
@@ -463,6 +467,7 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
             => throw new InvalidOperationException("This test requires invocation authority.");
         public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context, CancellationToken ct = default)
         {
+            Entered?.Invoke();
             Contexts.Enqueue(context);
             return Task.FromResult("confirmed");
         }
@@ -520,22 +525,48 @@ internal sealed class AcceptanceFault(bool rejectAcceptance, bool holdAcceptance
         }
     }
 
-    // The journal stores the next matching admission with a damaged authority record (no turn ID), so that
-    // TurnContext.TryFromRecord fails for it after a replay. The live actor keeps the event that it wrote.
-    private Func<InputAdmitted, bool>? _damageMatch;
+    // The journal stores the next event that the rewrite changes (a non-null result) in its changed form. The live
+    // actor keeps the event that it wrote, so only a replay sees the change.
+    private Func<object, object?>? _rewrite;
 
     public TaskCompletionSource<InputAdmitted> AdmissionDamaged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public void DamageNextAdmission(Func<InputAdmitted, bool> match) => Interlocked.Exchange(ref _damageMatch, match);
+    public void RewriteNextStored(Func<object, object?> rewrite) => Interlocked.Exchange(ref _rewrite, rewrite);
 
-    public InputAdmitted? TryDamage(InputAdmitted admitted)
+    // A damaged authority record (no turn ID), so that TurnContext.TryFromRecord fails for it after a replay.
+    public void DamageNextAdmission(Func<InputAdmitted, bool> match) => RewriteNextStored(payload =>
     {
-        var match = Volatile.Read(ref _damageMatch);
-        if (match is null || !match(admitted) || Interlocked.CompareExchange(ref _damageMatch, null, match) != match)
+        if (payload is not InputAdmitted admitted || !match(admitted))
             return null;
         var damaged = admitted with { TurnContext = admitted.TurnContext with { TurnId = string.Empty } };
         AdmissionDamaged.TrySetResult(damaged);
         return damaged;
+    });
+
+    public object? TryRewrite(object payload)
+    {
+        var rewrite = Volatile.Read(ref _rewrite);
+        if (rewrite?.Invoke(payload) is not { } changed || Interlocked.CompareExchange(ref _rewrite, null, rewrite) != rewrite)
+            return null;
+        return changed;
+    }
+
+    // The journal holds the next write that has a matching event until the spec releases it. A held write that a
+    // reject rule also matches is rejected after the release.
+    private Func<object, bool>? _holdMatch;
+
+    public TaskCompletionSource HoldEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource ReleaseHold { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void HoldNextWriteOf(Func<object, bool> match) => Interlocked.Exchange(ref _holdMatch, match);
+
+    public async Task HoldIfMatchedAsync(IEnumerable<object> events, CancellationToken cancellationToken)
+    {
+        var match = Volatile.Read(ref _holdMatch);
+        if (match is null || !events.Any(match) || Interlocked.CompareExchange(ref _holdMatch, null, match) != match)
+            return;
+        HoldEntered.TrySetResult();
+        await ReleaseHold.Task.WaitAsync(cancellationToken);
     }
 }
 
@@ -559,6 +590,8 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
         if (_fault is { } damageFault)
             writes = writes.Select(write => Damaged(damageFault, write)).ToArray();
         var events = writes.SelectMany(write => (IEnumerable<IPersistentRepresentation>)write.Payload).Select(item => item.Payload).ToArray();
+        if (_fault is { } holdFault)
+            await holdFault.HoldIfMatchedAsync(events, cancellationToken);
         if (_fault is { } eventFault && writes.Any(write => eventFault.RejectsWrite(Payloads(write), take: false)))
             return await RejectMatchingEventsAsync(eventFault, writes, cancellationToken);
         if (_fault is { } noticeFault && writes.Any(IsConsentNoticeWrite) && noticeFault.TryTakeConsentNoticeRejection())
@@ -648,7 +681,7 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
         var changed = false;
         for (var index = 0; index < items.Length; index++)
         {
-            if (items[index].Payload is InputAdmitted admitted && fault.TryDamage(admitted) is { } damaged)
+            if (fault.TryRewrite(items[index].Payload) is { } damaged)
             {
                 items[index] = items[index].WithPayload(damaged);
                 changed = true;
