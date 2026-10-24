@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
+using Akka.TestKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Hosting;
@@ -103,6 +104,89 @@ public sealed class SlashCommandSkillContentTests : LlmSessionTestBase
 
         var firstCall = _chatClient.ReceivedMessages[0];
         Assert.Contains(firstCall, message => message.Text.Contains(SkillBodyMarker, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("/demo-skill run it", TurnOutcome.Completed)]
+    [InlineData("/unknown-command", TurnOutcome.Skipped)]
+    public async Task Buffered_slash_command_acknowledges_only_its_original_sender_once(
+        string command, TurnOutcome commandOutcome)
+    {
+        var cancellation = TestContext.Current.CancellationToken;
+        var deadline = TimeSpan.FromSeconds(10);
+        var sessionId = new SessionId($"test-channel/slash-ack-{commandOutcome}");
+        var subscriber = CreateTestProbe("slash-ack-subscriber");
+        var originalSender = CreateTestProbe("slash-ack-original");
+        var completionSender = CreateTestProbe("slash-ack-completion");
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _chatClient.NextResponseGate = hold;
+        _snapshots.Release();
+
+        try
+        {
+            var session = await StartTurnWithBufferedCommandAsync(sessionId, command, subscriber, originalSender);
+
+            // This fresh session has one model call. The probe replaces its result with the same call identity.
+            session.Tell(new LlmResponseReceived
+            {
+                CallId = 1,
+                Response = new ChatResponse(new ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, "First turn complete."))
+            }, completionSender.Ref);
+
+            var first = await subscriber.FishForMessageAsync<TurnCompleted>(
+                _ => true, deadline, cancellationToken: cancellation);
+            Assert.Equal(TurnOutcome.Completed, first.Outcome);
+            var drained = await subscriber.FishForMessageAsync<TurnCompleted>(
+                _ => true, deadline, cancellationToken: cancellation);
+            Assert.Equal(commandOutcome, drained.Outcome);
+            Assert.Equal(commandOutcome == TurnOutcome.Completed ? 2 : 1, _chatClient.CallCount);
+            if (commandOutcome == TurnOutcome.Completed)
+                Assert.Contains(_chatClient.ReceivedMessages[1],
+                    message => message.Text.Contains(SkillBodyMarker, StringComparison.Ordinal));
+
+            await AssertNoFurtherAcknowledgementAsync(session, sessionId, subscriber, originalSender);
+            await AssertNoFurtherAcknowledgementAsync(session, sessionId, subscriber, completionSender);
+        }
+        finally
+        {
+            hold.TrySetResult();
+        }
+    }
+
+    private async Task<IActorRef> StartTurnWithBufferedCommandAsync(
+        SessionId sessionId, string command, TestProbe subscriber, TestProbe originalSender)
+    {
+        var cancellation = TestContext.Current.CancellationToken;
+        var deadline = TimeSpan.FromSeconds(10);
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        await JoinSessionAsync(manager, subscriber, sessionId, OutputFilter.Full);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Hold the first turn."
+        }, deadline, cancellation);
+        await _chatClient.FirstCallEntered.Task.WaitAsync(deadline, cancellation);
+        await AwaitAssertAsync(() => Assert.Null(_chatClient.NextResponseGate),
+            deadline, cancellationToken: cancellation);
+        Assert.Equal(1, _chatClient.CallCount);
+
+        var session = await Sys.ActorSelection($"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(deadline, cancellation);
+        session.Tell(new SendUserMessage { SessionId = sessionId, Content = command }, originalSender.Ref);
+        var ack = await originalSender.ExpectMsgAsync<CommandAck>(deadline, cancellationToken: cancellation);
+        Assert.Equal(sessionId, ack.SessionId);
+        Assert.Equal(1, _chatClient.CallCount);
+        return session;
+    }
+
+    private static async Task AssertNoFurtherAcknowledgementAsync(
+        IActorRef session, SessionId sessionId, TestProbe subscriber, TestProbe sender)
+    {
+        // The reply follows every prior persist callback. An extra ack reaches this probe before the reply.
+        session.Tell(new JoinSession(subscriber) { SessionId = sessionId, Filter = OutputFilter.Full }, sender.Ref);
+        var joined = await sender.ExpectMsgAsync<SessionJoined>(
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, joined.SessionId);
     }
 
     private sealed class GatedSnapshotProvider : IWorkingContextSnapshotProvider

@@ -2244,7 +2244,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     {
         if (placement == InputPlacement.Activate)
         {
-            ContinueIncomingUserMessage(command);
+            ContinueIncomingUserMessage(command, replyAck: true);
             return;
         }
 
@@ -2347,7 +2347,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         _state = _state.CloseInputs(inputIds);
     }
 
-    private void ContinueIncomingUserMessage(SendUserMessage cmd)
+    private void ContinueIncomingUserMessage(SendUserMessage cmd, bool replyAck)
     {
         _input.ActivateInput(cmd, _state.GetExecutablePendingInputs(), _trustContextDeriver);
         _toolWorkflow.StartNewTurn();
@@ -2380,11 +2380,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         PrepareFreshTurnState();
 
-        if (TryHandleSlashCommand(executableUserContent, mediaRefs))
+        if (TryHandleSlashCommand(executableUserContent, mediaRefs, replyAck))
             return;
 
         _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
-        TryReplyAck();
+        if (replyAck)
+            TryReplyAck();
         _modelContext.ResetForNewTurn();
         _input.ResetOverflowRetry();
         FireInitialTurnLlmCall(executableUserContent);
@@ -2519,7 +2520,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (_input.BeginSlashResume(first) is not { } executableText)
             return false;
 
-        var handled = TryHandleSlashCommand(executableText, first.UserMessage.MediaReferences);
+        var handled = TryHandleSlashCommand(executableText, first.UserMessage.MediaReferences, replyAck: true);
         return _input.CompleteSlashResume(handled, pending, _sessionId);
     }
 
@@ -3139,7 +3140,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     /// a registered skill, activation path selection is deterministic:
     /// metadata.subagent route first, then inline injection when metadata is absent.
     /// </summary>
-    private bool TryHandleSlashCommand(string userContent, IReadOnlyList<SerializableMediaReference> mediaRefs)
+    private bool TryHandleSlashCommand(string userContent, IReadOnlyList<SerializableMediaReference> mediaRefs, bool replyAck)
     {
         if (_skillRegistry is null || !SessionInputFlow.IsSlashCommand(userContent))
             return false;
@@ -3148,12 +3149,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             var decision = SkillActivationRouter.Resolve(skill!);
             if (decision.IsError)
-                return RejectSlashCommand(decision.ErrorMessage!);
+                return RejectSlashCommand(decision.ErrorMessage!, replyAck);
 
             if (decision.Path == SkillActivationPath.Routed)
-                return TryHandleRoutedSlashCommand(skill!, remainder, mediaRefs, decision.RoutedSubagent!);
+                return TryHandleRoutedSlashCommand(skill!, remainder, mediaRefs, decision.RoutedSubagent!, replyAck);
 
-            return HandleInlineSlashCommand(skill!, remainder, mediaRefs);
+            return HandleInlineSlashCommand(skill!, remainder, mediaRefs, replyAck);
         }
 
         // Unrecognized slash command — send deterministic error
@@ -3164,10 +3165,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             errorMsg += hint is not null ? $"  {cmd} {hint}\n" : $"  {cmd}\n";
         }
 
-        return RejectSlashCommand(errorMsg.TrimEnd());
+        return RejectSlashCommand(errorMsg.TrimEnd(), replyAck);
     }
 
-    private bool RejectSlashCommand(string message)
+    private bool RejectSlashCommand(string message, bool replyAck)
     {
         void Reply()
         {
@@ -3180,7 +3181,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 SourceReminderId = _input.Authority.Source?.ReminderId,
                 OpenChildRunIds = _state.GetOpenChildRunIds()
             });
-            TryReplyAck();
+            if (replyAck)
+                TryReplyAck();
             // A rejected command ends no turn, so no turn end starts the queue (#2587). Two paths leave queued input
             // here in Ready: a restart resume queues the inputs behind the slash command, and a live command closes
             // a parked approval (AbandonThenActivate) while a fire waits behind it. Start the next queued input as a
@@ -3192,10 +3194,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         return true;
     }
 
-    private bool HandleInlineSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs)
+    private bool HandleInlineSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs, bool replyAck)
     {
         if (skill.Source is not FileSkillSource fileSource)
-            return RejectSlashCommand($"Skill /{skill.Name} cannot use file-based slash dispatch.");
+            return RejectSlashCommand($"Skill /{skill.Name} cannot use file-based slash dispatch.", replyAck);
 
         string skillBody;
         try
@@ -3207,7 +3209,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             _log.Warning("Failed to read skill file for slash command /{SkillName}: {Error}",
                 skill.Name, ex.Message);
-            return RejectSlashCommand($"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted.");
+            return RejectSlashCommand($"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted.", replyAck);
         }
 
         _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SlashCommand);
@@ -3217,7 +3219,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             : remainder;
 
         _state = _state.AddUserMessage(effectiveUserContent, mediaRefs.Count > 0 ? mediaRefs : null);
-        TryReplyAck();
+        if (replyAck)
+            TryReplyAck();
         _modelContext.ResetForNewTurn();
 
         FireInitialTurnLlmCall(effectiveUserContent, skillBody);
@@ -3226,22 +3229,22 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         return true;
     }
 
-    private bool TryHandleRoutedSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs, string routedSubagent)
+    private bool TryHandleRoutedSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs, string routedSubagent, bool replyAck)
     {
         if (skill.Source is not FileSkillSource fileSource)
-            return RejectSlashCommand($"Skill /{skill.Name} cannot use file-based routed dispatch.");
+            return RejectSlashCommand($"Skill /{skill.Name} cannot use file-based routed dispatch.", replyAck);
 
         if (_subAgentRegistry is null || _subAgentSpawner is null)
-            return RejectSlashCommand($"Skill '/{skill.Name}' routes to subagent '{routedSubagent}', but subagent routing is not available in this runtime.");
+            return RejectSlashCommand($"Skill '/{skill.Name}' routes to subagent '{routedSubagent}', but subagent routing is not available in this runtime.", replyAck);
 
         _subAgentLoader?.SyncInto(_subAgentRegistry);
 
         var profile = _subAgentRegistry.TryGetByName(routedSubagent);
         if (profile is null)
-            return RejectSlashCommand(SkillActivationRouter.UnknownTargetError(skill.Name, routedSubagent));
+            return RejectSlashCommand(SkillActivationRouter.UnknownTargetError(skill.Name, routedSubagent), replyAck);
 
         if (profile.Visibility != SubAgentVisibility.UserFacing)
-            return RejectSlashCommand(SkillActivationRouter.InternalTargetError(skill.Name, routedSubagent));
+            return RejectSlashCommand(SkillActivationRouter.InternalTargetError(skill.Name, routedSubagent), replyAck);
 
         string skillBody;
         try
@@ -3253,7 +3256,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             _log.Warning("Failed to read skill file for routed slash command /{SkillName}: {Error}",
                 skill.Name, ex.Message);
-            return RejectSlashCommand($"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted.");
+            return RejectSlashCommand($"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted.", replyAck);
         }
 
         // The routed child gets the posture-narrowed audience, as a child that spawn_agent starts does.
@@ -3264,7 +3267,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 skill.Name,
                 SecurityPolicyDefaults.AudienceUnresolvedReason);
             return RejectSlashCommand(
-                $"Skill '/{skill.Name}' cannot run: the session cannot resolve the audience for this turn ({SecurityPolicyDefaults.AudienceUnresolvedReason}).");
+                $"Skill '/{skill.Name}' cannot run: the session cannot resolve the audience for this turn ({SecurityPolicyDefaults.AudienceUnresolvedReason}).", replyAck);
         }
 
         _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SlashCommand);
@@ -3274,7 +3277,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             : remainder;
 
         _state = _state.AddUserMessage(effectiveTask, mediaRefs.Count > 0 ? mediaRefs : null);
-        TryReplyAck();
+        if (replyAck)
+            TryReplyAck();
         _modelContext.ResetForNewTurn();
 
         var originalContext = _input.Authority.Context
@@ -3998,7 +4002,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         }
 
         TurnLog().Info("turn_buffer_command input={InputId}", batch.Messages[0].AdmittedInputId);
-        ContinueIncomingUserMessage(batch.Messages[0]);
+        // Admission already sent the acknowledgement. Keep this decision through any input-close callback.
+        ContinueIncomingUserMessage(batch.Messages[0], replyAck: false);
     }
 
     private bool AbandonResolvedToolBatchAfterRecovery()
