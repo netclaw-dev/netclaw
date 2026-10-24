@@ -141,34 +141,48 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
         Assert.Contains(result.Items, i => i.Id.Value == "doc-coverage-gap");
     }
 
-    [Fact]
-    public async Task CoverageGap_emits_a_rate_limited_warning_log_when_embeddings_are_enabled()
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(false, 1)]
+    public async Task CoverageGap_counts_only_unembedded_documents_and_preserves_record_recall(
+        bool documentEmbedded, int expectedGapLogs)
     {
         var ct = TestContext.Current.CancellationToken;
         await _store.InitializeAsync(ct);
 
-        await SeedDocumentAsync("doc-coverage-gap-log", "Grafana dashboard provisioning convention",
-            "Grafana dashboard provisioning convention details for the ops team.", ct);
+        await SeedDocumentAsync("doc-coverage-gap-log", "Widget rollout plan",
+            "Widget rollout plan details for the release team.", ct);
+        await SeedRecordAsync("rec-coverage-gap-log", "Widget rollout observation",
+            "Widget rollout plan passed the synthetic check.", ct);
+        if (documentEmbedded)
+            await UpsertCurrentEmbeddingAsync("doc-coverage-gap-log", QueryVector, ct);
 
         var recordingLogger = new RecordingLogger<SQLiteMemoryRecallCoordinator>();
-        var coordinator = new SQLiteMemoryRecallCoordinator(
-            _store,
-            recordingLogger,
-            new MemoryConfig { Embeddings = new MemoryEmbeddingsConfig { Enabled = true } },
-            TimeProvider.System,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true },
-            embedderHolder: new MemoryEmbedderHolder(new ScriptedEmbedder(ModelId, Dimensions, QueryVector), initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: TestFloor),
-            vectorIndexHolder: new MemoryVectorIndexHolder(_store));
+        var coordinator = BuildHybridCoordinator(TimeProvider.System, recordingLogger);
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: (SessionId)"hybrid/coverage-gap-log",
-            Query: "what is our grafana dashboard provisioning convention?",
-            RecentUserMessages: ["what is our grafana dashboard provisioning convention?"],
+            Query: "widget rollout plan",
+            RecentUserMessages: ["widget rollout plan"],
             MaxItems: 3), ct);
 
         Assert.False(result.Degraded);
+        Assert.Equal(2, result.Items.Count);
         Assert.Contains(result.Items, i => i.Id.Value == "doc-coverage-gap-log");
-        Assert.Contains(recordingLogger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("memory_recall_coverage_gap"));
+        var record = Assert.Single(result.Items, i => i.Id.Value == "rec-coverage-gap-log");
+        Assert.Equal("Widget rollout plan passed the synthetic check.", record.Content);
+        Assert.Contains(recordingLogger.Entries, e =>
+            e.Message.Contains("memory_retrieval_final") && e.Message.Contains("mode=hybrid"));
+
+        var gapLogs = recordingLogger.Entries
+            .Where(e => e.Message.Contains("memory_recall_coverage_gap"))
+            .ToArray();
+        Assert.Equal(expectedGapLogs, gapLogs.Length);
+        Assert.All(gapLogs, e =>
+        {
+            Assert.Equal(LogLevel.Warning, e.Level);
+            Assert.Contains("gapCandidates=1 totalCandidates=2", e.Message);
+        });
     }
 
     [Fact]
@@ -551,6 +565,32 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
             MemoryContentHasher.ComputeHash(document.Title, document.Body),
             vector,
             ct);
+    }
+
+    private async Task SeedRecordAsync(string recordId, string title, string content, CancellationToken ct)
+    {
+        await _store.ApplyInlineCurationBatchAsync([
+            new SQLiteMemoryCurationOperation(
+                Kind: "record",
+                MemoryClass: "evidence",
+                MemoryId: recordId,
+                AnchorCanonicalName: title,
+                AnchorType: "topic",
+                Title: title,
+                Content: content,
+                AliasesJson: null,
+                FacetsJson: null,
+                SlotsJson: null,
+                Relations: null,
+                UpdateSemantics: "immutable-record",
+                Boundary: TrustBoundary.TrustedInstanceValue,
+                Audience: TrustAudience.Public,
+                Sensitivity: "normal",
+                RecallMode: "searchable",
+                Confidence: 0.8,
+                FreshnessAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+                ExpiresAtMs: null)
+        ], ct);
     }
 
     /// <summary>
