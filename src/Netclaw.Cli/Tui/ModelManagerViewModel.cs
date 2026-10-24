@@ -237,13 +237,36 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetSectionOrNull(config, "Models");
-        if (modelsSection is not null && ModelEntryWriter.ClearRole(modelsSection, roleKey))
+
+        bool removed;
+        try
+        {
+            removed = modelsSection is not null && ModelEntryWriter.ClearRole(modelsSection, roleKey);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            // A mixed or legacy Models shape throws here. Uncaught, it kills the render loop
+            // and the user sees the TUI die instead of the reason. Same guard `netclaw model
+            // clear` applies.
+            StatusMessage.Value = $"Cannot clear {role}: {ex.Message}";
+            RequestRedraw();
+            return;
+        }
+
+        if (removed)
         {
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
             Refresh();
             StatusMessage.Value = $"Cleared {role} role. {ConfigFileHelper.DaemonAppliesChange}";
             NotifyStateChanged();
+            return;
         }
+
+        // Say so. A silent return looks exactly like a dead keybinding.
+        StatusMessage.Value = modelsSection is null
+            ? $"No models are configured, so {role} is not set."
+            : $"{role} role is not set.";
+        RequestRedraw();
     }
 
     /// <summary>
