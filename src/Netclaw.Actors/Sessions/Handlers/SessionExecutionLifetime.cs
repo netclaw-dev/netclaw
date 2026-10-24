@@ -53,10 +53,12 @@ internal sealed class SessionExecutionLifetime(ITimerScheduler timers, IActorRef
     private static readonly TimeSpan ChildWaitMargin = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan ChildWait = DaemonConfig.BoundedDrainTimeout - ChildWaitMargin;
 
+    // <child-drain-wait>
     // The drain acknowledgement waits for the park or terminal record of each live child, until the child wait ends
-    // (running-child-drain-park design D4).
+    // (running-child-drain-park design D4). The child-resume-gate Stryker script mutates this span.
     internal static bool WaitsForChildren(bool drainRequested, bool hasLiveChildren, bool childWaitEnded)
         => drainRequested && hasLiveChildren && !childWaitEnded;
+    // </child-drain-wait>
 
     private static readonly TimeSpan RestartReminderLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);

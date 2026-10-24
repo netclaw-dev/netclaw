@@ -97,6 +97,19 @@ internal enum ChildResumeDecision
     Resume
 }
 
+/// <summary>The first step of a resumed child (running-child-drain-park design D1 R3).</summary>
+internal enum ChildResumeStart
+{
+    /// <summary>A drain park: the child makes a model call.</summary>
+    ModelCall,
+
+    /// <summary>A consent park with an answer for each request: the child runs the parked calls.</summary>
+    ParkedCalls,
+
+    /// <summary>The answers do not match the requests of the park. The run ends, and no parked call runs.</summary>
+    EndRun
+}
+
 /// <summary>What recovery does with a child run (PR 2 design D6, F3).</summary>
 internal enum ChildRecoveryAction
 {
@@ -188,4 +201,8 @@ internal static class ChildParkRules
     public static bool RequesterCanAnswer(int requestCount, bool supportsInteractiveApproval)
         => requestCount == 0 || supportsInteractiveApproval;
     // </child-resume-gate>
+
+    // Compile shell for the review of running-child-drain-park. It keeps the choice by the answer count alone.
+    public static ChildResumeStart ResumeStart(int parkRequests, int answers)
+        => answers == 0 ? ChildResumeStart.ModelCall : ChildResumeStart.ParkedCalls;
 }
