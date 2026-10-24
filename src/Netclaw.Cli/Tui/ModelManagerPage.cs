@@ -183,7 +183,12 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         // on the same row instead of snapping back to Main. The previous list is still alive
         // here: the parent retires it only after this factory returns.
         if (_roleList?.HighlightedItem is { } prior)
-            _roleOverviewHighlight = Array.IndexOf(items, prior.Value);
+        {
+            // IndexOf cannot miss today: the items array is a fixed three-role list. Guard
+            // anyway so a future list that drops a name cannot carry -1 into the new index.
+            var priorIndex = Array.IndexOf(items, prior.Value);
+            _roleOverviewHighlight = priorIndex >= 0 ? priorIndex : 0;
+        }
 
         _roleList = Layouts.SelectionList(items, role => FormatRoleItem(role, models[role], providerWidth, modelWidth))
             .WithMode(SelectionMode.Single)

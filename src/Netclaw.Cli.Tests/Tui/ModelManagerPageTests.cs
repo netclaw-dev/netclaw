@@ -262,6 +262,86 @@ public sealed class ModelManagerPageTests : IDisposable
             await WaitForConditionAsync(
                 () => !terminal.Contains("GLM-5.3-Flash-EXL3") && terminal.Contains("Qwen3.8-Flash-Next"),
                 appCts.Token);
+
+            // Press C again without moving. The rebuild must have kept the cursor on the
+            // Compaction row, so this reports the role as unset rather than acting on Main.
+            input.EnqueueKey(ConsoleKey.C);
+            await WaitForConditionAsync(
+                () => terminal.Contains("Compaction role is not set"), appCts.Token);
+            Assert.True(LoadRoles().TryGetProperty("Main", out _));
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(appCts.Token);
+        }
+    }
+
+    [Fact]
+    public async Task ClearRole_AfterEnterSelectingThenBackingOut_ClearsSameRow()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["alpha"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://alpha.example/v1"
+                },
+                ["bravo"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://bravo.example/v1"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Definitions"] = new Dictionary<string, object>
+                {
+                    ["main-model"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "alpha",
+                        ["ModelId"] = "main-id"
+                    },
+                    ["fallback-model"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "alpha",
+                        ["ModelId"] = "fallback-id"
+                    }
+                },
+                ["Roles"] = new Dictionary<string, object>
+                {
+                    ["Main"] = "main-model",
+                    ["Fallback"] = "fallback-model"
+                }
+            }
+        });
+
+        var (terminal, app) = CreateHeadlessApp(out var input, width: 120);
+
+        using var appCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = app.RunAsync(appCts.Token);
+
+        try
+        {
+            await WaitForConditionAsync(() => terminal.Contains("fallback-id"), appCts.Token);
+
+            // Enter on Fallback opens the provider picker; Escape returns to the table.
+            // The rebuild must carry the cursor on Fallback, so C clears it next.
+            input.EnqueueKey(ConsoleKey.DownArrow);
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(() => terminal.Contains("Select provider for Fallback"), appCts.Token);
+            input.EnqueueKey(ConsoleKey.Escape);
+            await WaitForConditionAsync(() => terminal.Contains("Model Role Assignments"), appCts.Token);
+
+            input.EnqueueKey(ConsoleKey.C);
+            await WaitForConditionAsync(() => terminal.Contains("Cleared Fallback role"), appCts.Token);
+
+            var roles = LoadRoles();
+            Assert.True(roles.TryGetProperty("Main", out _));
+            Assert.False(roles.TryGetProperty("Fallback", out _));
         }
         finally
         {

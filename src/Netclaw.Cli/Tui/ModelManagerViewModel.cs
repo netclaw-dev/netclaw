@@ -255,7 +255,21 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
         if (removed)
         {
-            ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+            try
+            {
+                ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Nothing was saved, so the role stays set on disk. Report it as a save
+                // failure, not a malformed-config failure: the in-memory mutation is
+                // discarded when the next load re-reads the file. Same filter the config
+                // editor view models use for saves.
+                StatusMessage.Value = $"Could not save config: {ex.Message}";
+                RequestRedraw();
+                return;
+            }
+
             Refresh();
             StatusMessage.Value = $"Cleared {role} role. {ConfigFileHelper.DaemonAppliesChange}";
             NotifyStateChanged();
