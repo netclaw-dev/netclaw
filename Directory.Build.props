@@ -41,6 +41,10 @@
   - A later input that arrives before the turn continues closes the continuation. That input runs in its own turn, and the session posts the restart notice one time.
 - **A slash command from the input queue gets one acknowledgement.** Before, the sender got a second acknowledgement when the queue drained ([#2663](https://github.com/netclaw-dev/netclaw/pull/2663)).
 
+### Security
+
+- **Shell approval reuses a proved grant and checks compound redirects.** A Bash assignment from the launch environment now uses its proved value in the grant check, so an equal grant no longer prompts again. A changed value, or a grant with no assignment qualification, gives no authority. PowerShell still needs the authored value. A supported compound redirect now gets its own file check. A one-time shell answer applies only to the exact command text, also for a call that recovery restarts ([#2665](https://github.com/netclaw-dev/netclaw/pull/2665)).
+
 ### Memory
 
 - **A same-name memory rewrite no longer adds a duplicate.** Before, a rewrite of a memory with the same name could skip the model decision. Curation then added a duplicate document after the overwrite guard refused the rewrite. Now the decision waits until the model resolves it ([#2669](https://github.com/netclaw-dev/netclaw/pull/2669)).
@@ -49,6 +53,7 @@
 ### CLI/TUI
 
 - **A cold chat start no longer blocks a second request.** The chat client now starts its runtime outside its lifetime lock. The two-second limit for quit also applies while the runtime starts ([#2668](https://github.com/netclaw-dev/netclaw/pull/2668)).
+- **C clears the highlighted role in the model manager.** Before, C did nothing until you selected a row with Enter or Space. Now C clears the role of the highlighted row, and the table shows the change. A role that is not set gets a message ([#2667](https://github.com/netclaw-dev/netclaw/pull/2667)).
 
 ### Telemetry
 
@@ -61,7 +66,7 @@
 
 ### Dependency Updates
 
-- **Bump ShellSyntaxTree** — 0.4.0-beta.24 → 0.4.0, with no change in behavior ([#2660](https://github.com/netclaw-dev/netclaw/pull/2660))</PackageReleaseNotes>
+- **Bump ShellSyntaxTree** — 0.4.0-beta.24 → 0.4.0 ([#2660](https://github.com/netclaw-dev/netclaw/pull/2660)), then 0.5.0-beta.1 for the compound redirect facts ([#2665](https://github.com/netclaw-dev/netclaw/pull/2665))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
