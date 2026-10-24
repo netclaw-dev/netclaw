@@ -209,7 +209,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
                     break;
                 case "late-rejection":
                     journal.RejectWritesOf(static evt => evt is ToolApprovalResolved);
-                    journal.HoldNextWriteOf(static evt => evt is ToolApprovalResolved);
+                    journal.HoldNext(static evt => evt is ToolApprovalResolved);
                     break;
             }
             if (row == "answer")
@@ -267,7 +267,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         {
             // The journal holds the park write, and then rejects it.
             journal.RejectWritesOf(static evt => evt is ChildRunEvent.Parked);
-            journal.HoldNextWriteOf(static evt => evt is ChildRunEvent.Parked);
+            journal.HoldNext(static evt => evt is ChildRunEvent.Parked);
         }
         var run = await StartAsync(id, $"park-{row}");
         ToolInteractionRequest? prompt = null;
@@ -310,7 +310,6 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     /// <summary>
     /// S4, restart (PR 2: the park is durable in the run record). Rows:
     /// <list type="bullet">
-    /// <item>parked: the idle timeout passivates the session. After the wake, Alice approves, and the call runs once.</item>
     /// <item>drain: Alice answers during a restart drain. Recovery resumes the run, and the call runs once.</item>
     /// <item>passivating: an answer during the restart passivation records nothing (the restart nack, or no reply when
     /// the session stopped first). The prompt stays open, and the answer after the restart runs the call once.</item>
@@ -319,26 +318,29 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     /// <item>crash-answered: the session stops after the last answer and before the Resumed record. Recovery resumes.</item>
     /// <item>crash-resumed: the session stops after the Resumed record. Recovery records the run as lost, and the call
     /// does not run again.</item>
+    /// <item>crash-notice: the session crashes while the closing notice waits in its turn, and no request is open.
+    /// Recovery closes the notice with no turn, and it admits no new notice for the empty open set.</item>
     /// <item>wrong-user: Bob answers after the restart. He gets the nack, and nothing persists.</item>
     /// <item>damaged: the stored park has EqualRounds = 7. Recovery completes, and the prompt stays open. The answer
     /// ends the run with park_damaged, and the call does not run.</item>
     /// <item>counter: the resumed child parks again after a restart. No prompt of the second park reuses a call ID.</item>
     /// <item>late-click: after the resume, the end, and a snapshot, a click on the old prompt gets the closed-call reply.
     /// Nothing runs again.</item>
-    /// <item>wake: the session passivates, and Alice's click itself wakes it. The click waits in the stash during the
-    /// recovery and runs before the recovery of the child runs. The child resumes once and is not recorded as lost.</item>
+    /// <item>wake: the session passivates, and Alice's click itself wakes it. The journal holds the replay, so the click
+    /// surely waits in the stash and runs before the recovery of the child runs. The child resumes once and is not
+    /// recorded as lost.</item>
     /// </list>
     /// Planted bug: a restart loses the park, a parked session cannot passivate, an answer during a drain or a crash is
     /// lost, a snapshot drops the first answer, a crash after Resumed runs the call again, the counter starts again, or a
     /// damaged park stops the recovery.
     /// </summary>
     [Theory]
-    [InlineData("parked")]
     [InlineData("drain")]
     [InlineData("passivating")]
     [InlineData("compaction")]
     [InlineData("crash-answered")]
     [InlineData("crash-resumed")]
+    [InlineData("crash-notice")]
     [InlineData("wrong-user")]
     [InlineData("damaged")]
     [InlineData("counter")]
@@ -355,7 +357,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
             "compaction" => [[Probe("p1"), Probe("p2")]],
             "counter" => [[Probe("p1")], [Probe("p2")]],
             // The resumed child runs a second round with a tool that the row holds.
-            "crash-resumed" => [[Probe("p1")], [SiblingCall("s2")]],
+            "crash-resumed" or "crash-notice" => [[Probe("p1")], [SiblingCall("s2")]],
             _ => [[Probe("p1")]]
         });
         if (row == "damaged")
@@ -367,11 +369,12 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         var session = await ResolveSessionAsync(id);
         var stopped = CreateTestProbe();
         stopped.Watch(session);
+        var notices = 0;
 
         // Act: the stop of the session
         switch (row)
         {
-            case "parked" or "wake":
+            case "wake":
                 await PassivateAsync(id);
                 break;
             case "drain":
@@ -429,6 +432,20 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
                 Sibling.Release();
                 await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
                 break;
+            case "crash-notice":
+                // The resumed child waits in its second round, and the closing notice waits in its model call.
+                var secondTool = Sibling.HoldNext();
+                var noticeHold = NewGate();
+                var noticeEntered = ParentGate.Arm(request => FreshUserTexts(request).Any(text =>
+                    text.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal)), noticeHold);
+                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await secondTool.WaitAsync(Deadline, Cancellation);
+                await noticeEntered.WaitAsync(Deadline, Cancellation);
+                notices = ConsentNotices(journal, id).Count;
+                await StopAsync(session);
+                noticeHold.TrySetResult();
+                Sibling.Release();
+                break;
             case "late-click":
                 AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
                 await AwaitAssertAsync(() => Assert.NotEmpty(TerminalsOf(journal, run.Run.RunId)), Deadline,
@@ -447,7 +464,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         var answers = journal.Committed.OfType<ToolApprovalResolved>().Count();
         switch (row)
         {
-            case "parked" or "passivating" or "wrong-user" or "damaged":
+            case "passivating" or "wrong-user" or "damaged":
                 if (row == "wrong-user")
                 {
                     Assert.Equal(ApprovalNackReasons.WrongRequester,
@@ -470,10 +487,22 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
                 AssertAck(await AnswerAsync(id, new ToolCallId(callIds[1]), Alice));
                 break;
             case "wake":
-                // The join and the click reach the new session in this order, and both wait in its stash.
+                // The journal holds the replay of the woken session, so the join and the click wait in its stash.
+                journal.HoldNext(evt => evt is JournalReplay replay && replay.PersistenceId == $"session-{id.Value}");
                 var joined = JoinRecorderAsync(id);
-                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await journal.HoldEntered.Task.WaitAsync(Deadline, Cancellation);
+                var woken = await ResolveSessionAsync(id);
+                var click = woken.Ask<ISessionResponse>(ApproveOnce(id, prompts[0].CallId, Alice), Deadline, Cancellation);
+                journal.ReleaseHold.TrySetResult();
+                AssertAck(await click);
                 await joined;
+                break;
+            case "crash-notice":
+                // The open set is empty, so recovery closes the waiting notice and admits no new one.
+                await BarrierAsync(id, run);
+                var waiting = ConsentNotices(journal, id)[notices - 1];
+                Assert.Contains(journal.Committed.OfType<InputClosed>(), closed => closed.InputIds.Contains(waiting.InputId));
+                Assert.Equal(notices, ConsentNotices(journal, id).Count);
                 break;
             case "late-click":
                 Assert.Equal(ApprovalNackReasons.PromptExpired,
@@ -491,7 +520,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         });
         switch (row)
         {
-            case "crash-resumed":
+            case "crash-resumed" or "crash-notice":
                 Assert.True(terminal.Lost);
                 break;
             case "damaged":

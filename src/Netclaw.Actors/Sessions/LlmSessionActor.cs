@@ -281,7 +281,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 _input.ClearNoticeRuns();
             RestoreWaitingInputs();
             Self.Tell(new RecoverChildRuns([.. _state.GetExecutableChildRuns().Select(run =>
-                (run.RunId, ChildParkRules.RecoveryAction(run.Lifecycle, _toolWorkflow.ChildApprovalCount(run.RunId))))]));
+                (run.RunId, ChildParkRules.RecoveryAction(run.Lifecycle)))]));
 
             // Resolve once at recovery time. ActorRegistry returns Nobody if
             // the dispatcher hasn't been registered (unit-test scenarios that

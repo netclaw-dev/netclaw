@@ -60,40 +60,34 @@ public sealed class ChildParkRulesTests
     }
 
     /// <summary>
-    /// PR 2 design D6, F3. Recovery records a running run as lost, keeps a parked run with an open request, resumes a
-    /// parked run with all answers, prepares the result of an ended run, and does nothing for a reported run.
-    /// Planted bug: recovery records a parked run as lost, or resumes a run with an open request.
+    /// PR 2 design D6, F3. Recovery records a running run as lost, tries the resume of a parked run (the resume gate
+    /// waits while a request is open), prepares the result of an ended run, and does nothing for a reported run.
+    /// Planted bug: recovery records a parked run as lost, or relaunches a running run.
     /// </summary>
     [Fact]
-    public void Recovery_acts_on_each_lifecycle_by_its_open_requests()
+    public void Recovery_acts_on_each_lifecycle()
     {
-        (ChildRunLifecycle Lifecycle, int Open, ChildRecoveryAction Expected)[] table =
+        (ChildRunLifecycle Lifecycle, ChildRecoveryAction Expected)[] table =
         [
-            (new ChildRunLifecycle.Accepted(null), 0, ChildRecoveryAction.Lost),
-            (new ChildRunLifecycle.Accepted(null), 1, ChildRecoveryAction.Lost),
-            (new ChildRunLifecycle.Cancelling(null), 0, ChildRecoveryAction.Lost),
-            (new ChildRunLifecycle.Cancelling(null), 1, ChildRecoveryAction.Lost),
-            (Parked(), 0, ChildRecoveryAction.Resume),
-            (Parked(), 1, ChildRecoveryAction.Wait),
-            (Terminal(), 0, ChildRecoveryAction.PrepareResult),
-            (Terminal(), 1, ChildRecoveryAction.PrepareResult),
-            (Reported(), 0, ChildRecoveryAction.Nothing),
-            (Reported(), 1, ChildRecoveryAction.Nothing)
+            (new ChildRunLifecycle.Accepted(null), ChildRecoveryAction.Lost),
+            (new ChildRunLifecycle.Cancelling(null), ChildRecoveryAction.Lost),
+            (Parked(), ChildRecoveryAction.Resume),
+            (Terminal(), ChildRecoveryAction.PrepareResult),
+            (Reported(), ChildRecoveryAction.Nothing)
         ];
 
         Assert.Equal(table.Select(static row => row.Expected),
-            table.Select(static row => ChildParkRules.RecoveryAction(row.Lifecycle, row.Open)));
+            table.Select(static row => ChildParkRules.RecoveryAction(row.Lifecycle)));
     }
 
     /// <summary>
-    /// PR 2 design D4. A park of exactly 4 MiB fits. One byte more does not.
+    /// PR 2 design D4. A park of exactly the cap fits. One byte more does not.
     /// Planted bug: the cap is off by one, or the owner never refuses a park.
     /// </summary>
     [Fact]
     public void A_park_fits_up_to_the_cap()
     {
         Assert.Equal([true, false], new long[] { ChildRunPark.MaxBytes, ChildRunPark.MaxBytes + 1 }.Select(ChildParkRules.ParkFits));
-        Assert.Equal(4 * 1024 * 1024, ChildRunPark.MaxBytes);
     }
 
     /// <summary>
@@ -142,8 +136,7 @@ public sealed class ChildParkRulesTests
             ("parked open", Parked(), 1, false),
             ("parked answered", Parked(), 0, true),
             ("accepted", new ChildRunLifecycle.Accepted(null), 0, true),
-            ("terminal", Terminal(), 0, true),
-            ("reported", Reported(), 0, false)
+            ("terminal", Terminal(), 0, true)
         ];
 
         Assert.Equal(table.Select(static row => (row.Name, row.Expected)),

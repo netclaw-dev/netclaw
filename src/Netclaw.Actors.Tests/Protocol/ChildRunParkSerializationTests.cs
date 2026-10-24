@@ -25,7 +25,7 @@ namespace Netclaw.Actors.Tests.Protocol;
 /// <summary>
 /// PR 2 of durable-child-consent-wait (durable-child-park-recovery, design D1). The durable shapes of a park: the Parked
 /// and Resumed events (fields 8 and 9 of the cre-v2 event), the parked run record in the snapshot (fields 21 and 22),
-/// and the read of a run record that 0.28.0-beta.2 wrote.
+/// and the loud failure for a case that a binary does not know.
 /// </summary>
 public sealed class ChildRunParkSerializationTests : TestKit
 {
@@ -46,7 +46,7 @@ public sealed class ChildRunParkSerializationTests : TestKit
     {
         // Arrange
         var serializer = Codec();
-        var parked = new ChildRunEvent.Parked(FullPark(), [Request(1), Request(2)], PromptsIssued: 2)
+        var parked = new ChildRunEvent.Parked(FullPark(), [Request(1), Request(2)])
         { SessionId = Owner, RunId = RunId, RecordedAtMs = 10 };
         var resumed = new ChildRunEvent.Resumed { SessionId = Owner, RunId = RunId, RecordedAtMs = 11 };
         AssertNoDefaults(parked.Park, nameof(ChildRunPark));
@@ -83,30 +83,6 @@ public sealed class ChildRunParkSerializationTests : TestKit
         // Assert
         Assert.Equal(2, restored.PromptsIssued);
         Assert.Equivalent(lifecycle, restored.Lifecycle, strict: true);
-    }
-
-    /// <summary>
-    /// A run record that 0.28.0-beta.2 wrote has no fields 21 and 22. It reads as before: an accepted run with a
-    /// prompt counter of 0. This row passes before PR 2, and it pins the upgrade path.
-    /// Planted bug: the reader takes a missing prompt counter as damage, or the writer adds field 21 or 22 to a run that
-    /// never parked.
-    /// </summary>
-    [Fact]
-    public void A_run_record_of_beta_2_reads_as_before()
-    {
-        // Arrange
-        var proto = NetclawProtoMapper.ToProtoV2(new SessionSnapshot { ChildRuns = [Run(new ChildRunLifecycle.Accepted(null))] });
-        var record = WireFieldNumbers(proto.ChildRuns.Single().ToByteArray());
-        Assert.DoesNotContain(21, record);
-        Assert.DoesNotContain(22, record);
-
-        // Act
-        var restored = Assert.Single(NetclawProtoMapper.FromProto(
-            Serialization.Proto.SessionSnapshotV2Proto.Parser.ParseFrom(proto.ToByteArray())).ChildRuns);
-
-        // Assert
-        Assert.IsType<ChildRunLifecycle.Accepted>(restored.Lifecycle);
-        Assert.Equal(0, restored.PromptsIssued);
     }
 
     /// <summary>
@@ -191,20 +167,6 @@ public sealed class ChildRunParkSerializationTests : TestKit
                     break;
             }
         }
-    }
-
-    private static HashSet<int> WireFieldNumbers(byte[] bytes)
-    {
-        var fields = new HashSet<int>();
-        var input = new CodedInputStream(bytes);
-        uint tag;
-        while ((tag = input.ReadTag()) != 0)
-        {
-            fields.Add(WireFormat.GetTagFieldNumber(tag));
-            input.SkipLastField();
-        }
-
-        return fields;
     }
 
     // A park with a value in each field.

@@ -82,9 +82,10 @@ public sealed partial record SessionState
             (ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Parked, ChildRunEvent.TerminalRecorded terminal)
                 when terminal.Terminal.Result.RunId == run.RunId && terminal.Terminal.Result.ScopeId == run.ScopeId
                 => new ChildRunLifecycle.Terminal(terminal.Terminal),
-            // durable-child-park-recovery, design D3. The writer numbers the prompts from the counter of the run.
+            // durable-child-park-recovery, design D3. The writer numbers the prompts from the counter of the run, one
+            // for each request, so the counter after the park is the counter of the run plus the request count.
             (ChildRunLifecycle.Accepted, ChildRunEvent.Parked parked)
-                when parked.Requests.Count > 0 && parked.PromptsIssued == run.PromptsIssued + parked.Requests.Count
+                when parked.Requests.Count > 0
                      && parked.Requests.All(request => request.SourceChildRunId == run.RunId)
                 => new ChildRunLifecycle.Parked(parked.Park, [.. parked.Requests.Select(static request => new ChildParkRequest(request, null))]),
             // The resume record comes only after every answer. The checkpoint of the resume holds the round of the park,
@@ -108,7 +109,7 @@ public sealed partial record SessionState
             {
                 Lifecycle = next,
                 InitialWorkingSnapshot = next is ChildRunLifecycle.Terminal { LegacyPrepared: not null } ? null : run.InitialWorkingSnapshot,
-                PromptsIssued = evt is ChildRunEvent.Parked { PromptsIssued: var issued } ? issued : run.PromptsIssued
+                PromptsIssued = evt is ChildRunEvent.Parked parkedEvent ? run.PromptsIssued + parkedEvent.Requests.Count : run.PromptsIssued
             })
         };
     }

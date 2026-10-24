@@ -349,7 +349,6 @@ internal static partial class NetclawProtoMapper
                 break;
             case ChildRunEvent.Parked parked:
                 proto.Parked = ToProto(parked.Park, parked.Requests.Select(static request => new ChildParkRequest(request, null)));
-                proto.PromptsIssued = parked.PromptsIssued;
                 break;
             case ChildRunEvent.Resumed:
                 proto.Resumed = true;
@@ -392,7 +391,7 @@ internal static partial class NetclawProtoMapper
                     SessionId = sessionId, RunId = runId, RecordedAtMs = proto.RecordedAtMs
                 },
             Proto.ChildRunEventV2Proto.FactOneofCase.Parked => new ChildRunEvent.Parked(FromProto(proto.Parked),
-                ReadParkRequests(proto.Parked).Select(static request => request.Request).ToArray(), proto.PromptsIssued)
+                ReadParkRequests(proto.Parked).Select(static request => request.Request).ToArray())
             {
                 SessionId = sessionId, RunId = runId, RecordedAtMs = proto.RecordedAtMs
             },

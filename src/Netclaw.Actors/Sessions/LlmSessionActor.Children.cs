@@ -262,7 +262,7 @@ public sealed partial class LlmSessionActor
             EndParkedRun(run.RunId, SubAgentOutcomeReason.ToolExecutionFailed, error.Message, child);
             return;
         }
-        var evt = new ChildRunEvent.Parked(message.Park, dispatches.Select(CreateApprovalRequest).ToArray(), issued)
+        var evt = new ChildRunEvent.Parked(message.Park, dispatches.Select(CreateApprovalRequest).ToArray())
         { SessionId = _sessionId, RunId = run.RunId, RecordedAtMs = NowMs() };
         var bytes = NetclawProtoMapper.ToProto((ChildRunEvent)evt).CalculateSize();
         if (!ChildParkRules.ParkFits(bytes))
@@ -659,7 +659,7 @@ public sealed partial class LlmSessionActor
     // Recovery cannot tell a restart drain, a crash, and a stop of the session actor apart. In each case the owner
     // started again and the child did not survive, so the reason is owner_restarted.
     // The actions come from the state at RecoveryCompleted. A parked run that a stashed click resumed has the action
-    // Wait, so this message never records it as lost.
+    // Resume, so this message never records it as lost; its resume gate finds no park and does nothing.
     private void RecoverChildren(RecoverChildRuns message)
     {
         foreach (var (runId, action) in message.Actions)

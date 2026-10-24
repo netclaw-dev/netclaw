@@ -77,9 +77,6 @@ public sealed class RejectedSlashCommandAfterApprovalTests : ApprovalWaitTestBas
 /// </summary>
 public sealed class RejectedSlashCommandDuringChildConsentPauseTests(ITestOutputHelper output) : ChildConsentTestBase(output)
 {
-    private const string FireText = "Check the hold.";
-    private const long FireMs = 1_761_055_200_000;
-
     /// <summary>
     /// A child of Alice waits for consent, so the session is paused. A reminder fire waits behind the pause. Alice
     /// sends a slash command with a typo, and the session rejects it. The fire does not start a turn while the pause

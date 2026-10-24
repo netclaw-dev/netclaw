@@ -263,6 +263,17 @@ public abstract class ChildConsentTestBase : ChildNoticeTestBase
         ReceivedAt = TimeProvider.System.GetUtcNow()
     };
 
+    protected const string FireText = "Sweep the open pull requests.";
+    protected const string Sweep = "daily-pr-sweep";
+    protected const long FireMs = 1_761_055_200_000;
+
+    /// <summary>A fire of the reminder <see cref="Sweep"/> in this session.</summary>
+    private protected Task<ISessionResponse> SendFireAsync(SessionId sessionId, long fireMs = FireMs)
+        => AskManagerAsync<ISessionResponse>(new SendUserMessage
+        {
+            SessionId = sessionId, Content = FireText, Source = Fire(Sweep, fireMs)
+        });
+
     /// <summary>A reminder fire key <c>{reminderId}:{fireMs}</c>.</summary>
     protected static string FireKey(string reminderId, long fireMs) => $"{reminderId}:{fireMs}";
 

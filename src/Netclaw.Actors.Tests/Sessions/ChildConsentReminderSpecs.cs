@@ -19,8 +19,6 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// </summary>
 public sealed class ChildConsentReminderSpecs(ITestOutputHelper output) : ChildConsentTestBase(output)
 {
-    private const string Sweep = "pr-sweep";
-
     /// <summary>
     /// Scenario "The later fire replaces the earlier fire". Reminder R fires at 14:00 and at 15:00 while the session is
     /// paused. The 14:00 fire is closed, the 15:00 fire stays pending, and one turn of R runs after the pause.
@@ -149,12 +147,6 @@ public sealed class ChildConsentReminderSpecs(ITestOutputHelper output) : ChildC
         Assert.Empty(ApprovalTool.Contexts);
         Assert.Empty(ConsentNotices(journal, sessionId));
     }
-
-    private Task<ISessionResponse> SendFireAsync(SessionId sessionId, long fireMs)
-        => AskManagerAsync<ISessionResponse>(new SendUserMessage
-        {
-            SessionId = sessionId, Content = "Sweep the open pull requests.", Source = Fire(Sweep, fireMs)
-        });
 
     // The source of a reminder that runs in its own session. The reminder channel has no interactive approval.
     private static MessageSource Isolated(string key) => Reminder(key) with { ChannelType = ChannelType.Reminder };

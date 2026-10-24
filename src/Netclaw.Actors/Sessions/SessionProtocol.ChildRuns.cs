@@ -33,7 +33,7 @@ public static partial class SessionProtocol
 
         // PR 2 compile shells (test author): the durable park and its resume (design D2). No writer, reducer, or mapper
         // yet. The implementer owns them.
-        internal sealed record Parked(ChildRunPark Park, IReadOnlyList<ToolApprovalRequested> Requests, int PromptsIssued)
+        internal sealed record Parked(ChildRunPark Park, IReadOnlyList<ToolApprovalRequested> Requests)
             : ChildRunEvent;
 
         internal sealed record Resumed : ChildRunEvent;

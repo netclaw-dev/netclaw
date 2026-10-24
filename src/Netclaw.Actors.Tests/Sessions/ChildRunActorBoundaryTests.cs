@@ -551,14 +551,14 @@ internal sealed class AcceptanceFault(bool rejectAcceptance, bool holdAcceptance
         return changed;
     }
 
-    // The journal holds the next write that has a matching event until the spec releases it. A held write that a
-    // reject rule also matches is rejected after the release.
+    // The journal holds the next write that has a matching event, or the next replay (a JournalReplay marker), until
+    // the spec releases it. A held write that a reject rule also matches is rejected after the release.
     private Func<object, bool>? _holdMatch;
 
     public TaskCompletionSource HoldEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource ReleaseHold { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public void HoldNextWriteOf(Func<object, bool> match) => Interlocked.Exchange(ref _holdMatch, match);
+    public void HoldNext(Func<object, bool> match) => Interlocked.Exchange(ref _holdMatch, match);
 
     public async Task HoldIfMatchedAsync(IEnumerable<object> events, CancellationToken cancellationToken)
     {
@@ -569,6 +569,9 @@ internal sealed class AcceptanceFault(bool rejectAcceptance, bool holdAcceptance
         await ReleaseHold.Task.WaitAsync(cancellationToken);
     }
 }
+
+/// <summary>The marker that the test journal matches when a persistent actor starts its recovery.</summary>
+internal sealed record JournalReplay(string PersistenceId);
 
 public sealed class AcceptanceBoundaryJournal : MemoryJournal
 {
@@ -582,6 +585,15 @@ public sealed class AcceptanceBoundaryJournal : MemoryJournal
             return true;
         }
         return base.ReceivePluginInternal(message);
+    }
+
+    // Each recovery reads the highest sequence number, also when a snapshot leaves no event to replay.
+    public override async Task<long> ReadHighestSequenceNrAsync(string persistenceId, long fromSequenceNr,
+        CancellationToken cancellationToken)
+    {
+        if (_fault is { } holdFault)
+            await holdFault.HoldIfMatchedAsync([new JournalReplay(persistenceId)], cancellationToken);
+        return await base.ReadHighestSequenceNrAsync(persistenceId, fromSequenceNr, cancellationToken);
     }
 
     protected override async Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages, CancellationToken cancellationToken)

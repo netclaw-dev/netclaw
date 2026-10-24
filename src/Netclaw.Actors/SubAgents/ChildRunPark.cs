@@ -97,10 +97,7 @@ internal enum ChildRecoveryAction
     /// <summary>The run was running at the restart. Record it as lost.</summary>
     Lost,
 
-    /// <summary>The run is parked with an open request. Keep it and start no actor.</summary>
-    Wait,
-
-    /// <summary>The run is parked and every request has an answer. Resume it.</summary>
+    /// <summary>The run is parked. Try the resume; the resume gate waits while a request is open.</summary>
     Resume,
 
     /// <summary>The run ended. Prepare its result.</summary>
@@ -136,11 +133,11 @@ internal static class ChildParkRules
             : ChildResumeDecision.Resume;
 
     // At most once: a run that was running at the restart is lost, because its work is uncertain. A park ran nothing,
-    // so it waits for its answers or resumes.
-    public static ChildRecoveryAction RecoveryAction(ChildRunLifecycle lifecycle, int openRequests) => lifecycle switch
+    // so recovery tries its resume, and the resume gate waits for its answers.
+    public static ChildRecoveryAction RecoveryAction(ChildRunLifecycle lifecycle) => lifecycle switch
     {
         ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling => ChildRecoveryAction.Lost,
-        ChildRunLifecycle.Parked => openRequests > 0 ? ChildRecoveryAction.Wait : ChildRecoveryAction.Resume,
+        ChildRunLifecycle.Parked => ChildRecoveryAction.Resume,
         ChildRunLifecycle.Terminal => ChildRecoveryAction.PrepareResult,
         _ => ChildRecoveryAction.Nothing
     };
@@ -151,7 +148,6 @@ internal static class ChildParkRules
     // restart reminder. A parked run with every answer waits only for a drain to end, so it counts.
     public static bool CountsAsUnreported(ChildRunLifecycle lifecycle, int openRequests) => lifecycle switch
     {
-        ChildRunLifecycle.Reported => false,
         ChildRunLifecycle.Parked => openRequests == 0,
         _ => true
     };

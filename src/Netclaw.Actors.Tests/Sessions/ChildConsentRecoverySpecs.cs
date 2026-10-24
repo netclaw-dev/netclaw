@@ -286,9 +286,6 @@ public sealed class ChildConsentRecoverySpecs(ITestOutputHelper output) : ChildC
 public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : ChildConsentTestBase(output)
 {
     private const string AliceText = "Alice interrupted work.";
-    private const string FireText = "Sweep the open pull requests.";
-    private const string Sweep = "daily-pr-sweep";
-    private const long FireMs = 1_761_055_200_000;
 
     protected override bool UseTestScheduler => true;
 
@@ -348,12 +345,12 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
             await DrainAndResumeAsync(sessionId);
 
             // Assert: a recorded turn consumes P while the pause holds. After the answer, a recorded turn consumes F.
-            await AwaitAssertAsync(() => Assert.True(TurnConsumed(journal, person.InputId),
+            await AwaitAssertAsync(() => Assert.True(TurnRuns(journal, person.InputId) > 0,
                 "The interrupted input of Alice must run after the restart."), Deadline, cancellationToken: Cancellation);
             await BarrierAsync(sessionId, asking);
-            Assert.False(TurnConsumed(journal, fire.InputId), "The held fire must wait while the request is open.");
+            Assert.False(TurnRuns(journal, fire.InputId) > 0, "The held fire must wait while the request is open.");
             AssertAck(await AnswerAsync(sessionId, prompt.CallId, Alice));
-            await AwaitAssertAsync(() => Assert.True(TurnConsumed(journal, fire.InputId),
+            await AwaitAssertAsync(() => Assert.True(TurnRuns(journal, fire.InputId) > 0,
                 "The held fire must run after the last answer."), Deadline, cancellationToken: Cancellation);
         }
         finally
@@ -393,7 +390,7 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
             await AwaitAssertAsync(() => Assert.Contains(ConsentNotices(journal, sessionId),
                 notice => notice.UserMessage.Content!.StartsWith(ClosingNoticeHeading, StringComparison.Ordinal)),
                 Deadline, cancellationToken: Cancellation);
-            await AwaitAssertAsync(() => Assert.True(TurnConsumed(journal, Assert.Single(ResultNoticesOf(journal, asking.Run.RunId)).InputId)),
+            await AwaitAssertAsync(() => Assert.True(TurnRuns(journal, Assert.Single(ResultNoticesOf(journal, asking.Run.RunId)).InputId) > 0),
                 Deadline, cancellationToken: Cancellation);
             await SettleNoticesAsync(journal, sessionId);
             Assert.DoesNotContain(journal.Committed.OfType<ToolApprovalResolved>(), evt => evt.CallId.StartsWith(asking.Run.RunId.Value, StringComparison.Ordinal));
@@ -411,8 +408,8 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
             // Assert: P runs first, and F runs after it.
             await AwaitAssertAsync(() =>
             {
-                Assert.True(TurnConsumed(journal, person.InputId), "The interrupted input of Alice must run after the restart.");
-                Assert.True(TurnConsumed(journal, fire.InputId), "The fire must run after the restart.");
+                Assert.True(TurnRuns(journal, person.InputId) > 0, "The interrupted input of Alice must run after the restart.");
+                Assert.True(TurnRuns(journal, fire.InputId) > 0, "The fire must run after the restart.");
             }, Deadline, cancellationToken: Cancellation);
             Assert.True(TurnRecordedAt(journal, person.InputId) < TurnRecordedAt(journal, fire.InputId),
                 "The session is not paused, so the restart resume runs P first, and F runs after it in admission order.");
@@ -429,8 +426,7 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
     /// Alice's input P starts a turn, and fire F waits for the pause. The daemon drains for a restart. After the
     /// restart, P runs while the parked request of child A keeps the pause. After Alice answers it, F runs. The turn
     /// record of P comes before the turn record of F.
-    /// Planted bug: recovery queues the held input (N and F) before the stashed restart reminder appends P, so F runs
-    /// before P.
+    /// Planted bug: F runs while the request is open, or the turn record of F comes before the turn record of P.
     /// </summary>
     [Fact]
     public async Task A_restart_of_a_paused_session_keeps_admission_order_for_a_held_notice_a_person_input_and_a_held_fire()
@@ -467,10 +463,10 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
             await DrainAndResumeAsync(sessionId);
 
             // Assert
-            await AwaitAssertAsync(() => Assert.True(TurnConsumed(journal, person.InputId),
+            await AwaitAssertAsync(() => Assert.True(TurnRuns(journal, person.InputId) > 0,
                 "The interrupted input of Alice must run after the restart."), Deadline, cancellationToken: Cancellation);
             AssertAck(await AnswerAsync(sessionId, prompt.CallId, Alice));
-            await AwaitAssertAsync(() => Assert.True(TurnConsumed(journal, fire.InputId),
+            await AwaitAssertAsync(() => Assert.True(TurnRuns(journal, fire.InputId) > 0,
                 "The held fire must run after the last answer."), Deadline, cancellationToken: Cancellation);
             Assert.True(TurnRecordedAt(journal, person.InputId) < TurnRecordedAt(journal, fire.InputId),
                 "P was admitted before F, so the turn record of P must come before the turn record of F.");
@@ -526,9 +522,9 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
             // Assert
             await AwaitAssertAsync(() =>
             {
-                Assert.True(TurnConsumed(journal, fire.InputId), "The interrupted fire must run after the restart.");
-                Assert.True(TurnConsumed(journal, person.InputId), "The input of Alice must run after the restart.");
-                Assert.True(TurnConsumed(journal, later.InputId), "The later fire must run after the restart.");
+                Assert.True(TurnRuns(journal, fire.InputId) > 0, "The interrupted fire must run after the restart.");
+                Assert.True(TurnRuns(journal, person.InputId) > 0, "The input of Alice must run after the restart.");
+                Assert.True(TurnRuns(journal, later.InputId) > 0, "The later fire must run after the restart.");
             }, Deadline, cancellationToken: Cancellation);
             Assert.True(TurnRecordedAt(journal, person.InputId) < TurnRecordedAt(journal, later.InputId),
                 "P was admitted before F2, so the turn record of P must come before the turn record of F2.");
@@ -590,12 +586,6 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
         await AwaitAssertAsync(() => Assert.Null(Clients.Parent.NextResponseGate), Deadline, cancellationToken: Cancellation);
     }
 
-    private Task<ISessionResponse> SendFireAsync(SessionId sessionId)
-        => AskManagerAsync<ISessionResponse>(new SendUserMessage
-        {
-            SessionId = sessionId, Content = FireText, Source = Fire(Sweep, FireMs)
-        });
-
     // The drain waits for the model grace period, which the spec advances. Then the daemon restarts, and the restart
     // reminder wakes the session.
     private async Task DrainAndResumeAsync(SessionId sessionId)
@@ -623,10 +613,6 @@ public sealed class ChildConsentRestartResumeSpecs(ITestOutputHelper output) : C
         await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
         return reminder;
     }
-
-    private static bool TurnConsumed(AcceptanceFault journal, InputId inputId)
-        => journal.Committed.OfType<TurnRecorded>().Any(turn => turn.ConsumedInputIds.Contains(inputId))
-           || journal.Committed.OfType<ToolBatchStarted>().Any(batch => batch.ConsumedInputIds.Contains(inputId));
 
     private static int TurnRecordedAt(AcceptanceFault journal, InputId inputId)
         => IndexOfEvent(journal, evt => evt is TurnRecorded turn && turn.ConsumedInputIds.Contains(inputId)

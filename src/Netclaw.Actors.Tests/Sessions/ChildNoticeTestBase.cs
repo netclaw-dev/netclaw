@@ -393,6 +393,11 @@ public abstract class ChildNoticeTestBase : LlmSessionTestBase
         return -1;
     }
 
+    // How many turns consumed the input: a turn record or a tool batch. A close is not a turn.
+    private protected static int TurnRuns(AcceptanceFault journal, InputId inputId) => journal.Committed.ToArray().Count(evt =>
+        evt is TurnRecorded turn && turn.ConsumedInputIds.Contains(inputId)
+        || evt is ToolBatchStarted batch && batch.ConsumedInputIds.Contains(inputId));
+
     // How many committed events consumed the input. A turn that runs a notice twice is a double delivery.
     private protected static int ConsumptionCount(AcceptanceFault journal, InputId inputId)
         => journal.Committed.ToArray().Count(evt => evt switch
