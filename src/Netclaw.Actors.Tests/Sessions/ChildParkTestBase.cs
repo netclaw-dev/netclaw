@@ -267,6 +267,7 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
     /// <summary>
     /// The idle timeout passivates the session. The final snapshot and the journal delete run first. A turn that still
     /// runs, for instance a notice turn, ignores the idle timeout, so the spec sends it again until the session stops.
+    /// On the virtual scheduler each try also moves the clock past the passivation timers.
     /// </summary>
     protected async Task PassivateAsync(SessionId id)
     {
@@ -276,7 +277,10 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
         await AwaitAssertAsync(async () =>
         {
             session.Tell(ReceiveTimeout.Instance);
-            await stopped.ExpectTerminatedAsync(session, TimeSpan.FromSeconds(1), cancellationToken: Cancellation);
+            if (UseTestScheduler)
+                AdvanceScheduler(TimeSpan.FromSeconds(1));
+            await stopped.ExpectTerminatedAsync(session, TimeSpan.FromMilliseconds(UseTestScheduler ? 100 : 1000),
+                cancellationToken: Cancellation);
         }, Deadline, cancellationToken: Cancellation);
     }
 
