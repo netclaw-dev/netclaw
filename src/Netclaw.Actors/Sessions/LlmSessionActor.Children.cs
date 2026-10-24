@@ -275,8 +275,7 @@ public sealed partial class LlmSessionActor
         }
         // A live child never sends a damaged loop guard. A defect must not reach the journal, where it would fail the
         // resume of a later restart.
-        if (ChildParkRules.LoopGuardDamage(message.Park.LoopGuard, (run.Lifecycle as ChildRunLifecycle.Accepted)?.Checkpoint?.CompletedRound)
-            is { } damage)
+        if (ChildParkRules.LoopGuardDamage(message.Park.LoopGuard) is { } damage)
         {
             EndParkedRun(run.RunId, SubAgentOutcomeReason.ParkDamaged, $"The park is damaged: {damage}.", child);
             return;
@@ -336,7 +335,7 @@ public sealed partial class LlmSessionActor
         if (_subAgentSpawner is null || _subAgentRegistry is null ||
             !TurnContext.TryFromRecord(run.OriginalContext, out var authority, out _) || authority is null)
             throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable, "The session cannot start a child.");
-        if (ChildParkRules.LoopGuardDamage(resume.Park.LoopGuard, null) is { } damage)
+        if (ChildParkRules.LoopGuardDamage(resume.Park.LoopGuard) is { } damage)
             throw new ChildStartRejectedException(SubAgentOutcomeReason.ParkDamaged, $"The park is damaged: {damage}.");
         var snapshot = run.InitialWorkingSnapshot ?? throw new ChildStartRejectedException(
             SubAgentOutcomeReason.SpawnUnavailable, "The run has no initial working snapshot.");

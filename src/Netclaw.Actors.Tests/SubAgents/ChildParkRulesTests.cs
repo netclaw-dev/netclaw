@@ -92,11 +92,10 @@ public sealed class ChildParkRulesTests
 
     /// <summary>
     /// PR 2 design D7 and F6. A loop-guard state is damaged when a count is negative, the refused-repeat count is above
-    /// the escalation count plus one, an equal-round count is outside 0 to 2, or the round is below the last checkpoint
-    /// round. The valid rows hold each limit value. One row has a valid episode beside a damaged one, so the check must
-    /// read every episode. Each damaged row names its damage.
-    /// Planted bug: a damaged park resumes and makes the reducer throw at the next checkpoint, a valid park ends, or the
-    /// rule reads only the first episode.
+    /// the escalation count plus one, or an equal-round count is outside 0 to 2. The valid rows hold each limit value.
+    /// One row has a valid episode beside a damaged one, so the check must read every episode. Each damaged row names its
+    /// damage.
+    /// Planted bug: a damaged park resumes, a valid park ends, or the rule reads only the first episode.
     /// </summary>
     [Fact]
     public void A_damaged_loop_guard_is_found_and_a_valid_one_passes()
@@ -105,22 +104,21 @@ public sealed class ChildParkRulesTests
         const string Refused = "the refused-repeat count is above the escalation";
         const string EqualRounds = "an equal-round count is outside 0 to 2";
         var limit = TurnStateTracker.EscalatedRefusedRepeat + 1;
-        (string Name, TurnLoopGuardState Guard, int? LastCheckpoint, string? Damage)[] table =
+        (string Name, TurnLoopGuardState Guard, string? Damage)[] table =
         [
-            ("valid", Guard(round: 3, calls: 4, refused: limit, equalRounds: [2, 0]), 3, null),
-            ("valid with no checkpoint", Guard(round: 0, calls: 0, refused: 0), null, null),
-            ("negative round", Guard(round: -1), null, Negative),
-            ("negative call count", Guard(calls: -1), null, Negative),
-            ("negative refused repeat", Guard(refused: -1), null, Negative),
-            ("refused repeat above the escalation", Guard(refused: limit + 1), null, Refused),
-            ("equal rounds above 2", Guard(equalRounds: [3]), null, EqualRounds),
-            ("equal rounds below 0", Guard(equalRounds: [-1]), null, EqualRounds),
-            ("equal rounds of 7 after a valid episode", Guard(equalRounds: [1, 7]), null, EqualRounds),
-            ("round below the last checkpoint", Guard(round: 2), 3, "the round is below the last checkpoint")
+            ("valid", Guard(round: 3, calls: 4, refused: limit, equalRounds: [2, 0]), null),
+            ("valid with zero counts", Guard(round: 0, calls: 0, refused: 0), null),
+            ("negative round", Guard(round: -1), Negative),
+            ("negative call count", Guard(calls: -1), Negative),
+            ("negative refused repeat", Guard(refused: -1), Negative),
+            ("refused repeat above the escalation", Guard(refused: limit + 1), Refused),
+            ("equal rounds above 2", Guard(equalRounds: [3]), EqualRounds),
+            ("equal rounds below 0", Guard(equalRounds: [-1]), EqualRounds),
+            ("equal rounds of 7 after a valid episode", Guard(equalRounds: [1, 7]), EqualRounds)
         ];
 
         Assert.Equal(table.Select(static row => (row.Name, row.Damage)),
-            table.Select(static row => (row.Name, ChildParkRules.LoopGuardDamage(row.Guard, row.LastCheckpoint))));
+            table.Select(static row => (row.Name, ChildParkRules.LoopGuardDamage(row.Guard))));
     }
 
     /// <summary>
