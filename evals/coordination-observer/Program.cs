@@ -31,6 +31,7 @@ var turnCompletions = 0;
 var activeChildrenAtFirstCompletion = 0;
 var receivedTextDelta = false;
 var completed = false;
+var timedOut = false;
 
 await using var client = new DaemonClient(args[0]);
 using var subscription = client.SessionOutput.Subscribe(output => outputs.Writer.TryWrite(output));
@@ -93,6 +94,7 @@ try
 }
 catch (OperationCanceledException) when (timeout.IsCancellationRequested)
 {
+    timedOut = true;
     finalResponse = currentResponse.ToString();
 }
 
@@ -114,7 +116,7 @@ var envelope = new
     }
 };
 Console.WriteLine(JsonSerializer.Serialize(envelope, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-return completed ? 0 : 1;
+return completed ? 0 : timedOut ? 124 : 1;
 
 bool HasFinalOutcome()
 {

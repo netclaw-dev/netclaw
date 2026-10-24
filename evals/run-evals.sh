@@ -1489,7 +1489,8 @@ run_coordination_observer_prompt() {
 
     local started_at ended_at exit_code=0
     started_at=$(iso_now)
-    timeout "$PROMPT_TIMEOUT" dotnet run --no-build \
+    # The observer owns the prompt deadline. Allow time for its JSON result and disposal.
+    timeout "$((PROMPT_TIMEOUT + 15))" dotnet run --no-build \
         --project "$REPO_ROOT/evals/coordination-observer/coordination-observer.csproj" -- \
         "http://127.0.0.1:$EVAL_PORT" "$PROMPT_TIMEOUT" "$required_children" "$prompt" \
         > "$STDOUT_FILE" 2> "$STDERR_FILE" || exit_code=$?

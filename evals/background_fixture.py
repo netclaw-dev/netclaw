@@ -236,10 +236,12 @@ def handler_for(fixture):
             self.wfile.write(content)
 
         def forward(self, body, nonce):
+            body = {**body, "model": fixture.model}
             headers = {"Content-Type": "application/json"}
             if fixture.api_key:
                 headers["Authorization"] = "Bearer " + fixture.api_key
             request = urllib.request.Request(fixture.upstream, data=json.dumps(body).encode(), headers=headers)
+            body = json.loads(request.data)
             try:
                 response = urllib.request.urlopen(request, timeout=fixture.forward_timeout)
             except (urllib.error.URLError, TimeoutError):
@@ -259,6 +261,7 @@ def handler_for(fixture):
                     self.wfile.write(chunk)
                     self.wfile.flush()
                 if observer is not None:
-                    observer(nonce, bytes(captured), response.headers.get("Content-Type", ""))
+                    observer(nonce, bytes(captured), response.headers.get("Content-Type", ""),
+                             forwarded_request=body)
 
     return Handler
