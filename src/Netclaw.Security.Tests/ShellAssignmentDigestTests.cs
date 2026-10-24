@@ -13,6 +13,9 @@ namespace Netclaw.Security.Tests;
 public sealed class ShellAssignmentDigestTests
 {
     private static readonly ToolName ShellToolName = new("shell_execute");
+    private static readonly ManagedTemporaryLocation TestTemporaryLocation = new(
+        new SessionStorageEnvelopeRoot(
+            Path.Combine(Path.GetTempPath(), "netclaw-shell-assignment-digest")));
     // The daemon environment holds "mode" and "other", so an assignment to them
     // reaches each child process and keeps its digest (decision F3).
     private static readonly ShellApprovalMatcher BashMatcher = new(
@@ -93,9 +96,11 @@ public sealed class ShellAssignmentDigestTests
     [Fact]
     public void Bash_launch_proved_assignment_value_can_qualify_a_digest()
     {
-        const string Command = "export DOTNET_ROOT=$HOME/.dotnet; dotnet test";
+        // A separate export keeps its operand literal while the assignment uses launch facts.
+        const string Command = "DOTNET_ROOT=$TMPDIR/.dotnet; export DOTNET_ROOT; dotnet test";
         var environment = CreateBash52([new("PATH", "/usr/bin")]);
-        var analysis = new ShellCommandAnalyzer(environment).Analyze(Command, "/work");
+        var analysis = new ShellCommandAnalyzer(environment)
+            .Analyze(Command, "/work", TestTemporaryLocation);
         Assert.True(analysis.IsResolved);
 
         var occurrence = Assert.Single(analysis.Commands, static command =>
@@ -104,10 +109,10 @@ public sealed class ShellAssignmentDigestTests
         Assert.Equal("DOTNET_ROOT", assignment.Name);
         Assert.IsType<ShellValueDomain.Unknown>(assignment.AuthoredValue);
         Assert.Equal(
-            "DOTNET_ROOT=$HOME/.dotnet",
+            "DOTNET_ROOT=$TMPDIR/.dotnet",
             Command.Substring(assignment.SourceStart, assignment.SourceLength));
         Assert.Equal(
-            environment.HomeDirectory + "/.dotnet",
+            ShellExecutionEnvironment.GetTemporaryDirectoryValue(TestTemporaryLocation) + "/.dotnet",
             Assert.IsType<ShellValueDomain.Exact>(assignment.EffectiveValue).Value);
         Assert.Equal(ShellVariableAssignmentScope.ShellState, assignment.Scope);
         Assert.True(assignment.MayAffectProcessEnvironment);
@@ -151,28 +156,30 @@ public sealed class ShellAssignmentDigestTests
     public void Bash_assignment_digest_binds_the_effective_launch_and_source_values()
     {
         var environment = CreateBash52([new("PATH", "/usr/bin")]);
-        var home = environment.HomeDirectory;
-        Assert.NotNull(home);
+        var temporaryDirectory = ShellExecutionEnvironment.GetTemporaryDirectoryValue(TestTemporaryLocation);
 
         var launchValue = ExtractAssignmentDigest(
             environment,
-            "export DOTNET_ROOT=$HOME/.dotnet; dotnet test");
+            "export DOTNET_ROOT=$TMPDIR/.dotnet; dotnet test",
+            TestTemporaryLocation);
         var literalValue = ExtractAssignmentDigest(
             environment,
-            $"export DOTNET_ROOT='{home}/.dotnet'; dotnet test");
+            $"export DOTNET_ROOT='{temporaryDirectory}/.dotnet'; dotnet test",
+            TestTemporaryLocation);
         var differentLiteralValue = ExtractAssignmentDigest(
             environment,
-            "export DOTNET_ROOT='/other/.dotnet'; dotnet test");
+            "export DOTNET_ROOT='/other/.dotnet'; dotnet test",
+            TestTemporaryLocation);
         const string changedHomeCommand =
             "HOME=/other; export DOTNET_ROOT=$HOME/.dotnet; dotnet test";
         var changedHomeParsed = environment.ParseForApproval(
             changedHomeCommand,
             "/work",
             publishAuthoredSourceFacts: true,
-            environment.CreateLaunchEnvironment(temporary: null),
+            environment.CreateLaunchEnvironment(TestTemporaryLocation),
             parseCompoundRedirects: false);
         var changedHomeShellAnalysis = new ShellCommandAnalyzer(environment)
-            .Analyze(changedHomeCommand, "/work");
+            .Analyze(changedHomeCommand, "/work", TestTemporaryLocation);
         var changedHomeAnalysis = new ShellApprovalMatcher(environment).AnalyzeInvocation(
             ShellToolName,
             Args(changedHomeCommand, "/work"),
@@ -193,8 +200,9 @@ public sealed class ShellAssignmentDigestTests
     public void Launch_derived_git_directory_changes_keep_a_digest()
     {
         var environment = CreateBash52([new("PATH", "/usr/bin"), new("GIT_DIR", "/work/.git")]);
-        const string command = "export GIT_DIR=$HOME/.launch-value; git status";
-        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
+        const string command = "export GIT_DIR=$TMPDIR/.launch-value; git status";
+        var analysis = new ShellCommandAnalyzer(environment)
+            .Analyze(command, "/work", TestTemporaryLocation);
         Assert.True(analysis.IsResolved);
 
         var occurrence = Assert.Single(analysis.Commands, static item =>
@@ -202,7 +210,7 @@ public sealed class ShellAssignmentDigestTests
         var assignment = Assert.Single(occurrence.Assignments, item => item.Name == "GIT_DIR");
         Assert.IsType<ShellValueDomain.Unknown>(assignment.AuthoredValue);
         Assert.Equal(
-            environment.HomeDirectory + "/.launch-value",
+            ShellExecutionEnvironment.GetTemporaryDirectoryValue(TestTemporaryLocation) + "/.launch-value",
             Assert.IsType<ShellValueDomain.Exact>(assignment.EffectiveValue).Value);
         Assert.True(assignment.MayAffectProcessEnvironment);
         Assert.True(ShellAssignmentDigestFactory.TryCreate(
@@ -706,9 +714,11 @@ public sealed class ShellAssignmentDigestTests
 
     private static ApprovalAssignmentDigest ExtractAssignmentDigest(
         ShellExecutionEnvironment environment,
-        string command)
+        string command,
+        ManagedTemporaryLocation temporary)
     {
-        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
+        var analysis = new ShellCommandAnalyzer(environment)
+            .Analyze(command, "/work", temporary);
         Assert.True(analysis.IsResolved);
         var occurrence = Assert.Single(analysis.Commands, static item =>
             item.Clause.Verb.Tokens.FirstOrDefault() == "dotnet");
