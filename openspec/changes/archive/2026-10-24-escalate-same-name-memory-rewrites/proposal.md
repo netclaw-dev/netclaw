@@ -3,9 +3,9 @@
 A same-name document rewrite can bypass the LLM after the overwrite guard rejects a direct update.
 The `Create` result then reaches store deduplication and appends a second full copy.
 
-Source PRDs: [PRD-007](../../../docs/prd/PRD-007-agent-personality-and-local-memory.md), product outcome 2.
+Source PRDs: [PRD-007](../../../../docs/prd/PRD-007-agent-personality-and-local-memory.md), product outcome 2.
 Plan trace: `IMPLEMENTATION_PLAN.md`, Task 5.2.
-Terms: [engineering glossary](../../../docs/spec/GLOSSARY.md).
+Terms: [engineering glossary](../../../../docs/spec/GLOSSARY.md).
 
 ## What Changes
 

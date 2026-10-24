@@ -23,9 +23,9 @@
 - [x] 3.3 Parent: select the mutation gate after red proof; measure exact nonzero mutants, span membership, killed status, and cold-run cost.
 - [x] 3.4 Run Slopwatch, the header check, and strict OpenSpec validation on the final correction; verify no new violations or artifact errors.
 - [x] 3.5 Document extra LLM cost, failure behavior, target validation, both consumer loops, and the selected engine batch test seam.
-- [ ] 3.6 Parent: require independent review and green CI; sync and archive through OpenSpec skills only after acceptance.
+- [x] 3.6 Parent: require independent review and green CI; sync and archive through OpenSpec skills only after acceptance.
 
-Source PRDs: [PRD-007](../../../docs/prd/PRD-007-agent-personality-and-local-memory.md), product outcome 2.
+Source PRDs: [PRD-007](../../../../docs/prd/PRD-007-agent-personality-and-local-memory.md), product outcome 2.
 Capability: [netclaw-agent-memory delta](specs/netclaw-agent-memory/spec.md).
 
 The first frozen suite records 15 failures, then 51 passes.
@@ -40,3 +40,11 @@ Preflight does not promise rollback after a storage failure.
 The measured condition has one killed equality mutant; eight unsafe report controls fail.
 Final gate execution, hosted group duration, hosted CI, and the separate post-open review remain acceptance gates.
 The parent retains raw logs and TRX outside the repository.
+
+The final culture regression has two failing baseline rows and 113 final passes.
+The separate post-open reviews find no further source defect at `81edeee7c61ec6bf150a91de3c14c58645e19400`.
+All hosted checks for that code head pass or skip as configured.
+The complete mutation group passes in 659 seconds, below the 900-second budget.
+The main specification matches the delta.
+The rebase retains identical curation production files, tests, mutation code, and specification content.
+The final rebased and archived head must pass CI before merge.

@@ -1,8 +1,8 @@
 ## Context
 
-Source PRDs: [PRD-007](../../../docs/prd/PRD-007-agent-personality-and-local-memory.md), product outcome 2.
+Source PRDs: [PRD-007](../../../../docs/prd/PRD-007-agent-personality-and-local-memory.md), product outcome 2.
 See [the proposal](proposal.md) for the problem and [the capability delta](specs/netclaw-agent-memory/spec.md) for acceptance scenarios.
-Use [the engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+Use [the engineering glossary](../../../../docs/spec/GLOSSARY.md) for shared terms.
 
 Before this change, `MemoryCurationEvaluator` clears `IsExactAnchorMatch` after `GuardDestructiveUpdate` rejects a direct update.
 The candidate still carries its canonical name and document identity.

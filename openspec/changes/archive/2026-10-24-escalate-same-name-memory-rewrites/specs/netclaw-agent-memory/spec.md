@@ -2,8 +2,8 @@
 
 ### Requirement: Same-name document rewrites require a resolved curation decision
 
-Source PRDs: [PRD-007](../../../../../docs/prd/PRD-007-agent-personality-and-local-memory.md), product outcome 2.
-Terms: [engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+Source PRDs: [PRD-007](../../../../../../docs/prd/PRD-007-agent-personality-and-local-memory.md), product outcome 2.
+Terms: [engineering glossary](../../../../../../docs/spec/GLOSSARY.md).
 
 The curator SHALL preserve the guard that blocks a direct document overwrite when the proposal omits existing content.
 After guard rejection, an exact canonical name SHALL remain evidence of an existing document.
