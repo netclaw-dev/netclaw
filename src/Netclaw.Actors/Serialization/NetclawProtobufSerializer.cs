@@ -73,6 +73,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(ChildRunEvent.CancellationRequested)] = ChildRunEventManifest,
         [typeof(ChildRunEvent.TerminalRecorded)] = ChildRunEventManifest,
         [typeof(ChildRunEvent.ResultPrepared)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.Parked)] = ChildRunEventManifest,
+        [typeof(ChildRunEvent.Resumed)] = ChildRunEventManifest,
         [typeof(WorkingContext)] = WorkingContextManifest,
         [typeof(ReminderId)] = ReminderIdManifest,
         [typeof(ReminderDelivery)] = ReminderDeliveryManifest,

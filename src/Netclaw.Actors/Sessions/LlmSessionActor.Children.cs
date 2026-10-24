@@ -8,6 +8,7 @@ using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
@@ -25,10 +26,6 @@ public sealed partial class LlmSessionActor
     private IReadOnlyList<ToolInteractionClosed> _restartWithdrawals = [];
     private readonly ChildConsentDigest _consentDigest = new();
     private bool _noticeAdmissionInOpenTurn;
-    // durable-child-consent-wait PR 1: the park of each run that waits for consent, and the prompt counter of each run.
-    // Both are actor-local. A restart loses a park, and recovery records its run as lost (existing rule).
-    private readonly Dictionary<SubAgentRunId, ChildRunPark> _parks = [];
-    private readonly Dictionary<SubAgentRunId, int> _promptsIssued = [];
 
     private void ApplyLegacyCoordination(LegacyCoordinationEvent evt)
     {
@@ -98,14 +95,15 @@ public sealed partial class LlmSessionActor
         Command<ChildEventRejected>(message =>
         {
             // Race: a duplicate answer from the stash can resume the run before the rejection of the first answer
-            // arrives. Then the run has no park, and the resumed child owns its end.
-            if (!_parks.ContainsKey(message.RunId))
+            // arrives. Then the run is no longer parked, and the resumed child owns its end.
+            if (!ChildParkRules.RejectedEventEnds(message.Kind, _state.ChildRuns.GetValueOrDefault(message.RunId)?.Lifecycle))
             {
-                _log.Warning("A rejected consent event of child run {RunId} arrived after the park ended", message.RunId);
+                _log.Warning("A rejected {Kind} record of child run {RunId} arrived after its run moved on", message.Kind,
+                    message.RunId);
                 return;
             }
             EndParkedRun(message.RunId, SubAgentOutcomeReason.ToolExecutionFailed,
-                "The journal rejected a consent request or answer of the child.", ActorRefs.Nobody);
+                $"The journal rejected the {message.Kind} record of the child.", ActorRefs.Nobody);
         });
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
         Command<RecoverChildRuns>(_ => RecoverChildren());
@@ -212,8 +210,8 @@ public sealed partial class LlmSessionActor
         }
     }
 
-    // Design D1 and D3: the owner keeps the park actor-local, releases the child, and asks the run requester once for
-    // each parked call. The prompts show after all requests of the park are in the journal, in one atomic write.
+    // Design D1 and D3: the owner writes the park with its requests in one Parked record, releases the child, and asks
+    // the run requester once for each parked call. The prompts show after the journal holds the record.
     private void AcceptChildPark(ChildParkReached message)
     {
         var child = Sender;
@@ -239,7 +237,7 @@ public sealed partial class LlmSessionActor
         var requests = new ApprovalRequestBuilder(authority.SessionId, authority.RequesterSenderId,
             authority.RequesterPrincipal, authority.HasAdoptedContext, authority.HasThirdPartyAdoptedContext,
             authority.AdoptedSpeakerIds);
-        var issued = _promptsIssued.GetValueOrDefault(run.RunId);
+        var issued = run.PromptsIssued;
         var dispatches = new List<ToolInteractionRequestDispatch>();
         try
         {
@@ -256,28 +254,51 @@ public sealed partial class LlmSessionActor
             EndParkedRun(run.RunId, SubAgentOutcomeReason.ToolExecutionFailed, error.Message, child);
             return;
         }
-        _promptsIssued[run.RunId] = issued;
-        _parks[run.RunId] = message.Park;
+        var evt = new ChildRunEvent.Parked(message.Park, dispatches.Select(CreateApprovalRequest).ToArray(), issued)
+        { SessionId = _sessionId, RunId = run.RunId, RecordedAtMs = NowMs() };
+        var bytes = NetclawProtoMapper.ToProto((ChildRunEvent)evt).CalculateSize();
+        if (!ChildParkRules.ParkFits(bytes))
+        {
+            _log.Error("The park of child run {RunId} has {Bytes} bytes, above the cap of {Cap}", run.RunId, bytes,
+                ChildRunPark.MaxBytes);
+            EndParkedRun(run.RunId, SubAgentOutcomeReason.ParkTooLarge,
+                $"The park has {bytes} bytes, above the cap of {ChildRunPark.MaxBytes}.", child);
+            return;
+        }
+        // A live child never sends a damaged loop guard. A defect must not reach the journal, where it would fail the
+        // resume of a later restart.
+        if (ChildParkRules.LoopGuardDamage(message.Park.LoopGuard, (run.Lifecycle as ChildRunLifecycle.Accepted)?.Checkpoint?.CompletedRound)
+            is { } damage)
+        {
+            EndParkedRun(run.RunId, SubAgentOutcomeReason.ParkDamaged, $"The park is damaged: {damage}.", child);
+            return;
+        }
+        _log.Info("Child run {RunId} parked {Count} call(s) in {Bytes} bytes", run.RunId, dispatches.Count, bytes);
         Context.Unwatch(child);
         _execution.ReleaseChild(run.RunId);
         child.Tell(new ChildTerminalCommitted());
-        PersistApprovalRequests(dispatches);
+        _ = _state.Apply(evt);
+        Persist(evt, committed =>
+        {
+            _state = _state.Apply(committed);
+            foreach (var (request, dispatch) in committed.Requests.Zip(dispatches))
+                ApprovalRequestCommitted(request, PromptOf(dispatch));
+        });
     }
 
-    // Design D3, the resume gate. It runs after the journal holds an answer of a parked request.
+    // Design D3, the resume gate. It runs after the journal holds an answer of a parked request, and at recovery.
     private void TryResumeParkedRun(SubAgentRunId runId)
     {
-        var hasPark = _parks.TryGetValue(runId, out var park);
-        if (ChildParkRules.ResumeGate(hasPark, _toolWorkflow.ChildApprovalCount(runId), RestartDrainRequested)
+        var run = _state.ChildRuns[runId];
+        var parked = run.Lifecycle as ChildRunLifecycle.Parked;
+        if (ChildParkRules.ResumeGate(parked is not null, _toolWorkflow.ChildApprovalCount(runId), RestartDrainRequested)
             != ChildResumeDecision.Resume)
             return;
-        _parks.Remove(runId);
-        var run = _state.ChildRuns[runId];
         PreparedChildStart prepared;
         try
         {
             // A park with no original call for an approved shell request cannot bind its consent, so the run ends.
-            var resume = new ChildRunResume(park!, _toolWorkflow.TakeParkedAnswers(runId, park!));
+            var resume = new ChildRunResume(parked!.Park, _toolWorkflow.TakeParkedAnswers(runId, parked.Park));
             prepared = PrepareResume(run, resume);
         }
         catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
@@ -287,9 +308,17 @@ public sealed partial class LlmSessionActor
                 error.Message, ActorRefs.Nobody);
             return;
         }
-        // The prompt counter makes each incarnation name new, so it never meets an old actor that still stops. A resume
-        // emits no second Started output.
-        StartChildActor(run, prepared with { ActorName = $"{prepared.ActorName}-{_promptsIssued[runId]}" });
+        // At most once: the Resumed record is in the journal before any parked call runs. A crash after it records the
+        // run as lost, and the call does not run again.
+        var evt = new ChildRunEvent.Resumed { SessionId = _sessionId, RunId = runId, RecordedAtMs = NowMs() };
+        _ = _state.Apply(evt);
+        Persist(evt, committed =>
+        {
+            _state = _state.Apply(committed);
+            // The prompt counter makes each incarnation name new, so it never meets an old actor that still stops. A
+            // resume emits no second Started output.
+            StartChildActor(run, prepared with { ActorName = $"{prepared.ActorName}-{run.PromptsIssued}" });
+        });
     }
 
     // Design D4: a resume is a spawn from the park. Security boundary: the authority comes only from the run record,
@@ -299,6 +328,8 @@ public sealed partial class LlmSessionActor
         if (_subAgentSpawner is null || _subAgentRegistry is null ||
             !TurnContext.TryFromRecord(run.OriginalContext, out var authority, out _) || authority is null)
             throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable, "The session cannot start a child.");
+        if (ChildParkRules.LoopGuardDamage(resume.Park.LoopGuard, null) is { } damage)
+            throw new ChildStartRejectedException(SubAgentOutcomeReason.ParkDamaged, $"The park is damaged: {damage}.");
         var snapshot = run.InitialWorkingSnapshot ?? throw new ChildStartRejectedException(
             SubAgentOutcomeReason.SpawnUnavailable, "The run has no initial working snapshot.");
         _subAgentLoader?.SyncInto(_subAgentRegistry);
@@ -319,16 +350,15 @@ public sealed partial class LlmSessionActor
     }
 
     // The one refusal path of a park (cut plan): the run ends as failed, and no parked call runs. A second call for an
-    // ended run does nothing (RecordChildTerminal), so two rejected requests of one park record one end.
+    // ended run does nothing (RecordChildTerminal).
     private void EndParkedRun(SubAgentRunId runId, SubAgentOutcomeReason reason, string text, IActorRef child)
     {
-        _parks.Remove(runId);
         if (!_state.ChildRuns.TryGetValue(runId, out var run))
             return;
         RecordChildTerminal(runId, new SubAgentResult
         {
             AgentName = run.AgentName, Completion = new ChildRunCompletion.Failed(reason),
-            Output = $"The child could not wait for consent: {text} The calls that needed consent did not run."
+            Output = $"The child could not wait for consent: {text} The parked calls did not run."
         }, lost: false, warning: null, child);
     }
 
@@ -389,7 +419,7 @@ public sealed partial class LlmSessionActor
             replyTo.Tell("Error: This child run is not available to the requester.");
             return;
         }
-        if (command.Cancel && run.Lifecycle is ChildRunLifecycle.Accepted && _parks.Remove(run.RunId))
+        if (command.Cancel && run.Lifecycle is ChildRunLifecycle.Parked)
         {
             // Design D7: a parked run has no actor, so the cancel records the end at once.
             RecordChildTerminal(run.RunId, CancelledParkResult(run), lost: false, warning: null, ActorRefs.Nobody);
@@ -444,7 +474,7 @@ public sealed partial class LlmSessionActor
     private void RecordChildTerminal(SubAgentRunId runId, SubAgentResult result, bool lost, string? warning, IActorRef child)
     {
         if (!_state.ChildRuns.TryGetValue(runId, out var run) ||
-            run.Lifecycle is not (ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling))
+            run.Lifecycle is not (ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Parked))
             return;
         _execution.CloseChild(runId);
         // The durable owner copies the mutable findings before it hands the event to persistence.
@@ -461,7 +491,6 @@ public sealed partial class LlmSessionActor
             // The prompts close before the run reports its end, so no channel shows a live prompt of an ended run.
             EmitClosedPrompts(withdrawn);
             _execution.ReleaseChild(runId);
-            _promptsIssued.Remove(runId);
             if (!child.Equals(ActorRefs.Nobody))
             {
                 Context.Unwatch(child);
@@ -561,7 +590,8 @@ public sealed partial class LlmSessionActor
 
     // Runs whose result the parent has not received, minus runs whose notice the session cannot admit.
     private IEnumerable<BackgroundChildRun> UnreportedRuns()
-        => _state.GetUnreportedRuns().Where(run => !_unreportableRuns.Contains(run.RunId));
+        => _state.GetUnreportedRuns().Where(run => !_unreportableRuns.Contains(run.RunId)
+            && ChildParkRules.CountsAsUnreported(run.Lifecycle, _toolWorkflow.ChildApprovalCount(run.RunId)));
 
     // The reducer refused the notice of an ended run, for instance because the recorded authority of the run no
     // longer parses. A retry cannot succeed. The session reports the loss in the log with the path of the result
@@ -624,11 +654,20 @@ public sealed partial class LlmSessionActor
     {
         foreach (var run in _state.GetExecutableChildRuns().ToArray())
         {
-            if (run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling)
-                RecordChildTerminal(run.RunId, LostChildResult(run, SubAgentOutcomeReason.OwnerRestarted), lost: true,
-                    warning: "Recovery does not relaunch uncertain child work.", ActorRefs.Nobody);
-            else if (run.Lifecycle is ChildRunLifecycle.Terminal terminal)
-                PrepareChildResult(run, terminal.Result, terminal.LegacyPrepared);
+            switch (ChildParkRules.RecoveryAction(run.Lifecycle, _toolWorkflow.ChildApprovalCount(run.RunId)))
+            {
+                case ChildRecoveryAction.Lost:
+                    RecordChildTerminal(run.RunId, LostChildResult(run, SubAgentOutcomeReason.OwnerRestarted), lost: true,
+                        warning: "Recovery does not relaunch uncertain child work.", ActorRefs.Nobody);
+                    break;
+                case ChildRecoveryAction.Resume:
+                    TryResumeParkedRun(run.RunId);
+                    break;
+                case ChildRecoveryAction.PrepareResult:
+                    var terminal = (ChildRunLifecycle.Terminal)run.Lifecycle;
+                    PrepareChildResult(run, terminal.Result, terminal.LegacyPrepared);
+                    break;
+            }
         }
     }
 
@@ -686,6 +725,24 @@ public sealed partial class LlmSessionActor
         // interrupted batch first. Its journal callback then starts the notice turn.
         if (!AbandonInterruptedToolBatchAfterRecovery())
             StartWaitingInputAfterApproval();
+    }
+
+    // durable-child-park-recovery, F3: the run record holds each park, its requests, and their answers. Replay and the
+    // snapshot rebuild only the state, so the workflow entries of the parks open here, after the restart withdrew the
+    // requests of the runs that did not park. The prompts stay live in the channels. The log line holds no content.
+    private void RestoreParkedRequests()
+    {
+        var parks = _state.GetExecutableChildRuns().Select(static run => run.Lifecycle)
+            .OfType<ChildRunLifecycle.Parked>().ToArray();
+        foreach (var request in parks.SelectMany(static parked => parked.Requests))
+        {
+            ApplyToolApprovalRequested(request.Request);
+            if (request.Resolution is { } answer)
+                _toolWorkflow.ApplyResolvedResponse(answer);
+        }
+        if (parks.Length > 0)
+            _log.Info("child_parks_recovered count={Count} bytes={Bytes}", parks.Length,
+                parks.Sum(static parked => NetclawProtoMapper.ToProto(parked.Park, parked.Requests).CalculateSize()));
     }
 
     // A paused session at the crash: an open child request of a run that is still Accepted. Replay never closes a

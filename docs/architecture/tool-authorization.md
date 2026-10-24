@@ -852,7 +852,7 @@ Leaks today:
 | Classes | [`ApprovalPatternMatching`](../../src/Netclaw.Security/ApprovalPatternMatching.cs), [`ToolApprovalActor`](../../src/Netclaw.Actors/Tools/ToolApprovalActor.cs), [`ToolApprovalStore`](../../src/Netclaw.Configuration/ToolApprovalStore.cs), [`ApprovalEntry`](../../src/Netclaw.Configuration/ApprovalEntry.cs), [`ApprovalBucketBuilder`](../../src/Netclaw.Actors/Sessions/ApprovalBucketBuilder.cs), [`ShellApprovalEvidence`](../../src/Netclaw.Actors/Tools/ShellApprovalEvidence.cs), [`OneTimeApprovalKeys`](../../src/Netclaw.Actors/Tools/OneTimeApprovalKeys.cs), [`ReviewedSafeShellPolicy`](../../src/Netclaw.Actors/Tools/ReviewedSafeShellPolicy.cs), [`ShellPolicyEvaluation`](../../src/Netclaw.Actors/Tools/ShellPolicyEvaluation.cs), [`ShellPolicyProjection`](../../src/Netclaw.Actors/Tools/ShellPolicyProjection.cs) |
 | Published contract | `IShellApprovalMatchService.MatchShellCandidatesAsync(...)` (shell, one batched lookup), `IToolApprovalService.CheckApprovalAsync(...)` (other tools), `IStructuredToolApprovalService.RecordApprovalCandidatesAsync(...)` (store an answer). [`AkkaToolApprovalService`](../../src/Netclaw.Actors/Tools/AkkaToolApprovalService.cs) implements all three over `ToolApprovalActor`. |
 | Must not know | Shell syntax (it receives candidates), channels. |
-| Data | Persistent grants: `~/.netclaw/config/tool-approvals.json`, version 3, durable. Chat grants: actor-local in `ToolApprovalActor`. One-time consent: call-local keys in `ToolApprovalAttempt`. Coverage: call-local. A child consent request uses the parent journal events. The park of a child that waits for consent is actor-local in the owning session. No parent snapshot holds a child prompt entry, and a restart withdraws every child request (a durable park is planned, section 8). |
+| Data | Persistent grants: `~/.netclaw/config/tool-approvals.json`, version 3, durable. Chat grants: actor-local in `ToolApprovalActor`. One-time consent: call-local keys in `ToolApprovalAttempt`. Coverage: call-local. A child consent request lives in the run record: the `Parked` record holds the park and its requests, and each answer goes into the park. The session snapshot holds the run record, so a parked prompt survives a restart, a compaction snapshot, and passivation. A restart withdraws only the child requests of runs that did not park. |
 | Rules | [TA-8](../../openspec/specs/tool-authorization/spec.md#requirement-ta-8-every-candidate-needs-coverage), [TA-13](../../openspec/specs/tool-authorization/spec.md#requirement-ta-13-the-persistent-grant-store-fails-closed) |
 
 Leaks today:
@@ -923,22 +923,31 @@ Parked child prompts (PR 1 of durable-child-consent-wait, design D1 to D4):
   asks a bridge.
 - Owner of the park decision: `LlmSessionActor.AcceptChildPark` through `ChildParkRules.AcceptPark`. Only the owned
   child of an `Accepted` run opens prompts. A park of a cancelling run ends the run as cancelled. Any other sender gets
-  the stop signal, and the session records nothing. The park is actor-local.
+  the stop signal, and the session records nothing. The park is durable in the run record (`ChildRunEvent.Parked`).
 - The owner builds each prompt with `ApprovalRequestBuilder.ForChildCall` for the requester of the run record, never
-  for the requester of the current turn. The run prompt counter numbers the call IDs. The session journals all
-  requests of one park in one atomic write before it shows the prompts. A rejected write ends the run as failed, and
-  the `OnPersistRejected` branch for it runs first, so it never fails the parent turn.
+  for the requester of the current turn. The run prompt counter (`BackgroundChildRun.PromptsIssued`) numbers the call
+  IDs, also after a restart. The session journals the park and all its requests in one `Parked` record before it shows
+  the prompts. A park above 4 MiB ends the run with `park_too_large`, and no prompt shows. A rejected record ends the
+  run as failed only in the lifecycle that the record expected (`ChildParkRules.RejectedEventEnds`). The
+  `OnPersistRejected` branch for it runs first, so it never fails the parent turn.
 - A child answer has no live wait. It goes to the idle answer handler in every phase. After the journal holds the
   answer, `TryResumeParkedRun` asks `ChildParkRules.ResumeGate`: the run waits for every answer and for the end of a
   restart drain. If the journal rejects the answer, the same `OnPersistRejected` branch nacks it with
   `approval_persist_failed`, and the run ends as failed.
 - The resume is a spawn: `SubAgentSpawner.PrepareResume` applies the spawn rules again under `run.OriginalContext`
-  and the directories of the park. The new child runs only the parked calls, each once, through
-  `ApprovalRedriveEntry`, and the gate checks each call again. A failed spawn rule ends the run as failed, and no
-  parked call runs. A cancel of a parked run records the end at once.
+  and the directories of the park. A damaged loop guard ends the run with `park_damaged`. The session journals
+  `ChildRunEvent.Resumed` before any parked call runs, so a crash after it records the run as lost and the call does
+  not run again. The new child runs only the parked calls, each once, through `ApprovalRedriveEntry`, and the gate
+  checks each call again. A failed spawn rule ends the run as failed, and no parked call runs. A cancel of a parked
+  run records the end at once.
 - For an approved shell call, the owner reads the shell source key from the parked call in the park transcript
   (`SessionToolWorkflow.GetShellSourceKey`, the same rule as the session re-drive). If the transcript has no such
   call or no command, the run ends as failed, and no consent is seeded.
+- Recovery (durable-child-park-recovery, F3): the session opens the workflow entries of each parked run from its run
+  record (`RestoreParkedRequests`), and the pause comes back. `ChildParkRules.RecoveryAction` keeps a park with an open
+  request, resumes a park with every answer, and records a running child as lost. After a restart, the requester of a
+  parked prompt still comes from the run record. A channel binding keeps its tracked prompt, and no prompt is
+  replayed.
 
 A valid example: Alice's child parks on one call while Bob's turn runs. Alice approves. The call runs once under
 Alice's recorded authority and in the recorded directory. An invalid example: Bob clicks Alice's prompt first.
@@ -988,8 +997,8 @@ The agent event channel (see [agent event](../spec/GLOSSARY.md#agent-event)):
   no empty-reply retry.
 - At most once: a notice turn that starts gives its answers, also when the turn fails, so they do not come again.
   Recovery closes every pending approval notice with `InputClosed` (`KeepsTurn = true`) and rebuilds the digest from
-  the open child requests. A restart withdraws every child request today, so the rebuilt digest is empty and recovery
-  admits no notice.
+  the open child requests. The open requests of a parked run survive the restart, so the rebuilt digest lists them,
+  and recovery admits one new notice for them (#2617).
 - When the journal rejects a notice admission, the session logs an error and stops, as after a persist failure.
   A turn that stays open tells the person first: the persist-stopped error and a failed turn completion. At the end
   of a finished turn the session stays quiet. Recovery then withdraws the child requests, closes the notices, and
@@ -1402,19 +1411,20 @@ Facts behind the diagram (current code):
   child consent pause"). The held input waits in Ready and in the drain. It never
   joins a running turn. A person input still runs. An approval notice is not held.
   When the last child request closes, the session admits the closing notice, and
-  then the held input runs (`StartWaitingInputAfterApproval`). The pause does not
-  survive a restart today, because a restart withdraws every child request.
-  Recovery queues the held inputs in admission order (section 3.1).
+  then the held input runs (`StartWaitingInputAfterApproval`). The pause
+  survives a restart while a parked request is open. Recovery queues the held
+  inputs in admission order (section 3.1), and a restart reminder starts no turn
+  for an input that the pause holds.
 - Any person can abandon the approval, not only its requester. The check is
   fail-safe: an abandonment cancels the call and grants nothing.
   A valid example: a reminder fires while Alice's `git status` prompt is open.
   Alice approves, the command runs once, and then the reminder turn runs.
   An invalid example: the reminder fire closes Alice's prompt with the
   "superseded by a new message" result. The session must not do this.
-- A subagent request goes to the parent as a park. The owner keeps the park
-  actor-local and keeps the session in memory. A restart withdraws the old
-  prompt with `DaemonRestarted` and records the run as lost, and a late click
-  gets that text.
+- A subagent request goes to the parent as a park in the run record. A session
+  with only open parked runs can passivate, and a click wakes it. A restart
+  keeps the prompt open, and the requester's click resumes the call once. A
+  RUNNING child at a restart is still lost (`owner_restarted`).
   A subagent without a parent bridge cannot ask. The authorizer denies each
   such call with `approval_required_unattended`
   (`ToolAuthorizer.DenyConsentWhenUnattended`), and the run continues.
@@ -1957,7 +1967,7 @@ change is small.
 | Close the `skill_manage` parent-directory check-to-use window | Not supported today | The temp file uses create-new semantics, so a link at the temp name fails. A same-user process that can already write where the daemon writes can still swap a parent directory. That gives no new authority today. With a sandboxed executor, fix it in Filesystem authority with directory-handle operations. |
 | A missing or unreadable audience becomes an error (owner decision, September 29) | Planned | Today some components fall back to `Public` (TA-1). A follow-up code PR makes each such fallback fail loudly. Until that PR merges, the fallback stays as TA-1 describes it. |
 | A consent for repository A that covers repository B | Not supported, by design | This is an invariant. A repository grant covers only registered worktrees of one Git common directory (TA-8). |
-| A child that waits for consent survives a restart (#2572) | Planned | PR 2 of durable-child-consent-wait: the park moves into the run record (`ChildRunEvent.Parked`). Today the park is actor-local, a restart withdraws every child request, and the run is lost. |
+| A running child survives a restart (#2655) | Planned | At a graceful drain, a running child stops at its next batch boundary and sends a park with no request. Recovery already resumes such a park (`ChildParkRules.RecoveryAction`). Today recovery records a running child as lost. |
 | Messages between agents (`notify_parent`, `message_child`, sibling messages) | Needs a contract | One `AgentEvent` subtype, one renderer case, and one tool each. A message body is agent text, so it goes to a run file, and the event carries the path. The envelope gets event, correlation, and causation IDs. |
 | One answer for many child prompts ("approve for all") | Not supported, by design | Each prompt binds one-time consent to one exact call (owner decision Q2). |
 

@@ -8,6 +8,7 @@ using Google.Protobuf;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
 using Proto = Netclaw.Actors.Serialization.Proto;
@@ -346,6 +347,13 @@ internal static partial class NetclawProtoMapper
             case ChildRunEvent.TerminalRecorded terminal:
                 proto.Terminal = LegacyCoordinationReplay.ToLegacyTerminal(terminal.Terminal);
                 break;
+            case ChildRunEvent.Parked parked:
+                proto.Parked = ToProto(parked.Park, parked.Requests.Select(static request => new ChildParkRequest(request, null)));
+                proto.PromptsIssued = parked.PromptsIssued;
+                break;
+            case ChildRunEvent.Resumed:
+                proto.Resumed = true;
+                break;
             case ChildRunEvent.ResultPrepared:
                 throw new InvalidDataException("A prepared child result is legacy read-only data. No writer persists it.");
             default:
@@ -383,9 +391,87 @@ internal static partial class NetclawProtoMapper
                 {
                     SessionId = sessionId, RunId = runId, RecordedAtMs = proto.RecordedAtMs
                 },
+            Proto.ChildRunEventV2Proto.FactOneofCase.Parked => new ChildRunEvent.Parked(FromProto(proto.Parked),
+                ReadParkRequests(proto.Parked).Select(static request => request.Request).ToArray(), proto.PromptsIssued)
+            {
+                SessionId = sessionId, RunId = runId, RecordedAtMs = proto.RecordedAtMs
+            },
+            Proto.ChildRunEventV2Proto.FactOneofCase.Resumed when proto.Resumed => new ChildRunEvent.Resumed
+            {
+                SessionId = sessionId, RunId = runId, RecordedAtMs = proto.RecordedAtMs
+            },
             _ => throw new InvalidDataException("A v2 child event has no valid fact.")
         };
     }
+
+    // durable-child-park-recovery: the park and its requests. The owner measures this record for the size cap.
+    internal static Proto.ChildRunParkProto ToProto(ChildRunPark park, IEnumerable<ChildParkRequest> requests)
+    {
+        var proto = new Proto.ChildRunParkProto
+        {
+            LoopGuard = ToProto(park.LoopGuard),
+            FileActivity = LegacyCoordinationReplay.ToLegacyWorkingDelta(park.FileActivity)
+        };
+        proto.Transcript.AddRange(park.Transcript.Select(ToProto));
+        if (park.ScopeDirectories.ProjectDirectory is { } projectDirectory)
+            proto.ProjectDirectory = projectDirectory;
+        if (park.ScopeDirectories.InheritedWorkingDirectory is { } inherited)
+            proto.InheritedWorkingDirectory = inherited;
+        if (park.SkillOverlay is { } overlay)
+            proto.SkillOverlay = overlay;
+        proto.Requests.AddRange(requests.Select(static request => new Proto.ChildRunApprovalProto
+        {
+            Request = ToProto(request.Request),
+            Resolution = request.Resolution is null ? null : ToProto(request.Resolution)
+        }));
+        return proto;
+    }
+
+    private static ChildRunPark FromProto(Proto.ChildRunParkProto proto) => new()
+    {
+        Transcript = proto.Transcript.Select(FromProto).ToArray(),
+        LoopGuard = FromProto(proto.LoopGuard ?? throw new InvalidDataException("A child park has no loop guard.")),
+        ScopeDirectories = new ChildParkScopeDirectories(proto.HasProjectDirectory ? proto.ProjectDirectory : null,
+            proto.HasInheritedWorkingDirectory ? proto.InheritedWorkingDirectory : null),
+        FileActivity = LegacyCoordinationReplay.FromLegacyWorkingDelta(proto.FileActivity
+            ?? throw new InvalidDataException("A child park has no file activity.")),
+        SkillOverlay = proto.HasSkillOverlay ? proto.SkillOverlay : null
+    };
+
+    private static ImmutableArray<ChildParkRequest> ReadParkRequests(Proto.ChildRunParkProto proto)
+        => [.. proto.Requests.Select(static approval => new ChildParkRequest(
+            FromProto(approval.Request ?? throw new InvalidDataException("A child park request has no request.")),
+            approval.Resolution is null ? null : FromProto(approval.Resolution)))];
+
+    private static Proto.ChildLoopGuardProto ToProto(TurnLoopGuardState loopGuard)
+    {
+        var proto = new Proto.ChildLoopGuardProto
+        {
+            ToolIterationCount = loopGuard.ToolIterationCount,
+            ToolCallCount = loopGuard.ToolCallCount,
+            RefusedRepeatCount = loopGuard.RefusedRepeatCount
+        };
+        if (loopGuard.LastBlockedAction is { } blocked)
+            proto.LastBlockedAction = blocked.Value;
+        proto.CompletedCycles.AddRange(loopGuard.CompletedCycles.Select(static cycle =>
+            new Proto.ChildLoopGuardProto.Types.Cycle { Action = cycle.Action.Value, Outcome = cycle.OutcomeValue }));
+        proto.Episodes.AddRange(loopGuard.Episodes.Select(static pair => new Proto.ChildLoopGuardProto.Types.Episode
+        {
+            ToolName = pair.Key.ToolName.Value, ArgumentsHash = pair.Key.ArgumentsHash, Outcome = pair.Value.Outcome,
+            EqualRounds = pair.Value.EqualRounds, Corrected = pair.Value.Corrected, PendingJob = pair.Value.PendingJob
+        }));
+        return proto;
+    }
+
+    private static TurnLoopGuardState FromProto(Proto.ChildLoopGuardProto proto) => new(
+        proto.ToolIterationCount,
+        proto.ToolCallCount,
+        proto.CompletedCycles.Select(static cycle => (new ToolActionSignature(cycle.Action), cycle.Outcome)).ToArray(),
+        proto.HasLastBlockedAction ? new ToolActionSignature(proto.LastBlockedAction) : null,
+        proto.Episodes.ToDictionary(
+            static episode => new ToolRecurrenceKey(new ToolName(episode.ToolName), episode.ArgumentsHash),
+            static episode => new ToolRecurrenceEpisode(episode.Outcome, episode.EqualRounds, episode.Corrected, episode.PendingJob)),
+        proto.RefusedRepeatCount);
 
     private static Proto.BackgroundChildRunV2Proto ToProto(BackgroundChildRun run)
     {
@@ -403,7 +489,8 @@ internal static partial class NetclawProtoMapper
             SourceOperation = run.SourceOperation,
             ArgumentsDigest = run.ArgumentsDigest,
             OriginalContext = ToProto(run.OriginalContext),
-            AcceptedAtMs = run.AcceptedAtMs
+            AcceptedAtMs = run.AcceptedAtMs,
+            PromptsIssued = run.PromptsIssued
         };
         if (run.SourceReminderId is { } sourceReminder)
             proto.SourceReminderId = sourceReminder.Value;
@@ -440,6 +527,9 @@ internal static partial class NetclawProtoMapper
                 break;
             case ChildRunLifecycle.Terminal { LegacyPrepared: { } prepared } terminal:
                 proto.Prepared = ToProto(terminal.Result, prepared);
+                break;
+            case ChildRunLifecycle.Parked parked:
+                proto.Parked = ToProto(parked.Park, parked.Requests);
                 break;
             case ChildRunLifecycle.Reported reported:
                 proto.Closed = new Proto.ChildRunClosedV2Proto { Outcome = (int)reported.Outcome };
@@ -489,6 +579,8 @@ internal static partial class NetclawProtoMapper
             Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Prepared => ReadPrepared(proto.Prepared),
             Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Consumed => ReadConsumed(proto.Consumed),
             Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Closed => ReadReported(proto.Closed),
+            Proto.BackgroundChildRunV2Proto.LifecycleOneofCase.Parked =>
+                new ChildRunLifecycle.Parked(FromProto(proto.Parked), ReadParkRequests(proto.Parked)),
             _ => throw new InvalidDataException("A v2 child snapshot has no lifecycle.")
         };
         var needsInitialSnapshot = NeedsInitialSnapshot(lifecycle);
@@ -520,14 +612,15 @@ internal static partial class NetclawProtoMapper
             InitialWorkingSnapshot = initialWorkingSnapshot,
             AcceptedAtMs = proto.AcceptedAtMs,
             Lifecycle = lifecycle,
-            SourceReminderId = proto.HasSourceReminderId ? new ReminderId(proto.SourceReminderId) : null
+            SourceReminderId = proto.HasSourceReminderId ? new ReminderId(proto.SourceReminderId) : null,
+            PromptsIssued = proto.PromptsIssued
         };
     }
 
     // A run keeps its initial working snapshot until the owner can still enrich its result. A run that a deployed
     // runtime already prepared has no snapshot, and a reported run has none either.
     private static bool NeedsInitialSnapshot(ChildRunLifecycle lifecycle)
-        => lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling
+        => lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Parked
             or ChildRunLifecycle.Terminal { LegacyPrepared: null };
 
     private static Proto.ChildPreparedStateV2Proto ToProto(ChildRunTerminal terminal, LegacyPreparedResult prepared) => new()

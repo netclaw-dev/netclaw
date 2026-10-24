@@ -26,6 +26,7 @@ A waiting child is not stalled. It waits for the operator with no time limit.
 A child that needs consent parks: its other calls of the same step end first, and then the prompt appears.
 After the last answer, the runtime starts the child again from the park. Only the parked calls run, each once.
 A park that the runtime cannot record, or a resume that a spawn rule refuses, ends the run as failed. Nothing parked runs.
+A park above 4 MiB ends with `park_too_large`. A park whose stored state is damaged ends with `park_damaged` at the answer.
 Do not respawn or poll a waiting child. Tell the operator to answer the prompt, or to cancel the child.
 In a notice turn, `check_agent_run` can read the status of a child run of this session, and cancel it.
 Cancel a waiting child only when the operator asks for it or the task no longer needs it. The cancel closes its prompt.
@@ -36,10 +37,14 @@ A child prompt has buttons only. Do not tell the operator to reply with a letter
 A text answer such as "A" answers nothing while a child prompt is among two or more prompts that the sender can answer.
 The reply is then `N approval prompts are open. Use the buttons on the prompt you mean.`
 When the operator answers a child prompt in one client, the prompt in every other client shows `This approval request has an answer.`
-A cancel, the end of the child, a lost child, a restart, or a prompt that the channel cannot show withdraws the request.
+A cancel, the end of the child, a lost child, or a prompt that the channel cannot show withdraws the request.
 The prompt then shows the reason, for example `This approval request was withdrawn because the task that asked for it was cancelled. Nothing ran.`
 A click on a withdrawn prompt gets the same text. Nothing runs, and no grant is written.
-A restart withdraws every child consent request today. The child run is then lost.
+A parked child survives a restart, a config reload, and passivation. Its prompt stays open, and the pause comes back.
+The operator answers the old prompt after the restart, and the parked call runs once. Do not respawn the child.
+Recovery logs `child_parks_recovered count=N bytes=B` when it keeps parked runs.
+A child that was running (not parked) at a restart is still lost with `owner_restarted`.
+An older Netclaw binary cannot recover a session that holds a parked child. Restore the `netclaw.db` backup before a downgrade.
 
 Use `Cancel: true` to request cancellation.
 The acknowledgement records intent. Wait for the notice and read `result.md` before you report completion.

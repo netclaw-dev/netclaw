@@ -13,8 +13,8 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.SubAgents;
 
 /// <summary>
-/// The state of a child run that waits for consent (design D2). The child builds it when its batch ends. PR 1 keeps it
-/// actor-local in the owning session.
+/// The state of a child run that waits for consent (design D2). The child builds it when its batch ends. The owner
+/// keeps it in the run record (durable-child-park-recovery, design D2).
 /// </summary>
 internal sealed record ChildRunPark
 {
@@ -53,8 +53,11 @@ internal sealed record ChildParkScopeDirectories(string? ProjectDirectory, strin
 internal sealed record ChildParkReached(SubAgentRunId RunId, ChildRunPark Park, IReadOnlyList<ParentApprovalRequest> Requests)
     : INoSerializationVerificationNeeded;
 
-/// <summary>The journal rejected an event of a child run (design D3). The owner records the end of the run.</summary>
-internal sealed record ChildEventRejected(SubAgentRunId RunId) : INoSerializationVerificationNeeded;
+/// <summary>
+/// The journal rejected an event of a child run (design D3). The owner records the end of the run only when the run
+/// still has the lifecycle that the event expected (<see cref="ChildParkRules.RejectedEventEnds"/>).
+/// </summary>
+internal sealed record ChildEventRejected(SubAgentRunId RunId, ChildRejectedEvent Kind) : INoSerializationVerificationNeeded;
 
 /// <summary>The start of a resumed child: the park, and the recorded answer of each parked call by its call ID.</summary>
 internal sealed record ChildRunResume(ChildRunPark Park, IReadOnlyDictionary<string, ApprovalRedriveEntry> Answers);
@@ -112,7 +115,7 @@ internal enum ChildRejectedEvent
     Resumed
 }
 
-/// <summary>The two pure decisions of the park owner. They are the Stryker targets of child-resume-gate.</summary>
+/// <summary>The pure decisions of the park owner. They are the Stryker targets of child-resume-gate.</summary>
 internal static class ChildParkRules
 {
     // <child-resume-gate>
@@ -125,25 +128,58 @@ internal static class ChildParkRules
         _ => ChildParkDecision.StopSender
     };
 
-    // Guard 1: a batch with two parked calls waits for both answers. Guard 2: during a restart drain nothing runs; in
-    // PR 1 the restart then records the run as lost.
+    // Guard 1: a batch with two parked calls waits for both answers. Guard 2: during a restart drain nothing runs;
+    // recovery resumes the run after the restart.
     public static ChildResumeDecision ResumeGate(bool hasPark, int openRequests, bool drainPending)
         => !hasPark ? ChildResumeDecision.Nothing
             : openRequests > 0 || drainPending ? ChildResumeDecision.Wait
             : ChildResumeDecision.Resume;
+
+    // At most once: a run that was running at the restart is lost, because its work is uncertain. A park ran nothing,
+    // so it waits for its answers or resumes.
+    public static ChildRecoveryAction RecoveryAction(ChildRunLifecycle lifecycle, int openRequests) => lifecycle switch
+    {
+        ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling => ChildRecoveryAction.Lost,
+        ChildRunLifecycle.Parked => openRequests > 0 ? ChildRecoveryAction.Wait : ChildRecoveryAction.Resume,
+        ChildRunLifecycle.Terminal => ChildRecoveryAction.PrepareResult,
+        _ => ChildRecoveryAction.Nothing
+    };
+
+    public static bool ParkFits(long parkBytes) => parkBytes <= ChildRunPark.MaxBytes;
+
+    // A parked run with an open request waits for a person. It does not keep the session in memory and does not make a
+    // restart reminder. A parked run with every answer waits only for a drain to end, so it counts.
+    public static bool CountsAsUnreported(ChildRunLifecycle lifecycle, int openRequests) => lifecycle switch
+    {
+        ChildRunLifecycle.Reported => false,
+        ChildRunLifecycle.Parked => openRequests == 0,
+        _ => true
+    };
+
+    // A rejected record ends the run only in the lifecycle that the record expected. A duplicate answer from the stash
+    // can resume the run before the rejection of the first answer arrives; that run keeps going.
+    public static bool RejectedEventEnds(ChildRejectedEvent kind, ChildRunLifecycle? lifecycle) => (kind, lifecycle) switch
+    {
+        (ChildRejectedEvent.Parked, ChildRunLifecycle.Accepted) => true,
+        (ChildRejectedEvent.Answer or ChildRejectedEvent.Resumed, ChildRunLifecycle.Parked) => true,
+        _ => false
+    };
+
+    // The run record holds a child request, so a snapshot keeps it. An open parent request still blocks the snapshot.
+    public static bool IgnoredBySnapshot(SessionProtocol.ToolApprovalRequested request) => request.SourceChildRunId is not null;
     // </child-resume-gate>
 
-    // PR 2 compile shells (test author). Each returns a default result. The implementer owns them (tasks.md 1.1).
-    public static ChildRecoveryAction RecoveryAction(ChildRunLifecycle lifecycle, int openRequests) => default;
-
-    public static bool ParkFits(long parkBytes) => default;
-
-    // Returns the damage of a loop-guard state, or null when the state can be valid.
-    public static string? LoopGuardDamage(TurnLoopGuardState loopGuard, int? lastCheckpointRound) => default;
-
-    public static bool CountsAsUnreported(ChildRunLifecycle lifecycle, int openRequests) => default;
-
-    public static bool RejectedEventEnds(ChildRejectedEvent kind, ChildRunLifecycle? lifecycle) => default;
-
-    public static bool IgnoredBySnapshot(SessionProtocol.ToolApprovalRequested request) => default;
+    // Returns the damage of a loop-guard state, or null when the state can be valid. A damaged state must not resume:
+    // its round could make the next checkpoint fail the reducer, which stops the session. Outside the gate span: the
+    // table checks only null or not null, and each table guard has one episode, so the text and Any/All mutants live.
+    public static string? LoopGuardDamage(TurnLoopGuardState loopGuard, int? lastCheckpointRound)
+        => loopGuard.ToolIterationCount < 0 || loopGuard.ToolCallCount < 0 || loopGuard.RefusedRepeatCount < 0
+            ? "a count is negative"
+            : loopGuard.RefusedRepeatCount > TurnStateTracker.EscalatedRefusedRepeat + 1
+                ? "the refused-repeat count is above the escalation"
+                : loopGuard.Episodes.Values.Any(static episode => episode.EqualRounds is < 0 or > 2)
+                    ? "an equal-round count is outside 0 to 2"
+                    : loopGuard.ToolIterationCount < lastCheckpointRound
+                        ? "the round is below the last checkpoint"
+                        : null;
 }

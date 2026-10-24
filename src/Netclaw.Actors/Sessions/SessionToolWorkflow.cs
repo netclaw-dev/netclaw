@@ -217,7 +217,7 @@ internal sealed partial class SessionToolWorkflow
         => _activeBatch.HasOnlyPendingDurableApprovals(HasRecoverablePending);
 
     public bool AllowsSnapshot(SessionState state)
-        => _calls.Count == 0
+        => _calls.Values.All(static call => ChildParkRules.IgnoredBySnapshot(call.Pending.Request))
            && ParkedToolBatchHistory.FindRedrivableAssistantMessage(state.History, null) is null;
 
     public void ClearApprovalTurn()
