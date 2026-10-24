@@ -36,15 +36,16 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
     private static readonly SubAgentOutcomeReason OwnerRestarted = new("owner_restarted");
 
     /// <summary>
-    /// The live case of issue 2602. A child completes one tool round, and the session records a checkpoint. A daemon
-    /// restart drain stops the session while the child waits for its next model call. After the restart the reminder
-    /// wakes the session, and recovery records the run as lost. The result file names the reason, says that the child
+    /// The live case of issue 2602. A child completes one tool round, and the session records a checkpoint. The session
+    /// stops with no drain while the child waits for its next model call. A graceful drain parks such a child
+    /// (running-child-drain-park), so only a stop with no drain or a missed child wait loses it. The next join recovers
+    /// the session, and recovery records the run as lost. The result file names the reason, says that the child
     /// did not survive when its session restarted, says that the runtime does not start the child again, and says that the effects after the
     /// last checkpoint are uncertain.
     /// Planted bug: recovery records the run with the reason <c>actor_stopped</c> and the old text (today).
     /// </summary>
     [Fact]
-    public async Task A_child_lost_to_a_restart_drain_names_owner_restarted_in_its_result_file()
+    public async Task A_child_lost_to_a_restart_names_owner_restarted_in_its_result_file()
     {
         // Arrange
         var sessionId = new SessionId("lost-reason/drain-checkpoint");
@@ -55,8 +56,8 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
 
         try
         {
-            // Act: the daemon drains the session while the child runs, and the reminder wakes it after the restart.
-            await DrainAndWakeAsync(sessionId);
+            // Act: the session stops while the child runs, and the next join recovers it.
+            await RestartSessionAsync(sessionId);
 
             // Assert
             var terminal = await AwaitTerminalAsync(journal, accepted);
@@ -555,21 +556,6 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
         await AwaitAssertAsync(() => Assert.Contains(journal.Committed.OfType<ChildRunEvent.TerminalRecorded>(),
             evt => evt.RunId == accepted.Run.RunId), Deadline, cancellationToken: Cancellation);
         return Assert.Single(journal.Committed.OfType<ChildRunEvent.TerminalRecorded>(), evt => evt.RunId == accepted.Run.RunId);
-    }
-
-    // The daemon drains the session, and the session stops. After the restart the reminder system sends the restart
-    // reminder, and the reminder wakes the session.
-    private async Task DrainAndWakeAsync(SessionId sessionId)
-    {
-        var session = await ResolveSessionAsync(sessionId);
-        var stopped = CreateTestProbe();
-        stopped.Watch(session);
-        var drained = await AskManagerAsync<DaemonRestartPrepared>(new PrepareForDaemonRestart(sessionId, "daemon-stop"));
-        var reminder = drained.RestartReminder;
-        if (reminder is null)
-            Assert.Fail("The drain returned no restart reminder, but a live child needs one.");
-        await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
-        AssertAck(await SendRestartReminderAsync(sessionId, reminder));
     }
 
     /// <summary>

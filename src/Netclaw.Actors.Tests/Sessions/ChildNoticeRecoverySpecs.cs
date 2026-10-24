@@ -97,12 +97,13 @@ public sealed class ChildNoticeRecoverySpecs(ITestOutputHelper output) : ChildNo
 
     /// <summary>
     /// Spec 12 (S8). A session holds only a live child and no pending input. The daemon restart drain returns a restart
-    /// reminder that carries the recorded context of the child. After the restart the reminder wakes the session, and
-    /// one notice reports the lost child.
-    /// Planted bug: the eligibility check keeps the rule "no pending input, no reminder".
+    /// reminder that carries the recorded context of the child. The child waits at its model call, so the drain parks it
+    /// (running-child-drain-park). After the restart the reminder wakes the session, the child resumes, and one notice
+    /// reports its result.
+    /// Planted bug: the eligibility check keeps the rule "no pending input, no reminder", or the drain loses the child.
     /// </summary>
     [Fact]
-    public async Task Child_only_session_gets_a_restart_resume_and_reports_the_lost_child()
+    public async Task Child_only_session_gets_a_restart_resume_and_reports_the_child()
     {
         // Arrange
         var sessionId = new SessionId("notice/child-only-restart");
@@ -128,7 +129,7 @@ public sealed class ChildNoticeRecoverySpecs(ITestOutputHelper output) : ChildNo
         Assert.Equal(ChannelType.SignalR, reminder.Delivery.OriginChannelType);
         await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
 
-        // After the restart the reminder system sends the reminder to the session. Then one notice reports the lost child.
+        // After the restart the reminder system sends the reminder to the session. Then one notice reports the child.
         var fire = reminder.Schedule.FireAt ?? throw new InvalidOperationException("The restart reminder has no fire time.");
         await AskManagerAsync<ISessionResponse>(new SendUserMessage
         {
@@ -137,15 +138,17 @@ public sealed class ChildNoticeRecoverySpecs(ITestOutputHelper output) : ChildNo
             Source = Reminder($"{reminder.Id.Value}:{fire.ToUnixTimeMilliseconds()}")
         });
         await AwaitAssertAsync(() => Assert.True(NoticesFor(journal, accepted.Run.RunId).Count == 1,
-            "The restart must yield one notice for the lost child."), Deadline, cancellationToken: Cancellation);
+            "The restart must yield one notice for the child."), Deadline, cancellationToken: Cancellation);
         await AwaitAssertAsync(() => Assert.True(
             IndexOf(Clients.Parent.ReceivedMessages, request => CarriesNoticeFor(request, accepted.Run.RunId)) >= 0,
-            "A model request must carry the notice of the lost child."), Deadline, cancellationToken: Cancellation);
+            "A model request must carry the notice of the child."), Deadline, cancellationToken: Cancellation);
         var resultPath = ResultPath(sessionId, accepted);
         await AwaitAssertAsync(() => Assert.True(File.Exists(resultPath), $"The runtime must write {resultPath}."),
             Deadline, cancellationToken: Cancellation);
-        // Recovery cannot tell a restart drain from a crash, so it names the fact that it knows (issue 2602).
-        Assert.Contains("- reason: owner_restarted", await File.ReadAllTextAsync(resultPath, Cancellation), StringComparison.Ordinal);
+        // The resumed child ends with its own output. The drain did not lose it.
+        var result = await File.ReadAllTextAsync(resultPath, Cancellation);
+        Assert.Contains($"{ChildOutput} one", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("owner_restarted", result, StringComparison.Ordinal);
         Assert.Single(NoticesFor(journal, accepted.Run.RunId));
     }
 

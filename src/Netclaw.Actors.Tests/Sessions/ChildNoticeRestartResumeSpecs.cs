@@ -88,8 +88,9 @@ public sealed class ChildNoticeRestartResumeSpecs(ITestOutputHelper output) : Ch
     /// <summary>
     /// Review S2. Alice has a live child. Her next turn streams text and stays open. The daemon restarts. The drain
     /// closes the input of that turn, because the reply is half sent, and the session must not repeat it. The session
-    /// still owes the result of the child, so the drain must return a restart reminder. The reminder wakes the session
-    /// after the restart, and the recovery reports the lost child with one notice.
+    /// still owes the result of the child, so the drain must return a restart reminder. The child waits at its model
+    /// call, so the drain parks it (running-child-drain-park). The reminder wakes the session after the restart, the
+    /// child resumes, and one notice reports its result.
     /// Planted bug: the check for the reminder returns early when the turn emitted text, even when a child is unreported.
     /// </summary>
     [Fact]
@@ -126,7 +127,7 @@ public sealed class ChildNoticeRestartResumeSpecs(ITestOutputHelper output) : Ch
         Assert.Equal(sessionId.Value, reminder.Delivery.SessionId);
         await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
 
-        // After the restart the reminder wakes the session, and one notice reports the lost child.
+        // After the restart the reminder wakes the session, the child resumes, and one notice reports its result.
         Clients.Parent.StreamCompletionGate = null;
         stream.TrySetResult();
         AssertAck(await SendRestartReminderAsync(sessionId, reminder));
@@ -134,8 +135,9 @@ public sealed class ChildNoticeRestartResumeSpecs(ITestOutputHelper output) : Ch
         var resultPath = ResultPath(sessionId, accepted);
         await AwaitAssertAsync(() => Assert.True(File.Exists(resultPath), $"The runtime must write {resultPath}."),
             Deadline, cancellationToken: Cancellation);
-        // Recovery cannot tell a restart drain from a crash, so it names the fact that it knows (issue 2602).
-        Assert.Contains("- reason: owner_restarted", await File.ReadAllTextAsync(resultPath, Cancellation), StringComparison.Ordinal);
+        var result = await File.ReadAllTextAsync(resultPath, Cancellation);
+        Assert.Contains($"{ChildOutput} one", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("owner_restarted", result, StringComparison.Ordinal);
     }
 
     /// <summary>
