@@ -82,8 +82,7 @@ public sealed partial record SessionState
             (ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Parked, ChildRunEvent.TerminalRecorded terminal)
                 when terminal.Terminal.Result.RunId == run.RunId && terminal.Terminal.Result.ScopeId == run.ScopeId
                 => new ChildRunLifecycle.Terminal(terminal.Terminal),
-            // durable-child-park-recovery, design D3. The writer numbers the prompts from the counter of the run, one
-            // for each request, so the counter after the park is the counter of the run plus the request count.
+            // durable-child-park-recovery, design D3.
             (ChildRunLifecycle.Accepted, ChildRunEvent.Parked parked)
                 when parked.Requests.Count > 0
                      && parked.Requests.All(request => request.SourceChildRunId == run.RunId)

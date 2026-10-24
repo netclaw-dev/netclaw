@@ -318,7 +318,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             // Akka.Persistence unstashes the commands that arrived during recovery right after this handler.
             // The orphan notices must start their turn here, so a message that woke the session buffers behind them
             // and does not run first.
-            ResumeOrphanNotices(pausedAtRecovery);
+            ResumeOrphanNotices(pausedAtRecovery || _toolWorkflow.IsChildConsentPaused);
             // A restart that withdrew the requests ends the pause, so the held input runs. An open parked request keeps
             // the pause: the held input goes into the queue now, before the stashed commands, so a stashed fire finds
             // and replaces the held fire of its reminder (design F3). The queue holds it until the last answer.
@@ -2207,17 +2207,23 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     // Every admission comes here: an ordinary input, a fire that replaces a waiting fire, and an approval notice. One
     // atomic write holds the close of the waiting input and the admission of the newer input, so a crash keeps both or
-    // neither. The same write closes the continuation input of a stopped turn that no turn selected and the queue does
-    // not hold (#2632). The stopped turn never runs after that, so the person gets the held-back restart notice once. A
-    // continuation that the pause holds waits in the queue, and it runs after the last answer.
+    // neither. The same write closes the continuation input of a stopped turn that no turn selected (#2632). The stopped
+    // turn never runs after that, so the person gets the held-back restart notice once. Only the notices that the
+    // session makes itself (an approval notice, a child result notice) keep a continuation that the pause holds in the
+    // queue, so it runs after the last answer. A person input or a fire closes it.
     private void PersistReplacingInput(
         InputId? waiting, InputAdmitted admitted, string replacedLogEvent, Action<InputAdmitted> onAdmitted)
     {
         var selected = _input.SelectedInputs.Ids;
-        var stale = _state.GetExecutablePendingInputs()
+        var keepsQueued = admitted.ChildNotice is not null
+                          || TurnContext.TryFromRecord(admitted.TurnContext, out var authority, out _) && authority is { IsChildConsentNotice: true };
+        var pending = _state.GetExecutablePendingInputs();
+        var stale = pending
             .FirstOrDefault(input => SessionInputFlow.IsContinuation(input) && !selected.Contains(input.InputId)
-                                     && !_input.IsBuffered(input.InputId))?.InputId;
+                                     && input.InputId != waiting && !(keepsQueued && _input.IsBuffered(input.InputId)))?.InputId;
         InputId[] closes = [.. new[] { waiting, stale }.OfType<InputId>()];
+        // A replacing fire can name the continuation of its own reminder turn as the waiting fire.
+        var continuation = pending.FirstOrDefault(input => SessionInputFlow.IsContinuation(input) && closes.Contains(input.InputId))?.InputId;
         if (closes.Length == 0)
         {
             Persist(admitted, onAdmitted);
@@ -2234,9 +2240,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 if (waiting is { } waitingId)
                     TurnLog().Info("{ReplacedEvent} waiting={Waiting} replacement={Replacement}",
                         replacedLogEvent, waitingId, admitted.InputId);
-                if (stale is { } continuation)
+                if (continuation is { } stopped)
                 {
-                    TurnLog().Info("continuation_closed waiting={Waiting} replacement={Replacement}", continuation, admitted.InputId);
+                    TurnLog().Info("continuation_closed waiting={Waiting} replacement={Replacement}", stopped, admitted.InputId);
                     EmitRestartStoppedTurnNotice(ReminderEligibility.None, 0);
                 }
             }
@@ -2476,9 +2482,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         // N1 (durable-child-park-recovery): an open parked request holds automated input and child notices, also the
         // continuation of an automation turn. The reminder starts no turn for them. They run after the last answer.
         if (_toolWorkflow.IsChildConsentPaused)
-            pending = SessionInputFlow.SplitByAuthority(pending).Valid
-                .Where(static pair => !ChildConsentPause.Holds(pair.Authority, isChildNotice: pair.Input.ChildNotice is not null))
-                .Select(static pair => pair.Input).ToArray();
+            pending = SplitByThePause(pending).Free;
         if (pending.Count == 0)
         {
             AckRestartResumeNoOp(cmd);

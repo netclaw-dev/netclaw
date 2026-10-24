@@ -53,7 +53,7 @@ Current state on `feature/durable-child-pr1` (rebased on `dev` after #2651):
 
 ### D2. Domain
 
-- `ChildRunEvent.Parked(ChildRunPark Park, IReadOnlyList<ToolApprovalRequested> Requests, int PromptsIssued)` and
+- `ChildRunEvent.Parked(ChildRunPark Park, IReadOnlyList<ToolApprovalRequested> Requests)` and
   `ChildRunEvent.Resumed`.
 - `ChildRunLifecycle.Parked(ChildRunPark Park, ImmutableArray<ChildParkRequest> Requests)`, with
   `ChildParkRequest(ToolApprovalRequested Request, ToolApprovalResolved? Resolution)`.
@@ -67,7 +67,7 @@ Current state on `feature/durable-child-pr1` (rebased on `dev` after #2651):
 
 | From | Event | To |
 | --- | --- | --- |
-| `Accepted` | `Parked` | `Parked(park, requests with no resolution)`; `PromptsIssued` set |
+| `Accepted` | `Parked` | `Parked(park, requests with no resolution)`; `PromptsIssued` grows by the request count |
 | `Parked` | `ToolApprovalResolved` of one of its calls | the same run, with that resolution |
 | `Parked` | `Resumed` | `Accepted` with a checkpoint: round = `park.LoopGuard.ToolIterationCount`, activity = `park.FileActivity`, summary "The child resumed after consent." |
 | `Parked` | `TerminalRecorded` | `Terminal` |
@@ -97,7 +97,7 @@ Caution: a reducer throw during replay stops the session. Each writer check mirr
 | Damaged-park rule | `ChildParkRules.LoopGuardDamage`, called by `PrepareResume` | call-local |
 | Resume record | `TryResumeParkedRun` | durable `Resumed` |
 | Recovery choice for each run | `ChildParkRules.RecoveryAction`, called by `RecoverChildren` | durable lifecycle |
-| Open workflow entries, the pause | `SessionToolWorkflow.OpenParkEntries` | actor-local, rebuilt from the run record |
+| Open workflow entries, the pause | `LlmSessionActor.RestoreParkedRequests` (recovery) and `ApprovalRequestCommitted` (live) | actor-local, rebuilt from the run record |
 | Restart reminder and passivation count | `ChildParkRules.CountsAsUnreported` | call-local over durable state |
 | End on a rejected child event | `ChildParkRules.RejectedEventEnds(kind, lifecycle)` | call-local |
 | Snapshot rule for child entries | `ChildParkRules.IgnoredBySnapshot`, called by `AllowsSnapshot` | call-local |
@@ -112,10 +112,10 @@ has the lifecycle that the event expected: `Parked` expects `Accepted`; an answe
 F1 park (AcceptChildPark)
   decision := ChildParkRules.AcceptPark(owned, run.Lifecycle)            # PR 1
   requests := ForChildCall(..) each; number from run.PromptsIssued
-  evt := Parked(park, requests, issued)
+  evt := Parked(park, requests)
   if !ParkFits(size(evt)): end Failed park_too_large; return
   release the child                                                       # PR 1
-  Persist(evt): Apply; OpenParkEntries(run); emit UntilClosed prompts; digest; pause
+  Persist(evt): Apply; ApprovalRequestCommitted for each request (entry, UntilClosed prompt, digest, pause)
 
 F2 answer (live or after a restart)
   Persist ToolApprovalResolved: Apply (answer into the park); entry; ack; close prompt; digest
@@ -124,14 +124,13 @@ F2 answer (live or after a restart)
 
 F3 recovery
   replay or the snapshot offer rebuild SessionState only
-  for each Parked run: OpenParkEntries(run)
-  withdraw only the child entries of runs that are not Parked
+  withdraw the child entries that replay left open (runs that did not park)
+  RestoreParkedRequests: open the entries of each Parked run from its run record
   if the pause holds: queue the held inputs before the stashed commands
   log child_parks_recovered (n > 0 only)
-  RecoverChildren: RecoveryAction(lifecycle, open)
+  RecoverChildren: RecoveryAction(lifecycle), chosen at RecoveryCompleted
     Accepted or Cancelling -> lost, owner_restarted                      # unchanged
-    Parked, open > 0       -> wait; no actor
-    Parked, open = 0       -> TryResumeParkedRun
+    Parked                 -> TryResumeParkedRun (the resume gate waits while a request is open)
     Terminal               -> prepare the result                        # unchanged
 
 F4 admission with a pending continuation (#2651 contract)

@@ -33,7 +33,7 @@ Each test class that owns a temp folder deletes it. This list replaces tasks 6 t
 
 ## 5. Recovery, passivation, and the pause (implementation)
 
-- [x] 5.1 In `RecoveryCompleted`, open the entries of each parked run (`OpenParkEntries`) for the journal and the snapshot alike, withdraw only the child entries of runs that are not parked, queue held inputs before stashed commands when the pause holds, and write `child_parks_recovered` when n > 0. Narrow `ExpireRecoveredChildApprovals` to runs that are not parked. Verify S4, S5, and task 2.6 pass.
+- [x] 5.1 In `RecoveryCompleted`, withdraw the child entries that replay left open, then open the entries of each parked run (`RestoreParkedRequests`) for the journal and the snapshot alike, queue held inputs before stashed commands when the pause holds, and write `child_parks_recovered` when n > 0. Verify S4, S5, and task 2.6 pass.
 - [x] 5.2 Make `RecoverChildren` call `RecoveryAction`. Verify S4 `crash-answered` and `crash-resumed` pass.
 - [x] 5.3 Make `AllowsSnapshot` call `IgnoredBySnapshot`; drop `_parks.Count > 0` from `HasUnreportedChildren`; filter `UnreportedRuns()` with `CountsAsUnreported`; check that the idle abandon rule ignores child entries. Verify S4 `parked` and `drain` pass.
 - [x] 5.4 N1: while `IsChildConsentPaused`, `TryResumeInterruptedInput` leaves out each input that the pause holds and acknowledges with no turn when no other input remains. Verify S5 `reminder-held`, `reminder-person`, and `automation-continuation` pass.

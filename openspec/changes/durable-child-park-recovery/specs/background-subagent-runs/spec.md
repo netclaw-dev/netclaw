@@ -65,8 +65,7 @@ the count is above zero.
 A park whose loop-guard state cannot be valid SHALL NOT stop recovery. Recovery SHALL keep such a run parked with its
 prompts open. When every request of the run has an answer, the session SHALL end the run as failed with the reason
 `park_damaged`, and no parked call SHALL run. A loop-guard state cannot be valid when a count is negative, when the
-refused-repeat count is above the escalation count plus one, when the equal-round count is outside 0 to 2, or when the
-round is below the last recorded checkpoint round of the run.
+refused-repeat count is above the escalation count plus one, or when an equal-round count is outside 0 to 2.
 
 #### Scenario: A valid park resumes
 

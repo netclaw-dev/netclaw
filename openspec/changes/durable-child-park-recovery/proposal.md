@@ -11,7 +11,7 @@ turn). The plan has the owner decisions of 23 October 2026.
 ## What Changes
 
 - **The run record holds the park.** The session journals `ChildRunEvent.Parked` (fact 8) with the park, its consent
-  requests, and the prompt counter, in one write. It journals `ChildRunEvent.Resumed` (fact 9) before a resumed child
+  requests, in one write. It journals `ChildRunEvent.Resumed` (fact 9) before a resumed child
   starts. The snapshot holds a parked run as a new lifecycle case (field 21) and the prompt counter (field 22).
 - **The answer goes into the park.** The persist callback of an answer applies it to the park, so a compaction
   snapshot keeps the answer.
@@ -55,11 +55,7 @@ None.
 - Code: `SessionState` (reducer), `BackgroundChildRun`, `ChildRunEvent`, `ChildRunLifecycle`, `ChildRunPark`,
   `ChildParkRules`, `NetclawProtoMapper.CoordinationV2`, the coordination proto, `LlmSessionActor` and its `Children`
   partial, `SessionToolWorkflow` (`.Approvals`, `.Children`, `.Recovery`), `SessionInputFlow`, `SubAgentSpawner`.
-- Formats (forward-only): fact 8 and fact 9 on `ChildRunEventV2Proto`; lifecycle case 21 and `prompts_issued` (22) on
-  `BackgroundChildRunV2Proto`; two new messages, `ChildRunParkProto` and `ChildLoopGuardProto`. No field 25, no new
-  manifest, no new persistence ID, and no new snapshot field.
-- CI: the `child-resume-gate` span grows over the new `ChildParkRules` functions; the `child-approval-close` count
-  changes. Both run in the existing child gates.
+- CI: the `child-resume-gate` span grows over the new `ChildParkRules` functions, in the existing child gate.
 - Docs: `docs/architecture/tool-authorization.md` 3.6 and 4, `docs/spec/GLOSSARY.md`, the `netclaw-operations` skill
   (`references/child-runs.md`), `TOOLING.md`, and the release-note text.
 

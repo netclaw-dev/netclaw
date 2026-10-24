@@ -473,8 +473,6 @@ message ChildRunEventV2Proto {
     ChildRunParkProto parked = 8;
     bool resumed = 9;
   }
-  // The prompt counter of the run after a park. Only the parked fact sets it.
-  int32 prompts_issued = 10;
 }
 
 message BackgroundChildRunV2Proto {

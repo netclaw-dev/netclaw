@@ -1002,8 +1002,9 @@ The agent event channel (see [agent event](../spec/GLOSSARY.md#agent-event)):
   was pending, the model saw the requests already, and recovery admits none.
 - When the journal rejects a notice admission, the session logs an error and stops, as after a persist failure.
   A turn that stays open tells the person first: the persist-stopped error and a failed turn completion. At the end
-  of a finished turn the session stays quiet. Recovery then withdraws the child requests, closes the notices, and
-  queues the held input (section 3.1).
+  of a finished turn the session stays quiet. Recovery then keeps the open parked requests, so the pause holds, and
+  queues the held input behind it (section 3.1). The rejected notice is not in the journal, so recovery admits no new
+  notice. The held input runs after the last answer.
 - The parent cannot approve. No event carries consent. Consent goes only through the bridge.
 
 | | Bridge (`ParentSessionApprovalBridge`) | Channel (`AgentEvent`) |

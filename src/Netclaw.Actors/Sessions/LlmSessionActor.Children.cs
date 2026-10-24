@@ -273,13 +273,6 @@ public sealed partial class LlmSessionActor
                 $"The park has {bytes} bytes, above the cap of {ChildRunPark.MaxBytes}.", child);
             return;
         }
-        // A live child never sends a damaged loop guard. A defect must not reach the journal, where it would fail the
-        // resume of a later restart.
-        if (ChildParkRules.LoopGuardDamage(message.Park.LoopGuard) is { } damage)
-        {
-            EndParkedRun(run.RunId, SubAgentOutcomeReason.ParkDamaged, $"The park is damaged: {damage}.", child);
-            return;
-        }
         _log.Info("Child run {RunId} parked {Count} call(s) in {Bytes} bytes", run.RunId, dispatches.Count, bytes);
         _ = _state.Apply(evt);
         Context.Unwatch(child);
@@ -657,8 +650,8 @@ public sealed partial class LlmSessionActor
 
     // Recovery cannot tell a restart drain, a crash, and a stop of the session actor apart. In each case the owner
     // started again and the child did not survive, so the reason is owner_restarted.
-    // The actions come from the state at RecoveryCompleted. A parked run that a stashed click resumed has the action
-    // Resume, so this message never records it as lost; its resume gate finds no park and does nothing.
+    // The actions come from the state at RecoveryCompleted, so a stashed click that resumed a parked run first does not
+    // make this message record that run as lost.
     private void RecoverChildren(RecoverChildRuns message)
     {
         foreach (var (runId, action) in message.Actions)
@@ -774,23 +767,27 @@ public sealed partial class LlmSessionActor
         StartWaitingInputAfterApproval();
     }
 
-    // Queues each pending input that the pause holds and that the queue does not hold yet. A damaged record gets its
-    // log line and stays pending.
+    // Queues each pending input that the pause holds and that the queue does not hold yet.
     private void QueueInputsHeldByThePause()
     {
         var selected = _input.SelectedInputs.Ids;
-        // The split comes first, so a damaged record that is not a notice also gets its log line. It stays pending.
-        var (valid, damaged) = SessionInputFlow.SplitByAuthority(_state.GetExecutablePendingInputs()
-            .Where(input => !selected.Contains(input.InputId)));
-        foreach (var input in damaged)
-            _log.Error("Pending input {InputId} has a damaged authority", input.InputId);
-        // The pause holds automated input and child result notices (ChildConsentPause, design D5).
-        var queued = _input.RestoreWaitingInputs(valid
-            .Where(static pair => ChildConsentPause.Holds(pair.Authority, isChildNotice: pair.Input.ChildNotice is not null))
-            .Select(static pair => pair.Input)
-            .ToArray(), _sessionId);
+        var queued = _input.RestoreWaitingInputs(
+            SplitByThePause(_state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId))).Held,
+            _sessionId);
         if (queued > 0)
             _log.Info("Queued {HeldCount} input(s) that the child consent pause held before the restart", queued);
+    }
+
+    // The one pause filter of the recovery queue and the restart resume. The pause holds automated input and child
+    // result notices (ChildConsentPause, design D5). A damaged record gets its log line and stays pending in neither list.
+    private (InputAdmitted[] Held, InputAdmitted[] Free) SplitByThePause(IEnumerable<InputAdmitted> inputs)
+    {
+        var (valid, damaged) = SessionInputFlow.SplitByAuthority(inputs);
+        foreach (var input in damaged)
+            _log.Error("Pending input {InputId} has a damaged authority", input.InputId);
+        var held = valid.ToLookup(static pair => ChildConsentPause.Holds(pair.Authority, isChildNotice: pair.Input.ChildNotice is not null),
+            static pair => pair.Input);
+        return ([.. held[true]], [.. held[false]]);
     }
 
     private sealed record StartHeldInputs : INoSerializationVerificationNeeded;

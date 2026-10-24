@@ -41,7 +41,7 @@ public sealed record BackgroundChildRun
     /// </summary>
     public required ReminderId? SourceReminderId { get; init; }
 
-    /// <summary>The count of consent prompts that the run issued (PR 2 compile shell, design D2).</summary>
+    /// <summary>The count of consent prompts that the run issued (durable-child-park-recovery). A second park never reuses a call ID.</summary>
     public int PromptsIssued { get; init; }
 }
 
@@ -56,7 +56,7 @@ public abstract record ChildRunLifecycle
     public sealed record Accepted(ChildRunCheckpoint? Checkpoint) : ChildRunLifecycle;
     public sealed record Cancelling(ChildRunCheckpoint? Checkpoint) : ChildRunLifecycle;
 
-    /// <summary>The run waits for consent. The record holds the park and its requests (PR 2 compile shell, design D2).</summary>
+    /// <summary>The run waits for consent. The record holds the park, its requests, and their answers.</summary>
     internal sealed record Parked(ChildRunPark Park, ImmutableArray<ChildParkRequest> Requests)
         : ChildRunLifecycle;
 

@@ -31,8 +31,7 @@ public static partial class SessionProtocol
         public sealed record CancellationRequested : ChildRunEvent;
         public sealed record TerminalRecorded(ChildRunTerminal Terminal) : ChildRunEvent;
 
-        // PR 2 compile shells (test author): the durable park and its resume (design D2). No writer, reducer, or mapper
-        // yet. The implementer owns them.
+        // durable-child-park-recovery: the park with its requests, and the resume before any parked call runs.
         internal sealed record Parked(ChildRunPark Park, IReadOnlyList<ToolApprovalRequested> Requests)
             : ChildRunEvent;
 
