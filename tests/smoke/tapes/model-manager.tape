@@ -43,6 +43,26 @@ Down
 Enter
 Wait+Screen@30s /Select model for Main.*bravo-models/
 
+# ─── Clear an optional role with C ──────────────────────────────────
+# Back out of the model list to the role table.
+Escape
+Escape
+Wait+Screen@10s /Model Role Assignments/
+
+# Arrows move the highlight only. C must clear the highlighted row without an
+# Enter first. The rebuild keeps the cursor on that row, so a second C finds
+# the role already unset — that proves both the clear and the repaint.
+Down
+Type "c"
+Wait+Screen@10s /Cleared Fallback role/
+Type "c"
+Wait+Screen@10s /Fallback role is not set/
+
+# Main is protected.
+Up
+Type "c"
+Wait+Screen@10s /Cannot clear the main model role/
+
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Ctrl+Q
 Sleep 1s

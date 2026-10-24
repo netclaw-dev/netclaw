@@ -201,6 +201,135 @@ public sealed class ModelManagerPageTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task ClearRole_PressCAfterArrowNavigation_RemovesRoleFromConfigAndTable()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["spark-acad"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://acad.example:8080/v1"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Definitions"] = new Dictionary<string, object>
+                {
+                    ["main-model"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "spark-acad",
+                        ["ModelId"] = "Qwen3.8-Flash-Next"
+                    },
+                    ["compaction-model"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "spark-acad",
+                        ["ModelId"] = "GLM-5.3-Flash-EXL3"
+                    }
+                },
+                ["Roles"] = new Dictionary<string, object>
+                {
+                    ["Main"] = "main-model",
+                    ["Compaction"] = "compaction-model"
+                }
+            }
+        });
+
+        var (terminal, app) = CreateHeadlessApp(out var input, width: 120);
+
+        using var appCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = app.RunAsync(appCts.Token);
+
+        try
+        {
+            await WaitForConditionAsync(() => terminal.Contains("GLM-5.3-Flash-EXL3"), appCts.Token);
+
+            // Highlight Compaction with the arrows only. No Enter, so nothing is "selected".
+            input.EnqueueKey(ConsoleKey.DownArrow);
+            input.EnqueueKey(ConsoleKey.DownArrow);
+            input.EnqueueKey(ConsoleKey.C);
+
+            await WaitForConditionAsync(() => terminal.Contains("Cleared Compaction role"), appCts.Token);
+
+            var roles = LoadRoles();
+            Assert.True(roles.TryGetProperty("Main", out _));
+            Assert.False(roles.TryGetProperty("Compaction", out _));
+
+            // The table repaints: the cleared model row is gone, Main survives.
+            await WaitForConditionAsync(
+                () => !terminal.Contains("GLM-5.3-Flash-EXL3") && terminal.Contains("Qwen3.8-Flash-Next"),
+                appCts.Token);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(appCts.Token);
+        }
+    }
+
+    [Fact]
+    public async Task ClearRole_OnUnsetRole_ReportsWhyNothingChanged()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["spark-acad"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://acad.example:8080/v1"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Definitions"] = new Dictionary<string, object>
+                {
+                    ["main-model"] = new Dictionary<string, object>
+                    {
+                        ["Provider"] = "spark-acad",
+                        ["ModelId"] = "Qwen3.8-Flash-Next"
+                    }
+                },
+                ["Roles"] = new Dictionary<string, object> { ["Main"] = "main-model" }
+            }
+        });
+
+        var (terminal, app) = CreateHeadlessApp(out var input, width: 120);
+
+        using var appCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = app.RunAsync(appCts.Token);
+
+        try
+        {
+            await WaitForConditionAsync(() => terminal.Contains("Qwen3.8-Flash-Next"), appCts.Token);
+
+            // Cursor starts on Main; the reject message must name the reason.
+            input.EnqueueKey(ConsoleKey.C);
+            await WaitForConditionAsync(() => terminal.Contains("Cannot clear the main model role"), appCts.Token);
+
+            input.EnqueueKey(ConsoleKey.DownArrow);
+            input.EnqueueKey(ConsoleKey.C);
+            await WaitForConditionAsync(
+                () => terminal.Contains("Fallback role is not set"),
+                appCts.Token);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(appCts.Token);
+        }
+    }
+
+    private JsonElement LoadRoles()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        return document.RootElement.GetProperty("Models").GetProperty("Roles").Clone();
+    }
+
     private (VirtualTerminal Terminal, TerminaApplication App) CreateHeadlessApp(
         out VirtualInputSource input, int width = 160)
     {

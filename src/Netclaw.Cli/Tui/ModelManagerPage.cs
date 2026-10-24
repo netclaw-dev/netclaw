@@ -29,7 +29,8 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
     private IFocusable? _lastFocusedList;
     private TextInputNode? _lastFocusedInput;
-    private KeyedDynamicLayoutNode<ModelManagerContent>? _contentNode;
+    private KeyedDynamicLayoutNode<(ModelManagerContent Content, int Revision)>? _contentNode;
+    private int _roleOverviewHighlight;
     private readonly CompositeDisposable _stepSubs = [];
 
     public ModelManagerPage(IAnsiTerminal terminal)
@@ -63,7 +64,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
     private LayoutNode BuildContent()
     {
-        _contentNode = new KeyedDynamicLayoutNode<ModelManagerContent>(
+        _contentNode = new KeyedDynamicLayoutNode<(ModelManagerContent Content, int Revision)>(
             GetContentKey,
             _ =>
             {
@@ -90,21 +91,28 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         return _contentNode;
     }
 
-    private ModelManagerContent GetContentKey()
+    private (ModelManagerContent Content, int Revision) GetContentKey()
     {
+        // RoleOverview carries the revision in its key. A clear edits the table in place:
+        // the state stays RoleOverview, so a content-only key never rebuilds it and the
+        // cleared role stays on screen. Every other view keys on its own state or sub-state.
         if (ViewModel.CurrentState.Value != ModelManagerState.DiscoverModels)
-            return (ModelManagerContent)ViewModel.CurrentState.Value;
+        {
+            var content = (ModelManagerContent)ViewModel.CurrentState.Value;
+            var revision = content == ModelManagerContent.RoleOverview ? ViewModel.StateVersion.Value : 0;
+            return (content, revision);
+        }
 
         if (ViewModel.IsProbing.Value)
-            return ModelManagerContent.DiscoverProbing;
+            return (ModelManagerContent.DiscoverProbing, 0);
         if (ViewModel.ProbeResult.Value is { Success: false })
-            return ModelManagerContent.DiscoverFailed;
+            return (ModelManagerContent.DiscoverFailed, 0);
         if (ViewModel.ManualModelEntry)
-            return ModelManagerContent.DiscoverManualEntry;
+            return (ModelManagerContent.DiscoverManualEntry, 0);
         if (ViewModel.ProbeResult.Value is not null && ViewModel.DiscoveredModels.Count == 0)
-            return ModelManagerContent.DiscoverEmpty;
+            return (ModelManagerContent.DiscoverEmpty, 0);
 
-        return ModelManagerContent.DiscoverList;
+        return (ModelManagerContent.DiscoverList, 0);
     }
 
     private LayoutNode BuildStatusBar()
@@ -171,9 +179,16 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         var modelWidth = NetclawTuiChrome.FitColumnWidth(
             models.Values.Select(static m => m?.ModelId ?? "\u2014"), "Model ID", available - providerWidth);
 
+        // A clear rebuilds this subtree while the user stays on the role table. Keep the cursor
+        // on the same row instead of snapping back to Main. The previous list is still alive
+        // here: the parent retires it only after this factory returns.
+        if (_roleList?.HighlightedItem is { } prior)
+            _roleOverviewHighlight = Array.IndexOf(items, prior.Value);
+
         _roleList = Layouts.SelectionList(items, role => FormatRoleItem(role, models[role], providerWidth, modelWidth))
             .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
+            .WithHighlightColors(Color.Black, Color.Cyan)
+            .WithHighlightedIndex(_roleOverviewHighlight);
 
         _roleList.OnFocused();
         _lastFocusedList = _roleList;
@@ -428,13 +443,13 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                     }
                     return;
                 case ConsoleKey.C:
-                    if (_roleList is not null)
+                    // Read the live highlight, not SelectedItems. In single mode an arrow key
+                    // moves the highlight without selecting, so SelectedItems stays empty until
+                    // Enter or Space. The old read meant C did nothing after plain arrow
+                    // navigation. Provider manager hit the same bug class in #1721.
+                    if (_roleList?.HighlightedItem is { } highlighted)
                     {
-                        var selectedItems = _roleList.SelectedItems;
-                        if (selectedItems.Count > 0)
-                        {
-                            ViewModel.ClearRole(selectedItems[0]);
-                        }
+                        ViewModel.ClearRole(highlighted.Value);
                     }
                     return;
             }
