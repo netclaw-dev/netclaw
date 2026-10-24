@@ -108,7 +108,10 @@ class ProgressFixture(Fixture):
                         for m in messages if m.get("role") == "user")
             if child:
                 return self.child(tools, nonce)
-            return self.parent(messages, tools, nonce)
+            message = self.parent(messages, tools, nonce)
+            if message is None:
+                request["model"] = self.model
+            return message
 
     def child(self, tools, nonce):
         if "file_read" not in tools:

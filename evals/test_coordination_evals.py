@@ -727,6 +727,9 @@ exit "$rc"
                                parallel_tool_calls=False, stop=["synthetic-stop"],
                                response_format={"type": "json_object"},
                                provider_options={"context_window": 131072, "flag": False, "nullable": None})
+                with patch.object(fixture, "parent", return_value=None):
+                    self.assertIsNone(fixture.completion(request))
+                self.assertEqual("configured-model", request["model"])
                 body, content_type = self.public_reply(self.evidence()[1]["response"], stream=stream)
                 response = io.BytesIO(body)
                 response.status = 200

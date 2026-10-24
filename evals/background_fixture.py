@@ -236,7 +236,6 @@ def handler_for(fixture):
             self.wfile.write(content)
 
         def forward(self, body, nonce):
-            body = {**body, "model": fixture.model}
             headers = {"Content-Type": "application/json"}
             if fixture.api_key:
                 headers["Authorization"] = "Bearer " + fixture.api_key

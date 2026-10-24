@@ -66,6 +66,11 @@ and these policies are never copied into an operator's config.
 ### Behavioral eval preflight
 
 Run the deterministic assertion tests before model calls.
+
+```bash
+python3 -m unittest discover -s evals -p 'test_*.py' -v
+```
+
 For a comparison, freeze image digests, source hashes, prompts, resources, sample sizes, thresholds, and provider settings first.
 Verify actual forwarded parameters and tool hashes for each endpoint pair.
 The variant seed does not seed provider inference.
