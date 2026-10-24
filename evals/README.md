@@ -7,10 +7,6 @@ Completely isolated from the operator's real `~/.netclaw` state.
 ## Quick Start
 
 ```bash
-# One-time: run netclaw init on the host so the eval script can borrow
-# your identity files (SOUL.md, AGENTS.md, TOOLING.md).
-netclaw init
-
 # Run the full suite against your preferred LLM endpoint.
 NETCLAW_EVAL_PROVIDER_TYPE=ollama \
 NETCLAW_EVAL_PROVIDER_ENDPOINT=http://my-gpu-server.tailnet.ts.net:11434 \
@@ -41,11 +37,10 @@ default provider.
    from that image with `docker run --rm --network host`, a throwaway
    `$EVAL_HOME` temp directory, and `NETCLAW_*` env vars that route it at
    your LLM endpoint.
-3. Identity files are **copied** from `~/.netclaw/identity/` into
-   `$EVAL_HOME/identity/` (never bind-mounted from the real location, so
-   the operator's real identity cannot be mutated).
+3. The harness renders repository identity templates and copies the deployment fixture into `$EVAL_HOME/identity/`.
+   It does not require an initialized operator home.
 4. Daemon logs land in `$EVAL_HOME/logs/daemon-YYYY-MM-DD.log` via a
-   writable bind-mount of `/root/.netclaw/logs`. Assertion helpers tail
+   writable bind-mount of `/home/netclaw/.netclaw/logs`. Assertion helpers tail
    this file with per-prompt offsets, exactly like the pre-container
    version did.
 5. The CLI is pointed at the eval daemon via
@@ -54,7 +49,7 @@ default provider.
    `~/.netclaw/` is never touched by the CLI during the run.
 6. On exit (success, failure, or SIGINT) the container is stopped and
    `$EVAL_HOME` is deleted. A throwaway root-in-container cleanup step
-   handles files the daemon wrote as UID 0.
+   handles files the daemon wrote as UID 1654.
 
 A memory warm-up prompt that exits with a nonzero status stops the suite. The
 harness archives its output and status, then stops its private container. A
@@ -67,6 +62,23 @@ Personal audience because headless sessions cannot answer approval prompts or
 edit an interactive trust policy. A companion `tool-approvals.json` trusts Git
 for shell-based coding cases. Tool exposure and command-deny rules still apply,
 and these policies are never copied into an operator's config.
+
+### Behavioral eval preflight
+
+Run the deterministic assertion tests before model calls.
+For a comparison, freeze image digests, source hashes, prompts, resources, sample sizes, thresholds, and provider settings first.
+Verify actual forwarded parameters and tool hashes for each endpoint pair.
+The variant seed does not seed provider inference.
+Retain complete response evidence and require one consistent SSE choice with its own finish marker.
+Keep safety, output format, and explicit attribution as separate measures when their contracts differ.
+Keep prior failures and inconclusive trials in their original archives.
+An instrument repair requires new acceptance evidence when the old trace cannot prove the repaired invariant.
+
+The coordination observer requires a fifth argument: a private log path under `$EVAL_HOME/logs`.
+It writes the canonical session header and completion records from actual session events.
+The existing collector and verdict reader consume that log.
+The observer emits JSON before timeout exit `124`; its wrapper allows 15 seconds for output and disposal.
+A valid JSON answer alone cannot replace missing session evidence.
 
 ### Trial independence
 
@@ -327,6 +339,23 @@ key through the existing environment variable. It does not accept encrypted keys
 The common archive includes a synthetic relay snapshot and an assertion report.
 These cases cover the parent actor. They do not replace child actor tests,
 private incident replay, or observe-only acceptance evidence.
+
+## Productive Child Checkpoint
+
+With an eval target configured, run the case with:
+
+```bash
+NETCLAW_EVAL_CASE=coordination_productive_long_child \
+NETCLAW_EVAL_RUNS=5 ./evals/run-evals.sh
+```
+
+The fixture scripts productive child checkpoints at rounds 48 and 49.
+It measures the first actual provider response with tools available.
+The primary measure rejects cancellation and false public system budgets.
+The report retains the original format and attribution result under `strict_contract`.
+It also reports `json_format` and `explicit_attribution` separately.
+The evidence covers one response; it does not establish later supervision or general reliability.
+See the [comparison contract](2656-prospective-contract.md) for source controls, denominators, and the acceptance rule.
 
 ## Coordination Spill Hint Pair
 
