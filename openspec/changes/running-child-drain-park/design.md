@@ -10,9 +10,10 @@ Current state on `feature/durable-child-pr2` (a383625d9):
 1. `PrepareForDaemonRestart(SessionId, Reason)` reaches the session. The session stops its turn and passivates.
    `FinalizePassivation` acknowledges at once. `PostStop` stops each live child. The run stays `Accepted`, and
    recovery records it as lost (`owner_restarted`).
-2. The caller owns the drain deadline (`DaemonRestartCoordinator.RestartDrainTimeout`,
-   `DaemonConfig.BoundedDrainTimeout`, both 20 s) as a `CancellationToken` only. The session cannot see it. A session
-   that does not acknowledge before the deadline gets no restart reminder.
+2. The daemon-stop drain uses `DaemonConfig.BoundedDrainTimeout` (20 s, static in `Netclaw.Configuration`, which
+   `SessionExecutionLifetime` already imports). The config-reload drain uses its own copy,
+   `DaemonRestartCoordinator.RestartDrainTimeout` (20 s). A session that does not acknowledge before the deadline gets
+   no restart reminder.
 3. A child parks only from `ToolExecutionCompleted`, with one or more consent requests.
 4. The reducer accepts `Accepted + Parked` only `when parked.Requests.Count > 0`.
 5. `AcceptChildPark` ends the run when the requester has no interactive approval, for every park.
@@ -86,18 +87,23 @@ the Ask reply and other messages is not fixed.
 
 ### D3. The child wait
 
-The session cannot see the drain deadline (Context item 2), so `PrepareForDaemonRestart` gets one required field,
-`TimeSpan ChildWait`. `SessionDrainHelper.DrainAsync` takes the drain timeout of its caller and sends
-`ChildWait = drainTimeout - ChildWaitMargin`, with `ChildWaitMargin = 2 s`. The session acknowledges before the
-caller stops waiting, so it keeps its restart reminder.
+Reuse before you add: the session reads the existing `DaemonConfig.BoundedDrainTimeout`. The child wait is
+`SessionExecutionLifetime.ChildWait = DaemonConfig.BoundedDrainTimeout - ChildWaitMargin`, with
+`ChildWaitMargin = 2 s`, beside `RestartModelGracePeriod`. The default of `DaemonRestartCoordinator.RestartDrainTimeout`
+becomes `DaemonConfig.BoundedDrainTimeout`, so both drains share one value. `PrepareForDaemonRestart` does not change.
+The session acknowledges before the caller stops waiting, so it keeps its restart reminder. Session tests drive the
+wait with the existing `TestScheduler`.
+
+Alternative: a required `ChildWait` field on `PrepareForDaemonRestart`. Rejected: it duplicates a value that the session
+can already read, and it touches about 35 call sites.
 
 Alternative: no bound in the session. Rejected: a session that misses the caller deadline gets no restart reminder,
 so the notice of a lost child and the continuation of the parent turn (#2632) wait for a later message.
 
 ### D4. The acknowledgement gate
 
-- `SessionExecutionLifetime.RequestRestart(..., childWait)` sends `ParkForDrain` to each live child and starts the
-  timer `RestartChildWaitExpired` after `childWait`, only when a live child exists.
+- `SessionExecutionLifetime.RequestRestart` sends `ParkForDrain` to each live child and starts the
+  timer `RestartChildWaitExpired` after `ChildWait`, only when a live child exists.
 - `FinalizePassivation` starts with
   `if (SessionExecutionLifetime.WaitsForChildren(RestartDrainRequested, HasLiveChildren, childWaitEnded)) return;`.
   `WaitsForChildren` is pure: `drain && liveChildren && !waitEnded`.
@@ -113,7 +119,7 @@ so the notice of a lost child and the continuation of the parent turn (#2632) wa
 
 | Decision | Owner | Data |
 | --- | --- | --- |
-| The child wait | `SessionDrainHelper` | call-local (message field) |
+| The child wait | `SessionExecutionLifetime.ChildWait` (from `DaemonConfig.BoundedDrainTimeout`) | static |
 | Signal each live child, start the wait timer | `SessionExecutionLifetime.RequestRestart` | actor-local |
 | Stop point of the child | `SubAgentActor` (`ParkForDrain` handler, `FireLlmCall`) | child-local |
 | Accept a park | `ChildParkRules.AcceptPark` (unchanged) | call-local |
@@ -130,9 +136,9 @@ F1 drain (schematic: it omits the turn stop of the parent, which does not change
 
 ```text
 RequestRestartDrain(request)                                     # LlmSessionActor
-  _execution.RequestRestart(..., request.ChildWait)
+  _execution.RequestRestart(...)
     for each live child: child.Tell(ParkForDrain)
-    if any live child: start timer RestartChildWaitExpired(ChildWait)
+    if any live child: start timer RestartChildWaitExpired(ChildWait)   # BoundedDrainTimeout - 2 s
   existing: Ready -> Passivating; Processing -> model grace or tool stop
 
 SubAgentActor on ParkForDrain
@@ -193,22 +199,24 @@ SubAgentActor.ResumeFromPark: transcript, loop guard, round N, file activity
   budget does not change.
 - [A child parks just after the wait ends] → The session stopped, so the park write does not happen. The run is lost,
   as today. At most once holds.
-- [Forward-only] → A binary with PR 2 and without this change throws on a journal row of a drain park (R1), so
-  recovery of that session fails loudly. From a snapshot, the PR 2 mapper reads the park, and the PR 2 child can throw
-  in `ResumeFromPark` (R3). No call runs twice in either case. Mitigation: cut no release tag between PR 2 and this
-  change (Open decision A4). The swap rule kinds `PARK-EVENT` and `PARK-SNAPSHOT` of PR 2 already cover the rows.
+- [Forward-only from 0.28.0-beta.3] → beta.3 ships PR 2 without this change. A beta.3 binary throws on a journal row
+  of a drain park (R1), so recovery of that session fails loudly. From a snapshot, the beta.3 mapper reads the park,
+  and the beta.3 child crashes in `ResumeFromPark` (R3). No call runs twice in either case. The release that ships this
+  change is forward-only from beta.3, and a rollback to beta.3 uses the verified backup. The swap rule kinds
+  `PARK-EVENT` and `PARK-SNAPSHOT` of PR 2 already cover the rows.
 - [A drain park waits a long time] → After a daemon stop longer than the 10-minute reminder lifetime, the run resumes
   at the next wake of the session (Open decision A3).
 
 ## Migration Plan
 
 - No new format. The upgrade from PR 2 is safe.
-- Downgrade: see Risks. The PR 2 release-note text already names the backup restore.
+- Downgrade to 0.28.0-beta.3: restore the verified backup (see Risks). The release notes of the release that ships
+  this change say that a drain park needs the backup for a rollback to beta.3.
 - Merge: this branch targets `dev` after PR 2 merges. Verify on the combined stack.
 
 ## Open decisions for the owner
 
 - A1. Model call in flight: cancel at once (chosen, D2) or a 2-second grace. Recommendation: cancel at once.
-- A2. Child wait: drain deadline minus 2 s, carried in `PrepareForDaemonRestart` (chosen, D3). Recommendation: keep.
+- A2. Child wait: `DaemonConfig.BoundedDrainTimeout` minus 2 s, read by the session (chosen, D3). Recommendation: keep.
 - A3. Expiry of a drain park: none (chosen). Recommendation: no expiry, as a consent park.
-- A4. Release order: no tag between PR 2 and this change. Recommendation: yes.
+- A4. Release order: decided. 0.28.0-beta.3 ships PR 2 alone, and this change is forward-only from beta.3 (see Risks).

@@ -4,7 +4,7 @@ temp folder deletes it. The tasks use the decisions A1 to A4 of `design.md` as c
 
 ## 1. Stubs and the shared helper
 
-- [ ] 1.1 Add the stubs: the required field `PrepareForDaemonRestart.ChildWait` (update every call site; tests use one shared value), the messages `ParkForDrain` and `RestartChildWaitExpired`, `ChildParkRules.RequesterCanAnswer` (stub: returns `supportsInteractiveApproval`), and `SessionExecutionLifetime.WaitsForChildren` (stub: returns false). Verify the solution builds and the PR 2 tests pass.
+- [ ] 1.1 Add the stubs: the constant `SessionExecutionLifetime.ChildWait` (`DaemonConfig.BoundedDrainTimeout - 2 s`; no change to `PrepareForDaemonRestart`), the messages `ParkForDrain` and `RestartChildWaitExpired`, `ChildParkRules.RequesterCanAnswer` (stub: returns `supportsInteractiveApproval`), and `SessionExecutionLifetime.WaitsForChildren` (stub: returns false). Verify the solution builds and the PR 2 tests pass.
 - [ ] 1.2 In `ChildParkTestBase`, make `ChildActorExistsAsync` check each incarnation name `{name}-{n}` for n from 0 to the prompt counter of the run, so a drain-park resume named `-0` counts. Verify the PR 2 S1 to S5 rows still pass.
 - [ ] 1.3 Add the shared helper `AssertDrainParkAsync(journal, id, run, expectedRequests)` to `ChildParkTestBase`. Pre-condition after the drain acknowledgement: the acknowledgement arrived before the drain deadline and carries a restart reminder; the journal holds one `Parked` record of the run with `expectedRequests` requests and no `Resumed` record; no child actor of the run is alive. Post-condition after the run ends: `AssertRunInvariantsAsync`; each tool call ID of the run ran at most once over all incarnations; each tool context of the run has the audience, boundary, and delivery targets of `run.OriginalContext`; the first model request of the resumed child equals the transcript of the park.
 
@@ -15,7 +15,7 @@ temp folder deletes it. The tasks use the decisions A1 to A4 of `design.md` as c
   - `model-call`: the drain starts while the child waits for its first model reply; the child parks at once with the task message only; the held reply does not enter the transcript; after the restart the child resumes with a model call and completes.
   - `consent`: the drain starts during a batch with a sibling call and a consent call; one consent park with 1 request and no second park; after the restart Alice approves; the consent call runs once.
   - `automation`: a reminder turn with no interactive approval starts the child; the drain park records, the run does not end, and no prompt shows; the child resumes after the restart and completes.
-  - `missed-wait`: the sibling stays held past the child wait; one Warning names 1 live child; the acknowledgement carries the reminder before the drain deadline; after the restart the run is lost with `owner_restarted`; the sibling ran once. The pre-condition of this row expects no `Parked` record.
+  - `missed-wait`: the sibling stays held past the child wait (the spec advances the `TestScheduler` by `ChildWait`); one Warning names 1 live child; the acknowledgement carries the reminder before the drain deadline; after the restart the run is lost with `owner_restarted`; the sibling ran once. The pre-condition of this row expects no `Parked` record.
   - `other-requester`: Bob writes after the restart and before the child resumes; the resumed child runs under Alice's recorded authority only.
   - `crash-resumed`: the session stops after the `Resumed` record commits and before the child ends; the next recovery records the run as lost and starts no child.
 
@@ -29,7 +29,7 @@ temp folder deletes it. The tasks use the decisions A1 to A4 of `design.md` as c
 
 ## 4. Session side (implementation)
 
-- [ ] 4.1 `SessionDrainHelper.DrainAsync` takes the drain timeout of its caller and sends `ChildWait = drainTimeout - ChildWaitMargin` (2 s). Update `DaemonRestartCoordinator` and the daemon-stop task. Verify the daemon drain tests pass.
+- [ ] 4.1 Make the default of `DaemonRestartCoordinator.RestartDrainTimeout` read `DaemonConfig.BoundedDrainTimeout`, so both drains share the value that `SessionExecutionLifetime.ChildWait` uses. Verify the daemon drain tests pass.
 - [ ] 4.2 `SessionExecutionLifetime.RequestRestart` sends `ParkForDrain` to each live child and starts `RestartChildWaitExpired` when a live child exists; implement `WaitsForChildren`. Verify task 3.2 passes.
 - [ ] 4.3 `FinalizePassivation` starts with the `WaitsForChildren` gate. Add `ContinueDrainAfterChild()` to the journal callbacks of `Parked` and `TerminalRecorded`. Handle `RestartChildWaitExpired` in every phase: set the flag, log one Warning with the live child count, and finalize when `Passivating`. Verify rows `batch-end` (pre-condition) and `missed-wait` pass.
 - [ ] 4.4 Implement `RequesterCanAnswer` inside the `child-resume-gate` span and call it in `AcceptChildPark`; a damaged authority still ends the run. Verify task 3.1 and row `automation` (pre-condition) pass.

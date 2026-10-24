@@ -19,8 +19,8 @@ follow-up.
   The reducer accepts a park with zero requests. A batch that ends with a call that needs consent makes a consent park,
   as in PR 2.
 - **The drain acknowledgement waits for the children, with a bound.** The session acknowledges the drain only after no
-  live child remains, or after the child wait ends. The drain request carries that wait. It is the existing drain
-  deadline minus a short acknowledgement margin, so the session keeps its restart reminder.
+  live child remains, or after the child wait ends. The child wait is the existing `DaemonConfig.BoundedDrainTimeout`
+  minus a short acknowledgement margin, so the session keeps its restart reminder. The drain request does not change.
 - **Recovery resumes the park with the PR 2 rules.** The resume gate, the recovery action, and the `Resumed` record do
   not change. A drain park has no open request, so the gate resumes it at recovery. The resumed child starts with a
   model call.
@@ -48,8 +48,8 @@ None.
 
 ## Impact
 
-- Code: `PrepareForDaemonRestart`, `SessionDrainHelper`, `SessionExecutionLifetime`, `LlmSessionActor` (drain and
-  `Children` partial), `ChildParkRules`, `SessionState` (child-run reducer), `SubAgentActor`.
+- Code: `DaemonRestartCoordinator` (its default drain timeout reads `DaemonConfig.BoundedDrainTimeout`),
+  `SessionExecutionLifetime`, `LlmSessionActor` (drain and `Children` partial), `ChildParkRules`, `SessionState` (child-run reducer), `SubAgentActor`.
 - No new journal format. The park uses `ChildRunEvent.Parked` (fact 8) and lifecycle field 21 of PR 2.
 - CI: the `child-resume-gate` Stryker span takes one new pure rule (`RequesterCanAnswer`).
 - Docs: `docs/architecture/tool-authorization.md` 3.6, `docs/spec/GLOSSARY.md` ("parked child run"), the
@@ -67,4 +67,6 @@ Operational impact:
 - A graceful drain can take up to the drain deadline (20 s today) when a child runs. Before this change, a drain did
   not wait for children.
 - The session logs one Warning when the child wait ends with live children. It names the count.
-- Forward-only, as PR 2: a binary with PR 2 and without this change fails recovery of a journal that holds a drain park.
+- Forward-only from 0.28.0-beta.3 (PR 2). A beta.3 binary that reads a drain-park row fails recovery of that session
+  loudly from the journal, or from a snapshot it crashes the resumed child. No call runs twice. A rollback to beta.3
+  uses the verified backup.
