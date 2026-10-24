@@ -94,6 +94,14 @@ public sealed partial class LlmSessionActor
         Command<ChildParkReached>(AcceptChildPark);
         Command<ChildEventRejected>(message =>
         {
+            // A cancel that waited in the stash during the rejected park write moved the run to Cancelling. The child
+            // is released already, so no actor ends that run: end it as cancelled here.
+            if (message.Kind == ChildRejectedEvent.Parked
+                && _state.ChildRuns.GetValueOrDefault(message.RunId) is { Lifecycle: ChildRunLifecycle.Cancelling } cancelling)
+            {
+                RecordChildTerminal(message.RunId, CancelledParkResult(cancelling), lost: false, warning: null, ActorRefs.Nobody);
+                return;
+            }
             // Race: a duplicate answer from the stash can resume the run before the rejection of the first answer
             // arrives. Then the run is no longer parked, and the resumed child owns its end.
             if (!ChildParkRules.RejectedEventEnds(message.Kind, _state.ChildRuns.GetValueOrDefault(message.RunId)?.Lifecycle))
@@ -106,7 +114,7 @@ public sealed partial class LlmSessionActor
                 $"The journal rejected the {message.Kind} record of the child.", ActorRefs.Nobody);
         });
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
-        Command<RecoverChildRuns>(_ => RecoverChildren());
+        Command<RecoverChildRuns>(RecoverChildren);
         Command<StartHeldInputs>(_ => StartInputsHeldByThePause());
     }
 
@@ -274,10 +282,10 @@ public sealed partial class LlmSessionActor
             return;
         }
         _log.Info("Child run {RunId} parked {Count} call(s) in {Bytes} bytes", run.RunId, dispatches.Count, bytes);
+        _ = _state.Apply(evt);
         Context.Unwatch(child);
         _execution.ReleaseChild(run.RunId);
         child.Tell(new ChildTerminalCommitted());
-        _ = _state.Apply(evt);
         Persist(evt, committed =>
         {
             _state = _state.Apply(committed);
@@ -650,21 +658,23 @@ public sealed partial class LlmSessionActor
 
     // Recovery cannot tell a restart drain, a crash, and a stop of the session actor apart. In each case the owner
     // started again and the child did not survive, so the reason is owner_restarted.
-    private void RecoverChildren()
+    // The actions come from the state at RecoveryCompleted. A parked run that a stashed click resumed has the action
+    // Wait, so this message never records it as lost.
+    private void RecoverChildren(RecoverChildRuns message)
     {
-        foreach (var run in _state.GetExecutableChildRuns().ToArray())
+        foreach (var (runId, action) in message.Actions)
         {
-            switch (ChildParkRules.RecoveryAction(run.Lifecycle, _toolWorkflow.ChildApprovalCount(run.RunId)))
+            var run = _state.ChildRuns[runId];
+            switch (action)
             {
                 case ChildRecoveryAction.Lost:
-                    RecordChildTerminal(run.RunId, LostChildResult(run, SubAgentOutcomeReason.OwnerRestarted), lost: true,
+                    RecordChildTerminal(runId, LostChildResult(run, SubAgentOutcomeReason.OwnerRestarted), lost: true,
                         warning: "Recovery does not relaunch uncertain child work.", ActorRefs.Nobody);
                     break;
                 case ChildRecoveryAction.Resume:
-                    TryResumeParkedRun(run.RunId);
+                    TryResumeParkedRun(runId);
                     break;
-                case ChildRecoveryAction.PrepareResult:
-                    var terminal = (ChildRunLifecycle.Terminal)run.Lifecycle;
+                case ChildRecoveryAction.PrepareResult when run.Lifecycle is ChildRunLifecycle.Terminal terminal:
                     PrepareChildResult(run, terminal.Result, terminal.LegacyPrepared);
                     break;
             }
@@ -761,6 +771,14 @@ public sealed partial class LlmSessionActor
     {
         if (_toolWorkflow.HasParkedApprovals())
             return;
+        QueueInputsHeldByThePause();
+        StartWaitingInputAfterApproval();
+    }
+
+    // Queues each pending input that the pause holds and that the queue does not hold yet. A damaged record gets its
+    // log line and stays pending.
+    private void QueueInputsHeldByThePause()
+    {
         var selected = _input.SelectedInputs.Ids;
         // The split comes first, so a damaged record that is not a notice also gets its log line. It stays pending.
         var (valid, damaged) = SessionInputFlow.SplitByAuthority(_state.GetExecutablePendingInputs()
@@ -774,7 +792,6 @@ public sealed partial class LlmSessionActor
             .ToArray(), _sessionId);
         if (queued > 0)
             _log.Info("Queued {HeldCount} input(s) that the child consent pause held before the restart", queued);
-        StartWaitingInputAfterApproval();
     }
 
     private sealed record StartHeldInputs : INoSerializationVerificationNeeded;
@@ -870,9 +887,8 @@ public sealed partial class LlmSessionActor
     }
 
     // Approval notices reach the model at most once. A pending notice describes requests that the restart withdrew,
-    // so recovery closes it with no turn and rebuilds the digest from the open entries. Today a restart withdraws
-    // every child request first, so the rebuilt digest is empty. A rebuilt digest wakes the parent only when
-    // recovery closed a notice that the model did not see.
+    // so recovery closes it with no turn and rebuilds the digest from the open entries: the open requests of the parked
+    // runs. A rebuilt digest wakes the parent only when recovery closed a notice that the model did not see.
     private void CloseRecoveredConsentNotices()
     {
         var pending = _state.PendingInputs

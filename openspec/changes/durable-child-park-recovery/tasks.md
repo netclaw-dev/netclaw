@@ -42,7 +42,7 @@ Each test class that owns a temp folder deletes it. This list replaces tasks 6 t
 
 ## 6. Docs and gates
 
-- [ ] 6.1 Extend the `// <child-resume-gate>` span in `ChildRunPark.cs` over the new `ChildParkRules` functions, and update the expected counts of `child-resume-gate` and `child-approval-close` in their scripts and in `TOOLING.md`. Verify every mutant is killed and the counts are exact.
+- [x] 6.1 Extend the `// <child-resume-gate>` span in `ChildRunPark.cs` over the new `ChildParkRules` functions, and update the expected counts of `child-resume-gate` and `child-approval-close` in their scripts and in `TOOLING.md`. Verify every mutant is killed and the counts are exact.
 - [x] 6.2 Update `docs/architecture/tool-authorization.md` 3.6 and 4 (a parked prompt survives a restart, a snapshot, and passivation; recovery withdraws only prompts of runs that are not parked; no replay) and `docs/spec/GLOSSARY.md` ("parked child run" is durable in the run record). Verify the doc links resolve.
 - [ ] 6.3 Update the `netclaw-operations` skill (`references/child-runs.md`: a parked run survives a restart, `child_parks_recovered`, `park_too_large`, `park_damaged`, the downgrade rule) and bump `metadata.version` to dev plus one. Verify `./evals/run-evals.sh` passes.
 - [ ] 6.4 Add the release-note text of design "Migration Plan" to the release notes draft, and the `PARK-EVENT` and `PARK-SNAPSHOT` kinds to the swap rule. Verify the text names the backup restore.

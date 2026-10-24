@@ -56,7 +56,12 @@ internal sealed record ChildCheckpointCommitted : INoSerializationVerificationNe
 internal sealed record ChildResultWritten(SubAgentRunId RunId, WorkingContextDelta? ReviewedWorkingContext,
     string ResultPath, Exception? WriteFailure) : INoSerializationVerificationNeeded;
 internal sealed record ChildStopFailed(SubAgentRunId RunId, Exception Error) : INoSerializationVerificationNeeded;
-internal sealed record RecoverChildRuns : INoSerializationVerificationNeeded;
+/// <summary>
+/// The action that recovery chose for each child run when it completed. A stashed command runs before this message, so
+/// a click can resume a parked run first; that run keeps the action that recovery chose for it.
+/// </summary>
+internal sealed record RecoverChildRuns(IReadOnlyList<(SubAgentRunId RunId, ChildRecoveryAction Action)> Actions)
+    : INoSerializationVerificationNeeded;
 internal sealed record ChildRunControl(SubAgentRunId RunId, bool Cancel, TurnContextRecord Requester)
     : INoSerializationVerificationNeeded;
 internal sealed record ChildRunControlRequest(SubAgentRunId RunId, bool Cancel);

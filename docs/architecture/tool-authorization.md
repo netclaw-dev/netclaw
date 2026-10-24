@@ -997,8 +997,9 @@ The agent event channel (see [agent event](../spec/GLOSSARY.md#agent-event)):
   no empty-reply retry.
 - At most once: a notice turn that starts gives its answers, also when the turn fails, so they do not come again.
   Recovery closes every pending approval notice with `InputClosed` (`KeepsTurn = true`) and rebuilds the digest from
-  the open child requests. The open requests of a parked run survive the restart, so the rebuilt digest lists them,
-  and recovery admits one new notice for them (#2617).
+  the open child requests. The open requests of a parked run survive the restart, so the rebuilt digest lists them.
+  Recovery admits one new notice only when it closed a notice that was pending at the crash (#2617). When no notice
+  was pending, the model saw the requests already, and recovery admits none.
 - When the journal rejects a notice admission, the session logs an error and stops, as after a persist failure.
   A turn that stays open tells the person first: the persist-stopped error and a failed turn completion. At the end
   of a finished turn the session stays quiet. Recovery then withdraws the child requests, closes the notices, and

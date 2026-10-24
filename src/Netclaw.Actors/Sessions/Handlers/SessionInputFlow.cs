@@ -344,7 +344,7 @@ internal sealed class SessionInputFlow
             _buffer.Add((command, false));
     }
 
-    private bool IsBuffered(InputId? id)
+    public bool IsBuffered(InputId? id)
         => id is { } inputId && _buffer.Any(item => item.Message.AdmittedInputId == inputId);
 
     /// <summary>
