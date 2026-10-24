@@ -144,7 +144,8 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
             Deadline, cancellationToken: Cancellation);
         Assert.DoesNotContain(Outputs<TurnCompleted>(), static turn => turn.Outcome == TurnOutcome.Failed);
         for (var incarnation = 0; incarnation <= RequestsOf(journal, run.Run.RunId).Count; incarnation++)
-            Assert.False(await ChildActorExistsAsync(id, run, incarnation == 0 ? null : incarnation));
+            Assert.False(await ChildActorExistsAsync(id, run, incarnation == 0 ? null : incarnation),
+                $"Child actor {incarnation} of the run is still alive after the run ended.");
         return terminal;
     }
 
@@ -193,6 +194,8 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
         public const string ToolName = "sibling_probe";
         private TaskCompletionSource? _entered;
         private TaskCompletionSource? _release;
+        // The gate of the held call. The call takes _release, so Release needs its own reference.
+        private TaskCompletionSource? _held;
 
         public string Name => ToolName;
         public LlmFacingToolName LlmFacingName => LlmFacingToolName.FromCanonical(Name);
@@ -202,8 +205,8 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
         public AITool ToAITool() => AIFunctionFactory.Create(() => "sibling done", Name, Description);
         public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
             => throw new InvalidOperationException("This test requires invocation authority.");
-        public Task HoldNext() => (_entered = NewGate(), _release = NewGate()).Item1.Task;
-        public void Release() => _release?.TrySetResult();
+        public Task HoldNext() => (_entered = NewGate(), _release = _held = NewGate()).Item1.Task;
+        public void Release() => _held?.TrySetResult();
 
         public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context,
             CancellationToken ct = default)

@@ -211,10 +211,8 @@ public sealed class ChildConsentPauseSpecs(ITestOutputHelper output) : ChildCons
         Assert.Equal(-1, ConsumedAt(journal, webhook.InputId));
         Assert.Empty(ParentRequestsWith("Webhook payload: deploy finished."));
 
-        // Act 2: a crash and a recovery.
+        // Act 2: a crash and a recovery. The parked request stays open (durable-child-park-recovery).
         await RestartSessionAsync(sessionId);
-        await AwaitAssertAsync(() => Assert.True(IsResultReady(journal, asking.Run.RunId),
-            "The recovery must record the lost child."), Deadline, cancellationToken: Cancellation);
         await BarrierAsync(sessionId, asking);
 
         // Assert 2: the recovery did not close the webhook input as a notice.
