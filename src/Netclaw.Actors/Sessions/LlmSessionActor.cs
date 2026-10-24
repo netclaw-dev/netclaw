@@ -2217,13 +2217,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var selected = _input.SelectedInputs.Ids;
         var keepsQueued = admitted.ChildNotice is not null
                           || TurnContext.TryFromRecord(admitted.TurnContext, out var authority, out _) && authority is { IsChildConsentNotice: true };
-        var pending = _state.GetExecutablePendingInputs();
-        var stale = pending
+        var stale = _state.GetExecutablePendingInputs()
             .FirstOrDefault(input => SessionInputFlow.IsContinuation(input) && !selected.Contains(input.InputId)
-                                     && input.InputId != waiting && !(keepsQueued && _input.IsBuffered(input.InputId)))?.InputId;
+                                     && !(keepsQueued && _input.IsBuffered(input.InputId)))?.InputId;
         InputId[] closes = [.. new[] { waiting, stale }.OfType<InputId>()];
-        // A replacing fire can name the continuation of its own reminder turn as the waiting fire.
-        var continuation = pending.FirstOrDefault(input => SessionInputFlow.IsContinuation(input) && closes.Contains(input.InputId))?.InputId;
         if (closes.Length == 0)
         {
             Persist(admitted, onAdmitted);
@@ -2240,7 +2237,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 if (waiting is { } waitingId)
                     TurnLog().Info("{ReplacedEvent} waiting={Waiting} replacement={Replacement}",
                         replacedLogEvent, waitingId, admitted.InputId);
-                if (continuation is { } stopped)
+                if (stale is { } stopped)
                 {
                     TurnLog().Info("continuation_closed waiting={Waiting} replacement={Replacement}", stopped, admitted.InputId);
                     EmitRestartStoppedTurnNotice(ReminderEligibility.None, 0);

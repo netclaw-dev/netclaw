@@ -473,6 +473,7 @@ message ChildRunEventV2Proto {
     ChildRunParkProto parked = 8;
     bool resumed = 9;
   }
+  reserved 10;
 }
 
 message BackgroundChildRunV2Proto {

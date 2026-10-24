@@ -135,6 +135,8 @@ F3 recovery
 
 F4 admission with a pending continuation (#2651 contract)
   stale := the pending continuation that no turn selected
+           (a continuation that the pause holds is kept by the approval notice and a child result notice;
+            a person input or a fire closes it)
   every admission path calls PersistReplacingInput(waiting?, stale?, admitted)
     one write: InputClosed(waiting and stale) + InputAdmitted
     stale closed -> post the restart notice once
