@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using Netclaw.Configuration;
 using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
@@ -58,6 +59,7 @@ internal sealed class ShellCommandAnalyzer
         ManagedTemporaryLocation? temporary)
     {
         var commands = new List<CommandOccurrence>();
+        var syntaxRoots = new List<(string Source, ShellSyntaxNode Syntax)>();
         var denyOnlyClauses = new List<Clause>();
         var knownRegionArguments = new HashSet<ClauseElement>(
             ReferenceEqualityComparer.Instance);
@@ -69,6 +71,7 @@ internal sealed class ShellCommandAnalyzer
             _screenState is null ? _environment.CreateLaunchEnvironment(temporary) : null,
             depth: 0,
             commands,
+            syntaxRoots,
             denyOnlyClauses,
             knownRegionArguments,
             ref syntaxProofComplete,
@@ -78,6 +81,7 @@ internal sealed class ShellCommandAnalyzer
             command,
             workingDirectory,
             commands,
+            syntaxRoots,
             denyOnlyClauses,
             failure,
             knownRegionArguments,
@@ -138,6 +142,7 @@ internal sealed class ShellCommandAnalyzer
         ShellLaunchEnvironment? launchEnvironment,
         int depth,
         List<CommandOccurrence> commands,
+        List<(string Source, ShellSyntaxNode Syntax)> syntaxRoots,
         List<Clause> denyOnlyClauses,
         HashSet<ClauseElement> knownRegionArguments,
         ref bool syntaxProofComplete,
@@ -155,7 +160,8 @@ internal sealed class ShellCommandAnalyzer
                     command,
                     workingDirectory,
                     publishAuthoredSourceFacts: depth == 0,
-                    launchEnvironment);
+                    launchEnvironment,
+                    parseCompoundRedirects: depth == 0);
         }
         catch
         {
@@ -174,6 +180,8 @@ internal sealed class ShellCommandAnalyzer
 
             return ShellAnalysisFailure.Unresolved;
         }
+
+        syntaxRoots.Add((command, parsed.Syntax));
 
         if (parsed.Commands.Count == 0)
         {
@@ -270,6 +278,7 @@ internal sealed class ShellCommandAnalyzer
                 launchEnvironment: null,
                 depth + 1,
                 commands,
+                syntaxRoots,
                 denyOnlyClauses,
                 knownRegionArguments,
                 ref syntaxProofComplete,
@@ -557,6 +566,10 @@ internal static class ShellGlobPath
     }
 }
 
+internal readonly record struct ShellCompoundRedirectOwner(
+    string Source,
+    RedirectedCompoundSyntax Syntax);
+
 public sealed record ShellCommandAnalysis
 {
     private const long MaximumReviewedIntegerRangeCardinality = 4096;
@@ -566,6 +579,7 @@ public sealed record ShellCommandAnalysis
         string source,
         string? workingDirectory,
         IReadOnlyList<CommandOccurrence> commands,
+        IReadOnlyList<(string Source, ShellSyntaxNode Syntax)> syntaxRoots,
         IReadOnlyList<Clause> denyOnlyClauses,
         ShellAnalysisFailure failure,
         IReadOnlySet<ClauseElement> knownRegionArguments,
@@ -575,6 +589,7 @@ public sealed record ShellCommandAnalysis
         Source = source;
         WorkingDirectory = workingDirectory;
         Commands = commands.ToImmutableArray();
+        SyntaxRoots = syntaxRoots.ToImmutableArray();
         DenyOnlyClauses = denyOnlyClauses.ToImmutableArray();
         Failure = failure;
         SyntaxProofComplete = syntaxProofComplete;
@@ -621,6 +636,118 @@ public sealed record ShellCommandAnalysis
     internal ManagedTemporaryLocation? ManagedTemporary { get; init; }
 
     public IReadOnlyList<CommandOccurrence> Commands { get; }
+
+    /// <summary>Parser roots retained for this call and decoded wrapper sources.</summary>
+    internal IReadOnlyList<(string Source, ShellSyntaxNode Syntax)> SyntaxRoots { get; }
+
+    /// <summary>
+    /// Finds compound redirect owners in the parser roots of this call.
+    /// </summary>
+    /// <remarks>
+    /// A failure means the consumer cannot prove that the walk saw every node.
+    /// Callers must deny or keep the source unresolved. They must not treat a
+    /// failed walk as an empty owner list.
+    /// </remarks>
+    internal bool TryGetCompoundRedirectOwners(
+        [NotNullWhen(true)] out IReadOnlyList<ShellCompoundRedirectOwner>? owners)
+    {
+        if (Environment.Grammar != ShellGrammar.Bash)
+        {
+            owners = Array.Empty<ShellCompoundRedirectOwner>();
+            return true;
+        }
+
+        var found = new List<ShellCompoundRedirectOwner>();
+        foreach (var (source, syntax) in SyntaxRoots)
+        {
+            if (syntax is null)
+            {
+                owners = null;
+                return false;
+            }
+
+            var pending = new Stack<ShellSyntaxNode>();
+            var visited = new HashSet<ShellSyntaxNode>(ReferenceEqualityComparer.Instance);
+            pending.Push(syntax);
+            while (pending.TryPop(out var node))
+            {
+                if (!visited.Add(node))
+                    continue;
+
+                if (node is RedirectedCompoundSyntax compound)
+                {
+                    if (!HasValidCompoundRedirectFacts(compound, source))
+                    {
+                        owners = null;
+                        return false;
+                    }
+
+                    found.Add(new ShellCompoundRedirectOwner(source, compound));
+                }
+
+                IReadOnlyList<ShellSyntaxNode> children;
+                try
+                {
+                    children = node.GetChildren();
+                }
+                catch (NotSupportedException)
+                {
+                    owners = null;
+                    return false;
+                }
+                catch (InvalidOperationException)
+                {
+                    owners = null;
+                    return false;
+                }
+
+                if (children is null)
+                {
+                    owners = null;
+                    return false;
+                }
+
+                for (var index = children.Count - 1; index >= 0; index--)
+                {
+                    if (children[index] is not { } child)
+                    {
+                        owners = null;
+                        return false;
+                    }
+
+                    pending.Push(child);
+                }
+            }
+        }
+
+        owners = Array.AsReadOnly(found.ToArray());
+        return true;
+    }
+
+    private static bool HasValidCompoundRedirectFacts(
+        RedirectedCompoundSyntax compound,
+        string source)
+    {
+        if (compound.Redirects is not { Count: > 0 } redirects)
+            return false;
+
+        var previousEnd = 0;
+        foreach (var redirect in redirects)
+        {
+            if (redirect?.Analysis is null
+                || redirect.SourceStart < previousEnd
+                || redirect.SourceStart < 0
+                || redirect.SourceLength <= 0
+                || redirect.SourceStart > source.Length - redirect.SourceLength)
+            {
+                return false;
+            }
+
+            previousEnd = redirect.SourceStart + redirect.SourceLength;
+        }
+
+        return true;
+    }
 
     internal IReadOnlyList<Clause> DenyOnlyClauses { get; }
 
@@ -1031,18 +1158,45 @@ public sealed record ShellCommandAnalysis
                    _ => false
                });
 
-    private static bool IsPlainFileTarget(FileRedirectAnalysis redirect)
+    internal static bool TryResolvePlainFileTarget(
+        FileRedirectAnalysis redirect,
+        string? workingDirectory,
+        ShellPathStyle pathStyle,
+        out CanonicalPath target)
     {
-        if (redirect.Target is not ShellValueDomain.Exact { Value: { Length: > 0 } value }
-            || !value.StartsWith('/')
-            || !CanonicalPath.TryCreate(value, relativeBase: null, ShellPathStyle.Posix, out var path))
+        target = default;
+        if (!redirect.IsComplete)
+            return false;
+
+        var exactTarget = redirect.Target as ShellValueDomain.Exact;
+        if (exactTarget is null)
+            return false;
+
+        var pathResolved = CanonicalPath.TryCreate(
+            exactTarget.Value,
+            workingDirectory,
+            pathStyle,
+            out var path);
+        if (!pathResolved)
+            return false;
+
+        if (pathStyle == ShellPathStyle.Posix
+            && path.Value.StartsWith("/dev/", StringComparison.Ordinal)
+            && path.Value != "/dev/null")
         {
             return false;
         }
 
-        return path.Value == "/dev/null"
-               || !path.Value.StartsWith("/dev/", StringComparison.Ordinal);
+        target = path;
+        return true;
     }
+
+    private static bool IsPlainFileTarget(FileRedirectAnalysis redirect)
+        => TryResolvePlainFileTarget(
+            redirect,
+            workingDirectory: null,
+            ShellPathStyle.Posix,
+            out _);
 
     // ShellSyntaxTree 0.4.0-beta.17 gives no command words for a bracket
     // pattern in the program word, such as ["ci","build"], but it reports the

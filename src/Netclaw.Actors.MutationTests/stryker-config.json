@@ -3,6 +3,7 @@
     "project": "Netclaw.Actors.csproj",
     "configuration": "Release",
     "coverage-analysis": "off",
+    "break-on-initial-test-failure": true,
     "reporters": [
       "progress",
       "json",

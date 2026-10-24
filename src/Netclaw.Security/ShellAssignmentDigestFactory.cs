@@ -48,9 +48,12 @@ internal static class ShellAssignmentDigestFactory
         {
             foreach (var assignment in assignments)
             {
+                // Bash may use an exact effective fact from full source analysis.
+                // PowerShell still needs exact authored and effective facts.
                 if (assignment is null
                     || string.IsNullOrEmpty(assignment.Name)
-                    || assignment.AuthoredValue is not ShellValueDomain.Exact
+                    || shell == ApprovalShell.PowerShell
+                       && assignment.AuthoredValue is not ShellValueDomain.Exact
                     || assignment.EffectiveValue is not ShellValueDomain.Exact effective)
                 {
                     return false;

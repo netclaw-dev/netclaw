@@ -26,6 +26,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../Netclaw.Security.Tests/ShellPlainFileTargetContractTests.cs"
+             Link="Tools/ShellPlainFileTargetContractTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/ActiveToolBatchTrackerTests.cs"
              Link="Sessions/ActiveToolBatchTrackerTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/SessionToolWorkflowRequesterTests.cs"

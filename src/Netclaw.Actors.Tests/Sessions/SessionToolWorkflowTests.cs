@@ -9,11 +9,15 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Pipelines;
+using Netclaw.Actors.Tests.Tools;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Security.Authorization.Consent;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using Netclaw.Tools.Authorization.Consent;
 using Xunit;
 using ChatRole = Netclaw.Actors.Protocol.ChatRole;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -347,7 +351,13 @@ public sealed partial class SessionToolWorkflowTests
         Assert.NotNull(plan.DecisionOverride);
         Assert.NotNull(plan.ManagedTemporaryDenialDirectories);
         Assert.NotNull(plan.AuthorizationAttemptIds);
-        Assert.Equal(approved.Patterns, plan.OneTimeApprovalPreSeed[approved.CallId]);
+        Assert.Equal(
+            OneTimeApprovalKeys.Create(
+                approved.Patterns,
+                approved.Candidates,
+                approved.Cwd,
+                OneTimeApprovalKeys.CreateShellSourceKey(approved.CallId)),
+            plan.OneTimeApprovalPreSeed[approved.CallId]);
         Assert.Equal(RefusalKind.Denied, plan.DecisionOverride[denied.CallId]);
         Assert.Equal("/session/tmp", plan.ManagedTemporaryDenialDirectories[denied.CallId]);
         var attempts = plan.AuthorizationAttemptIds;
@@ -390,10 +400,224 @@ public sealed partial class SessionToolWorkflowTests
         var plan = dispatch.ApprovalPlan;
 
         Assert.Equal(
-            OneTimeApprovalKeys.Create(request.Patterns, request.Candidates, request.Cwd),
+            OneTimeApprovalKeys.Create(
+                request.Patterns,
+                request.Candidates,
+                request.Cwd,
+                OneTimeApprovalKeys.CreateShellSourceKey("call-assignment")),
             plan.OneTimeApprovalPreSeed![request.CallId]);
         Assert.Null(plan.DecisionOverride);
     }
+
+    [Fact]
+    public void Recovered_once_preseed_uses_the_original_structured_command()
+    {
+        const string approvedSource = "unused=one; git status";
+        const string changedSource = "ignored=one; git status";
+        var shell = new ToolName("shell_execute");
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironmentDefaults.Bash);
+        var approvedArguments = new Dictionary<string, object?>
+        {
+            ["command"] = approvedSource,
+            ["WorkingDirectory"] = "/repo"
+        };
+        var changedArguments = new Dictionary<string, object?>
+        {
+            ["command"] = changedSource,
+            ["WorkingDirectory"] = "/repo"
+        };
+        var approvedAnalysis = matcher.AnalyzeInvocation(shell, approvedArguments);
+        var changedAnalysis = matcher.AnalyzeInvocation(shell, changedArguments);
+        Assert.Equal(approvedAnalysis.Candidates.Count, changedAnalysis.Candidates.Count);
+        Assert.All(approvedAnalysis.Candidates.Zip(changedAnalysis.Candidates), pair =>
+            Assert.True(pair.Item1.HasSameApprovalFacts(pair.Item2)));
+
+        var request = CreateRequest("call-once-source", requestedAtMs: 10) with
+        {
+            Patterns = approvedAnalysis.Patterns,
+            CandidateVerbs = approvedAnalysis.Candidates.Select(candidate => candidate.Verb).ToArray(),
+            Candidates = approvedAnalysis.Candidates,
+            Cwd = "/repo"
+        };
+
+        var approvedKeys = RecoveredOnceKeys(request, approvedSource);
+        var changedKeys = RecoveredOnceKeys(request, changedSource);
+        var recoveredConsent = new OneTimeConsent(shell.Value, approvedKeys);
+        var approvedContext = new ToolApprovalContext(
+            shell.Value,
+            approvedSource,
+            request.Patterns,
+            request.CandidateVerbs ?? [],
+            [],
+            Cwd: request.Cwd,
+            Candidates: request.Candidates)
+        {
+            ShellSourceKey = OneTimeApprovalKeys.CreateShellSourceKey(approvedSource)
+        };
+        var changedContext = approvedContext with
+        {
+            DisplayText = changedSource,
+            ShellSourceKey = OneTimeApprovalKeys.CreateShellSourceKey(changedSource)
+        };
+
+        Assert.False(approvedKeys.SequenceEqual(changedKeys));
+        Assert.True(OneTimeApprovalKeys.Matches(recoveredConsent, shell.Value, approvedContext));
+        Assert.False(OneTimeApprovalKeys.Matches(recoveredConsent, shell.Value, changedContext));
+    }
+
+    [Fact]
+    public void Recovered_shell_once_without_valid_source_abandons_before_redrive()
+    {
+        var request = CreateRequest("call-once-source-missing", requestedAtMs: 10);
+        var missingSource = RecoveredOnceContinuation(request, argumentsJson: null);
+        var malformedSource = RecoveredOnceContinuation(request, argumentsJson: "{");
+        var duplicateCall = RecoveredOnceContinuation(
+            request,
+            JsonSerializer.Serialize(new Dictionary<string, object?> { ["command"] = "git status" }),
+            duplicateCallId: true);
+        var mismatchedTool = RecoveredOnceContinuation(
+            request,
+            JsonSerializer.Serialize(new Dictionary<string, object?> { ["command"] = "git status" }),
+            originalToolName: "file_read");
+
+        Assert.IsType<RecoveredContinuation.Abandon>(missingSource);
+        Assert.IsType<RecoveredContinuation.Abandon>(malformedSource);
+        Assert.IsType<RecoveredContinuation.Abandon>(duplicateCall);
+        Assert.IsType<RecoveredContinuation.Abandon>(mismatchedTool);
+    }
+
+    [Fact]
+    public async Task Recovered_once_plan_passes_only_the_original_source_through_the_real_shell_gate()
+    {
+        const string callId = "call-once-source-gate";
+        const string originalSource = "git status # source-A";
+        const string changedSource = "git status # source-a";
+        var environment = TestShellEnvironment.Current;
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+        var commandPolicy = new ShellCommandPolicy(environment);
+        var pathPolicy = new ToolPathPolicy(environment, []);
+        var policy = TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy);
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(policy);
+        var executor = new DispatchingToolExecutor(registry, policy);
+        var workingDirectory = Directory.GetCurrentDirectory();
+        var originalCall = ShellCall(callId, originalSource, workingDirectory);
+        var context = InteractiveShellContext(workingDirectory);
+        var initial = await executor.EvaluateAuthorizationAsync(
+            originalCall,
+            context,
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, initial.Outcome);
+        var approval = Assert.IsType<ToolApprovalContext>(initial.ApprovalContext);
+        var request = CreateRequest(callId, requestedAtMs: 10) with
+        {
+            Patterns = approval.Patterns,
+            CandidateVerbs = approval.CandidateVerbs,
+            Candidates = approval.Candidates ?? [],
+            Cwd = approval.Cwd
+        };
+        var argsJson = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["command"] = originalSource,
+            ["WorkingDirectory"] = approval.Cwd
+        });
+        var recovered = Assert.IsType<RecoveredContinuation.Dispatch>(
+            RecoveredOnceContinuation(request, argsJson));
+        var preSeed = recovered.ApprovalPlan.OneTimeApprovalPreSeed![callId];
+        var entry = new ApprovalRedriveEntry(
+            AuthorizationAttemptId.New(),
+            preSeed,
+            Refusal: null,
+            ManagedTemporaryDenialDirectory: null);
+
+        entry.ApplyTo(context.Approval, originalCall.Name);
+        var originalRetry = await executor.EvaluateAuthorizationAsync(
+            originalCall,
+            context,
+            TestContext.Current.CancellationToken);
+
+        var changedContext = InteractiveShellContext(workingDirectory);
+        entry.ApplyTo(changedContext.Approval, originalCall.Name);
+        var changedRetry = await executor.EvaluateAuthorizationAsync(
+            ShellCall(callId, changedSource, workingDirectory),
+            changedContext,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, originalRetry.Outcome);
+        Assert.Equal(ToolAllowReason.OneTimeApproval, originalRetry.AllowReason);
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, changedRetry.Outcome);
+        var originalCandidates = approval.Candidates ?? [];
+        var changedApproval = Assert.IsType<ToolApprovalContext>(changedRetry.ApprovalContext);
+        var changedCandidates = changedApproval.Candidates ?? [];
+        Assert.Equal(originalCandidates.Count, changedCandidates.Count);
+        Assert.All(originalCandidates.Zip(changedCandidates), pair =>
+            Assert.True(pair.Item1.HasSameApprovalFacts(pair.Item2)));
+    }
+
+    private static IReadOnlyList<string> RecoveredOnceKeys(
+        ToolApprovalRequested request,
+        string command)
+    {
+        var argsJson = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["command"] = command,
+            ["WorkingDirectory"] = request.Cwd
+        });
+        var dispatch = Assert.IsType<RecoveredContinuation.Dispatch>(
+            RecoveredOnceContinuation(request, argsJson));
+        return dispatch.ApprovalPlan.OneTimeApprovalPreSeed![request.CallId];
+    }
+
+    private static RecoveredContinuation RecoveredOnceContinuation(
+        ToolApprovalRequested request,
+        string? argumentsJson,
+        bool duplicateCallId = false,
+        string? originalToolName = null)
+    {
+        var workflow = new SessionToolWorkflow();
+        workflow.ApplyApprovalRequested(request, durable: true, recovered: true);
+        ResolveRecovered(workflow, request, ApprovalOptionKeys.ApproveOnce);
+        var originalCall = new SerializableToolCall
+        {
+            CallId = new ToolCallId(request.CallId),
+            Name = new ToolName(originalToolName ?? request.ToolName),
+            ArgumentsJson = argumentsJson ?? string.Empty
+        };
+        var assistant = new SerializableChatMessage
+        {
+            Role = ChatRole.Assistant,
+            ToolCalls = duplicateCallId ? [originalCall, originalCall] : [originalCall]
+        };
+        var state = SessionState.Empty with { History = SessionState.Empty.History.Add(assistant) };
+        return workflow.PlanRecoveredContinuation(state, request.CallId, request.SessionId, nowMs: 40);
+    }
+
+    private static FunctionCallContent ShellCall(string callId, string command, string workingDirectory)
+        => new(callId, "shell_execute", new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Command"] = command,
+            ["WorkingDirectory"] = workingDirectory,
+            ["_rationale"] = "Verify the approval gate."
+        });
+
+    private static ToolExecutionContext InteractiveShellContext(string workingDirectory)
+        => TestToolExecutionContext.CreateBound(
+            "signalr/recovered-once-source",
+            workingDirectory,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = TrustBoundary.TrustedInstance,
+                ChannelType = "signalr",
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
+            });
 
     private static SessionState HistoryState(params ToolApprovalRequested[] requests)
     {

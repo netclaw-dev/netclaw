@@ -306,9 +306,19 @@ public sealed class ToolAccessPolicy
 
     /// <summary>Denies shell text that names a protected path, whatever the operation.</summary>
     internal ToolAuthorizationDecision? ScreenProtectedShellText(ShellCommandAnalysis analysis)
-        => _toolPathPolicy.CommandReferencesDeniedPath(analysis)
+    {
+        if (!ShellPolicyPathFacts.TryCreateCompoundRedirectViews(analysis, out _))
+        {
+            return DenyRedirect(
+                "shell_redirect_unproved",
+                analysis.Source,
+                "Netclaw cannot prove every compound redirect");
+        }
+
+        return _toolPathPolicy.CommandReferencesDeniedPath(analysis)
             ? ToolAuthorizationDecision.Deny("shell_references_protected_path")
             : null;
+    }
 
     /// <summary>Denies a working directory with a <c>..</c> segment.</summary>
     /// <remarks>The OS resolves ".." after a symlink. Lexical policy normalization does not.</remarks>
@@ -532,12 +542,77 @@ public sealed class ToolAccessPolicy
         }
 
         var readOnly = ReadOnlyOccurrences(analysis);
-        return EnforceKnownShellPaths(
-            ShellPolicyPathFacts.CreateExecutionViews(analysis)
-                .SelectMany((view, index) => EnumerateKnownShellPaths(
-                    view,
-                    readOnly.Contains(analysis.Commands[index]))),
-            context.Invocation);
+        var executionPaths = ShellPolicyPathFacts.CreateExecutionViews(analysis)
+            .SelectMany((view, index) => EnumerateKnownShellPaths(
+                view,
+                readOnly.Contains(analysis.Commands[index])));
+        if (!ShellPolicyPathFacts.TryCreateCompoundRedirectViews(analysis, out var compoundRedirects))
+        {
+            return DenyRedirect(
+                "shell_redirect_unproved",
+                analysis.Source,
+                "Netclaw cannot prove every compound redirect");
+        }
+
+        foreach (var compound in compoundRedirects)
+        {
+            if (compound.WorkingDirectory.Path is { } compoundWorkingDirectory
+                && !IsShellPathAllowed(
+                    new ShellPathAccess(compoundWorkingDirectory, ShellPathRead.None),
+                    context.Invocation))
+            {
+                return ToolAuthorizationDecision.Deny("shell_path_outside_trusted_roots");
+            }
+
+            if (compound.PathFact.State != ShellPolicyPathResolutionState.Known)
+            {
+                return DenyRedirect(
+                    "shell_redirect_unproved",
+                    compound.Owner.Source,
+                    "Netclaw cannot prove the compound redirect target");
+            }
+
+            var read = compound.PathFact.Source.RedirectMode == FileRedirectMode.Input;
+            foreach (var path in compound.PathFact.Paths)
+            {
+                if (ShellRedirectPolicyFacts.IsNullDevice(path))
+                    continue;
+
+                var compoundTargetAllowed = IsShellPathAllowed(
+                    new ShellPathAccess(path, read ? ShellPathRead.Operand : ShellPathRead.None),
+                    context.Invocation);
+                if (!compoundTargetAllowed)
+                {
+                    return ToolAuthorizationDecision.Deny(
+                        _toolPathPolicy.FileSystem.IsProtected(path.Value, PathOperation.Write)
+                            ? "shell_path_protected"
+                            : "shell_path_outside_trusted_roots");
+                }
+
+                if (read
+                    && _pathAccessPolicy.EvaluateShellPath(
+                            path,
+                            context.Invocation,
+                            PathAccessPolicy.FileOperation.Read)
+                        is not PathAccessPolicy.PathAccessDecision.Allowed)
+                {
+                    return DenyRedirect(
+                        "shell_redirect_read_denied",
+                        path.Value,
+                        "the file_read rules of this audience do not let the redirect read that path");
+                }
+
+                if (GetFileToolMode(read, path, context) == ToolApprovalMode.Deny)
+                {
+                    return DenyRedirect(
+                        "shell_redirect_file_tool_denied",
+                        path.Value,
+                        $"this audience may not use {FileToolName(read)}, and a redirect gets the same decision");
+                }
+            }
+        }
+
+        return EnforceKnownShellPaths(executionPaths, context.Invocation);
     }
 
     /// <summary>
@@ -744,7 +819,8 @@ public sealed class ToolAccessPolicy
     /// SECURITY: a redirect is a file write (or a read) without the file tool.
     /// When the operator set <c>file_write</c> or <c>file_read</c> to
     /// <c>Approval</c>, each file operation retains its own exact candidate.
-    /// A composed redirect also retains an exact command candidate.
+    /// A composed redirect keeps its command candidate for display and command-length checks.
+    /// The shell source key binds the complete source to a Once answer.
     /// The prompt shows the full command and offers only "Once" and "Deny".
     /// Each candidate keeps its mark, so
     /// <see cref="ScreenNoProgramRedirects"/> still judges each redirect of
@@ -755,11 +831,11 @@ public sealed class ToolAccessPolicy
     /// <param name="granted">The file tool calls that a stored grant of the tool covers.</param>
     internal ShellApprovalAnalysis WithFileToolConsent(
         ShellApprovalAnalysis approval,
+        ShellCommandAnalysis analysis,
         ToolExecutionContext context,
         IReadOnlySet<FileToolCall> granted)
     {
-        if (!approval.Candidates.Any(static candidate => candidate.RunsNoProgram || candidate.UsesFileToolRedirects))
-            return approval;
+        ArgumentNullException.ThrowIfNull(analysis);
 
         var facts = ShellPolicyPathFacts.Create(approval.Candidates, ShellEnvironment.PathStyle);
         var candidates = approval.Candidates
@@ -781,14 +857,94 @@ public sealed class ToolAccessPolicy
                     VerbTokens = null,
                     Unresolved = ShellUnresolvedPart.Command
                 });
-                // A Once answer must bind the command as well as its file operations, even with a stored command grant.
+                // Keep the command candidate visible. The shell source key binds Once separately.
                 if (!candidate.UsesFileToolRedirects)
                     return fileCandidates;
 
                 return fileCandidates.Prepend(candidate with { VerbTokens = null, Unresolved = ShellUnresolvedPart.Command });
             })
+            .ToList();
+
+        if (!TryGetCompoundRedirectFileCalls(analysis, context, out var compoundCalls))
+            throw new InvalidOperationException("Compound redirect facts changed after the shell trust-zone check.");
+
+        var ungrantedCompoundCalls = compoundCalls
+            .Where(fileCall => !granted.Contains(fileCall.Call))
             .ToArray();
-        return approval with { Candidates = Array.AsReadOnly(candidates) };
+        if (ungrantedCompoundCalls.Length == 0)
+            return candidates.Count == approval.Candidates.Count
+                   && candidates.SequenceEqual(approval.Candidates)
+                ? approval
+                : approval with { Candidates = Array.AsReadOnly(candidates.ToArray()) };
+
+        candidates.Add(new ApprovalCandidate(analysis.Source, analysis.WorkingDirectory)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = null,
+            Unresolved = ShellUnresolvedPart.Command,
+            SourceCompoundOwner = ungrantedCompoundCalls[0].Owner.Syntax,
+        });
+
+        foreach (var compoundCall in ungrantedCompoundCalls)
+        {
+            var operation = compoundCall.Call.Tool == FileReadTool.ToolName ? "read" : "write";
+            candidates.Add(new ApprovalCandidate(
+                $"{operation} {compoundCall.Call.Path}",
+                compoundCall.Owner.Syntax.WorkingDirectory is ShellValueDomain.Exact cwd
+                    ? cwd.Value
+                    : null)
+            {
+                Shell = ApprovalShell.Bash,
+                VerbTokens = null,
+                Unresolved = ShellUnresolvedPart.Command,
+                UsesFileToolRedirects = true,
+                SourceCompoundOwner = compoundCall.Owner.Syntax,
+                SourceCompoundRedirect = compoundCall.Redirect,
+            });
+        }
+
+        return approval with { Candidates = Array.AsReadOnly(candidates.ToArray()) };
+    }
+
+    internal bool TryGetCompoundRedirectFileCalls(
+        ShellCommandAnalysis analysis,
+        ToolExecutionContext context,
+        [NotNullWhen(true)] out IReadOnlyList<CompoundRedirectFileToolCall>? fileCalls)
+    {
+        if (!ShellPolicyPathFacts.TryCreateCompoundRedirectViews(analysis, out var views))
+        {
+            fileCalls = null;
+            return false;
+        }
+
+        var found = new List<CompoundRedirectFileToolCall>();
+        foreach (var view in views)
+        {
+            if (view.PathFact.State != ShellPolicyPathResolutionState.Known
+                || view.PathFact.Source.RedirectMode is not { } redirectMode)
+            {
+                fileCalls = null;
+                return false;
+            }
+
+            var read = redirectMode == FileRedirectMode.Input;
+            foreach (var path in view.PathFact.Paths)
+            {
+                if (ShellRedirectPolicyFacts.IsNullDevice(path)
+                    || GetFileToolMode(read, path, context) != ToolApprovalMode.Approval)
+                {
+                    continue;
+                }
+
+                found.Add(new CompoundRedirectFileToolCall(
+                    view.Owner,
+                    view.Redirect,
+                    new FileToolCall(FileToolName(read), path.Value)));
+            }
+        }
+
+        fileCalls = Array.AsReadOnly(found.ToArray());
+        return true;
     }
 
     private IEnumerable<FileToolCall> RedirectsThatNeedConsent(
@@ -1074,7 +1230,8 @@ public sealed class ToolAccessPolicy
             isMessy,
             correction,
             hasReusablePhrase: true,
-            directoryApprovalAvailable: false);
+            directoryApprovalAvailable: false,
+            shellSourceKey: null);
     }
 
     internal ToolAuthorizationDecision AuthorizeShellApproval(
@@ -1106,7 +1263,8 @@ public sealed class ToolAccessPolicy
                 analysis.Candidates,
                 context.Approval.Cwd,
                 GetSessionOwnedApprovalDirectories(context),
-                ShellEnvironment.PathStyle));
+                ShellEnvironment.PathStyle),
+            OneTimeApprovalKeys.CreateShellSourceKey(ExtractShellCommand(arguments)));
     }
 
     private ToolAuthorizationDecision BuildApprovalDecision(
@@ -1118,7 +1276,8 @@ public sealed class ToolAccessPolicy
         bool isMessy,
         ToolCorrection? correction,
         bool hasReusablePhrase,
-        bool directoryApprovalAvailable)
+        bool directoryApprovalAvailable,
+        string? shellSourceKey)
     {
         var candidateVerbs = candidates
             .Select(static candidate => candidate.Verb)
@@ -1160,7 +1319,8 @@ public sealed class ToolAccessPolicy
             IsManagedTemporaryRetry = isManagedTemporaryRetry,
             ManagedTemporaryDirectory = managedTemporaryRetry?.ManagedTemporaryDirectory,
             PlatformTemporaryRoot = managedTemporaryRetry?.PlatformTemporaryRoot,
-            RepositoryCommonDirectory = repository
+            RepositoryCommonDirectory = repository,
+            ShellSourceKey = shellSourceKey
         };
 
         return ToolAuthorizationDecision.RequiresApproval(
@@ -1599,6 +1759,11 @@ public sealed record FeatureGates(
 /// <param name="Path">The canonical redirect target.</param>
 internal readonly record struct FileToolCall(string Tool, string Path);
 
+internal readonly record struct CompoundRedirectFileToolCall(
+    ShellCompoundRedirectOwner Owner,
+    CompoundRedirect Redirect,
+    FileToolCall Call);
+
 /// <summary>
 /// Context for an approval-gated tool invocation. Contains the information
 /// needed to present the approval prompt and cache the decision.
@@ -1628,6 +1793,8 @@ public sealed record ToolApprovalContext(
     // A null directory uses Cwd. ApprovedAlways stores these effective scopes.
     IReadOnlyList<ApprovalCandidate>? Candidates = null)
 {
+    internal string? ShellSourceKey { get; init; }
+
     internal bool IsManagedTemporaryRetry { get; init; }
 
     internal string? ManagedTemporaryDirectory { get; init; }

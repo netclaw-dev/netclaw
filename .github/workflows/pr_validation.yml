@@ -182,6 +182,8 @@ jobs:
             gates: reminder-execution literal-twin stream-commit-gate shutdown-notice-identity
           - group: authorization-and-directory
             gates: tool-authorization approval-directory
+          - group: shell-consent
+            gates: shell-once-identity compound-redirect
           - group: guard-and-authority
             gates: skill-manage-guard no-program input-one-authority
           - group: stop-proof

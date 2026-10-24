@@ -51,6 +51,7 @@ Hosted runs from 2026-10-17 through 2026-10-23 measured these gate times (minute
 | `reminder` | `reminder-execution` (4.4), `literal-twin` (2.9), `stream-commit-gate` (2.5), `shutdown-notice-identity` (18 mutants, one invocation, 3.4) | 13.7 (estimate) |
 | `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
 | `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
+| `shell-consent` | `shell-once-identity` (2.3 local), `compound-redirect` (2.2 local) | 4.5 local; hosted time pending |
 | `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9), `secrets-plaintext-leaf` (8 mutants, one invocation, 2 to 3, estimate) | 10 to 11 (estimate) |
 | `shell-command-analysis-a` | 131 Security mutants and 27 Actors mutants | [11m28s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616567) |
 | `shell-command-analysis-b` | 172 Security mutants | [11m03s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616477) |
@@ -88,6 +89,10 @@ The `loopback-host-origin` gate moved to its own group. It targets `Netclaw.Daem
 Keep each group at 15 minutes or less on a fast runner. Do not raise the job timeout.
 Measure a new gate on a cold runner and update this table.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
+The shared Actors mutation configuration stops if its initial test run fails.
+Do not accept a mutant result from a run whose initial tests fail.
+The `shell-consent` group contains the source-identity and compound-redirect gates. Measure its hosted cost on the next pull request.
+The 2026-10-23 local run took 2 minutes 18 seconds and killed its one selected source-identity mutant.
 Add a gate to the lightest group when its measured cost fits the timeout and the Windows test duration.
 Use another group under the same job definition when no existing group has that capacity.
 
@@ -102,11 +107,12 @@ coverage. They do not replace positive and negative behavior tests.
 | `PathAccessPolicy.AddSessionRoots`, `PathAccessPolicy.IsReadableByAudience`, `PathAccessPolicy.GetEffectiveAccess`, `PathAccessPolicy.IsInOtherTemporaryKeyFolder`, and `ManagedTemporaryEnvironment.CheckFolder` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected; issue #2554: a Personal read or attach follows the write profile and no other audience, operation, or write mode does (write `All` gives `All`, write `Roots` adds its roots, write `None` adds nothing, and a read profile of mode `All` stays `All`); the managed temporary key folder is a session root and the shared base is not; a Team or Public root over the base does not reach another key folder; the shell launch is refused when the base or the key folder is missing, a link, owned by another user, or open to a group or others | 30 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
+| `OneTimeApprovalKeys.Create` source identity condition | Shell `Once` consent covers only the exact case-sensitive source. Equal candidate facts do not cover changed source. | 1 killed | `./scripts/run-shell-once-identity-mutations.sh` |
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
 | Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an unknown operand with a safe phrase or a grant for anywhere, attended or not) covers it; a glob word gets the decision of each protected path that it can match (D5), and its link walk stays inside the covering directory; a bound value gets the hard-deny decision of its literal twin; a Bash test builtin is data only with proved operand values without `[`; a data command keeps its assignment digest unless each operand is proved data, and only such a data command with no redirect keeps its normal candidate after an unknown directory; a variable word that is not a path word is an unknown operand, so a folder grant cannot cover a loop or an assignment value outside the folder; an option value that the parser splits from its option (`--name=value`, `-p:Name=value`) and that can leave the working directory gets the scope of a path word with the same text, so a folder or repository grant cannot cover it; fixed text on stdin (a quoted heredoc or a proved here string) is data only on stdin and only for a receiver that is not a shell and has no argument that can name one | 330 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
-| Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract; only an assignment that can reach the program qualifies a grant, a Bash data command keeps every assignment, and the parser names are the names of the one environment snapshot that each process receives (F3) | 81 killed | `./scripts/run-shell-assignment-mutations.sh` |
+| Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, Bash sanitation, and Bash launch-value digest | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract; only an assignment that can reach the program qualifies a grant, a Bash data command keeps every assignment, and the parser names come from the same launch snapshot; an exact effective Bash value can qualify a digest when authored text is unknown, while PowerShell keeps the authored-value check (F3) | 84 killed | `./scripts/run-shell-assignment-mutations.sh` |
 | Filesystem authority folder membership, repository identity, repository persistence, the folder of a new grant, and the link target scope | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a word that names a link also has the scope of its final target, and a target after a `..` that leaves a link is unknown (#2375); a new folder grant uses the directory where its occurrence runs | 24 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
@@ -116,7 +122,8 @@ coverage. They do not replace positive and negative behavior tests.
 | `SkillManageTool.GuardMutationTarget` and the filesystem authority link and protection results | A skill mutation cannot follow a link, write a protected path, or skip the atomic-write temp file | 5 killed | `./scripts/run-skill-manage-guard-mutations.sh` |
 | `ToolAccessPolicy.ReadOnlyOccurrences`, the read relaxation in `ToolAccessPolicy.EnforceKnownShellPaths`, `PathAccessPolicy.EvaluateShellReadPath`, `FileSystemAuthority.HoldsReadProtectedPath`, and the read-operand exemption of the `ToolPathPolicy` text screen | Decision D6: a read-only shell program (`cat`, `head`, `tail`, `wc`, `grep`, `jq`, `diff`) with bounded arguments can read one exact config file; only a write-protected path gets read protection; a redirect that writes keeps write protection; a directory operand that holds a read-protected path, a plain word that names an entry, a glob, a brace or `$'...'` word, a `..`, the config directory itself, and program text that names it in any spelling (`//`, `/./`, `name/../`, split quotes) stay denied | 58 killed | `./scripts/run-shell-config-read-mutations.sh` |
 | `ToolApprovalEntryComparer.CoversCommandWords`, `ShellPolicyCoordinator.SelectCommandWordsCorrection`, `ShellApprovalMatcher.TryResolveProgramPath`, `ShellProgramPath.MatchesLegacyRelative`, `ShellApprovalMatcher.ProjectCommandWords`, `ShellGrantFileWords.TryFindEntry`, and `ToolPathPolicy.PlainWordLinkReachesDeniedPath` | A verb grant (two or more words) covers its command words and any later words, and a program-only grant covers its word alone, so a `gh` grant does not cover `gh auth logout`; an empty grant covers nothing; the matcher and the store hygiene use this one rule; Unknown command words get a rewrite correction; a program path names its file (R1), so a `./tool` grant does not cover another file named `tool` or `mytool`; a word after the verb slot that names an existing file or directory leaves the command words and becomes a path scope, while the program word, the verb slot, a link, a word without a file, and a word that is not one entry of the directory stay; a plain word that names a link to a protected path is denied, command word or argument; the store and the doctor use the same rule | 53 detected | `./scripts/run-exact-verb-chain-mutations.sh` |
-| `ShellCommandAnalysis.IsPlainFileTarget`, `ToolAccessPolicy.ScreenNoProgramRedirects`, and exact scratch consent | Only proved plain-file redirects qualify for the no-program exemption. Unknown targets, forbidden reads, and denied file tools block the call. Exact scratch consent binds the command and file operations. | 24 killed | `./scripts/run-no-program-mutations.sh` |
+| `ShellCommandAnalysis.TryResolvePlainFileTarget` and `ToolAccessPolicy.ScreenNoProgramRedirects` | Only complete, exact, canonical plain-file targets qualify for the no-program exemption. Unknown targets, forbidden reads, and denied file tools block the call. The separate `shell-once-identity` gate proves exact source identity. | 33 killed; 2 duplicate block removals | `./scripts/run-no-program-mutations.sh` |
+| `ShellPolicyProjection.HasValidCompoundCandidate` and compound path checks in `ToolAccessPolicy.ScreenShellTrustZone` | A source binder must name an owner in this call; a redirect target must pass its path rule; an input may use the read roots while an output still needs the write roots. | 5 killed | `./scripts/run-compound-redirect-mutations.sh` |
 | `BashLiteralTwinSlices.Apply` and the denial check of `ToolAccessPolicy.ScreenScopedSlices` | Decision F1: the strictest literal twin result decides a call. The candidates of every twin replace the candidates of their source command, an unresolved source keeps its exact answer, twins without their source command fail loudly, and one denied twin denies the call | 9 killed | `./scripts/run-literal-twin-mutations.sh` |
 | `SessionInputFlow.DrainBufferedBatch` (turn owner choice), `SessionInputFlow.JoinsTurn`, the person check of `SessionInputFlow.AdvanceAfterToolBatch`, and the automation check of `SessionToolWorkflow.PlanNewInputAbandonment` | A turn has one requester: a drain after a turn adopts the authority of the first buffered input, a drain inside a turn keeps the turn's authority, and only inputs of that requester join the batch; an Operator or TrustedInternal person who waits ends an automation turn at the tool-batch end, and an UntrustedExternal person, a child result notice, and a replay do not; automated input waits behind an open approval, and only input from a person closes it; a child result notice is automated input by its kind, although its principal is a person | 18 killed | `./scripts/run-input-one-authority-mutations.sh` |
 | `LocalControlPairingProofValidator.ValidateAndConsume` operation check and the result of `LocalControlRequests.AuthorizeAsync` | A local-control proof grants only its own operation: a payload with the provider OAuth result purpose and the pairing operation byte is refused; a request without a valid proof is refused, and only a refused request counts against the per-source limit, so a flood of refused requests cannot block a valid proof | 4 killed | `./scripts/run-local-control-proof-mutations.sh` |
@@ -175,22 +182,47 @@ Run the gate for commands that run no program:
 ./scripts/run-no-program-mutations.sh
 ```
 
-The script runs Stryker two times. The first run selects the target check of
-`ShellCommandAnalysis.IsPlainFileTarget` (5 mutants). A mutant that drops the
-`/dev/` check lets `printf x > /dev/tcp/host/port` run with no prompt. The
-second run selects the redirect checks of
-`ToolAccessPolicy.ScreenNoProgramRedirects` (18 mutants) and the exact-consent condition in `WithFileToolConsent` (one mutant). A mutant
-there lets `: < /etc/passwd` run for an audience that may not read that path,
-or lets a redirect run when `file_write` has the `Deny` mode.
+The script runs Stryker two times. The first run selects
+`ShellCommandAnalysis.TryResolvePlainFileTarget` (15 killed mutants). The resolver rejects an
+incomplete redirect, an unknown target, and an invalid path. The second run
+selects the redirect checks of
+`ToolAccessPolicy.ScreenNoProgramRedirects` (18 killed mutants and one exact
+ignored duplicate block-removal record). A mutant there lets `: < /etc/passwd`
+run for an audience that may not read that path, or lets a redirect run when
+`file_write` has the `Deny` mode. The script rejects any other ignored mutant,
+compile error, or survivor in the selected span.
 The same gate covers the transient fact for a program with composed scratch redirects.
-It also rejects a Once key that loses the command identity when a redirect needs file consent.
-These four mutants use the existing invocation and add no Stryker build.
-`NoProgramMutationTests` must kill all of them. A missing or duplicated span
-fails before Stryker starts.
+The `shell-once-identity` target in the separate `shell-consent` group proves that a Once key keeps
+the exact source identity when a redirect needs file consent. The source
+candidate stays in the prompt for raw-source visibility and the command-length
+check. It does not replace the source-key proof. The gate uses the existing
+invocation and adds no Stryker build. A missing or duplicated span fails before
+Stryker starts.
 
 The local run took about 4 minutes after package restore, while another build
 ran. CI runs it in the `guard-and-authority` group of the
 `mutation-gates` job. Its report directory is `artifacts/stryker/no-program`.
+
+### Compound Redirect Gate
+
+Run the gate for the parser owner and the outer file effects of Bash compounds:
+
+```bash
+./scripts/run-compound-redirect-mutations.sh
+```
+
+The gate tests five mutants in three spans. The owner-membership check has two
+mutants. `Compound_source_candidate_accepts_one_owner_from_a_multi_owner_call`
+kills both. The target-denial check has one mutant. The launch-bound target test
+kills it. The read selector has two mutants. The Team read-root control kills
+both: input may use a read root, but output still needs a write root.
+
+The script fails if a selected mutant does not run, survives, or causes a
+compile error. The local run took 2 minutes 14 seconds after package restore.
+The run used the xUnit 2 mutation project and tested 956 tests before mutation.
+CI runs the gate with `shell-once-identity` in the `shell-consent` group.
+The combined local cost is about 4.5 minutes. Hosted cost remains unmeasured.
+The existing groups keep their headroom under the 15-minute fast-runner target.
 
 ### MCP Artifact Admission Gate
 
@@ -1184,13 +1216,16 @@ Run the shell assignment gate:
 ./scripts/run-shell-assignment-mutations.sh
 ```
 
-The script tests 71 mutants across twelve narrow boundaries.
+The script tests 84 mutants across eighteen narrow targets.
 It covers grant identity, wrapper fallback, wrapper child source, the hard-deny screen, prompt rollback, reviewed-safe exclusion, source spans, Bash host selection, and environment sanitation.
 The prompt rollback target is `ConsentAnswerCodec.IsOffered` in `src/Netclaw.Actors/Authorization/Consent/ConsentAnswer.cs`.
 It decides whether the prompt offered the selected option key before the key becomes a `ConsentAnswer`.
 The job fails unless every mutant dies.
 
-The local calibration run took about five minutes after package restore.
+The 2026-10-23 local run took 5 minutes 22.73 seconds.
+It killed 69 Security mutants and 15 Actors mutants, with no survivors,
+timeouts, or test errors. The Bash authored-value target killed all three
+mutants for the shell check, the `&&` condition, and the authored-value check.
 CI allows 15 minutes for hosted-runner variance and report upload.
 The report directory is `artifacts/stryker/shell-assignment`.
 The authorization PR 4 re-run killed the same 41 Security and 15 Actors

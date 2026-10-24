@@ -1073,7 +1073,7 @@
       "projectDirectory": "/work",
       "sessionDirectory": "/work",
       "available": {
-        "oneTimeApprovalKeys": ["git push", "\u0000candidate-v3:06DD0A243ACFA2E917D972FC7120B9C215034853CFD2D9FACA2828B60C256DC6"],
+        "oneTimeApprovalKeys": ["git push", "\u0000candidate-v3:06DD0A243ACFA2E917D972FC7120B9C215034853CFD2D9FACA2828B60C256DC6", "\u0000shell-source-v1:ECA3B2DB9F7F06BB92C8F448E0ADB49416F2263169DE9678C52425D7E1F3DB39"],
         "sessionGrants": [],
         "persistentGrants": [],
         "safePhrases": []

@@ -108,6 +108,159 @@ public sealed class NoProgramMutationTests : IDisposable
         Assert.Null(Screen($": > {_outside}/out.txt"));
     }
 
+    // SECURITY: the redirect target comes from the launch HOME binding. The
+    // raw command has no path that can pass the write-root rule by itself.
+    [Fact]
+    public void Compound_redirect_checks_a_launch_bound_target_against_write_roots()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        const string command = "for item in one; do :; done > \"$HOME/compound-out.txt\"";
+        var policy = CreatePolicy(null, ToolApprovalMode.Approval);
+        var analysis = policy.ShellCommandPolicy.Analyze(command, _readRoot);
+
+        Assert.True(ShellPolicyPathFacts.TryCreateCompoundRedirectViews(analysis, out var views));
+        var view = Assert.Single(views!);
+        Assert.Equal(ShellPolicyPathResolutionState.Known, view.PathFact.State);
+        var path = Assert.Single(view.PathFact.Paths).Value;
+        Assert.DoesNotContain(path, command, StringComparison.Ordinal);
+
+        var denial = policy.ScreenShellTrustZone(analysis, _readRoot, CreateContext());
+
+        Assert.Equal("shell_path_outside_trusted_roots", denial?.DenyReason);
+    }
+
+    [Fact]
+    public void Compound_input_uses_team_read_roots_while_output_uses_write_roots()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var target = Path.Combine(_outside, "team-read-only.txt");
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.GlobalReadRoots = [];
+        config.AudienceProfiles.Team.ReadFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [_outside]
+        };
+        config.AudienceProfiles.Team.WriteFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [_readRoot]
+        };
+        var policy = new ToolAccessPolicy(
+            _paths,
+            config,
+            new EffectivePolicyDefaults(DeploymentPosture.Team, TrustAudience.Team,
+                ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
+            new ShellCommandPolicy(Bash52),
+            new ToolPathPolicy(Bash52, [target], [], []));
+        var context = new ToolExecutionContext(
+            CreateContext().RunScope with { Audience = TrustAudience.Team },
+            ToolExecutionTimeout.Default);
+        var input = policy.ShellCommandPolicy.Analyze(
+            $"while false; do :; done < '{target}'",
+            _readRoot);
+        var output = policy.ShellCommandPolicy.Analyze(
+            $"while false; do :; done > '{target}'",
+            _readRoot);
+
+        Assert.Null(policy.ScreenShellTrustZone(input, _readRoot, context));
+        Assert.Equal(
+            "shell_path_protected",
+            policy.ScreenShellTrustZone(output, _readRoot, context)?.DenyReason);
+    }
+
+    [Fact]
+    public void Compound_consent_candidate_rejects_a_foreign_owner_reference()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        const string command = "for item in one; do :; done > result.txt";
+        var policy = CreatePolicy("file_write", ToolApprovalMode.Approval);
+        var analysis = policy.ShellCommandPolicy.Analyze(command, _readRoot);
+        var foreignAnalysis = policy.ShellCommandPolicy.Analyze(command, _readRoot);
+        Assert.True(analysis.TryGetCompoundRedirectOwners(out var owners));
+        Assert.True(foreignAnalysis.TryGetCompoundRedirectOwners(out var foreignOwners));
+        var owner = Assert.Single(owners!);
+        var foreignOwner = Assert.Single(foreignOwners!);
+        var candidate = new ApprovalCandidate(command, _readRoot)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = null,
+            Unresolved = ShellUnresolvedPart.Command,
+            SourceCompoundOwner = foreignOwner.Syntax
+        };
+        var approval = new ToolApprovalContext(
+            ShellTool.ToolName,
+            command,
+            [command],
+            [command],
+            [],
+            Cwd: _readRoot,
+            Candidates: [candidate]);
+        var context = CreateContext();
+
+        Assert.False(ShellPolicyProjection.TryCreate(
+            Bash52,
+            approval,
+            directoryScopes: null,
+            context,
+            analysis,
+            out _));
+
+        var validCandidate = candidate with { SourceCompoundOwner = owner.Syntax };
+        Assert.True(ShellPolicyProjection.TryCreate(
+            Bash52,
+            approval with { Candidates = [validCandidate] },
+            directoryScopes: null,
+            context,
+            analysis,
+            out var projection));
+        Assert.False(Assert.Single(projection!.Candidates).CanRequestStoredGrant);
+        Assert.False(Assert.Single(projection.Candidates).CanUseRealReviewedSafePolicy);
+    }
+
+    [Fact]
+    public void Compound_source_candidate_accepts_one_owner_from_a_multi_owner_call()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        const string command = "for item in one; do :; done > first.txt; while false; do :; done > second.txt";
+        var policy = CreatePolicy("file_write", ToolApprovalMode.Approval);
+        var analysis = policy.ShellCommandPolicy.Analyze(command, _readRoot);
+        Assert.True(analysis.TryGetCompoundRedirectOwners(out var owners));
+        Assert.Equal(2, owners!.Count);
+
+        var candidate = new ApprovalCandidate(command, _readRoot)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = null,
+            Unresolved = ShellUnresolvedPart.Command,
+            SourceCompoundOwner = owners[0].Syntax
+        };
+        var approval = new ToolApprovalContext(
+            ShellTool.ToolName,
+            command,
+            [command],
+            [command],
+            [],
+            Cwd: _readRoot,
+            Candidates: [candidate]);
+
+        Assert.True(ShellPolicyProjection.TryCreate(
+            Bash52,
+            approval,
+            directoryScopes: null,
+            CreateContext(),
+            analysis,
+            out _));
+    }
+
     // A program never skips its prompt, so this check does not judge its redirects.
     [Fact]
     public void Program_redirect_is_not_judged_by_the_read_check()
@@ -278,7 +431,11 @@ public sealed class NoProgramMutationTests : IDisposable
             {
                 Candidates = approval.Candidates.Select(static candidate => candidate with { UsesFileToolRedirects = !candidate.RunsNoProgram }).ToArray()
             };
-            var exact = policy.WithFileToolConsent(composed, context, new HashSet<FileToolCall>());
+            var exact = policy.WithFileToolConsent(
+                composed,
+                analysis,
+                context,
+                new HashSet<FileToolCall>());
             var prompt = policy.AuthorizeShellApproval(new ToolName(ShellTool.ToolName), context, arguments,
                 ToolApprovalMode.Approval, exact, WorkingDirectory).ApprovalContext!;
             return ToolAccessPolicy.NarrowShellApprovalContext(prompt, exact.Candidates, [], ShellPathStyle.Posix);

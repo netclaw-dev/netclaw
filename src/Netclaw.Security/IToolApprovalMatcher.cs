@@ -56,6 +56,12 @@ public sealed record ApprovalCandidate(
     // projection removes it from approval and persistence candidates.
     internal CommandOccurrence? SourceOccurrence { get; init; }
 
+    // A compound file effect has no command occurrence. These references bind
+    // its exact candidate to parser nodes from this call until policy projection.
+    internal RedirectedCompoundSyntax? SourceCompoundOwner { get; init; }
+
+    internal CompoundRedirect? SourceCompoundRedirect { get; init; }
+
     /// <summary>
     /// How much of the command the parser could not prove. A candidate with an
     /// unresolved part is exact: its verb is the command text, and only a

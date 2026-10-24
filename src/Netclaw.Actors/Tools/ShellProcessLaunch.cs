@@ -137,6 +137,21 @@ public sealed class ShellProcessLaunch
                 foreach (var path in fact.Paths)
                     paths.Add(path.Value);
             }
+
+            if (!ShellPolicyPathFacts.TryCreateCompoundRedirectViews(source, out var compoundRedirects))
+                throw new ShellProcessStartException("Error: Netclaw cannot prove every compound redirect.");
+
+            foreach (var redirect in compoundRedirects)
+            {
+                if (redirect.PathFact.State != ShellPolicyPathResolutionState.Known)
+                    throw new ShellProcessStartException("Error: Netclaw cannot prove a compound redirect target.");
+
+                if (redirect.WorkingDirectory.Path is { } workingDirectory)
+                    paths.Add(workingDirectory.Value);
+
+                foreach (var path in redirect.PathFact.Paths)
+                    paths.Add(path.Value);
+            }
         }
     }
 

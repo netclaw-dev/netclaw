@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Handlers;
@@ -40,7 +41,22 @@ internal sealed partial class SessionToolWorkflow
         if (!TryGetResolved(callId, out var resolved))
             return new RecoveredContinuation.Expired("approval decision was not recoverable");
 
-        var aiMessage = ChatMessageConverter.ToAiMessage(assistant, reinjectMeta: true);
+        Microsoft.Extensions.AI.ChatMessage aiMessage;
+        try
+        {
+            aiMessage = ChatMessageConverter.ToAiMessage(assistant, reinjectMeta: true);
+        }
+        catch (JsonException)
+        {
+            return UnsafeReplay("original tool call arguments are malformed");
+        }
+
+        var originalCalls = new Dictionary<string, FunctionCallContent>(StringComparer.Ordinal);
+        foreach (var originalCall in aiMessage.Contents.OfType<FunctionCallContent>())
+        {
+            if (!originalCalls.TryAdd(originalCall.CallId, originalCall))
+                return UnsafeReplay("original tool call IDs are ambiguous");
+        }
         var calls = aiMessage.Contents
             .OfType<FunctionCallContent>()
             .Where(call => !ParkedToolBatchHistory.HasToolResult(state.History, call.CallId)
@@ -51,10 +67,15 @@ internal sealed partial class SessionToolWorkflow
         if (resolved.Pending.TurnContext is not { } context)
             return UnsafeReplay("turn context is not recoverable: "
                 + (resolved.Pending.TurnContextRestoreFailure ?? "missing turn context"));
+        var plan = BuildRedrivePlan(
+            assistant.ToolCalls.Select(call => call.CallId.Value),
+            originalCalls,
+            out var redriveFailure);
+        if (redriveFailure is not null)
+            return UnsafeReplay(redriveFailure);
         if (!MarkRedriving(resolved.Pending))
             return UnsafeReplay($"approval turn phase is {TurnPhase}");
 
-        var plan = BuildRedrivePlan(assistant.ToolCalls.Select(call => call.CallId.Value));
         return new RecoveredContinuation.Dispatch(calls, context, plan);
 
         RecoveredContinuation.Abandon UnsafeReplay(string diagnostic)

@@ -78,6 +78,67 @@ public sealed class ShellLaunchEnvironmentApprovalTests(ShellApprovalMatrixFixtu
         Assert.Equal(ApprovalAllowReason.StoredApproval, observed.AllowReason);
     }
 
+    [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Launch facts apply to the POSIX Bash host.")]
+    public async Task Launch_assignment_needs_a_qualified_grant_for_the_same_effect()
+    {
+        await using var harness = await CreateHarnessAsync(
+            Approvals.PersistentAnywhere("export", "dotnet"));
+        const string command = "export DOTNET_ROOT=$HOME/.dotnet; dotnet --version";
+        var launchPrompt = await harness.EvaluateShellAsync(command, Ct);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, launchPrompt.Outcome);
+        Assert.Contains(launchPrompt.Prompt!.CandidateVerbs, static verb =>
+            verb.Contains("dotnet", StringComparison.Ordinal));
+
+        var home = Assert.IsType<string>(ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2)).HomeDirectory);
+        var literalCommand = $"export DOTNET_ROOT='{home}/.dotnet'; dotnet --version";
+
+        var prompt = await harness.EvaluateShellDecisionAsync(literalCommand, Ct);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, prompt.Outcome);
+        var approvalContext = prompt.ApprovalContext!;
+        var candidates = approvalContext.Candidates!;
+        Assert.False(
+            approvalContext.IsMessy,
+            string.Join(", ", candidates.Select(
+                candidate => $"{candidate.Verb}:{candidate.Directory}:{candidate.AssignmentDigest}")));
+        var programCandidate = Assert.Single(
+            candidates,
+            static candidate => candidate.VerbTokens?.FirstOrDefault() == "dotnet");
+        Assert.NotNull(programCandidate.AssignmentDigest);
+
+        foreach (var candidate in candidates)
+        {
+            var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(candidate.VerbTokens);
+            harness.AddStoredShellEntry(
+                TrustAudience.Personal,
+                ApprovalEntry.CreateTokenPrefix(
+                    ApprovalShell.Bash,
+                    tokens,
+                    assignmentDigest: candidate.AssignmentDigest));
+        }
+
+        var sameEffect = await harness.EvaluateShellDecisionAsync(command, Ct);
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, sameEffect.Outcome);
+
+        var changedLiteralEffect = await harness.EvaluateShellDecisionAsync(
+            "export DOTNET_ROOT=/other/.dotnet; dotnet --version",
+            Ct);
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, changedLiteralEffect.Outcome);
+
+        var changedEffect = await harness.EvaluateShellDecisionAsync(
+            "HOME=/other; export DOTNET_ROOT=$HOME/.dotnet; dotnet --version",
+            Ct);
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, changedEffect.Outcome);
+
+        var protectedPath = await harness.EvaluateShellDecisionAsync(
+            "export CONFIG_ROOT=$HOME/.ssh; cat \"$CONFIG_ROOT/authorized_keys\"",
+            Ct);
+        Assert.Equal(ToolAuthorizationOutcome.Denied, protectedPath.Outcome);
+    }
+
     // Negative controls: each literal twin is allowed, but the source can change the
     // variable before the read, or a child shell reads its own startup files.
     [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]

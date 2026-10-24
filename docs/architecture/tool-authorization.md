@@ -173,16 +173,19 @@ differential test proves that it gives the same decision as the old gate. Its
 shell rules, in order:
 
 1. Admission: audience, then shell capability.
-2. Prohibition: hard deny, then protected shell text.
+2. Prohibition: hard deny, then protected shell text. The protected-path check
+   also reads known outer redirects from each retained Bash compound owner.
 3. Filesystem authority: a `..` in the working directory, then each slice of a
    `cd` directory proof, then each literal twin (decision F1, below).
 4. Filesystem authority: the working directory and the known paths must be in
-   a trusted root of the audience profile. A protected path stays denied.
+   a trusted root of the audience profile. For a Bash compound, the retained
+   parser owner supplies its entry directory and outer redirect targets. A
+   protected path stays denied.
 5. Admission: a Deny consent mode.
 6. Advice: a native tool, then Auto mode with its directory advice. Then a
    Bash source with no command is allowed: it runs no program (owner decision,
-   October 2026, below). Before the advice, the authorizer asks the grant store
-   for the file tool grants of the redirects that need consent.
+   October 2026, below). Before Auto or this allow, the authorizer asks the grant
+   store for each compound redirect's file tool grant.
 7. A call without command text, the projected trusted-root check, the
    redirect checks of a command that runs no program, and unresolved input:
    one-time consent or a Once-only request. Since approval taxonomy
@@ -193,6 +196,12 @@ shell rules, in order:
    A variable word (`"$d"`) is an unknown operand unless the parser resolves
    it as a path, or types its value as a filesystem value or as data. A loop
    or assignment value that names a path does not give the candidate a scope.
+   A compound with an uncovered outer file operation keeps the full source
+   visible and adds an exact `read <path>` or `write <path>` candidate. The
+   source candidate supports display and the 900-character check. A call-local
+   shell source key binds the full source to a `Once` answer. File-operation
+   candidates keep null `VerbTokens` and references to the parser owner and
+   redirect.
    Owner decision F1 (0.27.2): when the parser gives the literal twins of a
    command, the twin candidates replace the candidates of that command (see
    "Literal twins" below).
@@ -272,6 +281,9 @@ declares the complete names of the launch environment
 - Fail closed: a Bash host without a proved fresh state, a decoded `bash -c`
   child, and PowerShell keep every assignment. `set -a`, `declare -x`, and
   `eval` make the source unresolved.
+- For Bash, an exact effective value can qualify a digest when the authored
+  value is unknown. The parser must prove that value from the full analysis.
+  PowerShell still needs exact authored and effective values.
 
 Example: `b=$(git branch --show-current); git fetch origin` with a chat grant
 for `git fetch` runs with no prompt. Negative example: with `GIT_DIR` in the
@@ -370,10 +382,13 @@ and no pattern (a source that does not parse, `$cmd > x`, `eval x`,
 its one display candidate, with only `Once` and `Deny`. A request with
 patterns (a PowerShell statement list) keeps them. Slack and Discord show the
 command in the request line, so their header for such a request is "Approve
-this command in <folder>?". The one-time key reads the
-candidates and the patterns, not the display list, so a "Once" answer still
-matches the retry. The 900-character rule below applies after it. The test
-harness fails each test that observes a prompt with no display candidate.
+this command in <folder>?". The one-time key reads the candidates and the
+patterns, not the display list. For shell calls, it also binds a call-local
+hash of the exact structured `Command` value. The retry must keep that value;
+display text is not source. Recovery reads the original structured arguments
+from session history and abandons a shell retry when the source is missing or
+malformed. The 900-character rule below applies after it. The test harness
+fails each test that observes a prompt with no display candidate.
 
 Decision D2 (October 2026): an attended and an unattended call use the same
 rules above. The file reach of an unattended call is the reach of its audience
@@ -1183,8 +1198,9 @@ An ineligible occurrence retains its ordinary command and redirect scopes.
 The candidate's transient `UsesFileToolRedirects` fact selects the existing file-tool admission, read checks, and consent rules.
 The grant actor still receives the canonical command words and ordinary scopes. Persistent grants do not change.
 Each file operation that needs consent has its own exact candidate.
-A composed redirect also retains an exact command candidate.
-The Once answer binds both candidates, their scopes, and their assignment digests.
+A composed redirect keeps its command candidate in the prompt.
+The Once answer binds candidate facts, scopes, assignment digests, and the exact shell source key.
+Persistent grants do not store that source identity.
 
 ```mermaid
 flowchart TD
@@ -1895,6 +1911,7 @@ change is small.
 | Scenario | Support | Where it goes |
 | --- | --- | --- |
 | A fatigue fix for a new safe shell form (home-tilde glob, a literal loop) | Supported | Shell facts plus Consent, under the outcome direction rule (6.8). |
+| Bash compound redirects with independent file authority | Supported | Shell facts retain parser roots. Call-local exact candidates keep `VerbTokens` null and reference the retained compound owner and redirect. Consent uses exact `Verb` text. The projection validates the references against this call's roots and canonical file operation. |
 | A new grant scope, for example per project | Supported | One scope case and one path boundary (7.2, 7.3). Today it touches 8 or more encodings. |
 | A new tool family or MCP resource type | Supported | A new candidate kind (7.1). |
 | A new channel prompt surface (Teams, Telegram) | Supported | Consent delivery renders the consent request (7.5). |
