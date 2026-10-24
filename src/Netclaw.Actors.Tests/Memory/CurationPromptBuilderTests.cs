@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using Netclaw.Actors.Memory;
 using Netclaw.Configuration;
 using Xunit;
@@ -58,6 +59,38 @@ public sealed class CurationPromptBuilderTests
         Assert.Equal(CurationDecisionKind.Skip, CurationPromptBuilder.ParseResponse("skip")?.Kind);
         Assert.Equal(CurationDecisionKind.Create, CurationPromptBuilder.ParseResponse("create")?.Kind);
         Assert.Equal(CurationDecisionKind.Update, CurationPromptBuilder.ParseResponse("update doc-1")?.Kind);
+    }
+
+    [Theory]
+    [InlineData("tr-TR")]
+    [InlineData("az-Latn-AZ")]
+    public void ParseResponse_preserves_SKIP_semantics_across_cultures(string cultureName)
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo(cultureName);
+
+            foreach (var response in new[]
+                     {
+                         "skip", "SKIP",
+                         "skip\n---\nirrelevant trailing text",
+                         "SKIP\n---\nirrelevant trailing text"
+                     })
+            {
+                var decision = CurationPromptBuilder.ParseResponse(response);
+                Assert.NotNull(decision);
+                Assert.Equal(CurationDecisionKind.Skip, decision.Kind);
+                Assert.Null(decision.MergedBody);
+            }
+
+            Assert.Null(CurationPromptBuilder.ParseResponse("SKIPPER"));
+            Assert.Null(CurationPromptBuilder.ParseResponse("CREATE_EXTRA"));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
     }
 
     [Fact]

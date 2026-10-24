@@ -170,13 +170,13 @@ public static class CurationPromptBuilder
             return null;
 
         // SKIP
-        if (Regex.IsMatch(trimmed, @"^SKIP(?:\s|$)", RegexOptions.IgnoreCase))
+        if (Regex.IsMatch(trimmed, @"^SKIP(?:\s|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {
             return new CurationDecision(CurationDecisionKind.Skip, null, null, null, "LLM decision: SKIP", FromLlmTier: true);
         }
 
         // CREATE
-        if (Regex.IsMatch(trimmed, @"^CREATE(?:\s|$)", RegexOptions.IgnoreCase))
+        if (Regex.IsMatch(trimmed, @"^CREATE(?:\s|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {
             return new CurationDecision(CurationDecisionKind.Create, null, null, null, "LLM decision: CREATE", FromLlmTier: true);
         }
