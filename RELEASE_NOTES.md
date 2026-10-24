@@ -1,5 +1,56 @@
 # NetClaw Release Notes
 
+## 0.28.0-beta.3 (2026-10-24)
+
+Follow-up beta to 0.28.0-beta.2. A child that waits for operator consent now parks, and the park survives a daemon restart. A restart also resumes a turn that the restart drain stopped in a tool loop. Memory recall and memory curation get two fixes.
+
+> **Caution: this release is forward-only.** When this release writes a parked child run to a session journal, 0.28.0-beta.2 and older cannot recover that session. To roll back, you must have a backup from before the upgrade.
+> 1. Before you upgrade, stop the daemon: `netclaw daemon stop`.
+> 2. Copy the database: `cp ~/.netclaw/netclaw.db ~/.netclaw/netclaw.db.bak.$(date +%s)`.
+> 3. To roll back, stop the daemon, restore that copy, and then start the older binary. A restore loses the journal records that the new release wrote after the backup.
+
+### Sub-agents
+
+- **A child that waits for consent parks, and the park survives a restart.** When a child call needs operator consent, the child parks. The other calls of its batch end first. The session writes the park and its consent requests to the run record in one journal write. After the last answer, the child resumes and runs only the parked calls, each one time. The approval gate checks each parked call again under the current policy ([#2618](https://github.com/netclaw-dev/netclaw/pull/2618), [#2670](https://github.com/netclaw-dev/netclaw/pull/2670)).
+  - A parked run survives a daemon restart, a config reload, a compaction snapshot, and passivation. After a restart, one click resumes the parked calls one time.
+  - After a restart, the requester of a parked prompt comes from the run record. Netclaw refuses a click from another person.
+  - When the daemon stops after a resume starts, recovery records the run as lost. The parked calls do not run again.
+  - A park larger than 4 MiB ends the run with `park_too_large`, and no prompt appears. A damaged park ends the run with `park_damaged`.
+  - A cancel of a parked run ends the run at once.
+  - A resumed child does not keep the deferred tools that it loaded. The child can load them again.
+  - Before, a child waited live for consent, and a restart recorded the run as lost.
+  - **Upgrade impact:** this change is forward-only. Read the caution at the top of this section before you upgrade.
+- **A notice turn handles only its notice.** An approval notice turn cannot ask for approval. Each approval notice now ends with one rule: handle only this notice, tell the operator the next step, and end the turn. Before, the model could continue other work in the notice turn and get an `approval_required_unattended` denial ([#2657](https://github.com/netclaw-dev/netclaw/pull/2657)).
+- **The parent keeps a productive child.** The `agent-coordination` guidance now says that long child runs are normal, and that a status check sets no limit on rounds. The parent cancels a child only for an operator request, for wrong work, or for no progress ([#2666](https://github.com/netclaw-dev/netclaw/pull/2666)).
+
+### Sessions
+
+- **A restart resumes a turn that stopped after its first tool batch.** Before, the restart drain could stop a turn in a tool loop, and no restart reminder resumed that turn. Now the session records a continuation input for the stopped turn before the restart. After the restart, the turn continues from its stored history, with the authority of that turn ([#2651](https://github.com/netclaw-dev/netclaw/pull/2651)).
+  - A later input that arrives before the turn continues closes the continuation. That input runs in its own turn, and the session posts the restart notice one time.
+- **A slash command from the input queue gets one acknowledgement.** Before, the sender got a second acknowledgement when the queue drained ([#2663](https://github.com/netclaw-dev/netclaw/pull/2663)).
+
+### Memory
+
+- **A same-name memory rewrite no longer adds a duplicate.** Before, a rewrite of a memory with the same name could skip the model decision. Curation then added a duplicate document after the overwrite guard refused the rewrite. Now the decision waits until the model resolves it ([#2669](https://github.com/netclaw-dev/netclaw/pull/2669)).
+- **Recall reports a coverage gap only for documents.** Memory records have no embeddings by design. Recall no longer reports a vector coverage gap for them. The `netclaw-memory` skill explains the diagnostic correctly ([#2664](https://github.com/netclaw-dev/netclaw/pull/2664)).
+
+### CLI/TUI
+
+- **A cold chat start no longer blocks a second request.** The chat client now starts its runtime outside its lifetime lock. The two-second limit for quit also applies while the runtime starts ([#2668](https://github.com/netclaw-dev/netclaw/pull/2668)).
+
+### Telemetry
+
+- **A tool call that needs approval no longer writes an Error log.** Before, the daemon wrote an Error entry with a stack trace in addition to the Information audit entry. Now only the Information entry remains. A real tool failure still writes an Error entry ([#2649](https://github.com/netclaw-dev/netclaw/pull/2649)).
+
+### Internal
+
+- `build.ps1` now writes `VersionPrefix` and `VersionSuffix` for a prerelease ([#2645](https://github.com/netclaw-dev/netclaw/pull/2645)).
+- Session outputs, tests, mutation gates, evals, and design text ([#2646](https://github.com/netclaw-dev/netclaw/pull/2646), [#2647](https://github.com/netclaw-dev/netclaw/pull/2647), [#2648](https://github.com/netclaw-dev/netclaw/pull/2648), [#2650](https://github.com/netclaw-dev/netclaw/pull/2650), [#2652](https://github.com/netclaw-dev/netclaw/pull/2652), [#2654](https://github.com/netclaw-dev/netclaw/pull/2654), [#2658](https://github.com/netclaw-dev/netclaw/pull/2658)).
+
+### Dependency Updates
+
+- **Bump ShellSyntaxTree** — 0.4.0-beta.24 → 0.4.0, with no change in behavior ([#2660](https://github.com/netclaw-dev/netclaw/pull/2660))
+
 ## 0.28.0-beta.2 (2026-10-23)
 
 Follow-up beta to 0.28.0-beta.1. A message from a person now ends an active automation turn, so the person no longer waits for a long reminder or job turn.
