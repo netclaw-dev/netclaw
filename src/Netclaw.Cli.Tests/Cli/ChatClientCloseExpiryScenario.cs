@@ -46,6 +46,10 @@ internal static class ChatClientCloseExpiryScenario
             owner.Tell(new Close(reply, clock.GetTimestamp()), ActorRefs.NoSender);
             while (await events.Reader.ReadAsync(token).AsTask().WaitAsync(FailureCeiling, token)
                    is not ConnectionChanged { Value.State: DaemonConnectionState.Closing }) { }
+            // The Close handler publishes Closing before it calls Next(). If the clock moves before Next(),
+            // Next() ends the close and the Start guard never runs. The Identify reply queues behind
+            // the Close message, so it proves that the whole Close handler finished.
+            await owner.Ask<ActorIdentity>(new Identify(null), token).WaitAsync(FailureCeiling, token);
 
             // Only the elapsed clock advances. CloseDeadline cannot overtake the held bind completion.
             clockAdvance();
