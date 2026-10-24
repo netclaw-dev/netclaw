@@ -4,7 +4,11 @@
 
 Follow-up beta to 0.28.0-beta.2. A child that waits for operator consent now parks, and the park survives a daemon restart. A restart also resumes a turn that the restart drain stopped in a tool loop. Memory recall and memory curation get two fixes.
 
-> **Caution: this release is forward-only.** When this release writes a parked child run to a session journal, 0.28.0-beta.2 and older cannot recover that session. To roll back, you must have a backup from before the upgrade.
+> **Caution: this release is forward-only.**
+> - When this release writes a parked child run to a session journal, 0.28.0-beta.2 and older cannot recover that session. To roll back, you must have a backup from before this upgrade.
+> - Never start 0.27.1 or older on a database that 0.28.0-beta.1 or newer wrote. 0.27.1 reads the child notice rows wrongly. It replays a notice as user input, and it can deliver a child result a second time. To roll back to 0.27.1, you must have the backup from before the first 0.28 beta upgrade.
+>
+> Use these steps to make the backup and to roll back:
 > 1. Before you upgrade, stop the daemon: `netclaw daemon stop`.
 > 2. Copy the database: `cp ~/.netclaw/netclaw.db ~/.netclaw/netclaw.db.bak.$(date +%s)`.
 > 3. To roll back, stop the daemon, restore that copy, and then start the older binary. A restore loses the journal records that the new release wrote after the backup.
