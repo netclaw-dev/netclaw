@@ -44,6 +44,7 @@ The job timeout is 25 minutes.
 Each Stryker invocation builds the test project and runs the initial test run again. That fixed cost is about 1.5 to 2 minutes per invocation.
 The mutant run itself takes under 1 minute for most spans. Group time is mostly the sum of the invocations of its gates.
 Hosted runs from 2026-10-17 through 2026-10-23 measured these gate times (minutes):
+The table retains earlier group measurements. Gate notes below describe later additions and current total costs.
 
 | Group | Gates | Hosted time (about) |
 |-------|-------|---------------------|
@@ -58,7 +59,7 @@ Hosted runs from 2026-10-17 through 2026-10-23 measured these gate times (minute
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally), `stopped-turn-continuation` (10 mutants, one invocation, 2.5 locally) | 13.5 to 14.5 (estimate; hosted measurement required) |
 | `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry` (two mutants, one CLI invocation) | [8m14s](https://github.com/netclaw-dev/netclaw/actions/runs/40069130760/job/120798739243) |
-| `loopback-host-origin` | `loopback-host-origin` and `curation-same-name` (one mutant, one Actors invocation) | [10m59s](https://github.com/netclaw-dev/netclaw/actions/runs/40071707192/job/120806485577) |
+| `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local) | 7 to 8 (estimate) |
 
 The curation gate targets only `sameNameMatch is not null` in `CurationRulesEvaluator`.
