@@ -18,6 +18,9 @@ namespace Netclaw.Actors.SubAgents;
 /// </summary>
 internal sealed record ChildRunPark
 {
+    /// <summary>The cap on the size of one park record in bytes (design D4).</summary>
+    public const int MaxBytes = 4 * 1024 * 1024;
+
     /// <summary>Every message after the system message, as the child keeps it (M12).</summary>
     public IReadOnlyList<SerializableChatMessage> Transcript { get; init; } = [];
 
@@ -35,16 +38,20 @@ internal sealed record ChildRunPark
 
     /// <summary>The skill overlay of the spawn, or null. The agent profile does not hold it.</summary>
     public string? SkillOverlay { get; init; }
-
-    /// <summary>One consent request for each parked call, as the gate made it.</summary>
-    public required IReadOnlyList<ParentApprovalRequest> Requests { get; init; }
 }
+
+/// <summary>One journaled consent request of a parked run, and its answer when the journal holds one (design D2).</summary>
+internal sealed record ChildParkRequest(SessionProtocol.ToolApprovalRequested Request, SessionProtocol.ToolApprovalResolved? Resolution);
 
 /// <summary>The two working directories of the batch that parked (design D2).</summary>
 internal sealed record ChildParkScopeDirectories(string? ProjectDirectory, string? InheritedWorkingDirectory);
 
-/// <summary>The child tells its owner that its batch parked (design D1). The sender is the child.</summary>
-internal sealed record ChildParkReached(SubAgentRunId RunId, ChildRunPark Park) : INoSerializationVerificationNeeded;
+/// <summary>
+/// The child tells its owner that its batch parked (design D1). The sender is the child. The requests travel beside the
+/// park: one consent request for each parked call, as the gate made it.
+/// </summary>
+internal sealed record ChildParkReached(SubAgentRunId RunId, ChildRunPark Park, IReadOnlyList<ParentApprovalRequest> Requests)
+    : INoSerializationVerificationNeeded;
 
 /// <summary>The journal rejected an event of a child run (design D3). The owner records the end of the run.</summary>
 internal sealed record ChildEventRejected(SubAgentRunId RunId) : INoSerializationVerificationNeeded;
@@ -78,6 +85,33 @@ internal enum ChildResumeDecision
     Resume
 }
 
+/// <summary>What recovery does with a child run (PR 2 design D6, F3).</summary>
+internal enum ChildRecoveryAction
+{
+    /// <summary>The run has nothing to recover.</summary>
+    Nothing,
+
+    /// <summary>The run was running at the restart. Record it as lost.</summary>
+    Lost,
+
+    /// <summary>The run is parked with an open request. Keep it and start no actor.</summary>
+    Wait,
+
+    /// <summary>The run is parked and every request has an answer. Resume it.</summary>
+    Resume,
+
+    /// <summary>The run ended. Prepare its result.</summary>
+    PrepareResult
+}
+
+/// <summary>The kind of a child event that the journal rejected (PR 2 design D5).</summary>
+internal enum ChildRejectedEvent
+{
+    Parked,
+    Answer,
+    Resumed
+}
+
 /// <summary>The two pure decisions of the park owner. They are the Stryker targets of child-resume-gate.</summary>
 internal static class ChildParkRules
 {
@@ -98,4 +132,18 @@ internal static class ChildParkRules
             : openRequests > 0 || drainPending ? ChildResumeDecision.Wait
             : ChildResumeDecision.Resume;
     // </child-resume-gate>
+
+    // PR 2 compile shells (test author). Each returns a default result. The implementer owns them (tasks.md 1.1).
+    public static ChildRecoveryAction RecoveryAction(ChildRunLifecycle lifecycle, int openRequests) => default;
+
+    public static bool ParkFits(long parkBytes) => default;
+
+    // Returns the damage of a loop-guard state, or null when the state can be valid.
+    public static string? LoopGuardDamage(TurnLoopGuardState loopGuard, int? lastCheckpointRound) => default;
+
+    public static bool CountsAsUnreported(ChildRunLifecycle lifecycle, int openRequests) => default;
+
+    public static bool RejectedEventEnds(ChildRejectedEvent kind, ChildRunLifecycle? lifecycle) => default;
+
+    public static bool IgnoredBySnapshot(SessionProtocol.ToolApprovalRequested request) => default;
 }

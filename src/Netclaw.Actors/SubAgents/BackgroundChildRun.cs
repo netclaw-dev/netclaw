@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Collections.Immutable;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
@@ -39,6 +40,9 @@ public sealed record BackgroundChildRun
     /// the snapshot both carry it. A record written before the field reads as null.
     /// </summary>
     public required ReminderId? SourceReminderId { get; init; }
+
+    /// <summary>The count of consent prompts that the run issued (PR 2 compile shell, design D2).</summary>
+    public int PromptsIssued { get; init; }
 }
 
 /// <summary>
@@ -51,6 +55,10 @@ public abstract record ChildRunLifecycle
     private ChildRunLifecycle() { }
     public sealed record Accepted(ChildRunCheckpoint? Checkpoint) : ChildRunLifecycle;
     public sealed record Cancelling(ChildRunCheckpoint? Checkpoint) : ChildRunLifecycle;
+
+    /// <summary>The run waits for consent. The record holds the park and its requests (PR 2 compile shell, design D2).</summary>
+    internal sealed record Parked(ChildRunPark Park, ImmutableArray<ChildParkRequest> Requests)
+        : ChildRunLifecycle;
 
     /// <summary>
     /// The child ended and the owner has not yet admitted its notice.
