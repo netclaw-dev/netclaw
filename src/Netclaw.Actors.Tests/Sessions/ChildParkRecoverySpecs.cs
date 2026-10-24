@@ -352,6 +352,7 @@ public sealed class ChildParkRecoverySpecs(ITestOutputHelper output) : ChildPark
         await AwaitAssertAsync(() => Assert.Equal(1, TurnRuns(journal, fire.InputId)), Deadline, cancellationToken: Cancellation);
         await SettleNoticesAsync(journal, id);
         Assert.Equal(1, TurnRuns(journal, fire.InputId));
+        Assert.Equal(1, TurnRuns(journal, person.InputId));
         Assert.True(TurnAt(journal, person.InputId) < TurnAt(journal, fire.InputId),
             "P was admitted first and the restart reminder resumes it, so its turn record must come before the turn of F.");
     }
