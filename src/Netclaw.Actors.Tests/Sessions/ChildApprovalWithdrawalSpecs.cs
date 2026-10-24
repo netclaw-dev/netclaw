@@ -58,28 +58,6 @@ public sealed class ChildApprovalWithdrawalSpecs(ITestOutputHelper output) : Chi
     }
 
     /// <summary>
-    /// The live child actor stops with no terminal result. The session records the run as lost and withdraws its
-    /// prompt with the reason "child lost".
-    /// Planted bug: the lost record removes the entry and tells nobody, or it uses the reason of a restart.
-    /// </summary>
-    [Fact]
-    public async Task An_unexpected_stop_of_a_live_child_closes_its_prompt_as_lost()
-    {
-        // Arrange
-        var sessionId = new SessionId("withdraw/child-lost");
-        var opened = await OpenChildPromptsAsync(sessionId, "lost-p1");
-
-        // Act
-        await StopChildActorAsync(sessionId, opened.Accepted);
-        var closed = await CollectClosedUntilTheRunEndsAsync(opened.Subscriber);
-
-        // Assert
-        var item = Assert.Single(closed);
-        Assert.Equal(opened.Prompts[0].CallId, item.CallId);
-        Assert.Equal(new ToolInteractionCloseReason.Withdrawn(WithdrawReason.ChildLost), item.Reason);
-    }
-
-    /// <summary>
     /// The channel cannot post the buttons of a child prompt and answers with the <c>prompt_unavailable</c> key. The
     /// session withdraws the request with the reason "prompt unavailable", and the call does not run.
     /// Planted bug: the session records the key as an ordinary refusal and emits no closed output (today).
@@ -119,7 +97,6 @@ public sealed class ChildApprovalWithdrawalSpecs(ITestOutputHelper output) : Chi
     /// </summary>
     [Theory]
     [InlineData(WithdrawReason.CancelledByParent)]
-    [InlineData(WithdrawReason.ChildLost)]
     [InlineData(WithdrawReason.PromptUnavailable)]
     public async Task A_late_click_on_a_withdrawn_prompt_gets_its_reason_and_runs_nothing(WithdrawReason reason)
     {
@@ -131,9 +108,6 @@ public sealed class ChildApprovalWithdrawalSpecs(ITestOutputHelper output) : Chi
         {
             case WithdrawReason.CancelledByParent:
                 await CancelAsync(sessionId, opened.Accepted);
-                break;
-            case WithdrawReason.ChildLost:
-                await StopChildActorAsync(sessionId, opened.Accepted);
                 break;
             case WithdrawReason.PromptUnavailable:
                 await AskManagerAsync<ISessionResponse>(new ToolInteractionResponse
@@ -270,12 +244,6 @@ public sealed class ChildApprovalWithdrawalSpecs(ITestOutputHelper output) : Chi
         var session = await ResolveSessionAsync(sessionId);
         await session.Ask<string>(new ChildRunControl(accepted.Run.RunId, true, accepted.Run.OriginalContext),
             Deadline, Cancellation);
-    }
-
-    private async Task StopChildActorAsync(SessionId sessionId, ChildRunAccepted accepted)
-    {
-        var childPath = $"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}/subagent-{Agent}-{accepted.Run.RunId.Value}";
-        Sys.Stop(await Sys.ActorSelection(childPath).ResolveOne(Deadline, Cancellation));
     }
 
     // The session emits SubAgentOutput Completed in the callback of the terminal record, after it closed the prompts of

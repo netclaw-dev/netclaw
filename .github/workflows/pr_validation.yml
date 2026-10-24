@@ -193,7 +193,7 @@ jobs:
           - group: loopback-host-origin
             gates: loopback-host-origin
           - group: child-consent
-            gates: child-consent text-answer-guard
+            gates: child-consent text-answer-guard child-resume-gate
 
     steps:
       - name: "Checkout"

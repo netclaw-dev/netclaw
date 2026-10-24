@@ -183,7 +183,7 @@ public sealed class ChildNoticeReducerTests
     {
         // Arrange
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(OpenApproval(), durable: true, recovered: true);
+        workflow.ApplyApprovalRequested(OpenApproval(), recovered: true);
 
         // Act
         var plan = workflow.PlanNewInputAbandonment(SessionState.Empty, Owner, principal, isChildNotice: true, nowMs: 100);
@@ -203,7 +203,7 @@ public sealed class ChildNoticeReducerTests
         // Arrange
         var workflow = new SessionToolWorkflow();
         var request = OpenApproval();
-        workflow.ApplyApprovalRequested(request, durable: true, recovered: true);
+        workflow.ApplyApprovalRequested(request, recovered: true);
         var accepted = Assert.IsAssignableFrom<ApprovalResponseResult.DurableAccepted>(workflow.PrepareRecoveredResponse(
             new ToolInteractionResponse
             {

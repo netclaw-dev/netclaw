@@ -342,7 +342,8 @@ public sealed class ChildConsentNoticeTurnSpecs(ITestOutputHelper output) : Chil
                 break;
         }
 
-        Assert.Equal(cancelsOwnRun ? 1 : 0, journal.Committed.OfType<ChildRunEvent.CancellationRequested>().Count());
+        // A parked run has no actor, so its cancel writes only the terminal record (durable-child-consent-wait D7).
+        Assert.Empty(journal.Committed.OfType<ChildRunEvent.CancellationRequested>());
         Assert.Equal(cancelsOwnRun ? 1 : 0, journal.Committed.OfType<ChildRunEvent.TerminalRecorded>().Count(evt =>
             evt.RunId == alice.Run.RunId && evt.Terminal.Result.OutcomeReason == SubAgentOutcomeReason.CancelledByParent));
         Assert.Equal(cancelsOwnRun, ConsentNotices(journal, sessionId).Any(notice =>

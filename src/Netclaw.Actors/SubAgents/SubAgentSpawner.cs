@@ -216,39 +216,8 @@ public sealed class SubAgentSpawner
             SubAgentSpawnBreadcrumbs.NoSessionContext(_logger, context, profile.Name);
             throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable, "A child start requires an owning session.");
         }
-        var exposure = ResolveTools(context);
-        if (exposure.Tools.Count == 0)
-        {
-            SubAgentSpawnBreadcrumbs.NoToolsAvailable(_logger, context, profile.Name);
-            throw new ChildStartRejectedException(SubAgentOutcomeReason.NoToolsAvailable,
-                "No child tools are available under the parent audience policy.");
-        }
-        if (requireResultReader && exposure.Tools.All(tool => tool.Name != FileReadTool.ToolName))
-        {
-            SubAgentSpawnBreadcrumbs.NoResultReader(_logger, context, profile.Name);
-            throw new ChildStartRejectedException(SubAgentOutcomeReason.NoResultReader,
-                $"The child was not started. The result of a child run is read with {FileReadTool.ToolName}, "
-                + $"and the policy for this session does not allow {FileReadTool.ToolName}.");
-        }
-        var definition = new SubAgentDefinition
-        {
-            Name = new AgentName(profile.Name),
-            SystemPrompt = AppendSystemPromptOverlay(profile.SystemPrompt, systemPromptOverlay),
-            Tools = exposure.Tools,
-            ModelRole = profile.ModelRole,
-            EmitStructuredFindings = profile.EmitStructuredFindings,
-            ProjectInstructions = ResolveProjectInstructions(context),
-            OperatingRules = ResolveOperatingRules(context)
-        };
-
+        var (definition, coreToolNames) = ResolveDefinition(profile, systemPromptOverlay, context, requireResultReader);
         var runId = SubAgentRunId.New();
-
-        var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
-        // Inter-delta budget: session-wide, so every subagent gets the same value.
-        var subAgentTimeout = _sessionConfig.FirstTokenTimeout;
-        var prefillTimeout = TimeSpan.FromSeconds(
-            profile.PrefillTimeoutSeconds ?? _subAgentConfig.PrefillTimeoutSeconds);
-        var noProgressTimeout = TimeSpan.FromSeconds(_subAgentConfig.NoProgressTimeoutSeconds);
         var subAgentScopeId = !string.IsNullOrWhiteSpace(context.SessionId)
             ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
             : $"subagent/{definition.Name}/{runId}";
@@ -264,6 +233,82 @@ public sealed class SubAgentSpawner
         };
         var initialWorkingSnapshot = await _workingContextSnapshots.CreateAsync(
             parentWorkingContext, context.Audience, ct).ConfigureAwait(false);
+        var digestInput = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            profile.Name, task, runtimeContext, systemPromptOverlay
+        });
+        var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(digestInput)));
+        var prepared = BuildStart(definition, coreToolNames, profile, context, runId, scopeId, childStorage,
+            initialWorkingSnapshot, context.ResolveShellCwd(null), digest);
+        return prepared with { Execution = prepared.Execution with { Task = task, RuntimeContext = runtimeContext } };
+    }
+
+    /// <summary>
+    /// Prepares the next incarnation of a parked run (durable-child-consent-wait, design D4). It runs on the owner
+    /// thread with no await. The spawn rules apply again under the run authority in <paramref name="context"/>: child
+    /// runs enabled, a non-Public audience, a current agent profile, child tools, and <c>file_read</c>. A failed rule
+    /// throws <see cref="ChildStartRejectedException"/>, and no parked call runs.
+    /// </summary>
+    internal PreparedChildStart PrepareResume(BackgroundChildRun run, WorkingContextSnapshot snapshot, ChildRunResume resume,
+        SubAgentProfile? profile, ToolInvocationContext context)
+    {
+        if (!_subAgentConfig.Enabled || context.Audience == TrustAudience.Public)
+            throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable,
+                "Child runs are not available to the requester of this run.");
+        if (profile is null)
+            throw new ChildStartRejectedException(SubAgentOutcomeReason.SpawnUnavailable,
+                $"The agent profile '{run.AgentName.Value}' of this run no longer exists.");
+        var (definition, coreToolNames) = ResolveDefinition(profile, resume.Park.SkillOverlay, context, requireResultReader: true);
+        var storage = (context.SessionStorage ?? throw new InvalidOperationException("A resume requires session storage."))
+            .ForChild(run.RunId, run.ScopeId);
+        var prepared = BuildStart(definition, coreToolNames, profile, context, run.RunId, run.ScopeId, storage, snapshot,
+            resume.Park.ScopeDirectories.InheritedWorkingDirectory, run.ArgumentsDigest);
+        return prepared with { Execution = prepared.Execution with { Resume = resume } };
+    }
+
+    // The spawn rules on the tool set, and the definition of the agent.
+    private (SubAgentDefinition Definition, IReadOnlySet<string> CoreToolNames) ResolveDefinition(
+        SubAgentProfile profile, string? skillOverlay, ToolInvocationContext context, bool requireResultReader)
+    {
+        var exposure = ResolveTools(context);
+        if (exposure.Tools.Count == 0)
+        {
+            SubAgentSpawnBreadcrumbs.NoToolsAvailable(_logger, context, profile.Name);
+            throw new ChildStartRejectedException(SubAgentOutcomeReason.NoToolsAvailable,
+                "No child tools are available under the parent audience policy.");
+        }
+        if (requireResultReader && exposure.Tools.All(tool => tool.Name != FileReadTool.ToolName))
+        {
+            SubAgentSpawnBreadcrumbs.NoResultReader(_logger, context, profile.Name);
+            throw new ChildStartRejectedException(SubAgentOutcomeReason.NoResultReader,
+                $"The child was not started. The result of a child run is read with {FileReadTool.ToolName}, "
+                + $"and the policy for this session does not allow {FileReadTool.ToolName}.");
+        }
+        return (new SubAgentDefinition
+        {
+            Name = new AgentName(profile.Name),
+            SystemPrompt = profile.SystemPrompt,
+            SkillOverlay = string.IsNullOrWhiteSpace(skillOverlay) ? null : skillOverlay,
+            Tools = exposure.Tools,
+            ModelRole = profile.ModelRole,
+            EmitStructuredFindings = profile.EmitStructuredFindings,
+            ProjectInstructions = ResolveProjectInstructions(context),
+            OperatingRules = ResolveOperatingRules(context)
+        }, exposure.CoreToolNames);
+    }
+
+    // The child scope and the props of one incarnation. A first start and a resume share it.
+    private PreparedChildStart BuildStart(SubAgentDefinition definition, IReadOnlySet<string> coreToolNames,
+        SubAgentProfile profile, ToolInvocationContext context, SubAgentRunId runId, SubAgentScopeId scopeId,
+        SessionStoragePaths childStorage, WorkingContextSnapshot initialWorkingSnapshot, string? inheritedCwd, string digest)
+    {
+        var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
+        // Inter-delta budget: session-wide, so every subagent gets the same value.
+        var subAgentTimeout = _sessionConfig.FirstTokenTimeout;
+        var prefillTimeout = TimeSpan.FromSeconds(
+            profile.PrefillTimeoutSeconds ?? _subAgentConfig.PrefillTimeoutSeconds);
+        var noProgressTimeout = TimeSpan.FromSeconds(_subAgentConfig.NoProgressTimeoutSeconds);
         // A transport can own an approval channel without being able to service
         // interactive prompts. Fork only the admitted capability, never bridge
         // presence by itself.
@@ -283,7 +328,7 @@ public sealed class SubAgentSpawner
                 ModelInputModalities = context.ModelInputModalities,
                 InteractiveApproval = interactiveApproval,
                 ProjectDirectory = context.ProjectDirectory,
-                InheritedCwd = context.ResolveShellCwd(null),
+                InheritedCwd = inheritedCwd,
                 RecentFiles = context.RecentFiles,
             },
             InitialWorkingSnapshot = initialWorkingSnapshot
@@ -296,21 +341,14 @@ public sealed class SubAgentSpawner
             _promptProvider,
             _approvalService,
             _sessionMetrics,
-            exposure.CoreToolNames,
+            coreToolNames,
             _logger);
         var actorName = $"subagent-{definition.Name}-{runId}";
-        var digestInput = System.Text.Json.JsonSerializer.Serialize(new
-        {
-            profile.Name, task, runtimeContext, systemPromptOverlay
-        });
-        var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(digestInput)));
         return new PreparedChildStart(props, actorName, runId, definition.Name, digest, childStorage, definition.Tools.Count,
             new RunSubAgent
             {
                 Scope = childScope,
-                Task = task,
-                RuntimeContext = runtimeContext,
+                Task = string.Empty,
                 Timeout = subAgentTimeout,
                 PrefillTimeout = prefillTimeout,
                 NoProgressTimeout = noProgressTimeout
@@ -414,18 +452,6 @@ public sealed class SubAgentSpawner
             FileMode.OpenOrCreate,
             FileAccess.Write,
             FileShare.ReadWrite | FileShare.Delete);
-    }
-
-    private static string AppendSystemPromptOverlay(string basePrompt, string? overlay)
-    {
-        if (string.IsNullOrWhiteSpace(overlay))
-            return basePrompt;
-
-        return string.Concat(
-            basePrompt.TrimEnd(),
-            "\n\n",
-            "[Skill Overlay]\n",
-            overlay.Trim());
     }
 
     private string? ResolveProjectInstructions(ToolInvocationContext context)

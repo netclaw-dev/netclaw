@@ -73,8 +73,7 @@ The owner confirmed these decisions on 22 October 2026. They change decisions of
 | P7 | Replace the child journal with the park in the run record (D2). |
 | P10 | Resolve the model by role at resume. Log the recorded model ID and the new model ID. |
 | B1 | Show a prompt only after its park is recorded. |
-| Profile | A deleted agent profile fails the resume with `agent_definition_unavailable`. |
-| M6 | Derive the trust of the recorded requester and channel again at resume. Use the narrower audience. |
+| Profile | A deleted agent profile fails the resume with the existing reason `spawn_unavailable` (PR 1 cut plan). |
 | M10 | The park holds the loop-guard state, so a park does not reset it. |
 | M13 | The session database (`netclaw.db`) holds child transcripts, in the same data class as the parent transcript. |
 
@@ -110,6 +109,19 @@ row, and who decided it.
   The parent notice and `check_agent_run` still show the open request, so the operator can cancel the run.
 - A future replay is one separate change for parent and child prompts together.
 
+### PR 1 cut plan (22 October 2026)
+
+The owner approved a cut plan for PR 1. Where this design and the cut plan differ, the cut plan wins.
+
+- M6 is cut. A resumed child uses `run.OriginalContext` as it is, as the first spawn does.
+- Cut: `RepeatNudge`, `BatchObservations` and the cycle-batch rebuild, `LoadedTools`, `ModelId`, the typed reason
+  `park_not_recorded`, and the `parked` state of `check_agent_run`. Each refusal reuses an existing reason.
+- Deferred to a later PR: `DeferredMedia` and the managed temporary retry target (`platform_temporary_root` on
+  `ApprovalRedriveEntry`). The PR 1 review moved `FileActivity` back into PR 1.
+- Deferred to PR 2: the 4 MiB cap, and the update of the park in the persist callback of an answer.
+- In PR 1, a park drops the media nudge, the repeat nudge, and the loop observation of its batch.
+- A resumed child does not keep the deferred tools that the parked incarnation loaded. It can load them again.
+
 **Cost of the fingerprint cut:** this matches the parent re-drive, which checks no fingerprint. The answer stays bound
 by `OneTimeConsent.Covers(toolName, keys)` and the exact command. Binding every grant and consent to the MCP endpoint,
 for parent and child alike, is the general endpoint-binding issue.
@@ -120,8 +132,7 @@ for parent and child alike, is the general endpoint-binding issue.
 
 - A child that parked at consent survives a restart, a config reload, a compaction snapshot, and passivation.
 - One resume path for a live answer and for an answer after a restart.
-- The resumed call runs at most once, under the recorded authority and the narrower current trust, and it passes every
-  gate again.
+- The resumed call runs at most once, under the recorded authority, and it passes every gate again.
 - The resumed child continues with the same loop guard, the same working directories, and the same batch.
 
 **Non-Goals:**
@@ -156,8 +167,8 @@ The park is one record, `ChildRunPark`. PR 1 keeps it actor-local in the owner. 
 **Batch effects (audit row 10).** The existing `ToolExecutionCompleted` handler splits into two steps: "apply the
 result effects" and "continue the loop". At the park, the child runs "apply" for the calls that finished: it appends
 their result messages, applies file activity, `TryApplyProjectDirectory`, exposure requests, and `load_tool`. The park
-then records the child state that results. Only three things wait for the resume: the parked calls, the two nudges
-(media and repeat), and the loop observation of the batch.
+then records the child state that results. Only the parked calls wait for the resume. The park drops the two nudges
+(media and repeat) and the loop observation of the batch (PR 1 cut plan).
 
 One order differs from a live batch. Live, the effects apply in call order after the whole batch. With a park, the
 effects of the finished calls apply at the park, and the effects of the parked calls apply after they run. So a parked
@@ -167,28 +178,24 @@ order. No user message comes between two tool results, because the nudges still 
 | Field | Content | Why |
 | --- | --- | --- |
 | `Transcript` | every message after the system message: the assistant message of the open batch and the results of its finished calls, as `SerializableChatMessage` | it exists only in the child |
-| `DeferredMedia` | the model-input media references of the finished calls | the media nudge comes after all results |
-| `RepeatNudge` | the repeat nudge of the batch, or none | it comes after all results |
-| `BatchObservations` | the loop observations of the finished calls (`ToolLoopObservationProto`, reused) | the batch loop observation completes after the parked calls |
+| `DeferredMedia` (deferred to a later PR) | the model-input media references of the finished calls | the media nudge comes after all results |
 | `ScopeDirectories` | the project directory and the inherited working directory (audit row 9) | the parked calls run in the directories of the live batch (H3) |
-| `FileActivity` | the `WorkingContextDelta` of the child after the finished calls: project directory, read files, changed files | the existing type; the round is in `LoopGuard` only |
+| `FileActivity` | the `WorkingContextDelta` of the child after the finished calls: project directory, read files, changed files | the existing type; the round is in `LoopGuard` only. A finished `set_working_directory` call sets its project directory |
 | `LoopGuard` | `TurnLoopGuardState` from PR 0 (`TurnStateTracker.ExportLoopGuard`) | a park does not reset the loop guard (M10) |
-| `LoadedTools` | the names of the deferred tools that the child loaded, after the finished calls | `_loadedDeferredToolNames` |
 | `SkillOverlay` | the skill overlay of the spawn, or none (audit row 12) | the profile does not hold it |
-| `ModelId` | the resolved model ID, for the P10 log only (audit row 12) | the run record does not hold it |
 | `Requests` | one `ToolApprovalRequested` per parked call, and later its `ToolApprovalResolved` | the facts that the gate made |
 
 Rules:
 
 - **The round is stored once.** `LoopGuard.ToolIterationCount` is the only copy of the round in the park. The park
-  holds no checkpoint. When `Resumed` applies, the reducer moves the run to `Accepted` with a checkpoint that it builds
-  from the park: the round from `LoopGuard.ToolIterationCount`, the file activity from `park.FileActivity`. The resume
+  holds no checkpoint. When `Resumed` applies (PR 2), the reducer moves the run to `Accepted` with a checkpoint that it
+  builds from the park: the round from `LoopGuard.ToolIterationCount`. The resume
   seeds `_checkpointRound` from the same count, so its first checkpoint is round N+1 (H1, test 3.5).
 - **The rest comes from the run record and the profile.** The requester, boundary, channel, delivery targets, and
   initial recent files come from `run.OriginalContext` and `run.InitialWorkingSnapshot`. The model input modalities
   come from the model that resolves at resume. The model role, the findings flag, the budgets, and the base agent
   prompt come from the current agent profile.
-- **Managed temporary retry (audit row 11).** A parked request keeps the existing `managed_temporary_directory`
+- **Managed temporary retry (audit row 11; deferred to a later PR).** A parked request keeps the existing `managed_temporary_directory`
   (field 21 of `ToolApprovalRequestedProto`): it is the retry directory and the denial directory. One new string,
   `platform_temporary_root`, completes the retry target. The managed temporary correction state is not in the park:
   the parent never persists it, and `ClearApprovalTurn` clears it at each turn end.
@@ -196,7 +203,7 @@ Rules:
   and converts each assistant message once, when it arrives (M12). Reasoning content is not kept, as in the parent
   history.
 - **The owner numbers the prompts.** The counter `PromptsIssued` is on the run record (actor-local in PR 1).
-- **Size.** The owner logs the size of each park in bytes. A park above `ChildRunPark.MaxBytes` (4 MiB, a constant)
+- **Size (PR 2).** The owner logs the size of each park in bytes. A park above `ChildRunPark.MaxBytes` (4 MiB, a constant)
   ends the run with `park_too_large`, with no prompt, and no parked call runs (M8).
 - **Data class.** Child transcripts go into `netclaw.db`, in the same data class as the parent transcript (M13).
 
@@ -225,7 +232,7 @@ TryResumeParkedRun(r):
 ```
 
 - The answer path needs no live wait. `PrepareLiveResponse` and its claim stay for parent calls only.
-- **The live answer updates the park.** Today the live path updates only `_toolWorkflow` (`LlmSessionActor.cs:3754`).
+- **The live answer updates the park (PR 2).** Today the live path updates only `_toolWorkflow` (`LlmSessionActor.cs:3754`).
   Without the state update, a compaction snapshot after the answer would hold the park with an open request.
 - `Resumed` persists before any parked call runs. A crash after `Resumed` is uncertain work: recovery records the run
   as lost and never runs the call again.
@@ -238,7 +245,8 @@ TryResumeParkedRun(r):
   park and the per-call answers. A null field means a fresh start. A fresh start and a resume are two real runtime
   states, so the field is nullable by design. On a resume the child builds `_history` from the park.
 
-**Refusals and journal failure (H4, N7, N9; audit rows 2-5).** Each refusal has its own typed reason. The owner records
+**Refusals and journal failure (H4, N7, N9; audit rows 2-5).** Each refusal reuses an existing reason (PR 1 cut plan).
+The owner records
 the terminal through `RecordChildTerminal`, which already unwatches the child, sends `ChildTerminalCommitted`, and
 ignores a second call for an ended run.
 
@@ -246,8 +254,9 @@ ignores a second call for an ended run.
 | --- | --- | --- |
 | The run is cancelling | `RecordChildTerminal(Cancelled, cancelled_by_parent)` | the run ends cancelled; no prompt |
 | The sender is not the owned child | send the existing stop signal `ChildTerminalCommitted` to the sender | no record; the sender stops itself |
-| The park is above the cap | `RecordChildTerminal(Failed, park_too_large)` | no prompt; no parked call runs |
-| The journal rejects the park | `OnPersistRejected` sends `Self.Tell(ChildEventRejected(runId, park_not_recorded))`; the handler calls `RecordChildTerminal(Failed)` | the notice says "The child could not wait for consent. The calls that needed consent did not run." |
+| The park is above the cap (PR 2) | `RecordChildTerminal(Failed, park_too_large)` | no prompt; no parked call runs |
+| The journal rejects the park | `OnPersistRejected` sends `Self.Tell(ChildEventRejected(runId))`; the handler calls `RecordChildTerminal(Failed, tool_execution_failed)` | the notice says "The child could not wait for consent. The calls that needed consent did not run." |
+| The journal rejects an answer | `OnPersistRejected` nacks the answer with `approval_persist_failed` and sends `ChildEventRejected(runId)` | the run ends as above; the person who answered gets the nack |
 | The journal rejects `Resumed` (PR 2) | `Self.Tell(ChildEventRejected(runId, resume_not_recorded))` | the run ends `Failed`, "The parked calls did not run."; no actor starts |
 | The journal fails a write | the session actor stops (Akka.Persistence) | recovery decides from the journal |
 
@@ -256,7 +265,8 @@ ignores a second call for an ended run.
 `PersistRejectedTurnFailure` (`LlmSessionActor.cs:2727-2738`). Without this order, a rejected child event would fail
 the parent's turn. The branch has two triggers:
 
-- PR 1: a `ToolApprovalRequested` with `SourceChildRunId` (the park writes its requests);
+- PR 1: a `ToolApprovalRequested` or a `ToolApprovalResolved` with `SourceChildRunId` (the park writes its requests
+  in one `PersistAll`, so a rejected write leaves no request of the park);
 - PR 2: `ChildRunEvent.Parked` or `ChildRunEvent.Resumed`.
 
 A rejected write of several events calls `OnPersistRejected` once for each event. The first `ChildEventRejected`
@@ -266,26 +276,26 @@ once with no extra state.
 ### D4. A resume is a spawn from a recorded conversation
 
 The rule: **the conversation, the batch, and the directories are recorded; the environment resolves again; the
-authority comes from the run record, narrowed by the current trust.**
+authority comes from the run record.**
 
 | Fact | Source at resume |
 | --- | --- |
 | Requester, boundary, channel, delivery targets | `run.OriginalContext`. Never the current turn, never the current parent. |
-| Audience | the narrower of the recorded audience and the audience that the session derives now for the recorded requester and channel (M6) |
 | Project directory, inherited working directory | `park.ScopeDirectories` (H3) |
-| Recent files | `run.InitialWorkingSnapshot` and `park.FileActivity` |
+| Recent files | `run.InitialWorkingSnapshot` |
+| Read files, changed files, the project directory after the parked calls | `park.FileActivity`, unless a parked `set_working_directory` call changes the directory |
 | Model input modalities | the model that resolves at resume |
-| Base agent prompt, model role, findings flag, budgets | the current agent profile; a deleted profile fails with `agent_definition_unavailable` |
+| Base agent prompt, model role, findings flag, budgets | the current agent profile; a deleted profile fails with `spawn_unavailable` |
 | Skill overlay | `park.SkillOverlay` |
-| Conversation, deferred batch parts, loop guard, loaded tools | the park |
-| Model client | `IChatClientProvider.GetClient(role)` now; the session logs `park.ModelId` and the new model ID |
-| Tool set | `SubAgentSpawner.ResolveTools` now, under the current registry and the resume audience |
+| Conversation, loop guard | the park |
+| Model client | `IChatClientProvider.GetClient(role)` now |
+| Tool set | `SubAgentSpawner.ResolveTools` now, under the current registry and the recorded audience |
 | System message | `BuildSystemPrompt` now |
 
 `SubAgentSpawner.PrepareResume(run, park)` shares the scope and props builder with `PrepareRunAsync`. It applies the
 spawn rules again: a spawner exists; `SubAgentConfig.Enabled` and a non-`Public` audience (`spawn_unavailable`); the
-profile exists (`agent_definition_unavailable`); at least one child tool (`no_tools_available`); `file_read`
-(`no_result_reader`); a usable provider (`model_unavailable`). PR 2 adds one more rule for a park that comes from
+profile exists (`spawn_unavailable`); at least one child tool (`no_tools_available`); `file_read`
+(`no_result_reader`); the provider gives a client (`spawn_error`). PR 2 adds one more rule for a park that comes from
 the journal: the loop guard is valid (no negative count, `RefusedRepeatCount` at most `EscalatedRefusedRepeat + 1`,
 `EqualRounds` from 0 to 2), or the run ends `Failed` with `park_damaged`. `PrepareResume` runs from a command, never
 inside recovery, so a bad park never stops recovery. The mapper only maps; it decides nothing.
@@ -294,21 +304,14 @@ The resumed child:
 
 1. Seeds `_history` with the new system message and the transcript, and its serializable list with the transcript.
 2. Restores the loop guard with `TurnStateTracker.RestoreLoopGuard` (PR 0). `_checkpointRound` comes from the same
-   `ToolIterationCount`. It rebuilds the cycle batch (`PreparedToolCycleBatch`) with `ToolCycleSignatureFactory.Prepare`
-   from the assistant message of the transcript. That batch covers every call of the response, and
-   `ToolCycleSignatureFactory.Complete` throws when the result count differs, so the child joins `BatchObservations`
-   of the finished calls with the observations of the parked calls. No new field.
-3. Activates each name in `park.LoadedTools` that `TryActivateDiscoveredTool` still accepts.
-4. Canonicalizes the parked calls and runs only those calls through `ExecuteToolsAsync`, in `park.ScopeDirectories`.
+   `ToolIterationCount`.
+3. Canonicalizes the parked calls and runs only those calls through `ExecuteToolsAsync`, in `park.ScopeDirectories`.
    The shared helper of PR 0 applies one plan entry to a call context (`ApprovalRedriveEntry`, M11):
    - approved: seed the one-time consent from `OneTimeApprovalKeys.Create(patterns, candidates, cwd)` of the journaled
-     request, restore the authorization attempt ID, and mark the managed temporary retry target. PR 1 adds the retry
-     target to `ApprovalRedriveEntry` (two values: the directory of field 21 and `platform_temporary_root`);
-   - refused: no dispatch; the refusal text of `ConsentRefusalText.For`, with the managed temporary denial hint.
-5. Sets its run scope from `park.FileActivity.ProjectDirectory` after the parked calls finish. That is how a finished
-   sibling `set_working_directory` still applies. Then it runs "apply the result effects" for the parked calls, so a
-   parked `set_working_directory` wins (test 3.6). Then it adds the media nudge (deferred and new references) and the
-   repeat nudge, completes the batch loop observation, and runs "continue the loop".
+     request, and restore the authorization attempt ID. The managed temporary retry target is deferred to a later PR;
+   - refused: no dispatch; the refusal text of `ConsentRefusalText.For`.
+4. Runs "apply the result effects" for the parked calls, so a parked `set_working_directory` wins. Then it runs
+   "continue the loop".
 
 **Requester check.** PR 0 (`edf9e9a26`) has `ApprovalRequestBuilder` with two entry points, `ForSessionCall` and
 `ForChildCall`. `ForChildCall` already runs the requester check (`EnsureAuthorityContext`). PR 1 builds each parked
@@ -430,7 +433,7 @@ sequenceDiagram
     Ch->>S: ToolInteractionResponse (same call ID)
     S->>S: ValidateResponse (requester, option)
     S->>J: Persist ToolApprovalResolved (applied to the park)
-    S->>S: last open request -> PrepareResume (spawn rules, narrower audience)
+    S->>S: last open request -> PrepareResume (spawn rules)
     S->>J: Persist ChildRunEvent.Resumed
     S->>C2: ActorOf; RunSubAgent { Resume }
     C2->>C2: gate checks the parked call again; one-time consent; call runs once
@@ -441,9 +444,10 @@ sequenceDiagram
 
 | Case | Outcome | Loud signal |
 | --- | --- | --- |
-| The journal rejects the park | The run ends `Failed`, `park_not_recorded`. No prompt. No parked call runs. | result notice |
+| The journal rejects the park | The run ends `Failed`, `tool_execution_failed`. No prompt. No parked call runs. | result notice |
+| The journal rejects an answer | The answer gets a nack. The run ends `Failed`, `tool_execution_failed`. No parked call runs. | nack and result notice |
 | The journal fails a write | The session stops. Recovery decides from the journal. | session stop (existing) |
-| The park is above the cap | The run ends `Failed`, `park_too_large`. | result notice and error log with the size |
+| The park is above the cap (PR 2) | The run ends `Failed`, `park_too_large`. | result notice and error log with the size |
 | Crash before `Parked` | Recovery records the run as lost. No prompt was shown. | lost notice |
 | Crash after `Parked`, before the prompt post | The request is open, and no prompt shows. The parent notice and `check_agent_run` show it. The operator can cancel. | notice |
 | Crash after the last answer, before `Resumed` | Recovery resumes. Nothing ran. | resume log line |
@@ -456,22 +460,19 @@ sequenceDiagram
 | The policy now denies the parked call | The gate denies it. | denial result and audit log |
 | The policy now needs another consent | The child parks again. | new prompt |
 | The parked call's tool is gone | "Unknown tool: {name}". The child continues. | warning log |
-| The trust of the requester is narrower now | The child runs with the narrower audience. A `Public` audience fails the spawn rule. | `spawn_unavailable` or tool denial |
 | The role maps to another model | The resume uses the current model of the role. | info log with both model IDs |
 | No usable provider, deleted profile, subagents disabled, no tools, no `file_read`, no spawner | The run ends `Failed` with the reason. No parked call runs. | result notice |
 | A restart reminder while the pause holds | Held input stays in the queue. | `restart_resume` log line |
 
 ### Security boundary
 
-The resumed call is a new dispatch, so it passes the whole gate again. Four facts bound it:
+The resumed call is a new dispatch, so it passes the whole gate again. Three facts bound it:
 
 1. **Authority.** The requester, boundary, channel, and delivery targets come from `run.OriginalContext`. The working
    directories come from the park. None comes from the current turn or the current parent.
-2. **Trust.** The audience is the narrower of the recorded audience and the audience that the session derives now. A
-   resume never widens trust.
-3. **Policy.** The tool set and the gate use the current registry and `ToolAccessPolicy`. A deny rule, a protected
-   path, or a narrower audience after the park wins over the answer.
-4. **Consent.** The only consent is the journaled answer of the run requester, validated by `ValidateResponse`. It is
+2. **Policy.** The tool set and the gate use the current registry and `ToolAccessPolicy`. A deny rule or a protected
+   path after the park wins over the answer.
+3. **Consent.** The only consent is the journaled answer of the run requester, validated by `ValidateResponse`. It is
    a one-time consent that `OneTimeConsent.Covers(toolName, keys)` binds to the exact tool name and candidate keys of
    that prompt and that child call ID, used once. `Resumed` persists before the call runs.
 
@@ -485,8 +486,6 @@ Negative examples:
   the call. Nothing runs.
 - Bob clicks Alice's button after the restart. `ValidateResponse` reads the requester from the run record and rejects
   Bob (`approval_wrong_requester`). Nothing is recorded and nothing runs.
-- After the park, the operator removes Alice from the operator list. At resume the derived audience is narrower, so a
-  tool that only the operator audience may use is not in the tool set, and the parked call does not run.
 - After the park, the parent session changes its project directory. The resumed call still runs in the recorded
   directory.
 - After the resume, the child model calls `gh pr merge 43 --squash`. The one-time consent covers only call 42. The
@@ -507,7 +506,7 @@ child alike.
 | Prompt shape and requester check | `ApprovalRequestBuilder.ForChildCall` (PR 0) | call-local |
 | Answer validity | `SessionToolWorkflow.ValidateResponse` (unchanged) | durable `ToolApprovalResolved`, also in the park |
 | Resume gate | `LlmSessionActor.TryResumeParkedRun` | PR 2 durable `ChildRunEvent.Resumed` |
-| Resume preparation, spawn rules, narrower audience | `SubAgentSpawner.PrepareResume` | call-local |
+| Resume preparation, spawn rules | `SubAgentSpawner.PrepareResume` | call-local |
 | Apply one plan entry to a call context | `ApprovalRedriveEntry` (PR 0) | call-local |
 | Batch completion after the resume | `SubAgentActor` (incarnation 2) | actor-local from the park |
 | Open entries, pause | `SessionToolWorkflow` | actor-local, built at `RecoveryCompleted` from the run records |
@@ -532,7 +531,7 @@ Three PRs, all to `dev`. No feature branch and no merge PR.
 | PR | Base | Content | Format | Size (code plus tests) |
 | --- | --- | --- | --- | --- |
 | PR 0 | `dev` | Pure refactors with no behavior change: `ApprovalRequestBuilder` (`ForSessionCall`, `ForChildCall`, with the requester check), `ApprovalRedriveEntry`, the loop-guard export and restore, and `ChildConsentPause.Holds`. Branch `refactor/durable-child-pr0`. | none | measured on the branch: about 960 changed lines (861 added, 102 removed), most of them tests |
-| PR 1 | `dev`, after PR 0 | Park and resume in memory: the handler split and the park, the serializable transcript, the checkpoint seed, the loop guard, the scope directories, the managed temporary retry target, the resume gate, the answer path with no live wait, the live answer applied to the park, the narrower audience, the spawn and profile failures, the typed refusals, cancel of a parked run, the parked prompt built with `ApprovalRequestBuilder.ForChildCall`, and the `docs/architecture/tool-authorization.md` update. The existing restart rules apply. | none | 1,200 to 1,700 lines |
+| PR 1 | `dev`, after PR 0 | Park and resume in memory, per the PR 1 cut plan: the park (transcript, loop guard, scope directories, skill overlay, requests), the checkpoint seed, the resume through `PrepareResume` under `run.OriginalContext`, the resume gate, the answer path with no live wait, one refusal path with existing reasons, the `OnPersistRejected` order, the owned-sender check, cancel of a parked run, the drain guard, the prompt counter in the actor name, the passivation rule, the parked prompt built with `ApprovalRequestBuilder.ForChildCall`, and the `docs/architecture/tool-authorization.md` update. The existing restart rules apply. PR 1 alone gives no restart value; it ships with PR 2. | none | measured on the branch (see the PR) |
 | PR 2 | `dev`, after PR 1 and PR #2592 (#2587) | Durable `Parked` and `Resumed`, the two proto messages, the one recovery path, the damaged-park spawn rule, passivation, restart-reminder eligibility and the pause rule (N1), held input at recovery, the size cap and log, the recovery cost checks, the snapshot round-trip test, and the downgrade note. | forward-only | 1,050 to 1,550 lines |
 
 PR 1 ships alone. A restart in PR 1 follows the existing rules: the run is `Accepted` in the journal, recovery records
@@ -541,10 +540,9 @@ it as lost, and the prompt is withdrawn with `DaemonRestarted`.
 ### Tests and Stryker
 
 - The first tests compile against stub types, so they fail on assertions, not on compile errors.
-- `child-resume-gate` (PR 1, `child-consent` group, about 3 minutes): the open-request check and the drain check of
-  `TryResumeParkedRun`, the refusal branch of `ApprovalRedriveEntry`, the rule that a park is accepted only for an
-  owned `Accepted` run, and the checkpoint seed. PR 1 tests kill each mutant, including
-  `An_answer_during_a_drain_does_not_resume`.
+- `child-resume-gate` (PR 1, `child-consent` group): the two pure functions of `ChildParkRules` (PR 1 cut plan).
+  `AcceptPark` accepts a park only from the owned child of an `Accepted` run. `ResumeGate` waits for every answer and
+  for the end of a restart drain. The tables of `ChildParkRulesTests` kill each mutant.
 - `child-park-recovery` (PR 2, same group, about 3 minutes): the decision in `RecoverChildren` for each lifecycle and
   the child-entry rule of `AllowsSnapshot`. The mapper span is cut (audit row 34). The exhaustive round-trip test is
   the guard of the snapshot mapper.

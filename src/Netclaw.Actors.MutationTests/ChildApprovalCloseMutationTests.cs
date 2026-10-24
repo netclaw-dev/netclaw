@@ -83,8 +83,8 @@ public sealed class ChildApprovalCloseMutationTests
     {
         // The id "run-1" is a prefix of "run-10". A match on text would drop the second run.
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(ChildRequest("run-10", "run-10/subagent-approval/1"), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("run-10", "run-10/subagent-approval/1"), recovered: false);
 
         workflow.CloseChildApprovals(Cancel("run-1"));
 
@@ -97,8 +97,8 @@ public sealed class ChildApprovalCloseMutationTests
     public void A_record_keeps_a_parent_approval()
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ParentRequest("call-parent"), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ParentRequest("call-parent"), recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), recovered: false);
 
         workflow.CloseChildApprovals(Terminal("run-1", lost: false));
 
@@ -111,7 +111,7 @@ public sealed class ChildApprovalCloseMutationTests
     {
         // Replay applies the record of a run whose entries a snapshot or an earlier record already removed.
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ChildRequest("run-2", "run-2/subagent-approval/1"), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("run-2", "run-2/subagent-approval/1"), recovered: false);
 
         workflow.CloseChildApprovals(Cancel("run-unknown"));
         Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
@@ -126,9 +126,9 @@ public sealed class ChildApprovalCloseMutationTests
     {
         // A child owner never survives a restart, so no child entry stays open when replay ends.
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ParentRequest("call-parent"), durable: true, recovered: true);
-        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), durable: true, recovered: true);
-        workflow.ApplyApprovalRequested(ChildRequest("run-10", "run-10/subagent-approval/1"), durable: true, recovered: true);
+        workflow.ApplyApprovalRequested(ParentRequest("call-parent"), recovered: true);
+        workflow.ApplyApprovalRequested(ChildRequest("run-1", "run-1/subagent-approval/1"), recovered: true);
+        workflow.ApplyApprovalRequested(ChildRequest("run-10", "run-10/subagent-approval/1"), recovered: true);
 
         workflow.ExpireRecoveredChildApprovals();
 
@@ -143,7 +143,7 @@ public sealed class ChildApprovalCloseMutationTests
         var workflow = new SessionToolWorkflow();
         Assert.True(workflow.AllowsSnapshot(SessionState.Empty));
 
-        workflow.ApplyApprovalRequested(ChildRequest("run-3", "run-3/subagent-approval/1"), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest("run-3", "run-3/subagent-approval/1"), recovered: false);
         Assert.False(workflow.AllowsSnapshot(SessionState.Empty));
 
         workflow.ExpireRecoveredChildApprovals();
@@ -153,8 +153,8 @@ public sealed class ChildApprovalCloseMutationTests
     private static SessionToolWorkflow TwoEntriesOf(string runId)
     {
         var workflow = new SessionToolWorkflow();
-        workflow.ApplyApprovalRequested(ChildRequest(runId, $"{runId}/subagent-approval/1"), durable: true, recovered: false);
-        workflow.ApplyApprovalRequested(ChildRequest(runId, $"{runId}/subagent-approval/2"), durable: true, recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest(runId, $"{runId}/subagent-approval/1"), recovered: false);
+        workflow.ApplyApprovalRequested(ChildRequest(runId, $"{runId}/subagent-approval/2"), recovered: false);
         workflow.ApplyResolvedResponse(Resolved($"{runId}/subagent-approval/2"));
         return workflow;
     }

@@ -1817,7 +1817,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     // A live child, or an ended child whose notice is still to come. The notice needs this actor, and a passivated
     // session would not admit it until the next join.
-    private bool HasUnreportedChildren => _execution.HasLiveChildren || UnreportedRuns().Any(run => run.Lifecycle is ChildRunLifecycle.Terminal);
+    // A park lives only in this actor in PR 1, so a parked run keeps the session in memory.
+    private bool HasUnreportedChildren => _execution.HasLiveChildren || _parks.Count > 0
+        || UnreportedRuns().Any(run => run.Lifecycle is ChildRunLifecycle.Terminal);
 
     private void ApplyBufferedBatch(BufferedInputBatch batch)
     {
@@ -2534,7 +2536,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     {
         CommandChildMessages();
         Command<ToolInteractionRequest>(msg => HandleToolInteractionRequestDispatch(
-            new ToolInteractionRequestDispatch(msg, PersistApprovalState: true)));
+            new ToolInteractionRequestDispatch(msg)));
         Command<ToolInteractionRequestDispatch>(HandleToolInteractionRequestDispatch);
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         // Every phase accepts a late reap reply. The epoch gate protects a newer stop attempt.
@@ -2776,6 +2778,25 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _log.Error(cause, "The journal rejected the continuation input of the stopped turn of session {SessionId}.",
                 _sessionId.Value);
             stop(0);
+            base.OnPersistRejected(cause, @event, sequenceNr);
+            return;
+        }
+
+        // A rejected consent request or answer of a parked child ends that run, never the parent turn
+        // (durable-child-consent-wait, design D3). This branch runs before the turn failure below. The person who
+        // answered gets a nack, because no resume follows the rejected answer.
+        var childRun = @event switch
+        {
+            ToolApprovalRequested request => request.SourceChildRunId,
+            ToolApprovalResolved answer => answer.SourceChildRunId,
+            _ => null
+        };
+        if (childRun is { } rejectedRun)
+        {
+            _log.Error(cause, "The journal rejected a consent event of child run {RunId}", rejectedRun);
+            if (@event is ToolApprovalResolved)
+                TryReplyNack(ApprovalNackReasons.PersistFailed);
+            Self.Tell(new ChildEventRejected(rejectedRun));
             base.OnPersistRejected(cause, @event, sequenceNr);
             return;
         }
@@ -3497,32 +3518,18 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         TrackStartedBackgroundJob(evt.StartedBackgroundJob);
     }
 
+    // Only a call of the session sends a dispatch here. The owner of a park writes its child requests directly.
     private void HandleToolInteractionRequestDispatch(ToolInteractionRequestDispatch dispatch)
+        => PersistApprovalRequests([dispatch]);
+
+    // The journal stores the requests in one atomic write. A park sends all its requests here at once, so a rejected
+    // write leaves no request of the park (durable-child-consent-wait, design D3).
+    private void PersistApprovalRequests(IReadOnlyList<ToolInteractionRequestDispatch> dispatches)
     {
-        // A parent prompt ends with its turn. A child prompt lives until an answer or a close, because the child keeps
-        // waiting after the parent turn ends or fails (#2523).
-        var msg = dispatch.SourceChildRunId is null
-            ? dispatch.Request
-            : dispatch.Request with { Lifetime = ToolInteractionLifetime.UntilClosed };
-        if (dispatch.SourceChildRunId is { } childRunId &&
-            (!_state.ChildRuns.TryGetValue(childRunId, out var childRun) || childRun.Lifecycle is not ChildRunLifecycle.Accepted))
-            return;
-        var evt = _toolWorkflow.CreateApprovalRequest(
-            dispatch, _sessionId, _input.Authority.Context, _input.Authority.Source,
-            CurrentTurnAudience(), NowMs());
-
-        if (!dispatch.PersistApprovalState)
+        var prompts = new Queue<ToolInteractionRequest>(dispatches.Select(PromptOf));
+        PersistAll(dispatches.Select(CreateApprovalRequest).ToArray(), e =>
         {
-            // Live sub-agent approvals need the prompt in the in-memory pending
-            // map so responses can be authorized, but there is no durable child
-            // actor/tool batch to redrive after restart.
-            ApplyToolApprovalRequested(evt, persistApprovalState: false);
-            EmitOutput(msg);
-            return;
-        }
-
-        Persist(evt, e =>
-        {
+            var msg = prompts.Dequeue();
             ApplyToolApprovalRequested(e);
             EmitOutput(msg);
             TryStopDurableApprovalWaits();
@@ -3531,14 +3538,21 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         });
     }
 
-    private void ApplyToolApprovalRequested(ToolApprovalRequested evt)
-        => ApplyToolApprovalRequested(evt, persistApprovalState: true);
+    // A parent prompt ends with its turn. A child prompt lives until an answer or a close, because the child keeps
+    // waiting after the parent turn ends or fails (#2523).
+    private static ToolInteractionRequest PromptOf(ToolInteractionRequestDispatch dispatch)
+        => dispatch.SourceChildRunId is null
+            ? dispatch.Request
+            : dispatch.Request with { Lifetime = ToolInteractionLifetime.UntilClosed };
 
-    private void ApplyToolApprovalRequested(ToolApprovalRequested evt, bool persistApprovalState)
+    private ToolApprovalRequested CreateApprovalRequest(ToolInteractionRequestDispatch dispatch)
+        => _toolWorkflow.CreateApprovalRequest(dispatch, _sessionId, _input.Authority.Context, _input.Authority.Source,
+            CurrentTurnAudience(), NowMs());
+
+    private void ApplyToolApprovalRequested(ToolApprovalRequested evt)
     {
         var pending = _toolWorkflow.ApplyApprovalRequested(
             evt,
-            persistApprovalState,
             recovered: _phase.Current == SessionPhase.Recovering);
 
         // Replay re-applies requests that a later record may answer, cancel, or lose. RecoveryCompleted logs the
@@ -3546,9 +3560,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         if (_phase.Current != SessionPhase.Recovering)
             LogToolApprovalRequested(pending.AuthorizationAttemptId.Value, evt.CallId, evt.ToolName, recovered: false);
 
-        if (evt.SourceChildRunId is null && persistApprovalState && pending.TurnContext is { } turnContext)
+        if (evt.SourceChildRunId is null && pending.TurnContext is { } turnContext)
             _input.SetTurnContext(turnContext);
-        else if (persistApprovalState && pending.TurnContextRestoreFailure is { } restoreFailure)
+        else if (pending.TurnContextRestoreFailure is { } restoreFailure)
             _log.Error(
                 "Approval request {CallId} could not restore turn context: {Reason}",
                 evt.CallId,
@@ -3815,6 +3829,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private async Task HandleProcessingApprovalResponseAsync(ToolInteractionResponse msg)
     {
+        // A child answer has no live wait and never belongs to the parent turn (design D3).
+        if (_toolWorkflow.IsChildApproval(msg.CallId))
+        {
+            await HandleToolInteractionResponseWhenIdle(msg);
+            return;
+        }
         var response = _toolWorkflow.PrepareLiveResponse(msg, _state.History);
         if (response is ApprovalResponseResult.Rejected rejection)
         {
@@ -3822,7 +3842,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
-        var accepted = (ApprovalResponseResult.Accepted)response;
+        var accepted = (ApprovalResponseResult.DurableAccepted)response;
         try
         {
             _log.Info(
@@ -3833,31 +3853,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 accepted.CallId.Value,
                 ConsentAnswerCodec.ToJournalText(accepted.Answer));
             await PersistApprovalGrantIfNeededAsync(accepted, CancellationToken.None);
-            switch (accepted)
+            var resolution = _toolWorkflow.CreateResolution(accepted, _sessionId, NowMs());
+            Persist(resolution, evt =>
             {
-                case ApprovalResponseResult.LiveOnlyAccepted liveOnly:
-                    _toolWorkflow.CompleteLiveResponse(liveOnly);
-                    TryReplyAck();
-                    return;
-                case ApprovalResponseResult.DurableAccepted durable:
-                    var resolution = _toolWorkflow.CreateResolution(durable, _sessionId, NowMs());
-                    Persist(resolution, evt =>
-                    {
-                        _toolWorkflow.ApplyResolvedResponse(evt, durable);
-                        TryReplyAck();
-                        if (evt.SourceChildRunId is { } answeredRun)
-                        {
-                            var run = _state.ChildRuns[answeredRun];
-                            IReadOnlyList<AgentEvent.ChildApprovalResolved> closed =
-                                [_toolWorkflow.CreateChildResolution(evt, run, _sessionId, _timeProvider.GetUtcNow())];
-                            EmitClosedPrompts(closed);
-                            ChildApprovalsClosed(closed);
-                        }
-                    });
-                    return;
-                default:
-                    throw new InvalidOperationException("The accepted approval result has no completion route.");
-            }
+                _toolWorkflow.ApplyResolvedResponse(evt, accepted);
+                TryReplyAck();
+            });
         }
         catch (Exception ex)
         {
@@ -3869,11 +3870,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private async Task HandleToolInteractionResponseWhenIdle(ToolInteractionResponse msg)
     {
-        if (_toolWorkflow.IsChildApproval(msg.CallId))
-        {
-            await HandleProcessingApprovalResponseAsync(msg);
-            return;
-        }
         var response = _toolWorkflow.PrepareRecoveredResponse(msg, _state);
         if (response is ApprovalResponseResult.Rejected rejection)
         {
@@ -3911,6 +3907,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         Persist(resolution, evt =>
         {
             _toolWorkflow.ApplyResolvedResponse(evt);
+            if (evt.SourceChildRunId is { } answeredRun)
+            {
+                TryReplyAck();
+                IReadOnlyList<AgentEvent.ChildApprovalResolved> closed =
+                    [_toolWorkflow.CreateChildResolution(evt, _state.ChildRuns[answeredRun], _sessionId, _timeProvider.GetUtcNow())];
+                EmitClosedPrompts(closed);
+                ChildApprovalsClosed(closed);
+                TryResumeParkedRun(answeredRun);
+                return;
+            }
             var next = _toolWorkflow.PlanRecoveredContinuation(_state, msg.CallId.Value, _sessionId, NowMs());
             switch (next)
             {

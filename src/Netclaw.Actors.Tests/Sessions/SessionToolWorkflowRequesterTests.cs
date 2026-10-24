@@ -27,7 +27,7 @@ public sealed partial class SessionToolWorkflowTests
         // Arrange
         var workflow = new SessionToolWorkflow();
         var request = CreateRequest("call-recovered", requestedAtMs: 10);
-        workflow.ApplyApprovalRequested(request, durable: true, recovered: true);
+        workflow.ApplyApprovalRequested(request, recovered: true);
 
         // Act
         var response = workflow.PrepareRecoveredResponse(

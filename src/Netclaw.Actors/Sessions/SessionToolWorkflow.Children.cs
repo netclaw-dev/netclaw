@@ -7,6 +7,7 @@ using Akka.Actor;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -65,7 +66,11 @@ internal sealed partial class SessionToolWorkflow
                 reason = WithdrawReason.CancelledByParent;
                 break;
             case ChildRunEvent.TerminalRecorded terminal:
-                reason = terminal.Terminal.Lost ? WithdrawReason.ChildLost : WithdrawReason.ChildEnded;
+                // A parent cancel of a parked run writes only the terminal record (design D7).
+                reason = terminal.Terminal.Lost ? WithdrawReason.ChildLost
+                    : terminal.Terminal.Result.OutcomeReason == SubAgentOutcomeReason.CancelledByParent
+                        ? WithdrawReason.CancelledByParent
+                        : WithdrawReason.ChildEnded;
                 break;
             default:
                 throw new InvalidOperationException($"A {evt.GetType().Name} record closes no child approval.");
@@ -168,21 +173,36 @@ internal sealed partial class SessionToolWorkflow
     public IReadOnlyList<PendingToolInteraction> OpenApprovals()
         => _calls.Values.OfType<PendingToolApproval>().Select(static call => call.Pending).ToArray();
 
-    public InteractiveApprovalCapability ChildApprovalCapability(BackgroundChildRun run, IActorRef owner)
+    // A child gets only the fact that consent is available: it parks at a consent need (design D1), and the owner
+    // builds each prompt for the run requester when the park arrives.
+    public InteractiveApprovalCapability ChildApprovalCapability(BackgroundChildRun run)
     {
         if (!TurnContext.TryFromRecord(run.OriginalContext, out var context, out var reason) || context is null)
             throw new InvalidOperationException($"Child authority is invalid: {reason}");
-        if (!context.SupportsInteractiveApproval)
-            return new InteractiveApprovalCapability.Unavailable();
-        var bridge = new ParentSessionApprovalBridge(_approvalChannel,
-            dispatch => owner.Tell(dispatch with
-            {
-                PersistApprovalState = true,
-                SourceChildRunId = run.RunId,
-                ChildContext = context
-            }), new ToolExecutionTimeout(Timeout.InfiniteTimeSpan), context.SessionId, run.RunId.Value,
-            context.RequesterSenderId, context.RequesterPrincipal, context.HasAdoptedContext,
-            context.HasThirdPartyAdoptedContext, context.AdoptedSpeakerIds);
-        return new InteractiveApprovalCapability.Available(bridge);
+        return context.SupportsInteractiveApproval
+            ? new InteractiveApprovalCapability.Available(ChildConsentAvailable.Instance)
+            : new InteractiveApprovalCapability.Unavailable();
+    }
+
+    private sealed class ChildConsentAvailable : IParentApprovalBridge
+    {
+        public static readonly ChildConsentAvailable Instance = new();
+    }
+
+    /// <summary>
+    /// Takes the recorded answers of a parked run, keyed by the child call ID, for its resume (design D3 and D4). The
+    /// entries close, so a later click on a prompt of the park gets "already answered".
+    /// </summary>
+    public IReadOnlyDictionary<string, ApprovalRedriveEntry> TakeParkedAnswers(SubAgentRunId runId)
+    {
+        var answered = _calls.Where(pair => pair.Value is ResolvedToolApproval && pair.Value.Pending.Request.SourceChildRunId == runId)
+            .ToArray();
+        foreach (var pair in answered)
+            _calls.Remove(pair.Key);
+        RememberClosedChildCalls(answered, static _ => throw new InvalidOperationException("A parked run has an open request."));
+        return answered.ToDictionary(
+            pair => pair.Value.Pending.Request.OriginalChildCallId?.Value
+                    ?? throw new InvalidOperationException("A parked request has no child call ID."),
+            pair => ApprovalRedriveEntry.From((ResolvedToolApproval)pair.Value), StringComparer.Ordinal);
     }
 }

@@ -23,37 +23,30 @@ namespace Netclaw.Actors.Sessions;
 internal sealed record PendingToolInteraction(
     ToolApprovalRequested Request,
     AuthorizationAttemptId AuthorizationAttemptId,
-    bool PersistApprovalState,
     TurnContext? TurnContext,
     string? TurnContextRestoreFailure) : INoSerializationVerificationNeeded
 {
     public bool CanRecoverAfterRestart
-        => PersistApprovalState
-           && Request.TurnContext is not null
+        => Request.TurnContext is not null
            && TurnContext is not null
            && TurnContextRestoreFailure is null;
 
-    public static PendingToolInteraction From(
-        ToolApprovalRequested evt,
-        bool persistApprovalState)
+    public static PendingToolInteraction From(ToolApprovalRequested evt)
     {
         var turnContext = ToolApprovalTurnContext.Restore(evt, out var restoreFailure);
         var authorizationAttemptId = ToolApprovalTurnContext.RestoreAuthorizationAttemptId(evt);
         return new PendingToolInteraction(
             evt,
             authorizationAttemptId,
-            persistApprovalState,
             turnContext,
             restoreFailure);
     }
 }
 
 // Internal actor message for approval prompts. The request is the public output
-// shape; PersistApprovalState is session routing policy that decides whether the
-// prompt becomes durable parent-session approval state.
+// shape. The session journals every prompt before it shows it.
 internal sealed record ToolInteractionRequestDispatch(
-    SessionProtocol.ToolInteractionRequest Request,
-    bool PersistApprovalState) : INoSerializationVerificationNeeded
+    SessionProtocol.ToolInteractionRequest Request) : INoSerializationVerificationNeeded
 {
     internal string? ManagedTemporaryDirectory { get; init; }
     internal SubAgentRunId? SourceChildRunId { get; init; }
@@ -267,13 +260,12 @@ internal sealed partial class SessionToolWorkflow
 
     private PendingToolInteraction Request(
         ToolApprovalRequested evt,
-        bool persistApprovalState,
         bool recovered)
     {
-        var pending = PendingToolInteraction.From(evt, persistApprovalState);
+        var pending = PendingToolInteraction.From(evt);
         _calls[evt.CallId] = new PendingToolApproval(pending);
 
-        if (evt.SourceChildRunId is null && persistApprovalState && pending.TurnContext is not null)
+        if (evt.SourceChildRunId is null && pending.TurnContext is not null)
         {
             TurnPhase = recovered
                 ? ApprovalTurnPhase.RecoveredWaiting
@@ -406,26 +398,14 @@ internal sealed partial class SessionToolWorkflow
 
         public void Add(string callId, ResolvedToolApproval resolved)
         {
-            var request = resolved.Pending.Request;
-            _authorizationAttemptIds[callId] = resolved.Pending.AuthorizationAttemptId;
-
-            if (resolved.Answer is not ConsentAnswer.Refused refusal)
-            {
-                // The re-drive seeds these keys as a one-time consent for the
-                // tool name of the re-driven call.
-                _preSeed[callId] = OneTimeApprovalKeys.Create(
-                    request.Patterns,
-                    request.Candidates,
-                    request.Cwd);
-                return;
-            }
-
-            _decisionOverride[callId] = refusal.Kind;
-            if (refusal.Kind == RefusalKind.Denied
-                && request.ManagedTemporaryDirectory is { Length: > 0 } managedTemporaryDirectory)
-            {
+            var entry = ApprovalRedriveEntry.From(resolved);
+            _authorizationAttemptIds[callId] = entry.AuthorizationAttemptId;
+            if (entry.ApprovedConsentKeys is { } keys)
+                _preSeed[callId] = keys;
+            if (entry.Refusal is { } refusal)
+                _decisionOverride[callId] = refusal;
+            if (entry.ManagedTemporaryDenialDirectory is { } managedTemporaryDirectory)
                 _managedTemporaryDenialDirectories[callId] = managedTemporaryDirectory;
-            }
         }
 
         public ApprovalRedrivePlan Build()

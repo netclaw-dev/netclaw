@@ -45,38 +45,22 @@ internal sealed record ConsentStep(ConsentAnswer Answer, OneTimeConsent? RetryCo
 }
 
 /// <summary>
-/// The request contract of a parent consent bridge. A sub-agent sends the
-/// immutable approval context and receives the consent step. The parent
-/// session and the sub-agent use the same <see cref="ParentSessionApprovalBridge"/>.
+/// The consent loop of the session's own tool calls: one prompt shape, one wait with the session's approval timeout,
+/// and one decision from the answer. A child does not wait here: it parks, and the owner asks the run requester
+/// (durable-child-consent-wait, design D1).
 /// </summary>
-internal interface IParentConsentBridge : IParentApprovalBridge
-{
-    Task<ConsentStep> RequestConsentAsync(
-        ParentApprovalRequest request,
-        CancellationToken ct);
-}
-
-/// <summary>
-/// The one consent loop of an interactive session. The session's own tool
-/// calls and the tool calls of its sub-agents ask the operator here: one prompt
-/// shape, one wait with the session's approval timeout, and one decision from
-/// the answer. A sub-agent receives this object as its parent bridge.
-/// </summary>
-internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
+internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
 {
     private readonly IApprovalChannel _channel;
     private readonly Action<ToolInteractionRequestDispatch> _emitRequest;
     private readonly ToolExecutionTimeout _timeout;
-    private readonly string _approvalScopeId;
     private readonly ApprovalRequestBuilder _requests;
-    private int _nextApprovalRequestId;
 
     public ParentSessionApprovalBridge(
         IApprovalChannel channel,
         Action<ToolInteractionRequestDispatch> emitRequest,
         ToolExecutionTimeout timeout,
         SessionId sessionId,
-        string approvalScopeId,
         SenderId? requesterSenderId,
         PrincipalClassification? requesterPrincipal,
         bool hasAdoptedContext,
@@ -89,7 +73,6 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
         _channel = channel;
         _emitRequest = emitRequest;
         _timeout = timeout;
-        _approvalScopeId = approvalScopeId;
         _requests = new ApprovalRequestBuilder(
             sessionId,
             requesterSenderId,
@@ -109,18 +92,6 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
         CancellationToken ct)
         => PromptAsync(_requests.ForSessionCall(request), request, ct);
 
-    /// <summary>
-    /// Asks for consent for a call of a sub-agent. The prompt gets a call id in
-    /// the spawning call's scope. The session does not journal the wait,
-    /// because a sub-agent cannot resume after passivation.
-    /// </summary>
-    public Task<ConsentStep> RequestConsentAsync(
-        ParentApprovalRequest request,
-        CancellationToken ct)
-        // The builder checks the requester binding before the channel registers a wait. A failed check throws here,
-        // before any prompt or wait exists.
-        => PromptAsync(_requests.ForChildCall(CreateParentCallId(), request), request, ct);
-
     private async Task<ConsentStep> PromptAsync(
         ToolInteractionRequestDispatch dispatch,
         ParentApprovalRequest request,
@@ -129,20 +100,6 @@ internal sealed class ParentSessionApprovalBridge : IParentConsentBridge
         var waitTask = _channel.WaitForApprovalAsync(dispatch.Request.CallId, _timeout.Value, ct);
         _emitRequest(dispatch);
         return ConsentStep.From(await waitTask, request.CallName, request.Approval);
-    }
-
-    private ToolCallId CreateParentCallId()
-    {
-        // This prompt is created by the session actor but used by thread-pool
-        // tool tasks. Multiple child tool calls can request approval at once,
-        // so the sequence allocation is not actor-mailbox confined.
-        var requestId = Interlocked.Increment(ref _nextApprovalRequestId);
-
-        // Child call ids are only unique inside the sub-agent's tool loop. The
-        // parent approval channel is session-wide, so include the spawning tool
-        // call scope plus a per-prompt sequence. Keep this short: approval
-        // button payloads are capped by the most restrictive channel adapter.
-        return ChildApprovalPrompt.CreateCallId(_approvalScopeId, requestId);
     }
 }
 
@@ -181,11 +138,16 @@ internal sealed class ApprovalRequestBuilder
     /// journals the wait.
     /// </summary>
     public ToolInteractionRequestDispatch ForSessionCall(ParentApprovalRequest request)
-        => Build(request.CallId, request, persistApprovalState: true);
+        => Build(request.CallId, request) with
+        {
+            ManagedTemporaryDirectory = request.Approval.IsManagedTemporaryRetry
+                ? request.Approval.ManagedTemporaryDirectory
+                : null
+        };
 
     /// <summary>
-    /// Makes the request for a call of a child run, with the call ID <paramref name="promptCallId"/>. The request
-    /// keeps the call ID of the child. The session does not journal the wait.
+    /// Makes the request for a parked call of a child run, with the call ID <paramref name="promptCallId"/>. The
+    /// request keeps the call ID of the child. The owner of the run journals the request.
     /// </summary>
     /// <exception cref="ParentApprovalUnavailableException">
     /// The builder has no requester that can answer the request.
@@ -193,7 +155,9 @@ internal sealed class ApprovalRequestBuilder
     public ToolInteractionRequestDispatch ForChildCall(ToolCallId promptCallId, ParentApprovalRequest request)
     {
         EnsureAuthorityContext();
-        return Build(promptCallId, request, persistApprovalState: false);
+        // The retry target of a parked child call is deferred, so a child prompt carries no managed temporary
+        // directory.
+        return Build(promptCallId, request) with { OriginalChildCallId = request.CallId };
     }
 
     private void EnsureAuthorityContext()
@@ -215,8 +179,7 @@ internal sealed class ApprovalRequestBuilder
 
     private ToolInteractionRequestDispatch Build(
         ToolCallId promptCallId,
-        ParentApprovalRequest request,
-        bool persistApprovalState)
+        ParentApprovalRequest request)
     {
         var approval = request.Approval;
 
@@ -248,13 +211,6 @@ internal sealed class ApprovalRequestBuilder
                                  || approval.RepositoryCommonDirectory is not null)
                 .Select(static option => new ToolInteractionOption(option.Key, option.Label))
                 .ToList()
-        }, persistApprovalState)
-        {
-            // Only a journaled wait can restore the managed temporary retry after passivation.
-            OriginalChildCallId = persistApprovalState ? null : request.CallId,
-            ManagedTemporaryDirectory = persistApprovalState && approval.IsManagedTemporaryRetry
-                ? approval.ManagedTemporaryDirectory
-                : null
-        };
+        });
     }
 }

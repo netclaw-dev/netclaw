@@ -787,7 +787,6 @@ public class SubAgentActorTests : SubAgentActorTestBase
             ]
         };
 
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Denied);
         var sessionDirectory = TestPath("sessions", "approval-parent");
         var projectDirectory = TestPath("projects", "approval-project");
         var logger = new AuthorizationRecordingLogger();
@@ -799,34 +798,27 @@ public class SubAgentActorTests : SubAgentActorTestBase
             NullSystemPromptProvider.Instance,
             toolExecutorLogger: logger));
 
-        var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(
-                    sessionDirectory: sessionDirectory,
-                    projectDirectory: projectDirectory,
-                    inheritedCwd: projectDirectory,
-                    approvalBridge: approvalBridge),
-                Task = "Push to origin",
-                Timeout = TimeSpan.FromSeconds(5)
-            },
-            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        // The child parks the call (durable-child-consent-wait, design D1). The park request carries the gate facts.
+        var park = await RunToParkAsync(agent, SubAgentTestScope.Create(
+            sessionDirectory: sessionDirectory,
+            projectDirectory: projectDirectory,
+            inheritedCwd: projectDirectory,
+            approvalBridge: new ConsentCapableBridge()), "Push to origin");
 
-        Assert.True(result.Success);
         Assert.False(fakeTool.WasCalled);
-        Assert.Equal(1, approvalBridge.RequestCount);
-        var authorizationAttemptId = Assert.Single(approvalBridge.AuthorizationAttemptIds);
-        Assert.True(AuthorizationAttemptId.TryParse(authorizationAttemptId.Value, out _));
+        var request = Assert.Single(park.Requests);
+        Assert.True(AuthorizationAttemptId.TryParse(request.AuthorizationAttemptId.Value, out _));
         Assert.NotEmpty(logger.AuthorizationAttemptIds);
         Assert.All(
             logger.AuthorizationAttemptIds,
-            loggedAttemptId => Assert.Equal(authorizationAttemptId.Value, loggedAttemptId));
-        Assert.Equal(projectDirectory, approvalBridge.RequestedCwd);
-        Assert.Single(approvalBridge.RequestedCandidates);
-        Assert.Equal("git push origin main", approvalBridge.RequestedCandidates[0].Verb);
-        Assert.Contains(approvalBridge.RequestedOptions, o => o.Key == ApprovalOptionKeys.ApproveEverywhere);
-        Assert.Contains(approvalBridge.RequestedOptions, o => o.Key == ApprovalOptionKeys.ApproveAlways);
-        Assert.Contains(approvalBridge.RequestedOptions, o => o.Key == ApprovalOptionKeys.ApproveSession);
+            loggedAttemptId => Assert.Equal(request.AuthorizationAttemptId.Value, loggedAttemptId));
+        Assert.Equal(projectDirectory, request.Approval.Cwd);
+        var candidate = Assert.Single(request.Approval.Candidates ?? []);
+        Assert.Equal("git push origin main", candidate.Verb);
+        var options = request.Approval.Options.Select(static option => option.Key.Value).ToArray();
+        Assert.Contains(ApprovalOptionKeys.ApproveEverywhere, options);
+        Assert.Contains(ApprovalOptionKeys.ApproveAlways, options);
+        Assert.Contains(ApprovalOptionKeys.ApproveSession, options);
     }
 
     [Fact]
@@ -841,7 +833,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
                 PlatformTemporaryCall("call-managed-temporary-correction")
             ]
         };
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance);
+        var approvalBridge = new ConsentCapableBridge();
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition([fakeTool]),
             fakeClient,
@@ -861,7 +853,6 @@ public class SubAgentActorTests : SubAgentActorTestBase
 
         Assert.True(result.Success, result.Output);
         Assert.False(fakeTool.WasCalled);
-        Assert.Equal(0, approvalBridge.RequestCount);
         Assert.Equal(
             "Tool execution deferred: use_managed_temporary_directory\n" +
             $"Managed temporary directory: '{Path.Combine(sessionDirectory, "subagents", "run", "tmp")}'.\n" +
@@ -886,7 +877,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
                 NativeTemporaryFileWriteCall("call-native-temporary-correction")
             ]
         };
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance);
+        var approvalBridge = new ConsentCapableBridge();
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition([shell, fileWrite]),
             fakeClient,
@@ -906,7 +897,6 @@ public class SubAgentActorTests : SubAgentActorTestBase
 
         Assert.True(result.Success, result.Output);
         Assert.False(shell.WasCalled);
-        Assert.Equal(0, approvalBridge.RequestCount);
         Assert.Equal(
             "Shell execution stopped because 'file_write' is a native Netclaw tool.\n" +
             $"Managed temporary directory: '{Path.Combine(sessionDirectory, "subagents", "run", "tmp")}'.\n" +
@@ -989,7 +979,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
                 PlatformTemporaryCall("call-managed-temporary-parallel-2")
             ]
         };
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance);
+        var approvalBridge = new ConsentCapableBridge();
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition([fakeTool]),
             fakeClient,
@@ -1009,7 +999,6 @@ public class SubAgentActorTests : SubAgentActorTestBase
 
         Assert.True(result.Success, result.Output);
         Assert.False(fakeTool.WasCalled);
-        Assert.Equal(0, approvalBridge.RequestCount);
         Assert.Contains(
             "use_managed_temporary_directory",
             GetLastToolResult(fakeClient, "call-managed-temporary-parallel-1"));
@@ -1019,7 +1008,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
     }
 
     [Fact]
-    public async Task Subagent_exact_temp_retry_reaches_once_or_deny_parent_bridge()
+    public async Task Subagent_exact_temp_retry_parks_with_once_or_deny()
     {
         var sessionDirectory = TestPath("sessions", "managed-temporary-retry");
         var fakeTool = new FakeNetclawTool(ShellTool.ToolName, "should not run");
@@ -1028,336 +1017,23 @@ public class SubAgentActorTests : SubAgentActorTestBase
             PlatformTemporaryCall("call-managed-temporary-first"),
             PlatformTemporaryCall("call-managed-temporary-retry")
         ]);
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Denied);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition([fakeTool]),
             fakeClient,
             CreateManagedTemporaryCorrectionPolicy()));
 
-        var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(
-                    sessionDirectory: sessionDirectory,
-                    approvalBridge: approvalBridge),
-                Task = "Retry the exact disposable diagnostic call if corrected.",
-                Timeout = TimeSpan.FromSeconds(5)
-            },
-            ApprovalAskTimeout,
-            TestContext.Current.CancellationToken);
+        // The retry target of a parked managed temporary retry is deferred to a later PR (cut plan), so this test
+        // checks only the options of the parked request.
+        var park = await RunToParkAsync(agent, SubAgentTestScope.Create(
+            sessionDirectory: sessionDirectory,
+            approvalBridge: new ConsentCapableBridge()), "Retry the exact disposable diagnostic call if corrected.");
 
-        Assert.True(result.Success, result.Output);
         Assert.False(fakeTool.WasCalled);
-        Assert.Equal(1, approvalBridge.RequestCount);
+        var request = Assert.Single(park.Requests);
+        Assert.Equal("call-managed-temporary-retry", request.CallId.Value);
         Assert.Equal(
             [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
-            approvalBridge.RequestedOptions.Select(option => option.Key));
-        var denial = GetLastToolResult(fakeClient.LastReceivedMessages, "call-managed-temporary-retry");
-        Assert.Contains("approval_denied_by_user", denial, StringComparison.Ordinal);
-        Assert.Contains(sessionDirectory, denial, StringComparison.Ordinal);
-        Assert.DoesNotContain("set_working_directory", denial, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task Approve_once_does_not_leak_between_subagent_tool_calls()
-    {
-        var fakeTool = new FakeNetclawTool(ApprovalProbeToolName, "ok");
-        var policy = CreateApprovalProbeRequiredPolicy();
-        var fakeClient = new SequencedToolCallChatClient(
-            [
-                CreateToolCall(
-                    "call-approval-1",
-                    ApprovalProbeToolName),
-                CreateToolCall(
-                    "call-approval-2",
-                    ApprovalProbeToolName)
-            ]);
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance);
-
-        var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, approvalService: null));
-
-        var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
-                Task = "Run the same approval-gated tool twice",
-                Timeout = TimeSpan.FromSeconds(5)
-            },
-            ApprovalAskTimeout, TestContext.Current.CancellationToken);
-
-        Assert.True(result.Success);
-        Assert.Equal(2, approvalBridge.RequestCount);
-        Assert.Equal([ApprovalProbeToolName, ApprovalProbeToolName], approvalBridge.RequestedPatterns);
-    }
-
-    [Fact]
-    public async Task SubAgent_does_not_timeout_while_awaiting_human_approval()
-    {
-        // Regression: the sub-agent's inactivity watchdog must not abort a
-        // legitimate approval wait. A slow human approver (here, ~1s for a
-        // budget of 250ms) should still see the approval delivered and the
-        // sub-agent complete successfully and run the approved tool retry.
-        var fakeTool = new FakeNetclawTool(ApprovalProbeToolName, "ok");
-        var policy = CreateApprovalProbeRequiredPolicy();
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall =
-            [
-                CreateToolCall("call-slow-approval", ApprovalProbeToolName)
-            ]
-        };
-
-        var releaseSignal = new TaskCompletionSource<ConsentAnswer>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var approvalBridge = new DelayingParentApprovalBridge(releaseSignal.Task);
-
-        var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy));
-
-        // Act
-        var runTask = agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
-                Task = "Push to origin",
-                // 250ms inactivity budget — much smaller than the human delay
-                // below. Before this fix, this would always abort.
-                Timeout = TimeSpan.FromMilliseconds(250)
-            },
-            ApprovalAskTimeout, TestContext.Current.CancellationToken);
-
-        // Deterministic sync: wait until the sub-agent has actually entered
-        // the approval wait, then prove the run stays incomplete well past the
-        // 250ms budget before releasing the human decision.
-        await approvalBridge.EnteredApprovalWait.WaitAsync(TestContext.Current.CancellationToken);
-        await AssertNotCompletedWithinAsync(runTask, TimeSpan.FromSeconds(1));
-        releaseSignal.SetResult(ConsentAnswer.Once.Instance);
-
-        var result = await runTask;
-        Assert.True(result.Success, $"Expected success but got: {result.Output}");
-        Assert.True(fakeTool.WasCalled, "Tool retry after approval did not run");
-        Assert.Equal(1, approvalBridge.RequestCount);
-    }
-
-    [Fact]
-    public async Task SubAgent_surfaces_approval_wait_and_resolution_to_parent_stream()
-    {
-        var fakeTool = new FakeNetclawTool(ApprovalProbeToolName, "ok");
-        var policy = CreateApprovalProbeRequiredPolicy();
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall =
-            [
-                CreateToolCall("call-activity-approval", ApprovalProbeToolName)
-            ]
-        };
-
-        var releaseSignal = new TaskCompletionSource<ConsentAnswer>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var approvalBridge = new DelayingParentApprovalBridge(releaseSignal.Task);
-        var activityChannel = Channel.CreateUnbounded<ToolActivityUpdate>();
-
-        var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy));
-
-        var runTask = agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
-                Task = "Push to origin",
-                Timeout = TimeSpan.FromSeconds(5),
-                ActivitySink = activityChannel.Writer
-            },
-            ApprovalAskTimeout, TestContext.Current.CancellationToken);
-
-        // The sub-agent surfaces its approval state to the parent stream so the run
-        // stays visible while a human is in the loop. (Pausing the parent watchdog
-        // is no longer a flag on the activity — the parent no longer wall-clock-
-        // supervises a self-monitoring sub-agent.)
-        await approvalBridge.EnteredApprovalWait.WaitAsync(TestContext.Current.CancellationToken);
-        await ReadActivityAsync(
-            activityChannel.Reader,
-            "awaiting human approval",
-            TestContext.Current.CancellationToken);
-
-        releaseSignal.SetResult(ConsentAnswer.Once.Instance);
-        await ReadActivityAsync(
-            activityChannel.Reader,
-            "approval resolved",
-            TestContext.Current.CancellationToken);
-
-        var result = await runTask;
-        Assert.True(result.Success, $"Expected success but got: {result.Output}");
-    }
-
-    [Fact]
-    public async Task SubAgent_cancels_promptly_on_external_cancellation_during_approval_wait()
-    {
-        // External cancellation (parent passivation, daemon restart, user
-        // cancel) MUST still abort an in-flight approval wait — the watchdog
-        // pause does not turn the wait uncancellable.
-        var fakeTool = new FakeNetclawTool(ApprovalProbeToolName, "ok");
-        var policy = CreateApprovalProbeRequiredPolicy();
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall =
-            [
-                CreateToolCall("call-cancel", ApprovalProbeToolName)
-            ]
-        };
-
-        // Bridge holds forever — only external cancellation can unblock the
-        // sub-agent.
-        var neverReleased = new TaskCompletionSource<ConsentAnswer>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var approvalBridge = new DelayingParentApprovalBridge(neverReleased.Task);
-
-        using var externalCts = new CancellationTokenSource();
-        var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy));
-
-        var runTask = agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
-                Task = "Push to origin",
-                Timeout = TimeSpan.FromSeconds(10),
-                Cancellation = externalCts.Token
-            },
-            ApprovalAskTimeout, TestContext.Current.CancellationToken);
-
-        // Deterministic: wait until the sub-agent is actually inside the
-        // approval wait before cancelling. Without this signal the cancel can
-        // race the bridge call entry and the test asserts on a window that
-        // doesn't yet exist.
-        await approvalBridge.EnteredApprovalWait.WaitAsync(TestContext.Current.CancellationToken);
-        externalCts.Cancel();
-
-        var result = await runTask;
-        Assert.False(result.Success);
-        // Match the canonical 'cancel' prefix rather than a specific spelling —
-        // 'cancelled' (UK, from "Subagent cancelled by parent") vs 'canceled'
-        // (US, from OperationCanceledException.Message) both flow through
-        // depending on which mailbox path wins.
-        Assert.Contains("cancel", result.Output, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task SubAgent_parallel_tool_calls_each_awaiting_approval()
-    {
-        // Two parallel approvals in one assistant batch. The counter must hit
-        // 2 then decrement back to 0; the watchdog must not fire for the
-        // duration of either wait.
-        var fakeTool = new FakeNetclawTool(ApprovalProbeToolName, "ok");
-        var policy = CreateApprovalProbeRequiredPolicy();
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall =
-            [
-                CreateToolCall("call-par-1", ApprovalProbeToolName),
-                CreateToolCall("call-par-2", ApprovalProbeToolName)
-            ]
-        };
-
-        var releaseSignal = new TaskCompletionSource<ConsentAnswer>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var approvalBridge = new DelayingParentApprovalBridge(releaseSignal.Task);
-
-        var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy));
-
-        var runTask = agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
-                Task = "Push to origin twice",
-                // 200ms budget — shorter than the assertion window below, so
-                // a non-paused watchdog would abort before release.
-                Timeout = TimeSpan.FromMilliseconds(200)
-            },
-            ApprovalAskTimeout, TestContext.Current.CancellationToken);
-
-        await AwaitAssertAsync(
-            () => Assert.Equal(2, approvalBridge.RequestCount),
-            cancellationToken: TestContext.Current.CancellationToken);
-        await AssertNotCompletedWithinAsync(runTask, TimeSpan.FromMilliseconds(500));
-        releaseSignal.SetResult(ConsentAnswer.Once.Instance);
-
-        var result = await runTask;
-        Assert.True(result.Success, $"Expected success but got: {result.Output}");
-        Assert.Equal(2, approvalBridge.RequestCount);
-    }
-
-    [Theory]
-    [InlineData(
-        "Denied",
-        "Tool access denied: approval_denied_by_user (approval_probe requires interactive approval and the user declined it). "
-        + "The user declined this action. Do not reach the same goal by another tool or route. "
-        + "Tell the user what you wanted to do, and ask how to continue.")]
-    [InlineData("TimedOut", "Tool access denied: approval_timed_out")]
-    public async Task Rejected_approval_returns_tool_result_without_executing_tool(
-        string refusal,
-        string expectedToolResult)
-    {
-        var fakeTool = new FakeNetclawTool(ApprovalProbeToolName, "should not run");
-        var policy = CreateApprovalProbeRequiredPolicy();
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall =
-            [
-                CreateToolCall("call-rejected", ApprovalProbeToolName)
-            ]
-        };
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswerCodec.FromJournalText(refusal));
-
-        var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy));
-
-        var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
-                Task = "Push to origin",
-                Timeout = TimeSpan.FromSeconds(5)
-            },
-            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-
-        Assert.True(result.Success);
-        Assert.False(fakeTool.WasCalled);
-        Assert.Equal(expectedToolResult, GetLastToolResult(fakeClient, "call-rejected"));
-    }
-
-    [Fact]
-    public async Task External_stop_during_approval_wait_replies_once_and_cancels_wait()
-    {
-        var fakeTool = new FakeNetclawTool(ApprovalProbeToolName, "should not run");
-        var policy = CreateApprovalProbeRequiredPolicy();
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall =
-            [
-                CreateToolCall("call-stop", ApprovalProbeToolName)
-            ]
-        };
-        var neverReleased = new TaskCompletionSource<ConsentAnswer>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var approvalBridge = new DelayingParentApprovalBridge(neverReleased.Task);
-
-        var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy));
-
-        var runTask = agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(approvalBridge: approvalBridge),
-                Task = "Push to origin",
-                Timeout = TimeSpan.FromSeconds(10)
-            },
-            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-
-        await approvalBridge.EnteredApprovalWait.WaitAsync(TestContext.Current.CancellationToken);
-        agent.Tell(PoisonPill.Instance);
-
-        var result = await runTask;
-        Assert.False(result.Success);
-        Assert.Contains("stopped", result.Output, StringComparison.OrdinalIgnoreCase);
-        Assert.False(fakeTool.WasCalled);
+            request.Approval.Options.Select(static option => option.Key.Value));
     }
 
     internal static ToolAccessPolicy PermissivePolicy() => new(
@@ -1373,9 +1049,6 @@ public class SubAgentActorTests : SubAgentActorTestBase
 
     private static ToolAccessPolicy CreateApprovalRequiredPolicy(string? netclawHome = null)
         => CreateApprovalRequiredPolicy(ShellTool.ToolName, netclawHome);
-
-    private static ToolAccessPolicy CreateApprovalProbeRequiredPolicy()
-        => CreateApprovalRequiredPolicy(ApprovalProbeToolName, netclawHome: null);
 
     private static ToolAccessPolicy CreateApprovalRequiredPolicy(
         string toolName,
@@ -1482,34 +1155,24 @@ public class SubAgentActorTests : SubAgentActorTestBase
         }
     }
 
-    private static async Task<ToolActivityUpdate> ReadActivityAsync(
-        ChannelReader<ToolActivityUpdate> reader,
-        string phase,
-        CancellationToken ct)
+    // An owned run whose owner is a probe. The probe acknowledges each checkpoint, as the session does, and the
+    // method returns the park of the child (durable-child-consent-wait, design D1).
+    private async Task<ChildRunPark> RunToParkAsync(IActorRef agent, ChildRunScope scope, string task)
     {
-        while (await reader.WaitToReadAsync(ct))
+        var owner = CreateTestProbe();
+        var execution = new ChildRunExecution(new SubAgentRunId("run"), owner.Ref);
+        agent.Tell(new RunSubAgent
         {
-            while (reader.TryRead(out var activity))
-            {
-                if (string.Equals(activity.Phase, phase, StringComparison.Ordinal))
-                    return activity;
-            }
-        }
-
-        throw new Xunit.Sdk.XunitException($"Expected activity phase '{phase}'.");
-    }
-
-    private static async Task AssertNotCompletedWithinAsync(Task<SubAgentResult> task, TimeSpan duration)
-    {
-        try
+            Scope = scope, Task = task, Timeout = TimeSpan.FromSeconds(5), OwnedRun = execution,
+            Cancellation = execution.Token
+        }, owner.Ref);
+        while (true)
         {
-            var result = await task.WaitAsync(duration, TestContext.Current.CancellationToken);
-            throw new Xunit.Sdk.XunitException(
-                $"Expected sub-agent run to remain pending for {duration}, but it completed: {result.Output}");
-        }
-        catch (TimeoutException ex) when (ex.GetType() == typeof(TimeoutException))
-        {
-            return;
+            var message = await owner.ExpectMsgAsync<object>(ApprovalAskTimeout, cancellationToken: TestContext.Current.CancellationToken);
+            if (message is ChildParkReached reached)
+                return reached.Park;
+            Assert.IsType<ChildCheckpointReached>(message);
+            owner.Reply(SessionProtocol.CommandAck.For(new Netclaw.Actors.Protocol.SessionId("test-session")));
         }
     }
 
@@ -2455,54 +2118,6 @@ internal sealed class RecordingMcpToolInvoker(string result) : IMcpToolInvoker
     }
 }
 
-/// <summary>
-/// Test bridge that holds the approval decision until an external signal
-/// completes. The factory variant returns a fresh task per call (for
-/// parallel-approval tests where each call needs an independent wait).
-/// <see cref="EnteredApprovalWait"/> signals every time the sub-agent reaches
-/// the awaited bridge call, so tests can replace `await Task.Delay(...)` race
-/// windows with a deterministic synchronization point.
-/// </summary>
-internal sealed class DelayingParentApprovalBridge : IParentConsentBridge
-{
-    private readonly Func<Task<ConsentAnswer>> _decisionFactory;
-    private readonly TaskCompletionSource<bool> _enteredSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private int _requestCount;
-
-    public DelayingParentApprovalBridge(Task<ConsentAnswer> sharedTask)
-        : this(() => sharedTask)
-    {
-    }
-
-    public DelayingParentApprovalBridge(Func<Task<ConsentAnswer>> decisionFactory)
-    {
-        _decisionFactory = decisionFactory;
-    }
-
-    public int RequestCount => Volatile.Read(ref _requestCount);
-
-    /// <summary>
-    /// Completes the first time <see cref="RequestConsentAsync"/> is entered.
-    /// Tests should `await EnteredApprovalWait` before cancelling or releasing
-    /// the approval, so the synchronization window is deterministic rather
-    /// than a real-time sleep.
-    /// </summary>
-    public Task EnteredApprovalWait => _enteredSignal.Task;
-
-    public async Task<ConsentStep> RequestConsentAsync(
-        ParentApprovalRequest request,
-        CancellationToken ct)
-    {
-        Interlocked.Increment(ref _requestCount);
-        _enteredSignal.TrySetResult(true);
-        // Task.WaitAsync(CancellationToken) throws OperationCanceledException on
-        // cancel and observes faults on the underlying task — replaces a
-        // hand-rolled WhenAny+Register+TCS dance.
-        var answer = await _decisionFactory().WaitAsync(ct);
-        return ConsentStep.From(answer, request.CallName, request.Approval);
-    }
-}
-
 internal sealed class ProgressTool : INetclawTool
 {
     private readonly ConcurrentQueue<string> _queries = new();
@@ -2591,8 +2206,6 @@ internal sealed class ScriptedToolCallChatClient(
     }
 }
 
-internal sealed record RecordedApprovalOption(string Key, string Label);
-
 internal sealed class ReverseCompletionTool(string changedPath) : INetclawTool
 {
     private readonly TaskCompletionSource<string> _firstResult =
@@ -2652,30 +2265,11 @@ internal sealed class ReverseCompletionTool(string changedPath) : INetclawTool
     }
 }
 
-internal sealed class RecordingParentApprovalBridge(ConsentAnswer decisionToReturn) : IParentConsentBridge
-{
-    public int RequestCount { get; private set; }
-    public List<AuthorizationAttemptId> AuthorizationAttemptIds { get; } = [];
-    public List<string> RequestedPatterns { get; } = [];
-    public string? RequestedCwd { get; private set; }
-    public IReadOnlyList<ApprovalCandidate> RequestedCandidates { get; private set; } = [];
-    public IReadOnlyList<RecordedApprovalOption> RequestedOptions { get; private set; } = [];
-
-    public Task<ConsentStep> RequestConsentAsync(
-        ParentApprovalRequest request,
-        CancellationToken ct)
-    {
-        AuthorizationAttemptIds.Add(request.AuthorizationAttemptId);
-        RequestCount++;
-        RequestedPatterns.AddRange(request.Approval.Patterns);
-        RequestedCwd = request.Approval.Cwd;
-        RequestedCandidates = request.Approval.Candidates ?? [];
-        RequestedOptions = request.Approval.Options
-            .Select(static option => new RecordedApprovalOption(option.Key.Value, option.Label))
-            .ToList();
-        return Task.FromResult(ConsentStep.From(decisionToReturn, request.CallName, request.Approval));
-    }
-}
+/// <summary>
+/// A capability marker: an interactive requester can answer a consent request. An owned child parks at a consent need
+/// (durable-child-consent-wait, design D1). It never calls the bridge.
+/// </summary>
+internal sealed class ConsentCapableBridge : IParentApprovalBridge;
 
 internal sealed class AuthorizationRecordingLogger : Microsoft.Extensions.Logging.ILogger
 {

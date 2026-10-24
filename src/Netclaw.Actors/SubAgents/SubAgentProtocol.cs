@@ -48,6 +48,12 @@ public sealed record SubAgentDefinition
     /// Provides sub-agents with the same safety, grounding, and policy constraints as main agents.
     /// </summary>
     public string? OperatingRules { get; init; }
+
+    /// <summary>
+    /// The skill overlay of the spawn, or null. A park keeps it, so a resumed child keeps its skill instructions
+    /// (durable-child-consent-wait, design D2).
+    /// </summary>
+    public string? SkillOverlay { get; init; }
 }
 
 /// <summary>
@@ -69,6 +75,12 @@ public static class SubAgentProtocol
     public sealed record RunSubAgent : ISubAgentCommand
     {
         internal ChildRunExecution? OwnedRun { get; init; }
+
+        /// <summary>
+        /// The park and the recorded answers of a resumed run, or null for a fresh start (durable-child-consent-wait,
+        /// design D3). A fresh start and a resume are two real runtime states.
+        /// </summary>
+        internal ChildRunResume? Resume { get; init; }
 
         /// <summary>
         /// Framework-owned authority and read-only working snapshot forked from
