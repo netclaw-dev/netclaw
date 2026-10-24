@@ -200,9 +200,13 @@ internal static class ChildParkRules
     // park (no request) asks nobody, so a requester with no interactive approval, such as a reminder turn, can keep it.
     public static bool RequesterCanAnswer(int requestCount, bool supportsInteractiveApproval)
         => requestCount == 0 || supportsInteractiveApproval;
-    // </child-resume-gate>
 
-    // Compile shell for the review of running-child-drain-park. It keeps the choice by the answer count alone.
+    // The request count of the park picks the first step of a resumed child, never the answer count alone. A consent
+    // park whose answers are lost must not take the drain branch: the child would call the model with unanswered tool
+    // calls, and the parked calls would never run.
     public static ChildResumeStart ResumeStart(int parkRequests, int answers)
-        => answers == 0 ? ChildResumeStart.ModelCall : ChildResumeStart.ParkedCalls;
+        => answers != parkRequests ? ChildResumeStart.EndRun
+            : parkRequests == 0 ? ChildResumeStart.ModelCall
+            : ChildResumeStart.ParkedCalls;
+    // </child-resume-gate>
 }

@@ -416,6 +416,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _definition.Name, _aiTools.Count, _prefillBudget, _interDeltaBudget,
                 _noProgressBudget?.ToString() ?? "unbounded", msg.Resume is not null);
             LogToolExposure();
+            // Become first: a resume that ends the run at once hands over, and that behavior must win.
+            Become(Processing);
             if (msg.Resume is { } resume)
                 ResumeFromPark(resume);
             else
@@ -429,8 +431,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 });
                 FireLlmCall();
             }
-
-            Become(Processing);
         });
     }
 
@@ -881,15 +881,28 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _turnState.RestoreLoopGuard(park.LoopGuard);
         _checkpointRound = park.LoopGuard.ToolIterationCount;
         _fileActivity.Restore(park.FileActivity);
-        // A drain park has no parked call: the batch ended before the park, so the child continues with a model call.
-        if (resume.Answers.Count == 0)
+        // The parked calls of the park are the calls of its last assistant message with no result. A consent park has
+        // one for each request, and a drain park has none, so the child follows the same rule as the owner.
+        var lastAssistant = _history.FindLastIndex(static message => message.Role == Microsoft.Extensions.AI.ChatRole.Assistant);
+        var answered = _history.Skip(lastAssistant + 1).SelectMany(static message => message.Contents)
+            .OfType<FunctionResultContent>().Select(static result => result.CallId).ToHashSet(StringComparer.Ordinal);
+        List<FunctionCallContent> parkedCalls = lastAssistant < 0 ? [] : _history[lastAssistant].Contents.OfType<FunctionCallContent>()
+            .Where(call => !answered.Contains(call.CallId)).ToList();
+        switch (ChildParkRules.ResumeStart(parkedCalls.Count, resume.Answers.Count))
         {
-            FireLlmCall();
-            return;
+            case ChildResumeStart.ModelCall:
+                FireLlmCall();
+                return;
+            case ChildResumeStart.ParkedCalls when parkedCalls.All(call => resume.Answers.ContainsKey(call.CallId)):
+                break;
+            default:
+                // The owner checks the same rule before the resume, so this is damage. The run ends loudly, and no
+                // parked call runs.
+                var damage = $"The resume has {resume.Answers.Count} answer(s) that do not match the {parkedCalls.Count} parked call(s) of the park.";
+                _log.Error("SubAgent [{AgentName}] cannot resume: {Damage}", _definition.Name, damage);
+                Complete(false, damage, SubAgentRunOutcome.Failed, SubAgentOutcomeReason.ParkDamaged);
+                return;
         }
-        var parkedCallIds = resume.Answers.Keys.ToHashSet(StringComparer.Ordinal);
-        var parkedCalls = _history.Last(static message => message.Role == Microsoft.Extensions.AI.ChatRole.Assistant)
-            .Contents.OfType<FunctionCallContent>().Where(call => parkedCallIds.Contains(call.CallId)).ToList();
         _toolRegistry.CanonicalizeToolCalls(parkedCalls);
         RunTools(CreateExecutor(), parkedCalls, new HashSet<string>(StringComparer.Ordinal), resume.Answers);
         // Design D2: the parked calls run in the directories of the batch (RunTools took that context). A finished

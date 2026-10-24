@@ -55,9 +55,10 @@ These PR 2 rules already hold for a park with zero requests, with no change:
 | --- | --- | --- | --- |
 | R1 | Reducer: `Accepted + Parked when Requests.Count > 0` | It throws, and a replay that throws stops the session. | Drop the count guard. Keep `Requests.All(SourceChildRunId == run.RunId)`. |
 | R2 | `AcceptChildPark` ends the run when `!SupportsInteractiveApproval` | A drain park asks nobody. The rule would fail every drain park of an automation turn. | New pure rule `ChildParkRules.RequesterCanAnswer(requestCount, supportsInteractiveApproval) => requestCount == 0 \|\| supportsInteractiveApproval`, inside the `child-resume-gate` span. A damaged authority still ends the run. |
-| R3 | `ResumeFromPark` runs the parked calls as a tool batch | With no answer, `_history.Last(assistant)` throws when the child parked before its first model reply. `RunTools([])` calls `RecordToolCompletion`, which adds a false round. | Before the parked-call lookup: when `Answers` is empty, call `FireLlmCall()`. |
+| R3 | `ResumeFromPark` runs the parked calls as a tool batch | With no answer, `_history.Last(assistant)` throws when the child parked before its first model reply. `RunTools([])` calls `RecordToolCompletion`, which adds a false round. | New pure rule `ChildParkRules.ResumeStart(parkRequests, answers)`: 0 and 0 → model call; requests > 0 and answers equal to requests → parked calls; any other pair → the run ends. The owner applies it in `TryResumeParkedRun` (end: `EndParkedRun`). The child applies it to the unanswered calls of the park, and a mismatch ends the run as `park_damaged`. |
 | R4 | Reducer `Resumed` summary: "The child resumed after consent." | The text is false for a drain park. `check_agent_run` and a later loss notice show it. | Pick the text by the request count of the park: zero → "The child resumed after the restart." |
 | R5 | Nothing tells a live child to stop, and the acknowledgement does not wait | The drain stops the session, and `PostStop` kills the child. | D2, D3, D4. |
+| R6 | `EndParkedRun` ends a refused park as failed with "The parked calls did not run." | A drain park asked for no consent, and its batch already ran, so the text is false. | A refused drain park (too large, damaged authority, a failed resume, a rejected record) ends like a lost run: `Partial` with `owner_restarted`, the file activity of the park, and the restart-loss text. The refusal reason goes to the warning. A consent park keeps today's text. |
 
 A park with zero requests writes `PromptsIssued + 0`. The resume actor name `{name}-{PromptsIssued}` can repeat the
 name of an earlier incarnation. That is safe: a drain park resumes only in a new session incarnation (after the
@@ -125,11 +126,16 @@ so the notice of a lost child and the continuation of the parent turn (#2632) wa
 | Stop point of the child | `SubAgentActor` (`ParkForDrain` handler, `FireLlmCall`) | child-local |
 | Accept a park | `ChildParkRules.AcceptPark` (unchanged) | call-local |
 | The requester rule | `ChildParkRules.RequesterCanAnswer` (new) | call-local |
+| First step of a resume (model call, parked calls, or end) | `ChildParkRules.ResumeStart` (new), by the request count of the park; the owner and the child apply it | call-local |
 | Record a park | `SessionState.Apply(Parked)` | durable |
 | The acknowledgement gate | `SessionExecutionLifetime.WaitsForChildren`, called by `FinalizePassivation` | actor-local |
 | Recovery choice, resume gate, resume record | PR 2 (unchanged) | durable lifecycle; call-local gate |
-| First step of a resumed child | `SubAgentActor.ResumeFromPark` | child-local |
+| First step of a resumed child | `SubAgentActor.ResumeFromPark` (applies `ResumeStart` to the unanswered calls of the park) | child-local |
 | Resume summary text | `SessionState.Apply(Resumed)` | durable, derived |
+
+The Stryker gate `child-resume-gate` mutates two spans: `// <child-resume-gate>` in `ChildRunPark.cs`
+(`RequesterCanAnswer` and `ResumeStart` with the PR 2 rules) and `// <child-drain-wait>` in
+`SessionExecutionLifetime.cs` (`WaitsForChildren`). `ChildParkRulesTests` holds the tables of both.
 
 ### D6. Flows
 
@@ -175,11 +181,12 @@ RestoreParkedRequests: opens nothing; child_parks_recovered counts the park
 RecoverChildren: RecoveryAction(Parked) = Resume
 TryResumeParkedRun: ResumeGate(park, 0 open, no drain) = Resume
   answers := TakeParkedAnswers(run) = {}
+  ResumeStart(0, 0) = ModelCall, else EndRun -> EndParkedRun (R6)            # R3
   PrepareResume: LoopGuardDamage; authority from run.OriginalContext only
   Persist Resumed: Apply -> Accepted(round N, "The child resumed after the restart.")   # R4
                    StartChildActor({name}-{PromptsIssued})
 SubAgentActor.ResumeFromPark: transcript, loop guard, round N, file activity
-  if answers is empty: FireLlmCall()                                        # R3
+  ResumeStart(0 requests, 0 answers) = ModelCall: FireLlmCall()             # R3
   else: run the parked calls once with their answers (unchanged)
 ```
 
@@ -205,6 +212,9 @@ SubAgentActor.ResumeFromPark: transcript, loop guard, round N, file activity
   and the beta.3 child crashes in `ResumeFromPark` (R3). No call runs twice in either case. The release that ships this
   change is forward-only from beta.3, and a rollback to beta.3 uses the verified backup. The swap rule kinds
   `PARK-EVENT` and `PARK-SNAPSHOT` of PR 2 already cover the rows.
+- [The 2 s margin starts late] → The margin starts when the session gets `PrepareForDaemonRestart`, not when the
+  caller deadline starts. A message that reaches the session late can make the acknowledgement miss the caller
+  deadline. The session then gives no restart reminder, and the drain park resumes at the next wake of the session.
 - [A drain park waits a long time] → After a daemon stop longer than the 10-minute reminder lifetime, the run resumes
   at the next wake of the session (Open decision A3).
 

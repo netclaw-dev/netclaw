@@ -949,13 +949,15 @@ Parked child prompts (PR 1 of durable-child-consent-wait, design D1 to D4):
   parked prompt still comes from the run record. A channel binding keeps its tracked prompt, and no prompt is
   replayed.
 - Drain park (running-child-drain-park, #2655): a graceful drain sends `ParkForDrain` to each live child. The child
-  starts no model call and no tool batch after it. A running batch ends first. A waiting model call is cancelled. The
-  child then sends `ChildParkReached` with zero requests, so a drain park has no consent surface: no prompt, no open
+  starts no model call and no tool batch after it. A running batch ends first. A child that waits for a model call or
+  for a checkpoint commit parks at once, and a waiting model call is cancelled. The child then sends `ChildParkReached` with zero requests, so a drain park has no consent surface: no prompt, no open
   request, and no session pause. `ChildParkRules.RequesterCanAnswer` lets a drain park keep a requester with no
   interactive approval, such as a reminder turn. A consent park still needs a requester who can answer, and a damaged
   run authority still ends the run. When the batch ends with a call that needs consent, the child makes a consent park
   and no drain park. The resume of a drain park uses the same gate, record, and spawn rules under `run.OriginalContext`.
   It runs no parked call: the new child starts with a model call, and the gate checks each later call.
+  `ChildParkRules.ResumeStart` picks the first step by the request count of the park, in the owner and in the child.
+  A refused drain park ends as a restart loss (`owner_restarted`), not as a consent failure, because it asked nobody.
 
 A valid example: Alice's child parks on one call while Bob's turn runs. Alice approves. The call runs once under
 Alice's recorded authority and in the recorded directory. An invalid example: Bob clicks Alice's prompt first.

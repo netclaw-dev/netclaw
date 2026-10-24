@@ -110,7 +110,7 @@ public sealed partial class LlmSessionActor
                     message.RunId);
                 return;
             }
-            EndParkedRun(message.RunId, SubAgentOutcomeReason.ToolExecutionFailed,
+            EndParkedRun(message.RunId, DrainParkOf(_state.ChildRuns[message.RunId].Lifecycle), SubAgentOutcomeReason.ToolExecutionFailed,
                 $"The journal rejected the {message.Kind} record of the child.", ActorRefs.Nobody);
         });
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
@@ -235,10 +235,11 @@ public sealed partial class LlmSessionActor
         }
         // Security boundary: the prompts bind to the requester of the run record (ForChildCall checks it), never to
         // the requester of the current turn. A drain park asks nobody, but a damaged authority still ends the run.
+        var drainPark = message.Requests.Count == 0 ? message.Park : null;
         if (!TurnContext.TryFromRecord(run!.OriginalContext, out var authority, out _) || authority is null ||
             !ChildParkRules.RequesterCanAnswer(message.Requests.Count, authority.SupportsInteractiveApproval))
         {
-            EndParkedRun(run.RunId, SubAgentOutcomeReason.ToolExecutionFailed,
+            EndParkedRun(run.RunId, drainPark, SubAgentOutcomeReason.ToolExecutionFailed,
                 "The requester of the run cannot answer a consent request.", child);
             return;
         }
@@ -259,7 +260,7 @@ public sealed partial class LlmSessionActor
         }
         catch (ParentApprovalUnavailableException error)
         {
-            EndParkedRun(run.RunId, SubAgentOutcomeReason.ToolExecutionFailed, error.Message, child);
+            EndParkedRun(run.RunId, drainPark, SubAgentOutcomeReason.ToolExecutionFailed, error.Message, child);
             return;
         }
         var evt = new ChildRunEvent.Parked(message.Park, dispatches.Select(CreateApprovalRequest).ToArray())
@@ -269,7 +270,7 @@ public sealed partial class LlmSessionActor
         {
             _log.Error("The park of child run {RunId} has {Bytes} bytes, above the cap of {Cap}", run.RunId, bytes,
                 ChildRunPark.MaxBytes);
-            EndParkedRun(run.RunId, SubAgentOutcomeReason.ParkTooLarge,
+            EndParkedRun(run.RunId, drainPark, SubAgentOutcomeReason.ParkTooLarge,
                 $"The park has {bytes} bytes, above the cap of {ChildRunPark.MaxBytes}.", child);
             return;
         }
@@ -303,6 +304,7 @@ public sealed partial class LlmSessionActor
         if (ChildParkRules.ResumeGate(parked is not null, _toolWorkflow.ChildApprovalCount(runId), RestartDrainRequested)
             != ChildResumeDecision.Resume)
             return;
+        var drainPark = DrainParkOf(parked!);
         IReadOnlyDictionary<string, ApprovalRedriveEntry> answers;
         try
         {
@@ -313,7 +315,16 @@ public sealed partial class LlmSessionActor
             // An answer that does not bind to its parked call (a missing call, a duplicate call ID, or a shell call with
             // no source key) is a consent that the session cannot honour. An operator must see it.
             _log.Error(error, "Parked child run {RunId} cannot bind its answers", runId);
-            EndParkedRun(runId, SubAgentOutcomeReason.ParkDamaged, error.Message, ActorRefs.Nobody);
+            EndParkedRun(runId, drainPark, SubAgentOutcomeReason.ParkDamaged, error.Message, ActorRefs.Nobody);
+            return;
+        }
+        // The request count of the park picks the first step (running-child-drain-park R3). A mismatch is damage.
+        if (ChildParkRules.ResumeStart(parked.Requests.Length, answers.Count) == ChildResumeStart.EndRun)
+        {
+            _log.Error("Parked child run {RunId} has {Answers} answer(s) for {Requests} request(s)", runId,
+                answers.Count, parked.Requests.Length);
+            EndParkedRun(runId, drainPark, SubAgentOutcomeReason.ParkDamaged,
+                "The answers do not match the requests of the park.", ActorRefs.Nobody);
             return;
         }
         PreparedChildStart prepared;
@@ -324,13 +335,13 @@ public sealed partial class LlmSessionActor
         catch (ChildStartRejectedException rejected)
         {
             _log.Warning("Parked child run {RunId} cannot resume: {Reason}", runId, rejected.Message);
-            EndParkedRun(runId, rejected.Reason, rejected.Message, ActorRefs.Nobody);
+            EndParkedRun(runId, drainPark, rejected.Reason, rejected.Message, ActorRefs.Nobody);
             return;
         }
         catch (Exception error) when (!FatalExceptionPolicy.IsFatal(error))
         {
             _log.Error(error, "Parked child run {RunId} cannot resume", runId);
-            EndParkedRun(runId, SubAgentOutcomeReason.SpawnError, error.Message, ActorRefs.Nobody);
+            EndParkedRun(runId, drainPark, SubAgentOutcomeReason.SpawnError, error.Message, ActorRefs.Nobody);
             return;
         }
         // At most once: the Resumed record is in the journal before any parked call runs. A crash after it records the
@@ -374,18 +385,32 @@ public sealed partial class LlmSessionActor
             new ToolExecutionContext(scope, new ToolExecutionTimeout(_config.ToolExecutionTimeout)).Invocation);
     }
 
-    // The one refusal path of a park (cut plan): the run ends as failed, and no parked call runs. A second call for an
-    // ended run does nothing (RecordChildTerminal).
-    private void EndParkedRun(SubAgentRunId runId, SubAgentOutcomeReason reason, string text, IActorRef child)
+    // The one refusal path of a park (cut plan): the run ends, and no parked call runs. A second call for an ended run
+    // does nothing (RecordChildTerminal). A consent park ends as failed. A drain park (drainPark not null) asked for no
+    // consent and its batch already ran, so it ends as a restart loss with the confirmed file activity of the park; the
+    // refusal text goes to the warning (running-child-drain-park).
+    private void EndParkedRun(SubAgentRunId runId, ChildRunPark? drainPark, SubAgentOutcomeReason reason, string text,
+        IActorRef child)
     {
         if (!_state.ChildRuns.TryGetValue(runId, out var run))
             return;
+        if (drainPark is not null)
+        {
+            var parkedAt = new ChildRunCheckpoint(drainPark.LoopGuard.ToolIterationCount,
+                "The child parked for the restart, and the park could not continue.", drainPark.FileActivity);
+            RecordChildTerminal(runId, LostChildResult(run with { Lifecycle = new ChildRunLifecycle.Accepted(parkedAt) },
+                SubAgentOutcomeReason.OwnerRestarted), lost: true, warning: $"{reason.Value}: {text}", child);
+            return;
+        }
         RecordChildTerminal(runId, new SubAgentResult
         {
             AgentName = run.AgentName, Completion = new ChildRunCompletion.Failed(reason),
             Output = $"The child could not wait for consent: {text} The parked calls did not run."
         }, lost: false, warning: null, child);
     }
+
+    private static ChildRunPark? DrainParkOf(ChildRunLifecycle lifecycle)
+        => lifecycle is ChildRunLifecycle.Parked { Requests.Length: 0 } parked ? parked.Park : null;
 
     private static SubAgentResult CancelledParkResult(BackgroundChildRun run) => new()
     {
