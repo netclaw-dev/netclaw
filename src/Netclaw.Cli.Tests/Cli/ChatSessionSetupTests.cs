@@ -58,7 +58,7 @@ public sealed class ChatSessionSetupTests(ITestOutputHelper output) : TestKit(ou
     private Task<ChatCloseReceipt> Close()
     {
         var reply = new TaskCompletionSource<ChatCloseReceipt>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Owner.Tell(new Close(reply));
+            Owner.Tell(new Close(reply, TimeProvider.System.GetTimestamp()));
         return reply.Task.WaitAsync(TimeSpan.FromSeconds(10), Token);
     }
 

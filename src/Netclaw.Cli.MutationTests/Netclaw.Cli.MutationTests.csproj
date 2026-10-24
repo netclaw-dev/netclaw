@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Akka.TestKit" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
@@ -23,8 +24,8 @@
 
   <ItemGroup>
     <!-- The same fake transport as Netclaw.Cli.Tests. It has no xUnit dependency. -->
-    <Compile Include="../Netclaw.Cli.Tests/Cli/FakeDaemonHubTransport.cs"
-             Link="Cli/FakeDaemonHubTransport.cs" />
+    <Compile Include="../Netclaw.Cli.Tests/Cli/FakeDaemonHubTransport.cs" Link="Cli/FakeDaemonHubTransport.cs" />
+    <Compile Include="../Netclaw.Cli.Tests/Cli/ChatClientCloseExpiryScenario.cs" Link="Cli/ChatClientCloseExpiryScenario.cs" />
   </ItemGroup>
 
 </Project>

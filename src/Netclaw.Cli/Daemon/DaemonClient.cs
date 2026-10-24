@@ -10,6 +10,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Tools;
 using R3;
+using AkkaConfig = Akka.Configuration.Config;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 using static Netclaw.Cli.Daemon.ChatClientProtocol;
 
@@ -28,7 +29,11 @@ public sealed class DaemonClient : IAsyncDisposable
     private readonly Subject<DaemonConnectionEvent> _connectionSubject = new();
     private readonly Channel<ClientEvent> _events = Channel.CreateUnbounded<ClientEvent>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
-    private readonly Lazy<Runtime> _runtime;
+    private readonly Lazy<Task<Runtime>> _runtime;
+    private Queue<Request> _pending = new();
+    private readonly TimeProvider _clock;
+    private Close? _startupClose;
+    private ITimer? _startupCloseTimer;
     private readonly Lazy<Task<ChatCloseReceipt>> _close;
     private readonly IDisposable _transportSubscription;
     private enum Lifetime { Open, Closing, Disposed }
@@ -44,15 +49,23 @@ public sealed class DaemonClient : IAsyncDisposable
 
     internal DaemonClient(string daemonEndpoint, IDaemonHubTransport transport,
         TimeProvider? timeProvider = null, TimeSpan[]? reconnectDelays = null, TimeSpan? rpcTimeout = null)
+        : this(daemonEndpoint, transport, ActorSystem.Create, timeProvider, reconnectDelays, rpcTimeout)
+    { }
+
+    internal DaemonClient(string daemonEndpoint, IDaemonHubTransport transport,
+        Func<string, AkkaConfig, ActorSystem> actorSystemFactory, TimeProvider? timeProvider,
+        TimeSpan[]? reconnectDelays, TimeSpan? rpcTimeout)
     {
+        ArgumentNullException.ThrowIfNull(actorSystemFactory);
         var endpoint = NormalizeEndpoint(daemonEndpoint);
         var delays = (reconnectDelays ?? DefaultReconnectDelays).ToArray();
         if (delays.Length == 0) throw new ArgumentException("At least one reconnect delay is required.", nameof(reconnectDelays));
         _transport = transport;
+        _clock = timeProvider ?? TimeProvider.System;
         _transportSubscription = transport.Subscribe(OnTransportEvent);
-        _runtime = new Lazy<Runtime>(() =>
+        _runtime = new Lazy<Task<Runtime>>(() => Task.Run(() =>
         {
-            var system = ActorSystem.Create($"chat-client-{Guid.NewGuid():N}", ConfigurationFactory.ParseString("""
+            var system = actorSystemFactory($"chat-client-{Guid.NewGuid():N}", ConfigurationFactory.ParseString("""
                 akka.actor.provider = local
                 akka.actor.guardian-supervisor-strategy = "Akka.Actor.StoppingSupervisorStrategy, Akka"
                 akka.loglevel = ERROR
@@ -60,9 +73,9 @@ public sealed class DaemonClient : IAsyncDisposable
             var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var actor = system.ActorOf(Props.Create(() => new ChatClientActor(
                 transport, endpoint, delays, rpcTimeout ?? DefaultRpcTimeout,
-                timeProvider ?? TimeProvider.System, _events.Writer, stopped)), "client");
+                _clock, _events.Writer, stopped)), "client");
             return new Runtime(system, actor, stopped.Task, Task.Run(EventPumpAsync));
-        });
+        }));
         _close = new Lazy<Task<ChatCloseReceipt>>(() =>
         {
             lock (_runtime)
@@ -71,8 +84,13 @@ public sealed class DaemonClient : IAsyncDisposable
                 _lifetime = Lifetime.Closing;
                 if (!_runtime.IsValueCreated) return Task.FromResult(new ChatCloseReceipt(null, []));
                 var reply = new TaskCompletionSource<ChatCloseReceipt>(TaskCreationOptions.RunContinuationsAsynchronously);
-                var runtime = _runtime.Value;
-                runtime.Owner.Tell(new Close(reply));
+                var close = _startupClose = new Close(reply, _clock.GetTimestamp())
+                {
+                    Requests = _pending
+                };
+                _startupCloseTimer = _clock.CreateTimer(_ => ExpireStartup(close), null,
+                    TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+                var runtime = PostAfterAsync(_runtime.Value);
                 return AwaitReplyAsync(reply.Task, runtime, CancellationToken.None);
             }
         });
@@ -81,7 +99,7 @@ public sealed class DaemonClient : IAsyncDisposable
     public Observable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
     public Observable<DaemonConnectionEvent> ConnectionEvents => _connectionSubject.AsObservable();
     public bool IsConnected => _transport.IsConnected;
-    internal bool HasLocalRuntime => _runtime.IsValueCreated;
+    internal bool HasLocalRuntime => _runtime.IsValueCreated && _runtime.Value.IsCompletedSuccessfully;
     public ChatCloseReceipt? CloseReceipt => _close.IsValueCreated && _close.Value.IsCompletedSuccessfully ? _close.Value.Result : null;
 
     public Task ConnectAsync(CancellationToken cancellationToken = default) => Post(new Connect(cancellationToken));
@@ -114,33 +132,95 @@ public sealed class DaemonClient : IAsyncDisposable
 
     private async Task<string> SessionRequestAsync(SessionRequest request)
     {
-        var runtime = PostRequest(request);
+        var runtime = await PostRequest(request).WaitAsync(request.Token).ConfigureAwait(false);
         return (await AwaitReplyAsync(request.Reply.Task, runtime, request.Token).ConfigureAwait(false)).Value;
     }
-    private Task Post(Command command)
+    private async Task Post(Command command)
     {
-        var runtime = PostRequest(command);
-        return AwaitReplyAsync(command.Reply.Task, runtime, command.Token);
+        var runtime = await PostRequest(command).WaitAsync(command.Token).ConfigureAwait(false);
+        await AwaitReplyAsync(command.Reply.Task, runtime, command.Token).ConfigureAwait(false);
     }
-    private Runtime PostRequest(Request request)
+    private Task<Runtime> PostRequest(Request request)
     {
         request.Token.ThrowIfCancellationRequested();
-        var runtime = GetRuntime();
-        // Post before the first await. Enter and Ctrl+Q retain their input order.
-        runtime.Owner.Tell(request);
-        return runtime;
-    }
-    private Runtime GetRuntime()
-    {
-        // Serialize runtime creation and disposal. The actor owns connection and session state.
         lock (_runtime)
         {
             ObjectDisposedException.ThrowIf(_lifetime == Lifetime.Disposed, this);
             if (_lifetime == Lifetime.Closing) throw new InvalidOperationException("The chat client is closed.");
-            var runtime = _runtime.Value;
-            if (runtime.Stopped.IsCompleted) throw new InvalidOperationException("The chat client actor stopped.");
-            return runtime;
+            _pending.Enqueue(request);
+            return PostAfterAsync(_runtime.Value);
         }
+    }
+    private async Task<Runtime> PostAfterAsync(Task<Runtime> startup)
+    {
+        Runtime runtime;
+        try { runtime = await startup.ConfigureAwait(false); }
+        catch (Exception error)
+        {
+            lock (_runtime)
+            {
+                while (_pending.TryDequeue(out var request)) request.Fail(error);
+                _startupCloseTimer?.Dispose();
+            }
+            throw;
+        }
+        lock (_runtime)
+        {
+            if (_startupClose is { } close)
+            {
+                if (_clock.GetElapsedTime(close.StartedAt) >= TimeSpan.FromSeconds(2)) ExpireStartup(close);
+                if (!close.Reply.Task.IsCompleted)
+                {
+                    ObjectDisposedException.ThrowIf(_lifetime == Lifetime.Disposed, this);
+                    if (runtime.Stopped.IsCompleted) throw new InvalidOperationException("The chat client actor stopped.");
+                    // The actor receives the original requests and the remaining quit budget together.
+                    _startupClose = null;
+                    _pending = new Queue<Request>();
+                    _startupCloseTimer?.Dispose();
+                    runtime.Owner.Tell(close, ActorRefs.NoSender);
+                    return runtime;
+                }
+            }
+            else
+            {
+                ObjectDisposedException.ThrowIf(_lifetime == Lifetime.Disposed, this);
+                if (runtime.Stopped.IsCompleted) throw new InvalidOperationException("The chat client actor stopped.");
+                while (_pending.TryDequeue(out var request)) runtime.Owner.Tell(request, ActorRefs.NoSender);
+                return runtime;
+            }
+        }
+        await runtime.System.Terminate().ConfigureAwait(false);
+        return runtime;
+    }
+    private void ExpireStartup(Close close)
+    {
+        lock (_runtime)
+        {
+            if (!ReferenceEquals(_startupClose, close) || close.Reply.Task.IsCompleted) return;
+            var error = new OperationCanceledException("The chat closed before admission confirmation.");
+            var inputs = new List<UndeliveredInput>();
+            while (_pending.TryDequeue(out var request))
+            {
+                var text = request switch
+                {
+                    SendText send => send.Text,
+                    Open open => open.Initial,
+                    Respond respond => $"Interaction {respond.CallId}: {respond.Selection}",
+                    _ => null
+                };
+                if (text is not null && !request.Token.IsCancellationRequested)
+                    inputs.Add(new UndeliveredInput(text, InputDeliveryStatus.Unsent, error.Message));
+                request.Fail(error);
+            }
+            close.Reply.TrySetResult(new ChatCloseReceipt(null, [.. inputs]));
+            _startupCloseTimer?.Dispose();
+        }
+    }
+    private static async Task<T> AwaitReplyAsync<T>(Task<T> reply, Task<Runtime> runtime, CancellationToken token)
+    {
+        await Task.WhenAny(reply, runtime).WaitAsync(token).ConfigureAwait(false);
+        if (reply.IsCompleted) return await reply.ConfigureAwait(false);
+        return await AwaitReplyAsync(reply, await runtime.ConfigureAwait(false), token).ConfigureAwait(false);
     }
     private static async Task<T> AwaitReplyAsync<T>(Task<T> reply, Runtime runtime, CancellationToken token)
     {
@@ -160,7 +240,7 @@ public sealed class DaemonClient : IAsyncDisposable
         {
             case OutputReceived output: _events.Writer.TryWrite(new Output(output.Value)); break;
             case TransportDropped drop:
-                if (_runtime.IsValueCreated) _runtime.Value.Owner.Tell(drop);
+                if (HasLocalRuntime) _runtime.Value.Result.Owner.Tell(drop, ActorRefs.NoSender);
                 break;
             default: throw new InvalidOperationException("Unknown daemon transport event.");
         }
@@ -180,14 +260,19 @@ public sealed class DaemonClient : IAsyncDisposable
     }
     public async ValueTask DisposeAsync()
     {
-        Runtime? runtime;
+        Task<Runtime>? startup;
         lock (_runtime)
         {
             if (_lifetime == Lifetime.Disposed) return;
             _lifetime = Lifetime.Disposed;
-            runtime = _runtime.IsValueCreated ? _runtime.Value : null;
+            startup = _runtime.IsValueCreated ? _runtime.Value : null;
+            if (_startupClose is { } close) ExpireStartup(close);
+            _startupCloseTimer?.Dispose();
         }
         _transportSubscription.Dispose();
+        // Callers receive the cached startup failure. Disposal must still release the transport and observers.
+        if (startup is not null) await ((Task)startup).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        var runtime = startup is { IsCompletedSuccessfully: true } ? startup.Result : null;
         if (runtime is not null) await runtime.System.Terminate().ConfigureAwait(false);
         await _transport.DisposeAsync().ConfigureAwait(false);
         _events.Writer.TryComplete();

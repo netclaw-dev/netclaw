@@ -57,7 +57,7 @@ Hosted runs from 2026-10-17 through 2026-10-23 measured these gate times (minute
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally), `stopped-turn-continuation` (10 mutants, one invocation, 2.5 locally) | 13.5 to 14.5 (estimate; hosted measurement required) |
-| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans | [3m17s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616549) |
+| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry` (one CLI invocation, UNMEASURED) | Existing gate: [3m17s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616549); new total: UNMEASURED |
 | `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local) | 7 to 8 (estimate) |
 
@@ -99,6 +99,7 @@ coverage. They do not replace positive and negative behavior tests.
 
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
+| `ChatClientActor.Start` (`// chat-close-dispatch-expiry:begin` to `end`) | Issue #2642, PRD-004: a held bind reply permits text dispatch at 1.5 seconds after Close, but refuses it at two seconds | UNMEASURED; gate fails until the parent sets the reviewed count | `./scripts/run-chat-close-dispatch-expiry-mutations.sh` |
 | `PathAccessPolicy.AddSessionRoots`, `PathAccessPolicy.IsReadableByAudience`, `PathAccessPolicy.GetEffectiveAccess`, `PathAccessPolicy.IsInOtherTemporaryKeyFolder`, and `ManagedTemporaryEnvironment.CheckFolder` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected; issue #2554: a Personal read or attach follows the write profile and no other audience, operation, or write mode does (write `All` gives `All`, write `Roots` adds its roots, write `None` adds nothing, and a read profile of mode `All` stays `All`); the managed temporary key folder is a session root and the shared base is not; a Team or Public root over the base does not reach another key folder; the shell launch is refused when the base or the key folder is missing, a link, owned by another user, or open to a group or others | 30 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
@@ -166,6 +167,37 @@ A cold CI runner should take two to four minutes.
 
 The harness uses xUnit 2 because Stryker's VSTest adapter does not support xUnit 3 correctly.
 The script requires `perl` and `jq`, which the Linux CI image supplies.
+
+### Chat Close Dispatch Expiry Gate
+
+The xUnit 2 wrapper links `ChatClientCloseExpiryScenario` and the existing fake transport from the CLI tests.
+Both frameworks use the same actor flow and preserve the RPC, cancellation, and receipt assertions.
+The scenario holds the bind reply until Close takes effect.
+It advances only the elapsed clock before it releases that reply.
+The Akka `TestScheduler` stays stationary, so `CloseDeadline` cannot hide a missing dispatch guard.
+The positive row advances 1.5 seconds; the expired row advances two seconds.
+The positive row confirms dispatch before the two-second deadline.
+
+The parent removed only the `Start` expiry guard in a manual mutation check.
+The expired row failed on an actual `SendMessage` RPC; the positive row passed.
+That check justifies this narrow target. It does not establish a Stryker count or cost.
+
+Run `./scripts/run-chat-close-dispatch-expiry-mutations.sh` after the required disk check.
+On a shared host, hold the build lock through Stryker's initial SDK build.
+Release it when Stryker prints `Initial test run started`.
+Keep the lock free during mutation analysis and test waits.
+The script uses the existing CLI mutation project and its Stryker configuration.
+It selects only the elapsed-time comparison within the marked guard.
+The two expected mutants replace `>=` with `<` and `>`; both must have status `Killed`.
+Missing, extra, untested, ignored, compile-error, and surviving target mutants fail the gate.
+Other active mutants outside that comparison also fail the gate.
+Stryker records ignored and compile-error mutants outside the selected comparison; these cannot satisfy this gate.
+
+The finalized local gate killed both selected mutants in 177 seconds.
+Verify the finalized gate and record the hosted group cost before merge.
+CI places this gate in `child-owner-and-report`, whose last measured total was 3m17s.
+The combined group must stay within 15 minutes on a fast runner.
+The parent must measure the combined group before acceptance and move this gate if the total exceeds that budget.
 
 ### No Program Gate
 

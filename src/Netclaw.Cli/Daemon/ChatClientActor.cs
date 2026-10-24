@@ -51,7 +51,7 @@ internal sealed class ChatClientActor : ReceiveActor, IWithTimers
     private sealed record AwaitingCancelledRpc(RpcAttempt Rpc) : Work;
     private abstract record CloseState;
     private sealed record OpenClose : CloseState;
-    private sealed record Closing(TaskCompletionSource<ChatCloseReceipt> Reply) : CloseState;
+    private sealed record Closing(TaskCompletionSource<ChatCloseReceipt> Reply, long StartedAt) : CloseState;
     private sealed record Closed(ChatCloseReceipt Receipt) : CloseState;
 
     // State records reference this owner. Record copies must not create a second resource owner.
@@ -141,8 +141,11 @@ internal sealed class ChatClientActor : ReceiveActor, IWithTimers
                 close.Reply.TrySetException(new InvalidOperationException("The facade must share its close task."));
                 return;
             }
-            _close = new Closing(close.Reply);
-            Timers.StartSingleTimer(CloseKey, new CloseDeadline(), TimeSpan.FromSeconds(2));
+            while (close.Requests.TryDequeue(out var request)) _queue.Enqueue(request);
+            _close = new Closing(close.Reply, close.StartedAt);
+            var remaining = TimeSpan.FromSeconds(2) - _clock.GetElapsedTime(close.StartedAt);
+            if (remaining <= TimeSpan.Zero) { FinishClose(); return; }
+            Timers.StartSingleTimer(CloseKey, new CloseDeadline(), remaining);
             Publish(DaemonConnectionState.Closing, "Confirming daemon admission...");
             Next();
         });
@@ -159,6 +162,7 @@ internal sealed class ChatClientActor : ReceiveActor, IWithTimers
 
     private void Next()
     {
+        if (_close is Closing close && _clock.GetElapsedTime(close.StartedAt) >= TimeSpan.FromSeconds(2)) { FinishClose(); return; }
         if (_work is not Idle || _close is Closed) return;
         if (_session.Attachment is RecoveryPending recovery && _close is OpenClose)
         {
@@ -248,6 +252,9 @@ internal sealed class ChatClientActor : ReceiveActor, IWithTimers
 
     private void Start(Pending pending, RpcKind kind, Func<long, CancellationToken, Task<Completed>> operation)
     {
+        // chat-close-dispatch-expiry:begin
+        if (_close is Closing close && _clock.GetElapsedTime(close.StartedAt) >= TimeSpan.FromSeconds(2)) { FinishClose(); return; }
+        // chat-close-dispatch-expiry:end
         var rpc = new RpcAttempt(++_operationId, kind, pending.Request.Token, Self);
         Timers.StartSingleTimer(OperationKey, new Deadline(rpc.Id), _rpcTimeout);
         Enter(new Running(pending, rpc));
@@ -399,7 +406,12 @@ internal sealed class ChatClientActor : ReceiveActor, IWithTimers
         }
         while (_queue.TryDequeue(out var pending))
         {
-            if (!pending.Token.IsCancellationRequested) RecordFailure(pending, error, InputDeliveryStatus.Unsent);
+            if (!pending.Token.IsCancellationRequested)
+            {
+                if (pending is Open { Initial: { } queuedInitial })
+                    _unresolved.Add(new UndeliveredInput(queuedInitial, InputDeliveryStatus.Unsent, error.Message) { SessionId = _session.Attachment.Id?.Value });
+                else RecordFailure(pending, error, InputDeliveryStatus.Unsent);
+            }
             pending.Fail(error);
         }
         if (_session.Initial is { } initial)

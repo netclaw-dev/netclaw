@@ -43,7 +43,10 @@ internal static class ChatClientProtocol
     internal sealed record SendText(string Text, CancellationToken Token) : Command(Token);
     internal sealed record Respond(ToolCallId CallId, ApprovalOptionKey Selection, CancellationToken Token) : Command(Token);
     internal sealed record Recover() : Command(CancellationToken.None);
-    internal sealed record Close(TaskCompletionSource<ChatCloseReceipt> Reply);
+    internal sealed record Close(TaskCompletionSource<ChatCloseReceipt> Reply, long StartedAt)
+    {
+        internal Queue<Request> Requests { get; init; } = new();
+    }
 
     internal abstract record ClientEvent;
     internal sealed record Output(SessionOutput Value) : ClientEvent;

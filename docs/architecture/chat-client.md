@@ -9,9 +9,9 @@ The rules live in [netclaw-cli](../../openspec/specs/netclaw-cli/spec.md) and
 
 | Component | Decision | State lifetime |
 | --- | --- | --- |
-| `DaemonClient` | Create and dispose the local runtime; expose the client API | Process-local |
+| `DaemonClient` | Create and dispose the runtime; retain requests and the quit deadline before actor handover | Process-local |
 | `SignalRDaemonHubTransport` | Map typed commands and notifications to SignalR; own callback registrations | Connection-local |
-| `ChatClientActor` | Select the session; order inputs; own transport operations and elapsed deadlines | Actor-local |
+| `ChatClientActor` | Select the session; order inputs; own transport operations and deadlines after handover | Actor-local |
 | Event pump | Deliver immutable output and status outside the actor | Process-local |
 | `ChatViewModel` | Own page state and user actions through Termina `InvokeAsync` | Page-local |
 | `ChatPage` | Own keys, focus, scroll, and transcript nodes | Page-local |
@@ -23,7 +23,15 @@ The rules live in [netclaw-cli](../../openspec/specs/netclaw-cli/spec.md) and
 The client uses a local actor provider. It has no remoting, cluster, journal, or model actor.
 Offline bootstrap creates no client ActorSystem.
 The first explicit daemon command creates the client runtime.
+
+Concurrent commands share one asynchronous startup task and its cached failure.
+ActorSystem creation runs outside the facade's lifetime monitor.
+The facade retains original requests in one queue before actor handover.
+Each post drains that queue under the lifetime monitor, so concurrent continuations preserve request order.
+Close transfers any remaining requests through the existing `Close` command.
 Host disposal stops the actor system and disposes the transport.
+Disposal waits for startup outside the lifetime monitor and rejects posts that await startup.
+Before that wait, disposal resolves a close receipt for unsent requests that the facade still owns.
 
 ## Ordered flow
 
@@ -31,13 +39,16 @@ Host disposal stops the actor system and disposes the transport.
 sequenceDiagram
     participant UI as ChatPage
     participant V as ChatViewModel
+    participant F as DaemonClient
     participant C as ChatClientActor
     participant R as SessionRegistry
     participant P as SessionPipeline
     participant S as LlmSessionActor
     participant J as Journal
     UI->>V: Enter: submit text
-    V->>C: SendText
+    V->>F: SendText
+    opt Runtime exists before quit
+    F->>C: SendText
     C->>R: EnsureSession if attachment is absent
     R-->>C: SessionId + TextAdmissionVersion
     C->>R: SendMessage
@@ -49,9 +60,18 @@ sequenceDiagram
     S-->>R: CommandAck
     R-->>C: Text RPC succeeds
     Note over S: Model work continues independently
+    end
     UI->>V: Ctrl+Q: close
-    V->>C: Close
-    C-->>V: Final receipt within two seconds
+    V->>F: CloseAsync: start the two-second budget
+    alt Startup completes before expiry
+        F->>C: Close with original requests and monotonic start timestamp
+        Note over C: Use the remaining budget
+        C-->>F: Final receipt
+        F-->>V: Final receipt within two seconds
+    else Startup exceeds the budget
+        F-->>V: Receipt: prior local text is unsent
+        Note over F: Stop any late runtime before dispatch
+    end
 ```
 
 A fresh page connects without a daemon session until text or its hidden initial input arrives.
@@ -106,8 +126,19 @@ Escape, resize, usage, and turn completion no longer write view-model state from
 Usage-log files remain view-model resources. A separate follow-up can extract their lifetime without changing the actor protocol.
 One view-model lock serializes resource disposal with callbacks. The existing Termina disposal flag rejects late callbacks.
 
-Stable `IWithTimers` keys own retry, RPC, and close deadlines.
-The two-second close limit covers all prior requests once.
+Stable `IWithTimers` keys own retry, RPC, and the close deadline after handover.
+`CloseAsync` starts one two-second budget through the existing `TimeProvider`.
+The facade records `GetTimestamp()` once. Both owners use `GetElapsedTime()` from that timestamp.
+UTC changes cannot extend or shorten the budget.
+The facade owns its timer only until it transfers `Close` to the actor.
+`Close` carries the required monotonic start timestamp, reply, and original requests across that boundary.
+The actor sets its existing close timer to the remaining time and checks expiry before further work.
+The two-second limit covers startup, handover, and all prior requests once.
+If startup exceeds that limit, the facade reports each queued `SendText` and `Open.Initial` as unsent.
+The facade fails the original requests, rejects later submissions, and shares one close task across repeated calls.
+A late runtime terminates without request dispatch. Host disposal still releases the transport and observers.
+Disposal completes a close receipt that awaits startup before it cancels the facade timer.
+Startup failure reaches callers and does not prevent host resource disposal.
 The actor rejects later requests and never waits for a model response.
 An unresolved dispatched RPC has unconfirmed delivery. Queued unstarted input is unsent.
 The page stores the immutable receipt in the shared navigation state.
@@ -135,10 +166,15 @@ Positive: Enter followed by Ctrl+Q can exit after journal admission while the mo
 Negative: a queue write or an old daemon's early response cannot confirm admission.
 Positive: a cancelled queued caller causes no RPC.
 Negative: cancellation after dispatch cannot authorize automatic resend.
+Positive: held startup returns an unsent receipt at quit expiry before startup resumes.
+Negative: resumed startup cannot dispatch text after that receipt.
+Positive: disposal during held startup returns an unsent receipt before startup resumes.
+Negative: a backward UTC change cannot give the actor more admission time.
 
 `SignalRAdmissionTests` reaches the real authenticated hub, gateway, pipeline, session actor, and journal.
 Its theories cover rejection, buffered admission, and disconnect before or during the model request.
 `ChatSessionSetupTests` uses virtual actor timers and controlled task results.
+`DaemonClientStartupCloseTests` holds runtime startup and advances the supplied clock through quit expiry.
 `ChatAdmissionTests` drives typed Enter and repeated Ctrl+Q through Termina.
 Its bound-loop burst theories check delta payload order, usage state, approval state, and final Ready state.
 The actor theories count active transport tasks through their actual completion, including cancellation and timeout.
