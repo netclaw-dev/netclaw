@@ -537,38 +537,6 @@ public sealed class LostChildRestartReasonSpecs(ITestOutputHelper output) : Chil
            && (error.Message?.ToString()?.Contains("receiveRecover", StringComparison.OrdinalIgnoreCase) == true
                || error.Cause.ToString().Contains("reviewed working context", StringComparison.Ordinal));
 
-    // Writes records into the journal of a stopped session, as an earlier binary did. The writer recovers the journal
-    // first, so its records take the next sequence numbers.
-    private async Task AppendToJournalAsync(SessionId sessionId, params object[] events)
-    {
-        var writer = Sys.ActorOf(Props.Create(() => new JournalAppender($"session-{sessionId.Value}")));
-        await writer.Ask<Akka.Done>(new JournalAppender.Append(events), Deadline, Cancellation);
-        await StopAsync(writer);
-    }
-
-    private sealed class JournalAppender : Akka.Persistence.ReceivePersistentActor
-    {
-        public sealed record Append(object[] Events);
-
-        public JournalAppender(string persistenceId)
-        {
-            PersistenceId = persistenceId;
-            RecoverAny(_ => { });
-            Command<Append>(append =>
-            {
-                var replyTo = Sender;
-                var remaining = append.Events.Length;
-                PersistAll(append.Events, _ =>
-                {
-                    if (--remaining == 0)
-                        replyTo.Tell(Akka.Done.Instance);
-                });
-            });
-        }
-
-        public override string PersistenceId { get; }
-    }
-
     // The file that the checkpointed child changes in its first round.
     private string CheckpointedFile => Path.Combine(TestPaths.WorkspacesDirectory, "project", "ChangedBeforeRestart.cs");
 

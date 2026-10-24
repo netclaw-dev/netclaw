@@ -28,6 +28,8 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
     private static readonly Regex ParkLabel = new(@"\[(park[^\]\s]*)\]", RegexOptions.Compiled);
     private readonly ConcurrentDictionary<string, IReadOnlyList<AIContent>[]> _plans = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<object> _outputs = new();
+    // For each run of the approval probe: the count of Resumed records in the journal at that moment.
+    private readonly ConcurrentQueue<int> _resumedAtProbe = new();
     private IActorRef? _recorder;
     private protected readonly SiblingTool Sibling = new();
     protected static readonly MessageSource AliceSource = OperatorWithTargets(Alice, AliceTarget, AliceRequestedTarget);
@@ -37,7 +39,7 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
     protected void PlanChild(string label, params IReadOnlyList<AIContent>[] rounds)
     {
         _plans[label] = rounds;
-        Clients.A.ResponseContentsSelector = request =>
+        Clients.A.ResponseContentsSelector = Clients.B.ResponseContentsSelector = request =>
         {
             var task = request.FirstOrDefault(static message => message.Role == AiChatRole.User)?.Text ?? string.Empty;
             if (ParkLabel.Match(task) is not { Success: true } match || !_plans.TryGetValue(match.Groups[1].Value, out var plan))
@@ -60,21 +62,34 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
 
     /// <summary>
     /// Starts a child of Alice. The child waits at its first model call until the spawn turn ends and
-    /// <paramref name="beforeChildRuns"/> ran.
+    /// <paramref name="beforeChildRuns"/> ran. The agent child-b uses the second model client.
     /// </summary>
     private protected async Task<ChildRunAccepted> StartAsync(SessionId id, string label, string agent = "child-a",
         Func<Task>? beforeChildRuns = null)
     {
         var journal = await JournalAsync();
+        ApprovalTool.Entered = () => _resumedAtProbe.Enqueue(journal.Committed.OfType<ChildRunEvent.Resumed>().Count());
+        var started = Accepted(journal, id).Count;
         var gate = NewGate();
-        Clients.A.NextResponseGate = gate;
+        (agent == "child-b" ? Clients.B : Clients.A).NextResponseGate = gate;
         await SendAsync(id, $"spawn:{agent}:{label}", AliceSource);
-        await AwaitAssertAsync(() => Assert.Single(Accepted(journal, id)), Deadline, cancellationToken: Cancellation);
+        await AwaitAssertAsync(() => Assert.Equal(started + 1, Accepted(journal, id).Count), Deadline, cancellationToken: Cancellation);
         await SettleNoticesAsync(journal, id);
         if (beforeChildRuns is not null)
             await beforeChildRuns();
         gate.TrySetResult();
-        return Accepted(journal, id)[0];
+        return Accepted(journal, id)[started];
+    }
+
+    // Holds the next parent model request that carries the text, so a turn stays open. The caller releases it.
+    private protected async Task<TaskCompletionSource> HoldTurnAsync(AcceptanceFault journal, SessionId id, string text, MessageSource source)
+    {
+        await SettleNoticesAsync(journal, id);
+        var hold = NewGate();
+        var entered = ParentGate.Arm(request => FreshUserTexts(request).Contains(text), hold);
+        await SendAsync(id, text, source);
+        await entered.WaitAsync(Deadline, Cancellation);
+        return hold;
     }
 
     protected async Task<ToolInteractionRequest[]> AwaitPromptsAsync(SubAgentRunId runId, int count)
@@ -83,11 +98,14 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
         return PromptsOf(runId);
     }
 
-    private ToolInteractionRequest[] PromptsOf(SubAgentRunId runId) => Outputs<ToolInteractionRequest>()
+    private protected ToolInteractionRequest[] PromptsOf(SubAgentRunId runId) => Outputs<ToolInteractionRequest>()
         .Where(prompt => prompt.CallId.Value.StartsWith($"{runId.Value}/subagent-approval/", StringComparison.Ordinal))
         .DistinctBy(static prompt => prompt.CallId).ToArray();
 
-    /// <summary>The park precondition (design D1): the requests are journaled, and the child actor is gone.</summary>
+    /// <summary>
+    /// The park precondition (design D1, PR 2 design D4): the requests are journaled in a Parked record, and the child
+    /// actor is gone.
+    /// </summary>
     private protected async Task AssertParkedAsync(AcceptanceFault journal, SessionId id, ChildRunAccepted run, int requests)
     {
         await AwaitAssertAsync(() => Assert.Equal(requests, RequestsOf(journal, run.Run.RunId).Count), Deadline,
@@ -99,7 +117,8 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
     /// <summary>
     /// The invariants of every run (cut plan S1 to S4): one terminal record inside the deadline, each parked call runs
     /// at most <paramref name="probeRuns"/> times under the run authority, each request has a close, no parent turn
-    /// failed, and no child actor of the run stays.
+    /// failed, and no child actor of the run stays. PR 2: each parked call runs after a committed Resumed record, and
+    /// the run has no more Resumed records than Parked records.
     /// </summary>
     private protected async Task<ChildRunTerminal> AssertRunInvariantsAsync(AcceptanceFault journal, SessionId id,
         ChildRunAccepted run, int probeRuns)
@@ -116,6 +135,10 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
             Assert.Equal(authority.DefaultDeliveryTarget, context.DefaultDeliveryTarget);
             Assert.Equal(authority.RequestedDeliveryTarget, context.RequestedDeliveryTarget);
         });
+        Assert.All(_resumedAtProbe, resumed => Assert.True(resumed > 0, "A parked call ran before the journal held a Resumed record."));
+        var parks = journal.Committed.OfType<ChildRunEvent.Parked>().Count(evt => evt.RunId == run.Run.RunId);
+        var resumes = journal.Committed.OfType<ChildRunEvent.Resumed>().Count(evt => evt.RunId == run.Run.RunId);
+        Assert.True(resumes <= parks, $"The run has {resumes} Resumed records for {parks} Parked records.");
         await AwaitAssertAsync(() => Assert.All(RequestsOf(journal, run.Run.RunId), request =>
             Assert.Contains(Outputs<ToolInteractionClosed>(), closed => closed.CallId.Value == request.CallId)),
             Deadline, cancellationToken: Cancellation);
@@ -136,8 +159,25 @@ public abstract class ChildParkTestBase(ITestOutputHelper output) : ChildConsent
     private protected static IReadOnlyList<ChildRunEvent.TerminalRecorded> TerminalsOf(AcceptanceFault journal, SubAgentRunId runId)
         => journal.Committed.OfType<ChildRunEvent.TerminalRecorded>().Where(evt => evt.RunId == runId).ToArray();
 
+    // PR 2 writes the requests of a park only inside its Parked record.
     private protected static IReadOnlyList<ToolApprovalRequested> RequestsOf(AcceptanceFault journal, SubAgentRunId runId)
-        => journal.Committed.OfType<ToolApprovalRequested>().Where(evt => evt.SourceChildRunId == runId).ToArray();
+        => journal.Committed.OfType<ChildRunEvent.Parked>().Where(evt => evt.RunId == runId).SelectMany(evt => evt.Requests).ToArray();
+
+    /// <summary>
+    /// The idle timeout passivates the session. The final snapshot and the journal delete run first. A turn that still
+    /// runs, for instance a notice turn, ignores the idle timeout, so the spec sends it again until the session stops.
+    /// </summary>
+    protected async Task PassivateAsync(SessionId id)
+    {
+        var session = await ResolveSessionAsync(id);
+        var stopped = CreateTestProbe();
+        stopped.Watch(session);
+        await AwaitAssertAsync(async () =>
+        {
+            session.Tell(ReceiveTimeout.Instance);
+            await stopped.ExpectTerminatedAsync(session, TimeSpan.FromSeconds(1), cancellationToken: Cancellation);
+        }, Deadline, cancellationToken: Cancellation);
+    }
 
     protected static FunctionCallContent SiblingCall(string callId) => new(callId, SiblingTool.ToolName,
         new Dictionary<string, object?> { ["_rationale"] = "Run beside the consent call." });

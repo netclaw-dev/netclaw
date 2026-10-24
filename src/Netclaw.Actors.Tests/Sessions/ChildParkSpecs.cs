@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -20,11 +21,12 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
-/// PR 1 of durable-child-consent-wait (issue #2572), S1 to S4 of the cut plan. Each row runs one child run of Alice to
-/// its end and then checks the shared run invariants (<see cref="ChildParkTestBase.AssertRunInvariantsAsync"/>).
-/// Each row that parks first checks the park precondition. Today a child waits in memory, so each row fails there
-/// or at the invariant that the park changes.
-/// Source: background-subagent-runs, tool-authorization TA-12, design D1 to D4 and D7.
+/// PR 1 and PR 2 of durable-child-consent-wait (issue #2572), S1 to S4. Each row runs one child run of Alice to its end
+/// and then checks the shared run invariants (<see cref="ChildParkTestBase.AssertRunInvariantsAsync"/>). Each row that
+/// parks first checks the park precondition: the journal holds the Parked record. Before PR 2 the park is actor-local,
+/// so each row fails there or at the invariant that the durable park changes.
+/// Source: background-subagent-runs, tool-authorization TA-12, design D1 to D4 and D7 of durable-child-consent-wait,
+/// and design D1 to D7 of durable-child-park-recovery.
 /// </summary>
 public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase(output)
 {
@@ -131,12 +133,14 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     }
 
     /// <summary>
-    /// S2, refusals. Rows: the journal rejects both requests of a park during a parent turn; the journal rejects one
-    /// write of a two-request park; the agent profile is deleted before the answer; the model call of the resumed child
-    /// fails; the journal rejects the answer. Each run ends failed once, and no parent turn fails.
-    /// Planted bug: a rejected child request fails the parent turn (today), one park writes its requests in more than
-    /// one atomic write, a missing profile resumes with a stale profile, a failed resume records two ends, or a
-    /// rejected answer leaves the run open.
+    /// S2, refusals. Rows: the journal rejects the park during a parent turn; the journal rejects the park of two
+    /// requests; the agent profile is deleted before the answer; the model call of the resumed child fails; the journal
+    /// rejects the answer; the park is above the size cap; the journal rejects the Resumed record; a duplicate answer
+    /// from the stash resumes the run before the rejection of the first answer arrives. Each run ends once, and no
+    /// parent turn fails.
+    /// Planted bug: a rejected park fails the parent turn, one park takes more than one atomic write, a missing profile
+    /// resumes with a stale profile, a failed resume records two ends, a rejected answer leaves the run open, a park
+    /// above the cap shows a prompt, a rejected Resumed record starts the child, or a late rejection ends a resumed run.
     /// </summary>
     [Theory]
     [InlineData("rejected")]
@@ -144,6 +148,9 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     [InlineData("profile")]
     [InlineData("model")]
     [InlineData("answer")]
+    [InlineData("toolarge")]
+    [InlineData("resume-rejected")]
+    [InlineData("late-rejection")]
     public async Task A_refused_park_or_resume_ends_the_run_failed_once(string row)
     {
         // Arrange
@@ -151,7 +158,13 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         var journal = await JournalAsync();
         ScriptParent();
         var twoRequests = row is "rejected" or "atomic";
-        PlanChild($"park-{row}", twoRequests ? [[Probe("p1"), Probe("p2")]] : [[Probe("p1")]]);
+        PlanChild($"park-{row}", row switch
+        {
+            "rejected" or "atomic" => [[Probe("p1"), Probe("p2")]],
+            // The assistant text alone is above the cap (PR 2 design D4).
+            "toolarge" => [[new TextContent(new string('x', ChildRunPark.MaxBytes + 1)), Probe("p1")]],
+            _ => [[Probe("p1")]]
+        });
         var profiles = Host.Services.GetRequiredService<SubAgentDefinitionRegistry>();
         profiles.ReplaceFileProfiles([new SubAgentProfile
         {
@@ -161,8 +174,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         await JoinRecorderAsync(id);
         TaskCompletionSource? aliceTurn = null;
         if (twoRequests)
-            journal.RejectWritesOf(static evt => evt is ToolApprovalRequested { SourceChildRunId: not null },
-                writes: row == "rejected" ? 2 : 1);
+            journal.RejectWritesOf(static evt => evt is ChildRunEvent.Parked);
 
         // Act
         var run = await StartAsync(id, $"park-{row}", row == "profile" ? "child-c" : "child-a",
@@ -175,19 +187,30 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
             // One park writes all its requests in one atomic write, so a rejected write leaves no request of the park.
             Assert.Empty(RequestsOf(journal, run.Run.RunId));
         }
-        else
+        else if (row != "toolarge")
         {
             var prompt = (await AwaitPromptsAsync(run.Run.RunId, 1))[0];
             await AssertParkedAsync(journal, id, run, 1);
-            if (row == "profile")
-                profiles.ReplaceFileProfiles([]);
-            else if (row == "model")
-                Clients.A.PlannedExceptions.Enqueue(new InvalidOperationException("The model is down."));
-            else
+            switch (row)
             {
-                // An open parent turn proves that the child branch of OnPersistRejected runs before the turn failure.
-                aliceTurn = await HoldTurnAsync(journal, id, "Alice keeps a turn open.", AliceSource);
-                journal.RejectWritesOf(static evt => evt is ToolApprovalResolved);
+                case "profile":
+                    profiles.ReplaceFileProfiles([]);
+                    break;
+                case "model":
+                    Clients.A.PlannedExceptions.Enqueue(new InvalidOperationException("The model is down."));
+                    break;
+                case "answer":
+                    // An open parent turn proves that the child branch of OnPersistRejected runs before the turn failure.
+                    aliceTurn = await HoldTurnAsync(journal, id, "Alice keeps a turn open.", AliceSource);
+                    journal.RejectWritesOf(static evt => evt is ToolApprovalResolved);
+                    break;
+                case "resume-rejected":
+                    journal.RejectWritesOf(static evt => evt is ChildRunEvent.Resumed);
+                    break;
+                case "late-rejection":
+                    journal.RejectWritesOf(static evt => evt is ToolApprovalResolved);
+                    journal.HoldNextWriteOf(static evt => evt is ToolApprovalResolved);
+                    break;
             }
             if (row == "answer")
             {
@@ -195,23 +218,39 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
                     Assert.IsType<CommandNack>(await AnswerAsync(id, prompt.CallId, Alice)).Reason);
                 aliceTurn!.TrySetResult();
             }
+            else if (row == "late-rejection")
+                await AnswerTwiceAsync(journal, id, prompt.CallId);
             else
                 AssertAck(await AnswerAsync(id, prompt.CallId, Alice));
         }
 
         // Assert
-        var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: row == "model" ? 1 : 0);
-        Assert.Equal(SubAgentRunOutcome.Failed, terminal.Result.Outcome);
+        var resumes = row is "model" or "late-rejection";
+        var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: resumes ? 1 : 0);
+        Assert.Equal(row == "late-rejection" ? SubAgentRunOutcome.Completed : SubAgentRunOutcome.Failed, terminal.Result.Outcome);
+        if (row == "toolarge")
+        {
+            Assert.Equal(SubAgentOutcomeReason.ParkTooLarge, terminal.Result.OutcomeReason);
+            Assert.Empty(PromptsOf(run.Run.RunId));
+        }
+        if (row == "resume-rejected")
+        {
+            Assert.Equal(SubAgentOutcomeReason.ToolExecutionFailed, terminal.Result.OutcomeReason);
+            Assert.Contains("The parked calls did not run.", terminal.Result.Output, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
-    /// S3, cancel (design D7). Rows: a cancel while the run is parked; a cancel while the batch runs. The run ends
-    /// cancelled with one terminal record, and the parked call never runs. A cancel during the batch leaves no request.
-    /// Planted bug: the cancel of a parked run waits for an actor that does not exist, or a late park shows a prompt.
+    /// S3, cancel (design D7). Rows: a cancel while the run is parked; a cancel while the batch runs; a cancel after a
+    /// restart. The run ends cancelled with one terminal record, and the parked call never runs. A cancel during the
+    /// batch leaves no request. After the restart, a late click gets the "cancelled" text.
+    /// Planted bug: the cancel of a parked run waits for an actor that does not exist, a late park shows a prompt, or a
+    /// restart loses the park that the cancel must end.
     /// </summary>
     [Theory]
     [InlineData("parked")]
     [InlineData("batch")]
+    [InlineData("restart")]
     public async Task A_cancelled_run_ends_cancelled_once(string row)
     {
         // Arrange
@@ -222,13 +261,19 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         await JoinRecorderAsync(id);
         var siblingStarted = row == "batch" ? Sibling.HoldNext() : Task.CompletedTask;
         var run = await StartAsync(id, $"park-{row}");
-        if (row == "parked")
+        ToolInteractionRequest? prompt = null;
+        if (row == "batch")
+            await siblingStarted.WaitAsync(Deadline, Cancellation);
+        else
         {
-            await AwaitPromptsAsync(run.Run.RunId, 1);
+            prompt = (await AwaitPromptsAsync(run.Run.RunId, 1))[0];
             await AssertParkedAsync(journal, id, run, 1);
         }
-        else
-            await siblingStarted.WaitAsync(Deadline, Cancellation);
+        if (row == "restart")
+        {
+            await RestartSessionAsync(id);
+            await JoinRecorderAsync(id);
+        }
 
         // Act
         var session = await ResolveSessionAsync(id);
@@ -240,74 +285,211 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         Assert.IsType<ChildRunCompletion.Cancelled>(terminal.Result.Completion);
         if (row == "batch")
             Assert.Empty(RequestsOf(journal, run.Run.RunId));
+        if (row == "restart")
+        {
+            Assert.IsType<CommandNack>(await AnswerAsync(id, prompt!.CallId, Alice));
+            await AwaitAssertAsync(() => Assert.Contains(Outputs<TextOutput>(),
+                output => output.Text == ChildWithdrawalTexts.For(WithdrawReason.CancelledByParent)), Deadline,
+                cancellationToken: Cancellation);
+        }
     }
 
     /// <summary>
-    /// S4, restart (PR 1 rules; PR 2 changes both rows on purpose). Rows: a restart while parked, after an idle
-    /// timeout that must not passivate the session; an answer during a restart drain, which is recorded and does not
-    /// resume, and then the restart. Both runs end lost, and the parked call never runs.
-    /// Planted bug: an in-memory park lets the session passivate, or an answer during the drain runs the call.
+    /// S4, restart (PR 2: the park is durable in the run record). Rows:
+    /// <list type="bullet">
+    /// <item>parked: the idle timeout passivates the session. After the wake, Alice approves, and the call runs once.</item>
+    /// <item>drain: Alice answers during a restart drain. Recovery resumes the run, and the call runs once.</item>
+    /// <item>passivating: an answer during the restart passivation records nothing (the restart nack, or no reply when
+    /// the session stopped first). The prompt stays open, and the answer after the restart runs the call once.</item>
+    /// <item>compaction: Alice answers p1. The passivation snapshot and its journal delete run. After the wake, Alice
+    /// answers p2, and both calls run once.</item>
+    /// <item>crash-answered: the session stops after the last answer and before the Resumed record. Recovery resumes.</item>
+    /// <item>crash-resumed: the session stops after the Resumed record. Recovery records the run as lost, and the call
+    /// does not run again.</item>
+    /// <item>wrong-user: Bob answers after the restart. He gets the nack, and nothing persists.</item>
+    /// <item>damaged: the stored park has EqualRounds = 7. Recovery completes, and the prompt stays open. The answer
+    /// ends the run with park_damaged, and the call does not run.</item>
+    /// <item>counter: the resumed child parks again after a restart. No prompt of the second park reuses a call ID.</item>
+    /// <item>late-click: after the resume, the end, and a snapshot, a click on the old prompt gets the closed-call reply.
+    /// Nothing runs again.</item>
+    /// </list>
+    /// Planted bug: a restart loses the park, a parked session cannot passivate, an answer during a drain or a crash is
+    /// lost, a snapshot drops the first answer, a crash after Resumed runs the call again, the counter starts again, or a
+    /// damaged park stops the recovery.
     /// </summary>
     [Theory]
     [InlineData("parked")]
     [InlineData("drain")]
-    public async Task A_restart_loses_an_in_memory_park(string row)
+    [InlineData("passivating")]
+    [InlineData("compaction")]
+    [InlineData("crash-answered")]
+    [InlineData("crash-resumed")]
+    [InlineData("wrong-user")]
+    [InlineData("damaged")]
+    [InlineData("counter")]
+    [InlineData("late-click")]
+    public async Task A_restart_keeps_a_durable_park(string row)
     {
         // Arrange
         var id = new SessionId($"park/restart-{row}");
         var journal = await JournalAsync();
         ScriptParent();
-        PlanChild($"park-{row}", [[Probe("p1")]]);
+        PlanChild($"park-{row}", row switch
+        {
+            "compaction" => [[Probe("p1"), Probe("p2")]],
+            "counter" => [[Probe("p1")], [Probe("p2")]],
+            _ => [[Probe("p1")]]
+        });
+        if (row == "damaged")
+            journal.RewriteNextStored(static evt => evt is ChildRunEvent.Parked parked ? WithEqualRounds(parked, 7) : null);
         await JoinRecorderAsync(id);
         var run = await StartAsync(id, $"park-{row}");
-        var prompt = (await AwaitPromptsAsync(run.Run.RunId, 1))[0];
-        await AssertParkedAsync(journal, id, run, 1);
+        var prompts = await AwaitPromptsAsync(run.Run.RunId, row == "compaction" ? 2 : 1);
+        await AssertParkedAsync(journal, id, run, prompts.Length);
         var session = await ResolveSessionAsync(id);
+        var stopped = CreateTestProbe();
+        stopped.Watch(session);
 
-        // Act
-        if (row == "parked")
+        // Act: the stop of the session
+        switch (row)
         {
-            session.Tell(ReceiveTimeout.Instance);
-            await BarrierAsync(id, run);
-            Assert.NotEqual("Passivating", await PhaseOfAsync(id));
-            await RestartSessionAsync(id);
+            case "parked":
+                await PassivateAsync(id);
+                break;
+            case "drain":
+                var childCalls = Clients.A.CallCount;
+                var turn = await HoldTurnAsync(journal, id, "Alice keeps the drain waiting.", AliceSource);
+                var drain = AskManagerAsync<DaemonRestartPrepared>(new PrepareForDaemonRestart(id, "config-reload"));
+                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await BarrierAsync(id, run);
+                Assert.Empty(ApprovalTool.Contexts);
+                Assert.Equal(childCalls, Clients.A.CallCount);
+                turn.TrySetResult();
+                await drain;
+                await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
+                break;
+            case "passivating":
+                // The session is idle. Both messages go straight to the session in order. The answer meets the restart
+                // passivation and gets the restart nack, or it meets the stopped session and gets no reply. A restart
+                // passivation with no job and no observer ends in one step, so this fixture gives no reply.
+                await SettleNoticesAsync(journal, id);
+                var replies = CreateTestProbe();
+                var restart = session.Ask<DaemonRestartPrepared>(new PrepareForDaemonRestart(id, "config-reload"), Deadline, Cancellation);
+                session.Tell(ApproveOnce(id, prompts[0].CallId, Alice), replies.Ref);
+                await restart;
+                await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
+                Assert.Empty(journal.Committed.OfType<ToolApprovalResolved>());
+                if (replies.HasMessages)
+                    Assert.Equal(SessionIngressGate.RestartInProgressMessage,
+                        Assert.IsType<CommandNack>(replies.ReceiveOne(TimeSpan.Zero, Cancellation)).Reason);
+                break;
+            case "compaction":
+                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await PassivateAsync(id);
+                break;
+            case "crash-answered" or "crash-resumed":
+                // The journal fails the write, so Akka stops the session at that point, as a crash does.
+                journal.FailMatchingWrites = true;
+                journal.RejectWritesOf(row == "crash-answered"
+                    ? static evt => evt is ChildRunEvent.Resumed
+                    : static evt => evt is ChildRunEvent.Checkpointed);
+                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
+                break;
+            case "late-click":
+                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await AwaitAssertAsync(() => Assert.NotEmpty(TerminalsOf(journal, run.Run.RunId)), Deadline,
+                    cancellationToken: Cancellation);
+                await SettleNoticesAsync(journal, id);
+                await PassivateAsync(id);
+                break;
+            default:
+                await RestartSessionAsync(id);
+                break;
         }
-        else
-        {
-            var childCalls = Clients.A.CallCount;
-            var turn = await HoldTurnAsync(journal, id, "Alice keeps the drain waiting.", AliceSource);
-            var drain = AskManagerAsync<DaemonRestartPrepared>(new PrepareForDaemonRestart(id, "config-reload"));
-            AssertAck(await AnswerAsync(id, prompt.CallId, Alice));
-            await BarrierAsync(id, run);
-            Assert.Empty(ApprovalTool.Contexts);
-            Assert.Equal(childCalls, Clients.A.CallCount);
-            turn.TrySetResult();
-            // The turn ended, so the drain needs no model grace timer. The reply wait has the spec deadline. The next
-            // join must reach a new session, so the spec waits until the drained session stops.
-            var stopped = CreateTestProbe();
-            stopped.Watch(session);
-            await drain;
-            await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
-        }
-
         await JoinRecorderAsync(id);
 
+        // Act: after the restart
+        var answers = journal.Committed.OfType<ToolApprovalResolved>().Count();
+        switch (row)
+        {
+            case "parked" or "passivating" or "wrong-user" or "damaged":
+                if (row == "wrong-user")
+                {
+                    Assert.Equal(ApprovalNackReasons.WrongRequester,
+                        Assert.IsType<CommandNack>(await AnswerAsync(id, prompts[0].CallId, Bob)).Reason);
+                    Assert.Equal(answers, journal.Committed.OfType<ToolApprovalResolved>().Count());
+                }
+                if (row == "damaged")
+                    Assert.Empty(TerminalsOf(journal, run.Run.RunId));
+                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                break;
+            case "compaction":
+                AssertAck(await AnswerAsync(id, prompts[1].CallId, Alice));
+                break;
+            case "counter":
+                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await AwaitAssertAsync(() => Assert.Equal(2, RequestsOf(journal, run.Run.RunId).Count), Deadline,
+                    cancellationToken: Cancellation);
+                var callIds = RequestsOf(journal, run.Run.RunId).Select(static request => request.CallId).ToArray();
+                Assert.Equal(callIds.Length, callIds.Distinct(StringComparer.Ordinal).Count());
+                AssertAck(await AnswerAsync(id, new ToolCallId(callIds[1]), Alice));
+                break;
+            case "late-click":
+                Assert.Equal(ApprovalNackReasons.PromptExpired,
+                    Assert.IsType<CommandNack>(await AnswerAsync(id, prompts[0].CallId, Alice)).Reason);
+                Assert.Equal(answers, journal.Committed.OfType<ToolApprovalResolved>().Count());
+                break;
+        }
+
         // Assert
-        var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: 0);
-        Assert.True(terminal.Lost);
-        Assert.IsType<CommandNack>(await AnswerAsync(id, prompt.CallId, Alice));
+        var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: row switch
+        {
+            "damaged" => 0,
+            "compaction" or "counter" => 2,
+            _ => 1
+        });
+        switch (row)
+        {
+            case "crash-resumed":
+                Assert.True(terminal.Lost);
+                break;
+            case "damaged":
+                Assert.Equal(SubAgentOutcomeReason.ParkDamaged, terminal.Result.OutcomeReason);
+                break;
+            default:
+                Assert.True(terminal.Result.Success, terminal.Result.Output);
+                break;
+        }
     }
 
-    // Holds the next parent model request that carries the text, so a turn stays open. The caller releases it.
-    private async Task<TaskCompletionSource> HoldTurnAsync(AcceptanceFault journal, SessionId id, string text, MessageSource source)
+    // Two answers of Alice for one prompt. The journal holds the write of the first answer. The second answer goes
+    // straight into the session mailbox before the journal rejects the first, so the session takes it first.
+    private async Task AnswerTwiceAsync(AcceptanceFault journal, SessionId id, ToolCallId callId)
     {
-        await SettleNoticesAsync(journal, id);
-        var hold = NewGate();
-        var entered = ParentGate.Arm(request => FreshUserTexts(request).Contains(text), hold);
-        await SendAsync(id, text, source);
-        await entered.WaitAsync(Deadline, Cancellation);
-        return hold;
+        var first = AnswerAsync(id, callId, Alice);
+        await journal.HoldEntered.Task.WaitAsync(Deadline, Cancellation);
+        var session = await ResolveSessionAsync(id);
+        var second = session.Ask<ISessionResponse>(ApproveOnce(id, callId, Alice), Deadline, Cancellation);
+        journal.ReleaseHold.TrySetResult();
+        Assert.Equal(ApprovalNackReasons.PersistFailed, Assert.IsType<CommandNack>(await first).Reason);
+        AssertAck(await second);
     }
+
+    // A park whose stored loop guard has an equal-round count that no live loop guard can reach (PR 2 design D7).
+    private static ChildRunEvent.Parked WithEqualRounds(ChildRunEvent.Parked parked, int equalRounds) => parked with
+    {
+        Park = parked.Park with
+        {
+            LoopGuard = parked.Park.LoopGuard with
+            {
+                Episodes = new Dictionary<ToolRecurrenceKey, ToolRecurrenceEpisode>
+                {
+                    [new ToolRecurrenceKey(new ToolName("authority_probe"), "planted")] = new("ok", equalRounds, false, false)
+                }
+            }
+        }
+    };
 
     // The parent declares a project directory with a "cd:{path}" message, and the session settles.
     private async Task DeclareProjectAsync(AcceptanceFault journal, SessionId id, string path)
