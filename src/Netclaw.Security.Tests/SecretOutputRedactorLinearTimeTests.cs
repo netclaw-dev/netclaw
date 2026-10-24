@@ -145,27 +145,45 @@ public sealed class RedactorTimingCollection
 }
 
 /// <summary>
-/// Times Redact on adversarial input against a budget that scales with the current speed of
-/// the machine. A fixed 4 s budget failed linear code on a busy CI runner.
+/// Measures the CPU time of Redact on adversarial input against a budget that scales with the
+/// speed of the machine. Wall-clock time is not a valid measure on a shared CI runner, because
+/// other processes take the cores. On one Windows run, the benign baseline took 26 ms. On a
+/// machine of that speed, "dense header lines" needs about 0.75 s of CPU time, but that run did
+/// not finish in 5 s of wall-clock time.
 /// </summary>
 internal static class RedactorTimingBudget
 {
-    // The baseline is Redact on benign text of the same length, on the same machine, at the same
-    // time. The benign line has no key=value text, so it stays on the cheap path (86 ms for 4 MB).
-    // Measured in baselines: the slowest linear shape needs 13 ("repeat Password=a", 1.1 s).
-    // The known '+' regression of JsonSecretHeaderRegex needs about 80 to 266 (7 s to 23 s).
-    // The factor 36 is near the geometric middle, so each side has more than 2 times margin.
-    // The 4 s floor is above every linear shape and below the regression.
-    private const double BaselineFactor = 36;
+    // The baseline is the CPU time of Redact on benign text of the same length, on the same
+    // machine. The benign line has no key=value text, so it stays on the cheap path (about 30 ms
+    // for 4 MB). Measured in baselines of CPU time on an idle machine, the slowest linear shapes
+    // need about 35 ("repeat \"token\":\"", "dense option matches": 0.9 s to 1.0 s). The known
+    // '+' regression of JsonSecretHeaderRegex needs about 1000 (30 s). The factor 100 leaves
+    // about 3 times margin above the linear shapes and 10 times margin below the regression. The
+    // 4 s floor is above every linear shape and below the regression.
+    private const double BaselineFactor = 100;
     private static readonly TimeSpan Floor = TimeSpan.FromSeconds(4);
     private const string BenignLine = "INFO ok\n";
+
+    // Windows updates process CPU time once for each clock tick (about 16 ms). One benign run is
+    // only a few ticks, so the baseline is the mean of several runs.
+    private const int BaselineRuns = 5;
+
+    // The wait checks the CPU time at this interval. It stops when the worker finishes or when
+    // the worker uses all of its CPU budget.
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromMilliseconds(250);
+
+    // A worker that cannot get a core for this long is a failure too. This limit is for a stalled
+    // runner, not for the redactor.
+    private static readonly TimeSpan WallLimit = TimeSpan.FromMinutes(2);
 
     public static string AssertFinishesWithinBudget(string shape, string input)
     {
         var baseline = MeasureBaseline(input.Length);
         var budget = TimeSpan.FromTicks(Math.Max(Floor.Ticks, (long)(baseline.Ticks * BaselineFactor)));
 
-        // A quadratic pattern cannot be interrupted, so run it on a background thread and stop waiting.
+        // RedactorTimingCollection runs alone, so the CPU time of this process is the CPU time of
+        // the worker, its garbage collections, and the JIT.
+        var cpuStart = Environment.CpuUsage.TotalTime;
         var stopwatch = Stopwatch.StartNew();
         string? redacted = null;
         Exception? failure = null;
@@ -183,16 +201,26 @@ internal static class RedactorTimingBudget
             }
         }) { IsBackground = true };
         worker.Start();
-        var finished = worker.Join(budget);
+
+        // A quadratic pattern cannot be interrupted, so stop the wait when it has used its budget.
+        var finished = false;
+        var cpu = TimeSpan.Zero;
+        while (!finished && cpu <= budget && stopwatch.Elapsed < WallLimit)
+        {
+            finished = worker.Join(CheckInterval);
+            cpu = Environment.CpuUsage.TotalTime - cpuStart;
+        }
+
         var elapsed = stopwatch.Elapsed;
 
         // Limit the cleanup wait. A failed guard can leave its worker active until the test process ends.
         if (!finished)
             worker.Join(TimeSpan.FromSeconds(60));
 
-        Assert.True(finished,
-            $"{shape}: {input.Length / 1024 / 1024} MB did not finish within the budget. "
-            + $"elapsed {elapsed.TotalSeconds:F2} s, baseline {baseline.TotalSeconds:F3} s, budget {budget.TotalSeconds:F2} s");
+        Assert.True(finished && cpu <= budget,
+            $"{shape}: {input.Length / (1024.0 * 1024.0):F1} MB did not finish within the CPU budget. "
+            + $"cpu {cpu.TotalSeconds:F2} s, budget {budget.TotalSeconds:F2} s, baseline {baseline.TotalSeconds:F3} s, "
+            + $"elapsed {elapsed.TotalSeconds:F2} s, finished {finished}");
         Assert.Null(failure);
         return Assert.IsType<string>(redacted);
     }
@@ -200,15 +228,10 @@ internal static class RedactorTimingBudget
     private static TimeSpan MeasureBaseline(int length)
     {
         var benign = string.Concat(Enumerable.Repeat(BenignLine, length / BenignLine.Length + 1))[..length];
-        var fastest = TimeSpan.MaxValue;
-        for (var run = 0; run < 3; run++)
-        {
-            var stopwatch = Stopwatch.StartNew();
+        var cpuStart = Environment.CpuUsage.TotalTime;
+        for (var run = 0; run < BaselineRuns; run++)
             SecretOutputRedactor.Redact(benign);
-            if (stopwatch.Elapsed < fastest)
-                fastest = stopwatch.Elapsed;
-        }
 
-        return fastest;
+        return (Environment.CpuUsage.TotalTime - cpuStart) / BaselineRuns;
     }
 }
