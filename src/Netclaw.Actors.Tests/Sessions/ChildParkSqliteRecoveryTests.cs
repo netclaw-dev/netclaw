@@ -63,6 +63,8 @@ public sealed class ChildParkSqliteRecoveryTests(ITestOutputHelper output) : Chi
         await RestartSessionAsync(id);
         await JoinRecorderAsync(id);
         await PassivateAsync(id);
+        await AwaitAssertAsync(async () => Assert.True(await LatestSnapshotSequenceNrAsync(id) > 0,
+            "The passivation must save a snapshot."), Deadline, cancellationToken: Cancellation);
         await JoinRecorderAsync(id);
         AssertAck(await AnswerAsync(id, prompt.CallId, Alice));
 

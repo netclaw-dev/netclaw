@@ -242,15 +242,18 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
 
     /// <summary>
     /// S3, cancel (design D7). Rows: a cancel while the run is parked; a cancel while the batch runs; a cancel after a
-    /// restart. The run ends cancelled with one terminal record, and the parked call never runs. A cancel during the
-    /// batch leaves no request. After the restart, a late click gets the "cancelled" text.
-    /// Planted bug: the cancel of a parked run waits for an actor that does not exist, a late park shows a prompt, or a
-    /// restart loses the park that the cancel must end.
+    /// restart; a cancel that waits in the stash while the journal rejects the park. The run ends cancelled with one
+    /// terminal record, and the parked call never runs. A cancel during the batch leaves no request. After the restart, a
+    /// late click gets the "cancelled" text.
+    /// Planted bug: the cancel of a parked run waits for an actor that does not exist, a late park shows a prompt, a
+    /// restart loses the park that the cancel must end, or a cancel after a rejected park leaves the run cancelling with
+    /// no actor.
     /// </summary>
     [Theory]
     [InlineData("parked")]
     [InlineData("batch")]
     [InlineData("restart")]
+    [InlineData("park-rejected")]
     public async Task A_cancelled_run_ends_cancelled_once(string row)
     {
         // Arrange
@@ -260,10 +263,18 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         PlanChild($"park-{row}", [[Probe("p1"), SiblingCall("s1")]]);
         await JoinRecorderAsync(id);
         var siblingStarted = row == "batch" ? Sibling.HoldNext() : Task.CompletedTask;
+        if (row == "park-rejected")
+        {
+            // The journal holds the park write, and then rejects it.
+            journal.RejectWritesOf(static evt => evt is ChildRunEvent.Parked);
+            journal.HoldNextWriteOf(static evt => evt is ChildRunEvent.Parked);
+        }
         var run = await StartAsync(id, $"park-{row}");
         ToolInteractionRequest? prompt = null;
         if (row == "batch")
             await siblingStarted.WaitAsync(Deadline, Cancellation);
+        else if (row == "park-rejected")
+            await journal.HoldEntered.Task.WaitAsync(Deadline, Cancellation);
         else
         {
             prompt = (await AwaitPromptsAsync(run.Run.RunId, 1))[0];
@@ -275,9 +286,11 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
             await JoinRecorderAsync(id);
         }
 
-        // Act
+        // Act: the cancel goes into the session mailbox before the journal answers a held write.
         var session = await ResolveSessionAsync(id);
-        await session.Ask<string>(new ChildRunControl(run.Run.RunId, true, run.Run.OriginalContext), Deadline, Cancellation);
+        var cancel = session.Ask<string>(new ChildRunControl(run.Run.RunId, true, run.Run.OriginalContext), Deadline, Cancellation);
+        journal.ReleaseHold.TrySetResult();
+        await cancel;
         Sibling.Release();
 
         // Assert
@@ -312,6 +325,8 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     /// <item>counter: the resumed child parks again after a restart. No prompt of the second park reuses a call ID.</item>
     /// <item>late-click: after the resume, the end, and a snapshot, a click on the old prompt gets the closed-call reply.
     /// Nothing runs again.</item>
+    /// <item>wake: the session passivates, and Alice's click itself wakes it. The click waits in the stash during the
+    /// recovery and runs before the recovery of the child runs. The child resumes once and is not recorded as lost.</item>
     /// </list>
     /// Planted bug: a restart loses the park, a parked session cannot passivate, an answer during a drain or a crash is
     /// lost, a snapshot drops the first answer, a crash after Resumed runs the call again, the counter starts again, or a
@@ -328,6 +343,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     [InlineData("damaged")]
     [InlineData("counter")]
     [InlineData("late-click")]
+    [InlineData("wake")]
     public async Task A_restart_keeps_a_durable_park(string row)
     {
         // Arrange
@@ -338,6 +354,8 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         {
             "compaction" => [[Probe("p1"), Probe("p2")]],
             "counter" => [[Probe("p1")], [Probe("p2")]],
+            // The resumed child runs a second round with a tool that the row holds.
+            "crash-resumed" => [[Probe("p1")], [SiblingCall("s2")]],
             _ => [[Probe("p1")]]
         });
         if (row == "damaged")
@@ -353,7 +371,7 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
         // Act: the stop of the session
         switch (row)
         {
-            case "parked":
+            case "parked" or "wake":
                 await PassivateAsync(id);
                 break;
             case "drain":
@@ -386,14 +404,29 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
             case "compaction":
                 AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
                 await PassivateAsync(id);
+                await AwaitAssertAsync(async () => Assert.True(await LatestSnapshotSequenceNrAsync(id) > 0,
+                    "The passivation must save a snapshot."), Deadline, cancellationToken: Cancellation);
                 break;
-            case "crash-answered" or "crash-resumed":
-                // The journal fails the write, so Akka stops the session at that point, as a crash does.
+            case "crash-answered":
+                // The journal fails the write, so Akka stops the session at that point, as a crash does. The answer
+                // writes the closing notice and the Resumed record in one batch, so no notice turn starts.
+                await SettleNoticesAsync(journal, id);
                 journal.FailMatchingWrites = true;
-                journal.RejectWritesOf(row == "crash-answered"
-                    ? static evt => evt is ChildRunEvent.Resumed
-                    : static evt => evt is ChildRunEvent.Checkpointed);
+                journal.RejectWritesOf(static evt => evt is ChildRunEvent.Resumed);
                 AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
+                break;
+            case "crash-resumed":
+                // The resumed child holds its second-round tool until the closing notice turn ends. A persist failure
+                // while a turn runs fails that turn, and the row must not test that path. Then the checkpoint write
+                // of the second round fails, so Akka stops the session after Resumed, as a crash does.
+                var secondRound = Sibling.HoldNext();
+                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await secondRound.WaitAsync(Deadline, Cancellation);
+                await SettleNoticesAsync(journal, id);
+                journal.FailMatchingWrites = true;
+                journal.RejectWritesOf(static evt => evt is ChildRunEvent.Checkpointed);
+                Sibling.Release();
                 await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
                 break;
             case "late-click":
@@ -407,7 +440,8 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
                 await RestartSessionAsync(id);
                 break;
         }
-        await JoinRecorderAsync(id);
+        if (row != "wake")
+            await JoinRecorderAsync(id);
 
         // Act: after the restart
         var answers = journal.Committed.OfType<ToolApprovalResolved>().Count();
@@ -434,6 +468,12 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
                 var callIds = RequestsOf(journal, run.Run.RunId).Select(static request => request.CallId).ToArray();
                 Assert.Equal(callIds.Length, callIds.Distinct(StringComparer.Ordinal).Count());
                 AssertAck(await AnswerAsync(id, new ToolCallId(callIds[1]), Alice));
+                break;
+            case "wake":
+                // The join and the click reach the new session in this order, and both wait in its stash.
+                var joined = JoinRecorderAsync(id);
+                AssertAck(await AnswerAsync(id, prompts[0].CallId, Alice));
+                await joined;
                 break;
             case "late-click":
                 Assert.Equal(ApprovalNackReasons.PromptExpired,
