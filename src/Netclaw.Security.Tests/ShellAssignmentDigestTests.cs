@@ -291,41 +291,29 @@ public sealed class ShellAssignmentDigestTests
         PwshDialect dialect,
         string executable)
     {
-        var matcher = new ShellApprovalMatcher(
-            ShellExecutionEnvironment.CreatePowerShell(executable, dialect));
-
-        var candidate = ExtractSingle(
-            matcher,
-            "$mode='fast'; inspect item",
-            "C:/work");
-
-        Assert.Equal(
-            "sha256:9f7f62fe7f1f23b11f416a1f3e7babaed28073eb2c50e926291f808c87267fd2",
-            Assert.IsType<ApprovalAssignmentDigest>(
-                candidate.AssignmentDigest).Value);
-    }
-
-    [Theory]
-    [InlineData(PwshDialect.PowerShell7, "C:\\PowerShell\\7\\pwsh.exe")]
-    [InlineData(
-        PwshDialect.WindowsPowerShell51,
-        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")]
-    public void PowerShell_bounded_assignment_has_matching_authored_and_effective_values(
-        PwshDialect dialect,
-        string executable)
-    {
         var environment = ShellExecutionEnvironment.CreatePowerShell(executable, dialect);
-        var analysis = new ShellCommandAnalyzer(environment)
+        var shellAnalysis = new ShellCommandAnalyzer(environment)
             .Analyze("$mode='fast'; inspect item", "C:/work");
-
-        Assert.True(analysis.IsResolved);
-        var occurrence = Assert.Single(analysis.Commands, static command =>
+        Assert.True(shellAnalysis.IsResolved);
+        var occurrence = Assert.Single(shellAnalysis.Commands, static command =>
             command.Clause.Verb.Tokens.FirstOrDefault() == "inspect");
         var assignment = Assert.Single(occurrence.Assignments);
         var authored = Assert.IsType<ShellValueDomain.Exact>(assignment.AuthoredValue);
         var effective = Assert.IsType<ShellValueDomain.Exact>(assignment.EffectiveValue);
         Assert.Equal(authored.Value, effective.Value);
         Assert.Equal("fast", effective.Value);
+
+        var invocation = new ShellApprovalMatcher(environment).AnalyzeInvocation(
+            ShellToolName,
+            Args("$mode='fast'; inspect item", "C:/work"),
+            shellAnalysis);
+        Assert.False(invocation.IsMessy, invocation.DisplayText);
+        var candidate = Assert.Single(invocation.Candidates);
+
+        Assert.Equal(
+            "sha256:9f7f62fe7f1f23b11f416a1f3e7babaed28073eb2c50e926291f808c87267fd2",
+            Assert.IsType<ApprovalAssignmentDigest>(
+                candidate.AssignmentDigest).Value);
     }
 
     [Fact]

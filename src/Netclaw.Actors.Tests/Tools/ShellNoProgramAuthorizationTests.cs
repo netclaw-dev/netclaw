@@ -247,21 +247,16 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
     {
         await using var scope = await CreateHarnessAsync(attended: true);
         var harness = scope.Harness;
-        var temporary = await harness.EvaluateShellAsync(
-            "cd /tmp && gh api repos/example/project > /tmp/result.log",
-            Ct);
         var command = Expand(
             harness,
             "cd /tmp && gh api repos/example/project > /tmp/result.log && while false; do :; done > {C}/secrets.json");
-        var checksBeforeProtectedCall = harness.ApprovalService.CheckCount;
 
         var observed = await harness.EvaluateShellAsync(command, Ct);
 
-        Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, temporary.Outcome);
         Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
         Assert.Contains(observed.DenyReason, new[] { "shell_path_protected", "shell_references_protected_path" });
         Assert.Null(observed.AgentCorrection);
-        Assert.Equal(checksBeforeProtectedCall, harness.ApprovalService.CheckCount);
+        Assert.Equal(0, observed.ApprovalChecks);
     }
 
     // A file-read grant covers the input operation but does not cover `cat`.
@@ -287,36 +282,18 @@ public sealed class ShellNoProgramAuthorizationTests(ShellApprovalMatrixFixture 
         Assert.Equal(["cat"], observed.Prompt!.CandidateVerbs);
     }
 
-    // Shell Auto must not bypass an outer file operation in Approval mode.
+    // Shell Auto must not bypass an outer file operation with a body command or no command.
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
-    public async Task Shell_auto_prompts_for_a_compound_file_operation()
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [InlineData("while read value; do cat; done > result.txt")]
+    [InlineData("for item in one; do value=1; done > result.txt")]
+    public async Task Shell_auto_prompts_for_a_compound_file_operation(string command)
     {
         await using var scope = await CreateHarnessAsync(
             attended: true,
             fileToolModes: new() { ["file_write"] = ToolApprovalMode.Approval },
             shellApprovalMode: ToolApprovalMode.Auto);
         var harness = scope.Harness;
-        const string command = "while read value; do cat; done > result.txt";
-
-        var observed = await harness.EvaluateShellAsync(command, Ct);
-
-        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
-        Assert.Contains(command, observed.Prompt!.CandidateVerbs);
-        Assert.Contains(Expand(harness, "write {P}/result.txt"), observed.Prompt.CandidateVerbs);
-    }
-
-    // Shell Auto and the no-command rule must both defer to an outer file operation.
-    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
-    public async Task Shell_auto_prompts_for_a_compound_file_operation_with_no_body_command()
-    {
-        await using var scope = await CreateHarnessAsync(
-            attended: true,
-            fileToolModes: new() { ["file_write"] = ToolApprovalMode.Approval },
-            shellApprovalMode: ToolApprovalMode.Auto);
-        var harness = scope.Harness;
-        const string command = "for item in one; do value=1; done > result.txt";
 
         var observed = await harness.EvaluateShellAsync(command, Ct);
 

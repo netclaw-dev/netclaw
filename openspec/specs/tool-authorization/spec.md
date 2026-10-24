@@ -1846,30 +1846,21 @@ A shell `Once` answer SHALL cover a retry only when the exact structured `Comman
 For a recovered prompt, Netclaw SHALL derive source identity from the original assistant tool call in session history. If that call has no valid structured shell command, Netclaw SHALL NOT dispatch the retry with the old `Once` answer.
 Netclaw SHALL stop recovery when a call ID is ambiguous or the original canonical tool name does not match the recovered approval.
 
-#### Scenario: The same shell source retries once
-- **GIVEN** an operator approved a shell call with `Once`
-- **WHEN** Netclaw retries the exact same structured `Command` value
-- **THEN** the retry passes the one-time consent check
-- **AND** the consent does not cover a later call
+#### Scenario: Exact source decides the one-time retry
+- **GIVEN** an operator approved `git status # source-A` with `Once`
+- **WHEN** Netclaw checks a retry with the same approval candidates
+- **THEN** the structured source decides the result:
 
-#### Scenario: A changed source with the same candidates needs consent
-- **GIVEN** an operator approved a shell call with `Once`
-- **AND** a different Bash source produces the same approval candidates
-- **WHEN** Netclaw checks the changed source
-- **THEN** Netclaw requests consent again
+| Retry source | Result |
+|---|---|
+| `git status # source-A` | Pass the one-time consent check; consume the consent |
+| `git status # source-a` | Request consent again |
 
-#### Scenario: Recovery lacks the original shell command
-- **GIVEN** a recovered approval answer for a shell call
-- **AND** the original assistant tool call has missing or malformed command arguments
+#### Scenario: Invalid history prevents recovered consent
+- **GIVEN** a recovered shell approval with invalid source or call identity
+- **AND** history lacks valid command arguments, duplicates a call ID, or names a different canonical tool
 - **WHEN** Netclaw plans the retry
-- **THEN** Netclaw does not dispatch the shell call with the old one-time consent
-- **AND** Netclaw does not use prompt display text as a fallback
-
-#### Scenario: Recovery has ambiguous call identity
-- **GIVEN** a recovered shell approval
-- **AND** session history has duplicate call IDs or a different canonical tool name
-- **WHEN** Netclaw plans the retry
-- **THEN** Netclaw abandons the retry without using the old one-time consent
+- **THEN** Netclaw abandons it without using the old consent or prompt display text
 
 ### Requirement: TA-18 Bash compound redirects retain independent file authority
 
@@ -1907,20 +1898,16 @@ Netclaw SHALL check each redirect again before process start. A changed path or 
 - **WHEN** a compound command uses the matching input or output redirect
 - **THEN** authorization returns `Denied` with reason `shell_redirect_file_tool_denied`
 
-#### Scenario: A file-tool grant does not cover a body command
+#### Scenario: Command and file grants retain separate authority
 
-- **GIVEN** an interactive Personal session with a stored grant for the file tool but no grant for the body command
-- **WHEN** the file tool has mode `Approval` and the compound command redirects a file
-- **THEN** the file-tool grant covers only the redirect operation
-- **AND** Netclaw requests consent for the body command
+- **GIVEN** an interactive Personal session with a file tool in mode `Approval`
+- **WHEN** a proved compound redirect has only the grant in the table
+- **THEN** Netclaw requests the separate consent shown:
 
-#### Scenario: A legacy exact shell grant does not cover a file operation
-
-- **GIVEN** `file_write` has mode `Approval` and the store has a legacy exact shell grant for the full compound source
-- **AND** the store has no grant for the file operation
-- **WHEN** the model calls `shell_execute` with a proved compound output redirect
-- **THEN** Netclaw requests consent for the file operation
-- **AND** the shell grant does not cover the redirect
+| Stored grant | Consent still required |
+|---|---|
+| File-tool grant for the redirect | Body command |
+| Legacy exact shell grant for the full source | File operation |
 
 #### Scenario: Every redirect gets an independent file check
 
@@ -1943,21 +1930,18 @@ Netclaw SHALL check each redirect again before process start. A changed path or 
 - **THEN** Netclaw checks `input.txt` with file-read path rules and the file-tool mode
 - **AND** Netclaw does not allow the call only because it found no body command
 
-#### Scenario: Shell Auto does not skip file-operation consent for a compound
+#### Scenario: Shell Auto retains file consent with or without a body command
 
 - **GIVEN** the shell tool has mode `Auto` and `file_write` has mode `Approval`
 - **AND** no stored `file_write` grant covers the compound output target
 - **WHEN** the model calls `shell_execute` with a supported compound output redirect
 - **THEN** Netclaw requests one-time consent for the full source and the write operation
-- **AND** shell mode `Auto` does not skip the file-operation candidate
+- **AND** neither shell `Auto` nor the no-command rule skips the file-operation candidate
 
-#### Scenario: Shell Auto does not skip file consent for a compound with no body command
-
-- **GIVEN** the shell tool has mode `Auto` and `file_write` has mode `Approval`
-- **AND** no stored `file_write` grant covers the compound output target
-- **WHEN** the model calls `shell_execute` with a compound that has no body command and an output redirect
-- **THEN** Netclaw requests one-time consent for the full source and the write operation
-- **AND** the no-command rule does not skip the file-operation candidate
+| Compound source | Body command |
+|---|---|
+| `while read value; do cat; done > result.txt` | `cat` |
+| `for item in one; do value=1; done > result.txt` | None |
 
 #### Scenario: A command substitution in an outer target stays unresolved
 

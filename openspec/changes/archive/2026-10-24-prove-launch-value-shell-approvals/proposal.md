@@ -35,7 +35,7 @@ None.
 
 The affected owners are shell analysis, assignment digest creation, grant diagnostics, and their existing tests.
 The study starts from `aecbe73e1714e9acc2d68612e0cfa0d3abc4f33d` with ShellSyntaxTree `0.4.0-beta.24`.
-The canonical execution plan is [plan.html](../../../../.systematize/plans/shell-approval-proof/plan.html).
+The implementation and validation summary is in [PR 2665](https://github.com/netclaw-dev/netclaw/pull/2665).
 
 ### Security and operational impact
 

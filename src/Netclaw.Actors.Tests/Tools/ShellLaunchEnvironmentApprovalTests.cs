@@ -80,26 +80,16 @@ public sealed class ShellLaunchEnvironmentApprovalTests(ShellApprovalMatrixFixtu
 
     [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "Launch facts apply to the POSIX Bash host.")]
-    public async Task Launch_assignment_does_not_use_an_unqualified_program_grant()
+    public async Task Launch_assignment_needs_a_qualified_grant_for_the_same_effect()
     {
         await using var harness = await CreateHarnessAsync(
             Approvals.PersistentAnywhere("export", "dotnet"));
-
-        var observed = await harness.EvaluateShellAsync(
-            "export DOTNET_ROOT=$HOME/.dotnet; dotnet --version",
-            Ct);
-
-        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
-        Assert.Contains(observed.Prompt!.CandidateVerbs, static verb =>
-            verb.Contains("dotnet", StringComparison.Ordinal));
-    }
-
-    [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "Launch facts apply to the POSIX Bash host.")]
-    public async Task Assignment_qualified_grant_covers_only_the_same_launch_effect()
-    {
-        await using var harness = await CreateHarnessAsync(Approvals.None);
         const string command = "export DOTNET_ROOT=$HOME/.dotnet; dotnet --version";
+        var launchPrompt = await harness.EvaluateShellAsync(command, Ct);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, launchPrompt.Outcome);
+        Assert.Contains(launchPrompt.Prompt!.CandidateVerbs, static verb =>
+            verb.Contains("dotnet", StringComparison.Ordinal));
+
         var home = Assert.IsType<string>(ShellExecutionEnvironment.CreateBash(
             ShellPlatform.Linux,
             new Version(5, 2)).HomeDirectory);
