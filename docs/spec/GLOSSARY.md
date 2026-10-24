@@ -109,15 +109,16 @@ Added by `child-approval-events-and-parent-pause` (#2583).
 
 ### Parked child run
 
-A parked child run is a child run that waits for consent with no actor. Its
-conversation and its parked calls are in its child journal, and the parent run
-record says that it is parked. The parent snapshot keeps its open requests.
-When every parked request has an answer, the session recreates the child from
-its journal, under the authority of the run record, and runs only the parked
-calls, each once. Planned in PR 3 of `child-approval-events-and-parent-pause`
-(#2572). This part is not on `dev` yet.
+A parked child run is a child run that waits for consent with no actor. The
+parent run record holds its park (the conversation, the loop guard, the working
+directories, the file activity, and the skill overlay), its consent requests,
+and their answers, so the session journal and the snapshot keep it across a
+restart and passivation. When every parked request has an answer, the session
+records the resume and starts a new child from the park, under the authority of
+the run record, and runs only the parked calls, each once
+(`durable-child-consent-wait` and `durable-child-park-recovery`, #2572).
 
-**Code anchors (planned):** `ChildRunLifecycle.Parked`, `ChildRunEvent.Parked`
+**Code anchors:** `ChildRunLifecycle.Parked`, `ChildRunEvent.Parked`, `ChildRunEvent.Resumed`, `ChildParkRules`
 
 ### Child journal
 

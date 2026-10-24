@@ -59,7 +59,7 @@ Hosted runs from 2026-10-17 through 2026-10-23 measured these gate times (minute
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally), `stopped-turn-continuation` (10 mutants, one invocation, 2.5 locally) | 13.5 to 14.5 (estimate; hosted measurement required) |
 | `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans | [3m17s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616549) |
 | `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
-| `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local), `child-resume-gate` (10 mutants, one invocation, 2.2 local) | 9 to 11 (estimate) |
+| `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local), `child-resume-gate` (23 mutants, one invocation, 2.2 local) | 9 to 11 (estimate) |
 
 The `verb-chain` and `reminder` groups were one group, `verb-chain-and-reminder`. That group took 24.5 to 25 minutes, and one run reached the timeout.
 The `authorization-and-directory` and `guard-and-authority` groups were one group, `approval-and-authorization`. That group took 16.5 to 24.6 minutes on the same day and ran near the timeout.
@@ -130,7 +130,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `SessionToolWorkflow.IsChildConsentPaused`, `SessionToolWorkflow.RefusesChildStart`, the pause hold of `SessionToolWorkflow.PlanNewInputAbandonment`, the pause rules of the `SessionInputFlow.DrainBufferedBatch` drain (`PassesPause`, `IsHeldByPause`, `MoveHeldInputBehind`), the hold rule `ChildConsentPause.Holds` that the drain and the recovery share, and `TurnContext.IsChildConsentNotice` | Design D5 of child-approval-events-and-parent-pause: an open child consent request pauses the session, and an answered request does not. While paused, a `spawn_agent` start is refused and a slash start of a person is accepted; automated input and a child result notice wait in Ready and in the drain, never join a running turn, and run after the last close; a person input runs; a replay continues its turn. An approval notice needs the principal `VerifiedAutomation`, the authenticity `LocalProcess`, and the source kind and sender `child-consent`, so a webhook cannot pose as one; a notice is never held, never joins a turn, and nothing joins a notice turn | 36 killed | `./scripts/run-child-consent-mutations.sh` |
 | The guard of `SessionToolWorkflow.TryResolveTextResponse` and the count rule of `PendingApprovalLookup.Resolve` | Design D7 of child-approval-events-and-parent-pause: when a child prompt is among two or more prompts that the sender can answer, a text answer resolves none, and the session and the channel tell the sender to use the buttons; text that answers no prompt keeps the option-unavailable reply; with parent prompts only, the session resolves the latest prompt and the channels the earliest | 15 killed | `./scripts/run-text-answer-guard-mutations.sh` |
 | `TurnContext.HasSameRequester`, `SessionState.RequireNoticeRun`, restart-resume partition, `TurnContext.CanControlChildRunOf`, reminder report and retry state, child approval close, and the continuing-turn notice scan in `SessionInputFlow` | These targets protect child ownership, notice admission, restart order, child control, one-time reminder reports, retry links, and approval cleanup. The continuing-turn scan skips a queued notice while it finds a replay or owner input. | 74 killed | `./scripts/run-child-owner-and-report-mutations.sh` |
-| `ChildParkRules.AcceptPark` and `ChildParkRules.ResumeGate` (`// <child-resume-gate>`) | durable-child-consent-wait PR 1: only the owned child of an `Accepted` run opens prompts, a cancelling run ends cancelled, and any other sender gets the stop signal; a parked run resumes only when every request has an answer and no restart drain is pending | 10 killed | `./scripts/run-child-resume-gate-mutations.sh` |
+| `ChildParkRules.AcceptPark`, `ResumeGate`, `RecoveryAction`, `ParkFits`, `CountsAsUnreported`, `RejectedEventEnds`, and `IgnoredBySnapshot` (`// <child-resume-gate>`) | durable-child-consent-wait: only the owned child of an `Accepted` run opens prompts, a cancelling run ends cancelled, and any other sender gets the stop signal; a parked run resumes only when every request has an answer and no restart drain is pending. durable-child-park-recovery: recovery records a running child as lost and keeps or resumes a park; a park above 4 MiB is refused; a park with an open request does not keep the session in memory; a rejected record ends only the lifecycle that it expected; a child request does not block a snapshot and a parent request does | 23 killed | `./scripts/run-child-resume-gate-mutations.sh` |
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
 | The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
 
@@ -661,20 +661,24 @@ Run the child resume gate:
 ```
 
 The script runs Stryker one time over the span `// <child-resume-gate>` in `SubAgents/ChildRunPark.cs`
-(`Netclaw.Actors`, 10 mutants). The span holds the two pure decisions of a parked child run
-(durable-child-consent-wait, PR 1). The selector rejects a missing or repeated marker before Stryker starts. The gate
+(`Netclaw.Actors`, 23 mutants). The span holds the pure decisions of a parked child run
+(durable-child-consent-wait and durable-child-park-recovery). `ChildParkRules.LoopGuardDamage` is outside the span:
+its table checks only null or not null, and each table guard has one episode, so its text mutants and the `Any` to
+`All` mutant live. The selector rejects a missing or repeated marker before Stryker starts. The gate
 fails for a survivor or a changed count.
 
 `ChildParkRules.AcceptPark` decides a park that arrives at the owner. `ChildParkRules.ResumeGate` decides what an
-answer of a parked request does. `ChildParkRulesTests` (linked into `Netclaw.Actors.MutationTests`) covers them as two
+answer of a parked request does. The other rules decide recovery, the size cap, the unreported count, a rejected
+record, and the snapshot gate. `ChildParkRulesTests` (linked into `Netclaw.Actors.MutationTests`) covers them as
 tables, with no actor, no timer, and no delay:
 
 - the owned child of an `Accepted` run gets its prompts; the owned child of a `Cancelling` run ends cancelled; a
   sender that the owner does not own gets the stop signal, and nothing is recorded
 - a park with an open request waits; a park with every answer waits while a restart drain is pending; a park with
   every answer and no drain resumes; a run with no park does nothing
+- recovery, the cap, the unreported count, the rejected record, and the snapshot rule, each by lifecycle or value
 
-The local Stryker run took 2 minutes 14 seconds. CI runs the gate in the `child-consent` group of the
+The local Stryker run took 2 minutes 12 seconds. CI runs the gate in the `child-consent` group of the
 `mutation-gates` job. Its report directory is `artifacts/stryker/child-resume-gate`.
 
 ### Child Control Gate

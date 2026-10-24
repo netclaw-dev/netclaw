@@ -69,7 +69,7 @@ public sealed partial record SessionState
         if (!ChildRuns.TryGetValue(evt.RunId, out var run) || run.OriginalContext.SessionId != evt.SessionId)
             throw new InvalidOperationException("Child event does not name an accepted run.");
         if (run.InitialWorkingSnapshot is null && run.Lifecycle is ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling
-            or ChildRunLifecycle.Terminal { LegacyPrepared: null })
+            or ChildRunLifecycle.Parked or ChildRunLifecycle.Terminal { LegacyPrepared: null })
             throw new InvalidOperationException("An unprepared child requires its initial context snapshot.");
         ChildRunLifecycle next = (run.Lifecycle, evt) switch
         {
@@ -79,9 +79,20 @@ public sealed partial record SessionState
             (ChildRunLifecycle.Accepted current, ChildRunEvent.CancellationRequested)
                 => new ChildRunLifecycle.Cancelling(current.Checkpoint),
             (ChildRunLifecycle.Cancelling, ChildRunEvent.CancellationRequested) => run.Lifecycle,
-            (ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling, ChildRunEvent.TerminalRecorded terminal)
+            (ChildRunLifecycle.Accepted or ChildRunLifecycle.Cancelling or ChildRunLifecycle.Parked, ChildRunEvent.TerminalRecorded terminal)
                 when terminal.Terminal.Result.RunId == run.RunId && terminal.Terminal.Result.ScopeId == run.ScopeId
                 => new ChildRunLifecycle.Terminal(terminal.Terminal),
+            // durable-child-park-recovery, design D3. The writer numbers the prompts from the counter of the run.
+            (ChildRunLifecycle.Accepted, ChildRunEvent.Parked parked)
+                when parked.Requests.Count > 0 && parked.PromptsIssued == run.PromptsIssued + parked.Requests.Count
+                     && parked.Requests.All(request => request.SourceChildRunId == run.RunId)
+                => new ChildRunLifecycle.Parked(parked.Park, [.. parked.Requests.Select(static request => new ChildParkRequest(request, null))]),
+            // The resume record comes only after every answer. The checkpoint of the resume holds the round of the park,
+            // so the first checkpoint of the resumed child is the next round.
+            (ChildRunLifecycle.Parked current, ChildRunEvent.Resumed)
+                when current.Requests.All(static request => request.Resolution is not null)
+                => new ChildRunLifecycle.Accepted(new ChildRunCheckpoint(current.Park.LoopGuard.ToolIterationCount,
+                    "The child resumed after consent.", current.Park.FileActivity)),
             (ChildRunLifecycle.Terminal { LegacyPrepared: null } terminal, ChildRunEvent.ResultPrepared prepared)
                 when IsCanonicalChildPair(run, prepared.Call, prepared.Result) &&
                      (terminal.Result.Result.WorkingContext is not null || prepared.ReviewedWorkingContext is null)
@@ -96,7 +107,25 @@ public sealed partial record SessionState
             ChildRuns = ChildRuns.SetItem(run.RunId, run with
             {
                 Lifecycle = next,
-                InitialWorkingSnapshot = next is ChildRunLifecycle.Terminal { LegacyPrepared: not null } ? null : run.InitialWorkingSnapshot
+                InitialWorkingSnapshot = next is ChildRunLifecycle.Terminal { LegacyPrepared: not null } ? null : run.InitialWorkingSnapshot,
+                PromptsIssued = evt is ChildRunEvent.Parked { PromptsIssued: var issued } ? issued : run.PromptsIssued
+            })
+        };
+    }
+
+    // The answer of a parked request goes into the park, so a snapshot keeps it. Any other answer changes nothing: a
+    // parent answer, or the answer of a 0.28 live wait that a replay reads.
+    public SessionState Apply(ToolApprovalResolved evt)
+    {
+        if (evt.SourceChildRunId is not { } runId || !ChildRuns.TryGetValue(runId, out var run)
+            || run.Lifecycle is not ChildRunLifecycle.Parked parked
+            || parked.Requests.FirstOrDefault(request => request.Request.CallId == evt.CallId) is not { Resolution: null } open)
+            return this;
+        return this with
+        {
+            ChildRuns = ChildRuns.SetItem(runId, run with
+            {
+                Lifecycle = parked with { Requests = parked.Requests.Replace(open, open with { Resolution = evt }) }
             })
         };
     }

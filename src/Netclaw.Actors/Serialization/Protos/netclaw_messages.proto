@@ -468,7 +468,13 @@ message ChildRunEventV2Proto {
     bool cancellation_requested = 5;
     ChildRunTerminalProto terminal = 6;
     ChildPreparedResultV2Proto result_prepared = 7;
+    // durable-child-park-recovery: the park with its requests, and the resume. A binary before them reads no fact and
+    // fails the recovery of the session (forward-only).
+    ChildRunParkProto parked = 8;
+    bool resumed = 9;
   }
+  // The prompt counter of the run after a park. Only the parked fact sets it.
+  int32 prompts_issued = 10;
 }
 
 message BackgroundChildRunV2Proto {
@@ -494,10 +500,14 @@ message BackgroundChildRunV2Proto {
     ChildPreparedStateV2Proto prepared = 17;
     ChildPreparedStateV2Proto consumed = 18;
     ChildRunClosedV2Proto closed = 19;
+    ChildRunParkProto parked = 21;
   }
   // The reminder fire key of the turn that started the child. The child-delivery turn copies it, so a failed post
   // of the child result raises the reminder alert. A record from before this field has no value (no reminder).
   optional string source_reminder_id = 20;
+  // durable-child-park-recovery: the lifecycle case of a parked run sits in the oneof above as field 21.
+  // The prompt counter of the run. A record from before this field reads 0.
+  int32 prompts_issued = 22;
 }
 
 message ChildRunAcceptedStateV2Proto { ChildRunCheckpointProto checkpoint = 1; }
@@ -670,4 +680,38 @@ message ChildRunEventProto {
 message ChildRunApprovalProto {
   ToolApprovalRequestedProto request = 1;
   ToolApprovalResolvedProto resolution = 2;
+}
+
+// durable-child-park-recovery: a child run that waits for consent. The parked fact holds requests with no resolution.
+// The run record holds each request with its resolution when the journal has one.
+message ChildRunParkProto {
+  repeated SerializableChatMessageProto transcript = 1;
+  ChildLoopGuardProto loop_guard = 2;
+  optional string project_directory = 3;
+  optional string inherited_working_directory = 4;
+  ChildWorkingContextProto file_activity = 5;
+  optional string skill_overlay = 6;
+  repeated ChildRunApprovalProto requests = 7;
+}
+
+// The loop guard of a parked child (TurnLoopGuardState): counts and hashes only.
+message ChildLoopGuardProto {
+  message Cycle {
+    string action = 1;
+    string outcome = 2;
+  }
+  message Episode {
+    string tool_name = 1;
+    string arguments_hash = 2;
+    string outcome = 3;
+    int32 equal_rounds = 4;
+    bool corrected = 5;
+    bool pending_job = 6;
+  }
+  int32 tool_iteration_count = 1;
+  int32 tool_call_count = 2;
+  repeated Cycle completed_cycles = 3;
+  optional string last_blocked_action = 4;
+  repeated Episode episodes = 5;
+  int32 refused_repeat_count = 6;
 }
