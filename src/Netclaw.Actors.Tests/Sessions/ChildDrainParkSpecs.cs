@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.RegularExpressions;
+using Akka.Actor;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Handlers;
@@ -11,6 +12,7 @@ using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
+using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -184,5 +186,110 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
             Assert.Single(journal.Committed.OfType<ChildRunEvent.Parked>(), evt => evt.RunId == run.Run.RunId);
         if (row == "automation")
             Assert.Empty(PromptsOf(run.Run.RunId));
+    }
+
+    /// <summary>
+    /// The drain acknowledgement comes from the journal callback of the last live child record (design D4), during
+    /// the child wait. No row moves the virtual clock, so the child wait never ends. Rows:
+    /// <list type="bullet">
+    /// <item>park-too-large: the child changes a file, and its drain park is above the size cap. The refused park
+    /// ends the run as a restart loss: Partial with owner_restarted, the file activity of the park, and the
+    /// "effects uncertain" text of a lost run. The park did not ask for consent, so "The parked calls did not run."
+    /// is false.</item>
+    /// <item>cancelled: Alice cancels the run during the child wait. The run ends cancelled, and the terminal record
+    /// releases the drain.</item>
+    /// <item>held-park: the journal holds the write of the drain park. The session does not acknowledge while the
+    /// write is held.</item>
+    /// </list>
+    /// Planted bug: the terminal record does not continue the drain (it waits for the child wait), the session
+    /// acknowledges before the park record commits, or a refused drain park says that nothing ran.
+    /// </summary>
+    [Theory]
+    [InlineData("park-too-large")]
+    [InlineData("cancelled")]
+    [InlineData("held-park")]
+    public async Task A_drain_acknowledges_from_the_journal_callback_of_the_last_child_record(string row)
+    {
+        // Arrange: the drain starts while the child runs a held sibling batch.
+        var id = new SessionId($"drain-park/ack-{row}");
+        var journal = await JournalAsync();
+        ScriptParent();
+        var label = $"park-ack-{row}";
+        var changed = Path.Combine(TestPaths.WorkspacesDirectory, "changed.txt");
+        PlanChild(label, row == "park-too-large"
+            ? [[new TextContent(new string('x', ChildRunPark.MaxBytes + 1)), SiblingCall("s1"), ChangeFile("f1", changed)]]
+            : [[SiblingCall("s1")]]);
+        await JoinRecorderAsync(id);
+        var sibling = Sibling.HoldNext();
+        var run = await StartAsync(id, label);
+        await sibling.WaitAsync(Deadline, Cancellation);
+        var session = await ResolveSessionAsync(id);
+        var stopped = CreateTestProbe();
+        stopped.Watch(session);
+        var reply = new ReplyRecorder((ExtendedActorSystem)Sys);
+        SessionManager.Tell(new PrepareForDaemonRestart(id, "daemon-stop"), reply);
+        await AwaitAssertAsync(async () => Assert.Equal("Passivating", await PhaseOfAsync(id)), Deadline,
+            cancellationToken: Cancellation);
+
+        // Act: the child record during the child wait
+        switch (row)
+        {
+            case "cancelled":
+                await session.Ask<string>(new ChildRunControl(run.Run.RunId, true, run.Run.OriginalContext), Deadline, Cancellation);
+                Sibling.Release();
+                break;
+            case "held-park":
+                journal.HoldNext(static evt => evt is ChildRunEvent.Parked);
+                Sibling.Release();
+                await journal.HoldEntered.Task.WaitAsync(Deadline, Cancellation);
+                Assert.False(reply.Ack.Task.IsCompleted, "The session acknowledged the drain before the park record committed.");
+                journal.ReleaseHold.TrySetResult();
+                break;
+            default:
+                Sibling.Release();
+                break;
+        }
+
+        // Assert: the acknowledgement follows the committed record of the child.
+        var ack = await reply.Ack.Task.WaitAsync(Deadline, Cancellation);
+        Assert.NotNull(ack.RestartReminder);
+        Assert.Equal(row == "held-park" ? 1 : 0, journal.Committed.OfType<ChildRunEvent.Parked>().Count(evt => evt.RunId == run.Run.RunId));
+        Assert.Equal(row == "held-park" ? 0 : 1, TerminalsOf(journal, run.Run.RunId).Count);
+        await stopped.ExpectTerminatedAsync(session, Deadline, cancellationToken: Cancellation);
+        AssertAck(await SendRestartReminderAsync(id, ack.RestartReminder));
+        await JoinRecorderAsync(id);
+        var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: 0);
+        switch (row)
+        {
+            case "park-too-large":
+                Assert.Equal(SubAgentRunOutcome.Partial, terminal.Result.Outcome);
+                Assert.Equal(SubAgentOutcomeReason.OwnerRestarted, terminal.Result.OutcomeReason);
+                Assert.Contains(changed, terminal.Result.WorkingContext?.ConfirmedChangedFiles ?? []);
+                Assert.Contains(ChildRunDocuments.RestartLoss, terminal.Result.Output, StringComparison.Ordinal);
+                Assert.Contains("uncertain", terminal.Result.Output, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("The parked calls did not run.", terminal.Result.Output, StringComparison.Ordinal);
+                break;
+            case "cancelled":
+                Assert.IsType<ChildRunCompletion.Cancelled>(terminal.Result.Completion);
+                break;
+            default:
+                Assert.True(terminal.Result.Success, terminal.Result.Output);
+                break;
+        }
+    }
+
+    // Records the drain reply in Tell, on the thread of the sender. A TestProbe takes a reply through its own mailbox,
+    // so it cannot show that the reply came before a held journal write.
+    private sealed class ReplyRecorder(ExtendedActorSystem system) : MinimalActorRef
+    {
+        public TaskCompletionSource<DaemonRestartPrepared> Ack { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override ActorPath Path { get; } = system.Provider.TempPath();
+        public override IActorRefProvider Provider => system.Provider;
+
+        protected override void TellInternal(object message, IActorRef sender)
+        {
+            if (message is DaemonRestartPrepared prepared)
+                Ack.TrySetResult(prepared);
+        }
     }
 }

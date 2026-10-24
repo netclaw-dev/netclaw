@@ -94,6 +94,39 @@ public sealed class ChildParkRulesTests
         => Assert.Equal((row, expected), (row, ChildParkRules.RequesterCanAnswer(requests, interactive)));
 
     /// <summary>
+    /// running-child-drain-park design D4. The drain acknowledgement waits while a live child exists and the child wait
+    /// has not ended. With no drain, no live child, or an ended wait, it does not wait. The child-resume-gate Stryker
+    /// gate mutates this rule in its child-drain-wait span, so the rows live in this linked table.
+    /// Planted bug: the session acknowledges before the child parks, or a stuck child holds the drain past the deadline.
+    /// </summary>
+    [Theory]
+    [InlineData("no-drain", false, true, false, false)]
+    [InlineData("live-child", true, true, false, true)]
+    [InlineData("no-live-child", true, false, false, false)]
+    [InlineData("wait-ended", true, true, true, false)]
+    public void The_drain_acknowledgement_waits_only_for_live_children_inside_the_wait(string row, bool drain,
+        bool liveChildren, bool waitEnded, bool expected)
+        => Assert.Equal((row, expected), (row, SessionExecutionLifetime.WaitsForChildren(drain, liveChildren, waitEnded)));
+
+    /// <summary>
+    /// running-child-drain-park design D1 R3, review. The first step of a resumed child follows the request count of the
+    /// park, and the answer count must match it. A drain park (0 requests, 0 answers) starts with a model call. A
+    /// consent park with an answer for each request runs its parked calls. Any other pair ends the run, and no parked
+    /// call runs.
+    /// Planted bug: a consent park whose answers are lost takes the drain branch, so the child calls the model with
+    /// unanswered tool calls and the parked calls never run.
+    /// </summary>
+    [Theory]
+    [InlineData("drain-park", 0, 0, nameof(ChildResumeStart.ModelCall))]
+    [InlineData("consent-park", 2, 2, nameof(ChildResumeStart.ParkedCalls))]
+    [InlineData("consent-no-answer", 1, 0, nameof(ChildResumeStart.EndRun))]
+    [InlineData("consent-partial", 2, 1, nameof(ChildResumeStart.EndRun))]
+    [InlineData("drain-with-answer", 0, 1, nameof(ChildResumeStart.EndRun))]
+    public void A_resumed_child_starts_by_the_request_count_of_its_park(string row, int requests, int answers,
+        string expected)
+        => Assert.Equal((row, expected), (row, ChildParkRules.ResumeStart(requests, answers).ToString()));
+
+    /// <summary>
     /// PR 2 design D4. A park of exactly the cap fits. One byte more does not.
     /// Planted bug: the cap is off by one, or the owner never refuses a park.
     /// </summary>
