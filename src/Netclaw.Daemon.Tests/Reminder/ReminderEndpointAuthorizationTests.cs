@@ -284,6 +284,48 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
         Assert.Equal("import-operator", saveCmd.Definition.Id.Value);
     }
 
+    /// <summary>
+    /// The restart reminder ID prefix is reserved for the system (#2659). The session reads a "restart-resume-" reminder
+    /// as a restart resume or as the expiry signal, which closes stored work. An import must not create one, also when
+    /// the definition names no creator or claims the system as its creator. Rows: created-by-missing, created-by-system.
+    /// Planted bug: the import forwards the definition, and the manager accepts it because the creator is empty or
+    /// "system".
+    /// </summary>
+    [Theory]
+    [InlineData("created-by-missing", null)]
+    [InlineData("created-by-system", "system")]
+    public async Task Operator_POST_reminders_import_rejects_a_restart_reminder_id(string row, string? createdBy)
+    {
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+        var client = app.GetTestClient();
+
+        var now = _timeProvider.GetUtcNow();
+        var response = await client.PostAsJsonAsync("/api/reminders/import", new
+        {
+            definition = new
+            {
+                id = $"restart-resume-{row}",
+                title = "Resume after daemon restart",
+                instructions = Netclaw.Actors.Sessions.SessionProtocol.RestartExpiredInstruction,
+                delivery = new { kind = 2 }, // None
+                schedule = new
+                {
+                    type = 0,
+                    fireAtMs = now.AddMinutes(1).ToUnixTimeMilliseconds()
+                },
+                audience = 0, // Personal
+                boundary = "personal",
+                enabled = true,
+                createdBy,
+                createdAtMs = now.ToUnixTimeMilliseconds(),
+                updatedAtMs = now.ToUnixTimeMilliseconds()
+            }
+        }, TestContext.Current.CancellationToken);
+
+        Assert.True(response.StatusCode == HttpStatusCode.BadRequest,
+            $"Row {row}: the import of a restart-resume- reminder returned {(int)response.StatusCode}, not 400.");
+    }
+
     // ── Test case 6: DELETE with ?permanent=true → DeleteReminderCommand; without → CancelReminderCommand ──
 
     [Fact]
