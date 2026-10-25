@@ -18,13 +18,18 @@ at f80b5feb9.
   it maps `Low` and `Medium` to `high` without a message.
 - `OpenRouterReasoningExcludePolicy` replaces the whole `reasoning` object with
   `{exclude: true}`. An effort value is lost.
-- `netclaw model set` already probes the provider (`IProviderProbe`), and
+- `netclaw model set` already probes the provider (`IProviderProbe`).
   `OpenAiCompatibleCapabilityResolver` already tells ds4, vLLM, llama.cpp, and
-  generic servers apart. Only llama.cpp shows its chat template (`/props`).
+  generic servers apart.
+- `CompositeCapabilityResolver` merges `ResolvedModelCapabilities(ModelId,
+  InputModalities, OutputModalities, ContextWindowTokens)` from a chain. The
+  first non-null value wins for each field. The chain order is the native
+  probes (Ollama, OpenAI-compatible), then `OpenRouterOracleResolver`, then
+  `HuggingFaceCapabilityResolver` (Program.cs ~995-1004).
+- `SessionCompactionPipeline.EstimateTokens` estimates a prompt as total
+  characters / 4, with media at base64 size.
 - Anthropic SDK 12.50.0 sends `max_tokens` 1024 when `MaxOutputTokens` is
-  unset. Current Claude models use adaptive thinking with
-  `output_config.effort` (`low`, `medium`, `high`, `xhigh`, `max`). Some
-  models reject `thinking: {type: "disabled"}`.
+  unset.
 
 ## Goals / Non-Goals
 
@@ -32,17 +37,21 @@ at f80b5feb9.
 
 - One mechanism maps the two neutral settings to each provider. It extends the
   existing dialect, and it does not add a parallel one.
+- A default output limit that does not break a long session or a model with a
+  small output maximum.
+- Netclaw offers a thinking level only when it knows that the model accepts it.
 - The CLI, the TUI, doctor, and startup use one validator.
 - A failover candidate never sees another candidate's request fields.
 
 **Non-Goals:**
 
 - No per-role or per-call-site settings. No thinking token budget.
-- No per-model table of the levels that a hosted model accepts. A hosted
-  provider that rejects a level returns its own error.
-- No reserve for the output limit in the session context budget.
+- No hard-coded table of models.
+- No reserve for the output limit in the session compaction budget.
 - No TUI provider-editor field for `ThinkingDialect`. The CLI and
   `netclaw.json` set it.
+- A models.dev resolver is a separate change; these fields are its targets.
+- No native Venice or Copilot capability resolver in this change.
 
 ## Decisions
 
@@ -59,64 +68,67 @@ level that the provider offers.
 - Per-role tuning: make a second definition of the same model, for example
   `sonnet-low` and `sonnet-high`.
 - Alternative: per role. Rejected, because a role switch would carry a value to
-  a model that cannot accept it. It also splits model metadata across two
-  places.
-- Alternative: add an `On` level. Rejected. An unset level already means "the
-  model's default". On/off backends need only `Off`.
+  a model that cannot accept it.
+- Alternative: an `On` level. Rejected. An unset level already means "the
+  model's default".
 
 ### D2. One mechanism: the thinking dialect
 
 Rename `ReasoningSuppressionDialect` to `ThinkingDialect` and extend it. The
-dialect translates both the effective thinking level and the suppression
-intent.
+dialect states which levels the wire can express. It translates the effective
+level and the suppression intent.
 
 | Dialect | Used by | Off | Low | Medium | High | Max |
 |---|---|---|---|---|---|---|
 | `Native` | Anthropic, OpenAI, Codex, Copilot, OpenRouter, Venice | yes | yes | yes | yes | yes |
-| `DeepSeek` | DeepSeek; OpenAI-compatible when set | yes | no | no | yes | yes |
-| `ReasoningEffort` | OpenAI-compatible when set | no | yes | yes | yes | no |
-| `ChatTemplateKwargs` | OpenAI-compatible when set or detected | yes | no | no | no | no |
-| `OllamaThink` | Ollama | yes | no | no | no | no |
+| `DeepSeek` | DeepSeek; OpenAI-compatible when set | yes | yes | no | yes | yes |
+| `ReasoningEffort` | OpenAI-compatible when set or detected | yes (`none`) | yes | yes | yes | no |
+| `ChatTemplateKwargs` | OpenAI-compatible when set | yes | no | no | no | no |
+| `OllamaThink` | Ollama | yes | yes | yes | yes | no |
 | `None` | OpenAI-compatible when set | no | no | no | no | no |
 | `Unresolved` | OpenAI-compatible with no value | no | no | no | no | no |
 
 `Unresolved` is not a config value. It keeps today's suppression form
-(`chat_template_kwargs`) and supports no level (D5). `Native` replaces today's
-`None` for strict SDKs. It sets the standard
-`ChatOptions.Reasoning`, and the SDK adapter writes the wire field. The other
-dialects write request-body fields through `AdditionalProperties`, as today.
+(`chat_template_kwargs`) and supports no level (D6). `Native` replaces today's
+`None` for strict SDKs. It sets the standard `ChatOptions.Reasoning`, and the
+SDK adapter writes the wire field. The other dialects write request-body fields
+through `AdditionalProperties`, as today. `OllamaThink` writes `Off` as the
+body field `think: false`, as today, and the levels through
+`ChatOptions.Reasoning`. OllamaSharp maps those levels to string `think`
+values (verified, D3).
+
+The dialect is one of two filters. The other is the model's thinking
+capability (D5). Netclaw offers a level only when both allow it.
 
 The dialect resolution moves from `ILlmProviderPlugin` to `IProviderDescriptor`
 as `ResolveThinkingDialect(ProviderEntry)`. The CLI and doctor have
-descriptors, so they use the same resolution as the daemon. The table above is
-one static map in `Netclaw.Providers`.
+descriptors, so they use the same resolution as the daemon.
 
 `ReasoningSuppressionChatClient` becomes `ModelRequestSettingsChatClient`. It
-is the outermost wrapper of each model client, and the factory gives it the
-`ModelReference` and the dialect. The DeepSeek reasoning code moves out of
-`OpenAiCompatibleChatClient` into the DeepSeek dialect. The DeepSeek wire
-profile keeps only its message replay rules.
+is the outermost wrapper of each model client. The factory gives it the
+`ModelReference`, the dialect, and the capability lookup (D4). The DeepSeek
+reasoning code moves out of `OpenAiCompatibleChatClient` into the DeepSeek
+dialect. The DeepSeek wire profile keeps only its message replay rules.
 
 Per-call flow (schematic; omits the logging scope and cancellation):
 
 ```
 ModelRequestSettingsChatClient.Call(messages, callerOptions):
-  o = callerOptions?.Clone() ?? new ChatOptions()    // D8: own copy per candidate
+  o = callerOptions?.Clone() ?? new ChatOptions()    // D9: own copy per candidate
   (limit, limitSource) =
       o.MaxOutputTokens        -> (it, call)
-      model.MaxOutputTokens    -> (it, model)
-      descriptor.DefaultMaxOutputTokens -> (it, provider-default)   // Anthropic only
-      otherwise                -> (null, unset)
+      model.MaxOutputTokens    -> (it, configured)    // sent as is, never clamped
+      otherwise                -> DefaultLimit(messages)   // D4: default or default-clamped
   o.MaxOutputTokens = limit
   suppress = o.AdditionalProperties.Remove(SuppressReasoning)       // always removed
   (level, levelSource) =
       suppress and dialect sends Off in the body -> (Off, suppressed)
-      suppress (Native, ReasoningEffort, None)   -> (null, suppressed)  // today's behavior
+      suppress (Native, None)                    -> (null, suppressed)  // today's behavior
       // Unresolved: suppress -> chat_template_kwargs, as today
       o.Reasoning is set       -> (from o.Reasoning, call)
-      model.Thinking           -> (it, model)
+      model.Thinking           -> (it, configured)
       otherwise                -> (null, unset)
-  dialect.Apply(o, level)     // throws when the level is unsupported (D4)
+  dialect.Apply(o, level)     // throws when the dialect cannot express the level
   log.Debug(limit, limitSource, level, levelSource, dialect)
   return inner.Call(messages, o)   // inner = VendorOptions wrapper -> SDK client
 ```
@@ -127,80 +139,187 @@ Ownership and data:
 |---|---|---|
 | Limit and level of a model | operator, via `ModelEntryWriter` | durable (`Models:Definitions`) |
 | Dialect of a provider | provider descriptor | durable (`VendorOptions`) or code constant |
-| Supported levels of a dialect | static dialect map | code constant |
+| Levels that a dialect expresses | static dialect map | code constant |
+| Thinking capability, model max output | capability resolvers (D5) | cached for the client's lifetime |
 | Dialect detection | `netclaw model set`, with the existing probe | call-local, then durable |
 | Validation | one validator for CLI, TUI, doctor, startup | call-local |
+| Default limit and clamp | `ModelRequestSettingsChatClient` | call-local |
 | Effective values and wire fields | `ModelRequestSettingsChatClient` | call-local (copied options) |
-| Anthropic default limit | Anthropic descriptor | code constant |
 | OpenRouter effort and exclude merge | `OpenRouterReasoningExcludePolicy` | call-local |
 
 Alternative: a new `IThinkingMapper` per plugin. Rejected, because the dialect
 already is that seam, and two seams would drift.
 
-### D3. Per-provider mapping
+### D3. Per-provider mapping (verified)
 
 Prefer the standard `ChatOptions.MaxOutputTokens` and `ChatOptions.Reasoning`
-where the SDK maps them. Use a dialect body field only where it does not.
-"OQ" marks a row that needs a check (see Open Questions).
+where the SDK maps them. Use a body field or a plugin-owned raw request only
+where it does not. "V" marks a verified fact with its source. "U" marks an
+unverified fact.
 
-| Provider (wire) | Output limit field | Off | Low / Medium / High | Max | Owner |
-|---|---|---|---|---|---|
-| Anthropic (Messages, SDK adapter) | `max_tokens` (32000 when unset, D6) | `thinking.type: disabled` | adaptive + `output_config.effort` low / medium / high | adaptive + effort `max` | Native; plugin-owned request if the adapter differs (OQ1) |
-| OpenAI API key and Codex (Responses) | `max_output_tokens` | `reasoning.effort: none` | `low` / `medium` / `high` | `xhigh` | Native |
-| GitHub Copilot (Responses or Chat) | `max_output_tokens` or `max_completion_tokens` (OQ3) | effort `none` | `low` / `medium` / `high` | `xhigh` | Native (OQ4) |
-| OpenRouter (Chat + policy) | `max_completion_tokens` (OQ3) | `reasoning.effort: none` (OQ5) | `reasoning.effort` low / medium / high, with `exclude` kept | `reasoning.effort: xhigh` (OQ5) | Native + the policy merges, not replaces |
-| Venice (Chat) | `max_completion_tokens` (OQ3) | `reasoning_effort: none` (OQ6) | `reasoning_effort` low / medium / high (OQ6) | `xhigh` (OQ6) | Native |
-| DeepSeek (self-hosted client) | `max_tokens` | `thinking.type: disabled` | rejected / rejected / `thinking.type: enabled` + `reasoning_effort: high` | `enabled` + `reasoning_effort: max` | `DeepSeek` dialect |
-| Ollama (OllamaSharp) | `num_predict` | `think: false` | rejected (OQ7) | rejected | `OllamaThink` dialect |
-| OpenAI-compatible (self-hosted client) | `max_tokens` | per backend rows below | per backend rows below | per backend rows below | dialect from `VendorOptions` |
-
-Native rows map `Off -> ReasoningEffort.None`, `Low -> Low`, `Medium -> Medium`,
-`High -> High`, `Max -> ExtraHigh`. The Anthropic plugin owns its mapping where
-`ExtraHigh` must become `max`, not `xhigh`.
-
-OpenAI-compatible per-backend rows. The output limit uses `max_tokens` on every
-row. vLLM, llama.cpp, SGLang, Ollama's `/v1`, and DeepSeek accept `max_tokens`.
-None of these targets needs `max_completion_tokens` (OQ8 confirms llama.cpp and
-SGLang).
-
-| Backend + model template | Dialect source | Off | Low / Medium / High | Max |
+| Provider (wire) | Output limit field | Off | Low / Medium / High | Max |
 |---|---|---|---|---|
-| llama.cpp, template reads `enable_thinking` (Qwen3, GLM) | detected from `/props` | `chat_template_kwargs.enable_thinking: false` | rejected | rejected |
-| llama.cpp, template reads `reasoning_effort` (gpt-oss) | operator (OQ9) | rejected | OQ9 | rejected |
-| llama.cpp server option `--reasoning-budget` | server-wide | not per request; Netclaw does not set it | n/a | n/a |
-| vLLM or SGLang, Qwen3-style template | operator: `ChatTemplateKwargs` | `chat_template_kwargs.enable_thinking: false` | rejected | rejected |
-| vLLM, template that reads `reasoning_effort` (gpt-oss) | operator: `ReasoningEffort` | rejected | `reasoning_effort` low / medium / high | rejected |
-| ds4 (DeepSeek V4 server) | detected from `owned_by: ds4.c` (OQ10) | DeepSeek fields | rejected / rejected / high | max |
-| Ollama `/v1` OpenAI API | operator: `ReasoningEffort` (OQ11) | rejected | `reasoning_effort` | rejected |
-| Generic proxy (for example LiteLLM) | operator: `ReasoningEffort` or `None` | per dialect | per dialect | per dialect |
+| Anthropic (SDK adapter, adaptive mode) | `max_tokens` (V: SDK 12.50.0) | `thinking.type: disabled` (V) | `thinking.type: adaptive` + `output_config.effort` low / medium / high (V) | plugin sets `output_config.effort: max` in the raw request; the adapter maps `ExtraHigh` to `xhigh` and keeps a caller effort (V) |
+| OpenAI API key and Codex (Responses) | `max_output_tokens` (V: M.E.AI 10.8.3) | `reasoning.effort: none` (V) | `low` / `medium` / `high` (V) | `xhigh` (U: Responses mapping of `ExtraHigh`) |
+| GitHub Copilot (Responses or Chat) | `max_output_tokens` or `max_completion_tokens` (V: SDK) | effort `none` | `low` / `medium` / `high` | `xhigh` (U: Copilot accepts effort for every model) |
+| OpenRouter (Chat + policy) | `max_completion_tokens` (V: SDK writes it; OpenRouter docs accept it) | policy writes `reasoning.effort: none` (V: docs) | policy writes `reasoning.effort` and keeps `exclude` (V: docs allow both) | `reasoning.effort: max` (V: docs list `max`) |
+| Venice (Chat) | `max_completion_tokens` (V: docs; `max_tokens` is deprecated) | `reasoning_effort: none` (V: docs) | `reasoning_effort` low / medium / high (V: docs) | plugin sets `reasoning_effort: max` through the SDK JSON patch (V: docs list `max`) |
+| DeepSeek (self-hosted client) | `max_tokens` (U: field name in the API reference) | `thinking.type: disabled` (V: docs) | `reasoning_effort` low / rejected / high (V: docs map `medium` to `high` on the server, so Netclaw rejects `Medium`) | `reasoning_effort: max` (V) |
+| Ollama (OllamaSharp 5.4.30) | `num_predict` (V: SDK) | `think: false` (V) | `think: "low" / "medium" / "high"` through `ChatOptions.Reasoning` (V: SDK maps them; docs accept model-defined strings) | rejected: OllamaSharp maps `ExtraHigh` to `"high"` |
+| OpenAI-compatible (self-hosted client) | `max_tokens` (V: :251) | per backend rows | per backend rows | per backend rows |
+
+Facts behind the rows:
+
+- Anthropic 12.50.0 `AsIChatClient` has `AnthropicThinkingMode.Adaptive` (the
+  default) and `Extended`. In adaptive mode, `ReasoningEffort.None` sends
+  `thinking.type: disabled`. `Low`, `Medium`, `High`, and `ExtraHigh` send
+  `output_config.effort` `low`, `medium`, `high`, and `xhigh` (IL switch on
+  `effort - 1`). The adapter does not overwrite an effort that the caller set
+  in the raw request. With `MaxOutputTokens` unset, the adapter sends
+  `_defaultMaxTokens` (1024).
+- The OpenAI SDK 2.12.0 Chat options write `max_completion_tokens` and
+  `reasoning_effort`. The M.E.AI Chat adapter maps `ExtraHigh` to `"xhigh"`.
+- OpenRouter documents `max_tokens` and `max_completion_tokens` with the same
+  meaning. It documents `reasoning.effort` values `none`, `minimal`, `low`,
+  `medium`, `high`, `xhigh`, and `max`. A model with `reasoning.mandatory: true`
+  rejects `none`.
+- OllamaSharp 5.4.30 maps `MaxOutputTokens` to `num_predict`. It maps
+  `ReasoningEffort.None` to `think: false`, and `Low`, `Medium`, `High` to the
+  strings. It maps `ExtraHigh` to `"high"`, so Netclaw never sends `ExtraHigh`
+  to Ollama.
+
+OpenAI-compatible per-backend rows. The output limit uses `max_tokens` on each
+row.
+
+| Backend | Facts | Dialect | Off | Levels |
+|---|---|---|---|---|
+| llama.cpp | V (server source, master): `max_tokens` maps to `n_predict`; `max_completion_tokens` is not mapped. `reasoning_effort: none` sets `enable_thinking` false. Another value goes to the template as `chat_template_kwargs.reasoning_effort`. `chat_template_kwargs.enable_thinking` is read. Per-request `reasoning_budget_tokens` exists. `/props` has `chat_template_caps.supports_reasoning_effort`. | detected: `ReasoningEffort` | `reasoning_effort: none` | low / medium / high when `supports_reasoning_effort` is true |
+| vLLM | V (docs): `reasoning_effort` low / medium / high set `enable_thinking` true, and `none` sets it false. `chat_template_kwargs` names differ by model (`enable_thinking`, `thinking`). gpt-oss levels: U. | operator: `ReasoningEffort` or `ChatTemplateKwargs` | yes | only with capability evidence (D5) |
+| SGLang | U: `chat_template_kwargs.enable_thinking` for Qwen3, `max_tokens`. | operator | yes | only with capability evidence |
+| ds4 (`owned_by: ds4.c`) | U: the README shows `ds4-server` and CLI flags `--think`, `--nothink`, `--think-level`. It does not document request fields. | operator only; no auto-detection | per dialect | per dialect |
+| Ollama `/v1` | U: `reasoning_effort` on the OpenAI endpoint. | operator; prefer the `ollama` provider type | per dialect | per dialect |
+| Generic proxy (for example LiteLLM) | U | operator: `ReasoningEffort` or `None` | per dialect | only with capability evidence |
 
 A `chat_template_kwargs` value from the caller is merged, not replaced. The
 dialect writes a new dictionary, so the caller's object does not change.
 
-### D4. A level that the dialect lacks is rejected (question 3)
+### D4. Default output limit: 32,000 with a per-call clamp
 
-Options:
+Decision by Aaron: when `MaxOutputTokens` is unset, Netclaw sends a default to
+every provider. The default is 32,000 tokens. This is an intentional behavior
+change for all providers. The release notes and the `netclaw-operations` skill
+state it.
 
-1. Map to the nearest level, and log it once at startup.
-2. Reject in `model set`, the TUI, doctor, and startup validation.
+A flat 32,000 can fail a request. vLLM rejects a request when the prompt tokens
+plus `max_tokens` exceed `max_model_len` (U: the exact error text). Some models
+cap their output below 32,000. Thus the effective default is computed per call:
 
-Decision: option 2. Option 1 is a silent fallback with a log line: the operator
-asks for `low` and pays for `high`. Today's DeepSeek code does exactly that,
-and this change removes it. The error lists the levels that the dialect
-supports and says that an unset level uses the model's default.
+```
+DefaultLimit(messages):                              // schematic
+  cap      = 32000
+  modelMax = capability.MaxOutputTokens              // null when unknown
+  window   = model.ContextWindow ?? capability.ContextWindowTokens   // null when unknown
+  value    = min(cap, modelMax ?? cap)
+  if window is known:
+    prompt   = EstimateTokens(messages)              // characters / 4, the compaction rule
+    margin   = max(1024, window / 20)
+    headroom = window - prompt - margin
+    value    = min(value, max(1024, headroom))       // 1024 is the floor
+  source = (value == cap) ? default : default-clamped
+```
 
-- Positive: provider `deepseek` (DeepSeek dialect),
-  `netclaw model set main deepseek deepseek-v4 --thinking max` saves `Max`.
-- Negative: the same command with `--thinking low` exits non-zero, prints
-  "DeepSeek supports off, high, max", and leaves `netclaw.json` unchanged.
-- Negative: a hand-edited `Thinking: Low` on a provider with dialect `None`
-  fails startup with the same text.
+An explicit value (`call` or `configured`) is sent as is. Validation rejects an
+explicit value that is not below the context window, or that is above a known
+model maximum (D10).
 
-The `Native` dialect accepts every level. A hosted model can still reject a
-level, for example `Off` on Claude Opus 5.5. That call fails loudly with the
-provider's error. Netclaw does not keep a per-model table.
+Inputs and their sources:
 
-### D5. Self-hosted dialect: set once per provider
+| Input | Source | Status |
+|---|---|---|
+| Context window | `ModelReference.ContextWindow`, else the resolved `ContextWindowTokens`. The startup default of 32,768 counts as unknown. | existing code |
+| Prompt estimate | the `EstimateTokens` rule (characters / 4), applied to the call's messages | existing code; one shared helper |
+| Model max output | Anthropic Models API `max_tokens` (new native resolver) | V: SDK 12.50.0 `ModelInfo.max_tokens` |
+| Model max output | OpenRouter catalog `top_provider.max_completion_tokens` | V: live catalog |
+| Model max output | OpenAI Models API | V: no such field; the OpenRouter name oracle is the fallback |
+| Model max output | models.dev `limit.output` (later change) | V: live catalog |
+| Model max output | Venice `model_spec.maxCompletionTokens` (no resolver in this change) | V: live catalog |
+
+The provider-reported input count of the last call is more exact, but the model
+client is shared across sessions and has no session state. The margin covers
+the estimate error.
+
+Examples (margin = max(1024, window / 20)):
+
+| Case | Window | Prompt | Model max | Sent | Source |
+|---|---|---|---|---|---|
+| Short prompt | 131,072 | 5,000 | unknown | 32,000 | `default` |
+| Prompt near the window | 131,072 | 110,000 | unknown | 14,519 | `default-clamped` |
+| Prompt past the floor | 32,768 | 31,000 | unknown | 1,024 (floor); a warning is logged | `default-clamped` |
+| Unknown context window | unknown | 5,000 | unknown | 32,000 | `default` |
+| Known model max below 32,000 | 131,072 | 5,000 | 16,384 | 16,384 | `default-clamped` |
+| Explicit value | 131,072 | 110,000 | 64,000 | 64,000 | `configured` |
+| Memory curation | any | any | any | 4,096 | `call` |
+
+The capability inputs are resolved once for each model client on first use,
+through the existing `CompositeCapabilityResolver`. They are cached for the
+client's lifetime. A failed lookup makes the inputs unknown, and the startup
+line says so. A network failure here is a normal runtime condition, so an
+unknown input is not a silent fallback.
+
+Alternative: a flat 32,000 with no clamp. Rejected, because long vLLM sessions
+would fail near the window. Alternative: compute the default in the session
+actor. Rejected, because sub-agents, compaction, and titles would each need the
+same code.
+
+### D5. How Netclaw knows whether a model thinks
+
+Extend `ResolvedModelCapabilities` with two fields, and add no new system:
+
+- `ThinkingSupport Thinking`: `Unknown | None | AlwaysOn | Controllable(levels)`.
+  `levels` is a subset of `Off, Low, Medium, High, Max`. A model that thinks
+  but cannot turn thinking off is `Controllable` without `Off`.
+- `int? MaxOutputTokens`: the model's output maximum.
+
+Precedence for each new field, the same order that `CompositeCapabilityResolver`
+already uses:
+
+1. The provider-native probe (what the actual server reports).
+2. A catalog (the OpenRouter name oracle today; models.dev later).
+3. Unknown.
+
+A catalog resolver slots into the chain beside `OpenRouterOracleResolver`. The
+merge rule "first non-null wins" becomes "first non-`Unknown` wins" for
+`Thinking`.
+
+Sources:
+
+| Source | Signal | Maps to | Status |
+|---|---|---|---|
+| Anthropic Models API (new native resolver, `GET /v1/models/{id}`) | `capabilities.thinking.supported`, `.types.adaptive` / `.types.enabled`, `capabilities.effort.{low, medium, high, xhigh, max}.supported`, `max_tokens` | `Controllable` with the supported efforts; `Off` only for a model that accepts `disabled` (U: how the API reports that) | V: SDK 12.50.0 model types |
+| OpenAI Models API | `id`, `created`, `owned_by` only | no signal; the OpenRouter name oracle is the fallback | V |
+| OpenRouter catalog | `supported_parameters` has `reasoning`; `reasoning.mandatory`, `reasoning.supported_efforts`, `reasoning.default_effort`; `top_provider.max_completion_tokens` | no `reasoning` -> `None`; `mandatory` -> `Controllable` without `Off`; `supported_efforts` -> those levels; no list -> `Controllable` with `Off` and the dialect levels | V: live catalog (for example `openai/gpt-5`: mandatory, efforts high / medium / low / minimal) |
+| Ollama `/api/show` | `thinking.values` and `thinking.default`; `values: [false]` means no thinking | strings -> those levels; `true` / `false` -> `Off` | V: docs; U: the server version that adds it |
+| llama.cpp `/props` | `chat_template_caps.supports_reasoning_effort`; template text with `enable_thinking` or `<think>` | caps true -> `Controllable(Off, Low, Medium, High)`; marker only -> `Controllable(Off)` | V: server source (`caps.h`) |
+| vLLM | no direct signal | the OpenRouter name oracle; else `Unknown` | V: docs show no signal |
+| Copilot catalog | `capabilities` object | U: field names for effort and output limits | U |
+| Venice catalog | `model_spec.capabilities.supportsReasoning`, `.supportsReasoningEffort`, `maxCompletionTokens` | a later resolver | V: live catalog |
+| models.dev (later change) | per model: `reasoning` (bool), `reasoning_options` (`[{type: "effort", values: [...]}]`), `limit.context`, `limit.output` | `reasoning: false` -> `None`; effort values -> levels; `limit.output` -> max output | V: live `api.json` |
+| Observation | the per-call breakdown counts thinking deltas | the model thinks; levels stay unknown | existing code; used only in the log |
+
+Rules for each surface (`model set`, the TUI, doctor):
+
+- The output limit always works.
+- Offered levels = (levels the dialect expresses) ∩ (capability levels).
+- `Unknown`: offer `Off` only when the dialect expresses `Off`. Show
+  "thinking support unknown for this endpoint" with the dialect hint. Netclaw
+  never guesses a level.
+- `None`: offer no level, with the reason "this model does not think".
+- `AlwaysOn`: offer no level, with the reason "this model always thinks; the
+  endpoint reports no levels".
+- Startup validation checks only the dialect, because the capability is
+  resolved at runtime. A provider that rejects a level returns a loud error.
+
+### D6. Self-hosted dialect: set once per provider
 
 `Providers:<name>:VendorOptions:ThinkingDialect` holds `ChatTemplateKwargs`,
 `ReasoningEffort`, `DeepSeek`, or `None`. The CLI accepts the kebab-case form
@@ -209,43 +328,36 @@ provider's error. Netclaw does not keep a per-model table.
 Resolution order:
 
 1. An explicit `ThinkingDialect` value.
-2. A value that `netclaw model set` detected and saved: `/props` chat template
-   reads `enable_thinking` -> `ChatTemplateKwargs`; backend `ds4` -> `DeepSeek`.
-3. Absent: no thinking level is supported. The suppression intent keeps its
-   current `chat_template_kwargs` form, so memory curation does not change.
+2. A value that `netclaw model set` detected and saved: backend llama.cpp ->
+   `ReasoningEffort`.
+3. Absent: `Unresolved`. No level is supported. The suppression intent keeps
+   its current `chat_template_kwargs` form, so memory curation does not change.
 
 Detection runs only in `model set`, because that command already probes the
-endpoint with the model ID. The runtime reads only durable config, so a slow or
-failed probe cannot change a request at runtime. When detection fails,
-`model set --thinking` fails and names the key and its four values. The output
-limit always works.
+endpoint with the model ID. The runtime reads only durable config for the
+dialect. When detection fails, `model set --thinking` fails and names the key
+and its four values. The output limit always works.
 
-Alternative: detect at daemon startup. Rejected, because capability detection
-is asynchronous and the client stack is built before it ends.
+### D7. A level that the provider lacks is rejected (question 3)
 
-### D6. Unset behavior and the Anthropic default (question 4)
+Options:
 
-When both the call site and the definition leave a value unset, Netclaw sends
-nothing. Today's behavior stays for every provider except Anthropic.
+1. Map to the nearest level, and log it once at startup.
+2. Reject in `model set`, the TUI, doctor, and startup validation.
 
-The Anthropic SDK sends `max_tokens` 1024 when the limit is unset. Thinking
-tokens count inside that limit. Since `fail-truncated-reply-and-cap-thinking`,
-a reply that hits the limit fails the turn. Options:
+Decision: option 2. Option 1 is a silent fallback with a log line: the operator
+asks for `medium` and pays for `high`. Today's DeepSeek code does exactly that,
+and this change removes it. The error lists the levels that are offered and
+the reason for each missing level.
 
-| Option | Effect |
-|---|---|
-| A. Keep 1024 | Long Anthropic replies fail as truncated. No cost change. |
-| B. Netclaw default 32000, documented and logged | Long replies work. Each call can cost more. Every Claude 4.x and later model accepts 32000. |
-| C. Require `MaxOutputTokens` on Anthropic definitions | Breaks the "existing deployment starts after upgrade" requirement. |
-| D. Read the model's own maximum from the Anthropic Models API | Exact, but adds detection plumbing. |
+- Positive: provider `deepseek`,
+  `netclaw model set main deepseek deepseek-v4 --thinking max` saves `Max`.
+- Negative: the same command with `--thinking medium` exits non-zero, prints
+  "DeepSeek offers off, low, high, max", and leaves `netclaw.json` unchanged.
+- Negative: a hand-edited `Thinking: Low` on a provider with dialect `None`
+  fails startup with the same text.
 
-Recommendation: B. The Anthropic descriptor declares `DefaultMaxOutputTokens`
-32000. The startup line and the debug line show `provider-default`, so the
-value is not silent. D can replace the constant later. **This is an open
-decision for Aaron.** If he picks A, delete the "Anthropic output limit when
-unset" requirement and the descriptor constant. Nothing else changes.
-
-### D7. Callers and precedence (question 5)
+### D8. Callers and precedence (question 5)
 
 The settings attach to the model client, not to a caller. Every caller that
 uses a definition gets its values: the session, sub-agents, compaction, the
@@ -253,17 +365,15 @@ memory observer, and titles. Each caller uses the definition of its role.
 
 A call-site value wins. The model value fills only an unset field. Reason: the
 call site knows the shape of its output. Memory curation sizes its JSON reply
-to 4096 tokens and asks for no reasoning. A model default of 32000 or `High`
-must not change that.
+to 4096 tokens and asks for no reasoning.
 
 The suppression intent is a call-site `Off` for each dialect that sends `Off`
-in the request body (`DeepSeek`, `ChatTemplateKwargs`, `OllamaThink`, and
-`Unresolved`). For `Native`, `ReasoningEffort`, and `None`, it sends no thinking
-field, as today. A `Native` `Off` would fail on
-models that cannot turn thinking off, for example Claude Opus 5.5, and memory
-curation would break.
+in the request body (`DeepSeek`, `ReasoningEffort`, `ChatTemplateKwargs`,
+`OllamaThink`, and `Unresolved`). For `Native` and `None`, it sends no thinking
+field, as today. A `Native` `Off` would fail on models that cannot turn
+thinking off, for example Claude Opus 5.5, and memory curation would break.
 
-### D8. Failover isolation (#2681)
+### D9. Failover isolation (#2681)
 
 This change fixes #2681. `ModelRequestSettingsChatClient` is the outermost
 wrapper of each candidate. It copies the caller's options with
@@ -272,65 +382,82 @@ wrapper of each candidate. It copies the caller's options with
 dialect change only the copy. `RoutingChatClient` does not change.
 
 Alternative: copy in `RoutingChatClient`. Rejected, because a non-routing
-caller of a model client would still share options with retries. The copy
-belongs with the code that changes the options.
+caller of a model client would still share options with retries.
 
-### D9. Visibility
+### D10. CLI, TUI, schema, doctor, and visibility
 
-- Startup: `ProviderPluginFactory.Create` logs one Information line for each
-  model client. Example:
-  `Model client main: provider=anthropic model=claude-opus-5-5 maxOutputTokens=32000 (provider-default) thinking=Low (model) dialect=Native`.
-- Per call: `ModelRequestSettingsChatClient` logs one Debug line with the
-  effective values and their sources (`call`, `model`, `provider-default`,
-  `suppressed`, `unset`).
-- The existing capability line in `ModelCapabilityActor` does not change. It
-  does not know the dialect or the provider default.
-
-### D10. CLI, TUI, schema, and doctor
+CLI:
 
 - `netclaw model set`: `--max-output-tokens <n>`, `--clear-max-output-tokens`,
   `--thinking <off|low|medium|high|max>`, `--clear-thinking`. The flags follow
   the `--context-window` pattern (ModelCommand.cs:137-185).
-- The TUI model manager: an integer field for the output limit (blank means
-  unset) and a picker for the level (unset, off, low, medium, high, max).
-- Both call one validator before `ModelEntryWriter` writes:
-  - limit > 0;
-  - limit < `ContextWindow` when it is configured;
-  - level supported by the provider's dialect;
-  - no conflict with the Ollama `DisableThinking` vendor option.
-- Schema (`ModelReference`): `MaxOutputTokens` `{"type": "integer",
-  "minimum": 1}` and `Thinking` `{"type": "string", "enum": ["Off", "Low",
-  "Medium", "High", "Max"]}`. Both are optional, so no `default` is needed.
-  The provider entry stays open, so `ThinkingDialect` needs no schema change.
-  Doctor checks it through the descriptor.
-- Doctor reports each rule above as an error with the key path. When the
-  detected context window is not above the limit, startup logs a warning.
-- Cross-boundary proof: each CLI and TUI test that rejects a value asserts that
-  the file bytes do not change. Each save test reloads the file through
-  `ModelConfigurationResolver` and asserts the values that the runtime reads.
+- `netclaw model list` gets two columns: "Max out" (the value, or
+  `default 32000`) and "Thinking" (the level, or `default`).
+
+TUI model manager (mock-up choices, agreed with the coordinator):
+
+- The role table gets "Max out" and "Thinking" columns.
+- `P` opens a properties panel for the model definition of the selected role.
+- The panel has an integer field for the output limit (blank means the
+  default) and a level picker.
+- The picker greys out each level that is not offered, with its reason.
+- A definition that several roles share shows "Also used by: ...".
+- For an endpoint without a known dialect, only the output field is editable.
+  The panel shows the dialect hint.
+
+Validation (one validator before `ModelEntryWriter` writes):
+
+- limit > 0;
+- limit < `ContextWindow` when it is configured;
+- limit <= the known model max output, when the probe reports one;
+- the level is offered (D5);
+- no conflict with the Ollama `DisableThinking` vendor option.
+
+Schema (`ModelReference`): `MaxOutputTokens` `{"type": "integer", "minimum":
+1}` and `Thinking` `{"type": "string", "enum": ["Off", "Low", "Medium",
+"High", "Max"]}`. Both are optional, so no `default` is needed. The provider
+entry stays open, so `ThinkingDialect` needs no schema change. Doctor checks it
+through the descriptor. Doctor reports a capability problem only when it can
+probe the endpoint.
+
+Visibility:
+
+- Startup: `ProviderPluginFactory.Create` logs one Information line for each
+  model client. Example:
+  `Model client main: provider=vllm model=qwen3 maxOutputTokens=default 32000 (clamped per call; window=131072, modelMax=unknown) thinking=Off (configured) dialect=ReasoningEffort capability=Controllable(Off)`.
+- Per call: `ModelRequestSettingsChatClient` logs one Debug line with the
+  effective limit and its source (`call`, `configured`, `default`,
+  `default-clamped`), the prompt estimate, and the level with its source
+  (`call`, `configured`, `suppressed`, `unset`).
+
+Cross-boundary proof: each CLI and TUI test that rejects a value asserts that
+the file bytes do not change. Each save test reloads the file through
+`ModelConfigurationResolver` and asserts the values that the runtime reads.
 
 ## Risks / Trade-offs
 
-- [Thinking tokens count inside the output limit on Anthropic and OpenAI. A low
-  limit with a high level fails the turn as truncated.] -> The runbook and the
-  `netclaw-operations` skill state this. The truncation error names the limit.
-- [A hosted model rejects a level that `Native` accepts.] -> The call fails
-  with the provider's error. Doctor cannot know. The skill lists the known
-  cases.
-- [A chat template ignores `enable_thinking`.] -> The server ignores the field
-  with no error. Netclaw cannot see this. This risk exists today for memory
-  curation.
+- [The 32,000 default raises the cost per call for every provider.] -> The
+  release notes and the skill state the change. An explicit value overrides it.
+- [The character estimate is low for some tokenizers, so a clamped request can
+  still exceed the window.] -> The margin is 5% of the window, at least 1,024
+  tokens. The provider error is loud.
+- [Thinking tokens count inside the output limit on Anthropic, OpenAI,
+  OpenRouter, and Venice. A low limit with a high level fails the turn as
+  truncated.] -> The skill states this. The truncation error names the limit.
+- [A new hosted model is `Unknown` until a catalog lists it.] -> Only `Off` is
+  offered for it. A models.dev resolver later improves coverage.
+- [A chat template ignores `enable_thinking` or `reasoning_effort`.] -> The
+  server ignores the field with no error. Netclaw cannot see this. The risk
+  exists today for memory curation.
 - [Compaction and titles inherit `High` or `Max` from a shared definition.] ->
   The operator can give Compaction its own definition.
-- [B raises the Anthropic cost per call.] -> The default appears on the startup
-  line and in the release notes.
 
 ## Migration Plan
 
-- No data migration. Both fields are optional, and an absent value keeps
-  today's request shape.
-- One behavior change: an Anthropic call without a configured limit sends 32000
-  in place of 1024 (if Aaron accepts D6 option B).
+- No data migration. Both fields are optional.
+- Behavior change: each call without an explicit limit now sends the D4
+  default. Anthropic calls change from 1024 to up to 32,000. Other providers
+  change from no limit to up to 32,000.
 - Rollback: revert the code. An older daemon does not know the two fields. Its
   schema check rejects them, and `netclaw doctor --fix` on the older version
   removes them.
@@ -340,25 +467,15 @@ belongs with the code that changes the options.
 Each item is a check during implementation. A result changes one table row or
 one test row, not the approach.
 
-1. OQ1: Does the Anthropic SDK 12.50.0 adapter map `ChatOptions.Reasoning` to
-   adaptive thinking plus `output_config.effort`, or to `budget_tokens`? How
-   does it map `ExtraHigh`? If it does not send adaptive plus `max`, the
-   Anthropic plugin builds the thinking fields itself. Check with ILSpy.
-2. OQ2: The OpenAI Responses adapter maps `ExtraHigh` to `xhigh` and `None` to
-   `none`. Confirm in the M.E.AI OpenAI adapter.
-3. OQ3: The OpenAI SDK Chat adapter sends `max_completion_tokens`, not
-   `max_tokens`. Do OpenRouter, Venice, and Copilot Chat accept it?
-4. OQ4: Does Copilot honor the reasoning effort for non-OpenAI models?
-5. OQ5: Which OpenRouter `reasoning.effort` values exist (`none`, `xhigh`)?
-   Does OpenRouter read a top-level `reasoning_effort`, or does the policy have
-   to move it into `reasoning`?
-6. OQ6: Does Venice accept `reasoning_effort`, or only
-   `venice_parameters.disable_thinking`?
-7. OQ7: Does OllamaSharp 5.4.30 send a string `think` (`low`, `medium`,
-   `high`) for gpt-oss? If yes, `OllamaThink` gains those three levels.
-8. OQ8: Confirm that llama.cpp and SGLang accept `max_tokens` (expected yes).
-9. OQ9: Does llama.cpp read gpt-oss effort from `chat_template_kwargs.reasoning_effort`
-   or from a top-level `reasoning_effort`?
-10. OQ10: Does the ds4.c server accept the DeepSeek `thinking` field, and does
-    it need the DeepSeek replay rules?
-11. OQ11: Does Ollama's `/v1` endpoint accept `reasoning_effort`?
+1. The M.E.AI Responses adapter mapping of `ExtraHigh` (expected `xhigh`, as
+   in the Chat adapter).
+2. Copilot: the output-limit and effort fields in its model catalog, and
+   whether it accepts an effort for non-OpenAI models.
+3. How the Anthropic Models API reports that a model rejects
+   `thinking.type: disabled` (for example `types.enabled` false).
+4. ds4: the request fields of `ds4-server`. Its serving guide is not read yet.
+5. SGLang and Ollama `/v1`: `chat_template_kwargs` and `reasoning_effort`
+   support.
+6. vLLM: the exact error when the prompt plus `max_tokens` exceeds
+   `max_model_len`, and the gpt-oss level support.
+7. DeepSeek: the output-limit field name in its API reference.

@@ -2,10 +2,10 @@
 
 ### Requirement: Provider-neutral output limit
 
-The system SHALL send a model definition's `MaxOutputTokens` to the provider as
-that provider's output-limit field. The operator SHALL NOT need to know the
-field name. When the effective limit is unset, the system SHALL send no limit,
-except where the "Anthropic output limit when unset" requirement applies.
+The system SHALL send the effective output limit to the provider as that
+provider's output-limit field. The operator SHALL NOT need to know the field
+name. An explicit value from the call site or from the model definition SHALL
+be sent as is.
 
 #### Scenario: Limit reaches a self-hosted endpoint
 
@@ -19,11 +19,59 @@ except where the "Anthropic output limit when unset" requirement applies.
 - **WHEN** a session calls the model
 - **THEN** the request SHALL set `num_predict` to 8000
 
-#### Scenario: Unset limit sends nothing
+#### Scenario: Explicit limit is not clamped
 
-- **GIVEN** a definition on an OpenAI provider without `MaxOutputTokens`
+- **GIVEN** a definition with `MaxOutputTokens` 64000 and a context window of 131072
+- **AND** a prompt of about 110000 tokens
 - **WHEN** a session calls the model
-- **THEN** the request SHALL contain no output-limit field
+- **THEN** the request SHALL carry 64000
+
+### Requirement: Default output limit with a per-call clamp
+
+When neither the call site nor the definition sets an output limit, the system
+SHALL send a default to every provider. The default SHALL be the smallest of
+32000, the model's known maximum output, and the context window minus the
+estimated prompt tokens minus a margin. The margin SHALL be the larger of 1024
+and 5% of the context window. The clamped value SHALL NOT be below 1024. An
+unknown input SHALL NOT limit the value. The system SHALL compute the default
+for each call.
+
+#### Scenario: Short prompt gets the full default
+
+- **GIVEN** a definition without `MaxOutputTokens`, a context window of 131072, and an unknown model maximum
+- **WHEN** a session calls the model with a prompt of about 5000 tokens
+- **THEN** the request SHALL carry 32000 with source `default`
+
+#### Scenario: Prompt near the window clamps the default
+
+- **GIVEN** a definition without `MaxOutputTokens` and a context window of 131072
+- **WHEN** a session calls the model with a prompt of about 110000 tokens
+- **THEN** the request SHALL carry 14519 with source `default-clamped`
+
+#### Scenario: Prompt past the floor sends the floor and warns
+
+- **GIVEN** a definition without `MaxOutputTokens` and a context window of 32768
+- **WHEN** a session calls the model with a prompt of about 31000 tokens
+- **THEN** the request SHALL carry 1024 with source `default-clamped`
+- **AND** the system SHALL log a warning
+
+#### Scenario: Unknown context window does not clamp
+
+- **GIVEN** a definition without `MaxOutputTokens` whose context window is unknown
+- **WHEN** a session calls the model
+- **THEN** the request SHALL carry 32000 with source `default`
+
+#### Scenario: Known model maximum below the default
+
+- **GIVEN** a definition without `MaxOutputTokens` whose model reports a maximum output of 16384
+- **WHEN** a session calls the model with a short prompt
+- **THEN** the request SHALL carry 16384 with source `default-clamped`
+
+#### Scenario: Anthropic no longer uses the SDK default
+
+- **GIVEN** an Anthropic definition without `MaxOutputTokens`
+- **WHEN** a session calls the model with a short prompt
+- **THEN** the request SHALL NOT carry `max_tokens` 1024
 
 ### Requirement: Provider-neutral thinking level through the thinking dialect
 
@@ -40,18 +88,31 @@ thinking field.
 - **WHEN** a session calls the model
 - **THEN** the request SHALL set the reasoning effort to `low`
 
+#### Scenario: Anthropic Max sends the max effort
+
+- **GIVEN** an Anthropic definition with `Thinking` `Max`
+- **WHEN** a session calls the model
+- **THEN** the request SHALL contain adaptive thinking and `output_config.effort` `max`
+
 #### Scenario: DeepSeek level maps to the DeepSeek fields
 
 - **GIVEN** a definition on a DeepSeek provider with `Thinking` `Max`
 - **WHEN** a session calls the model
 - **THEN** the request body SHALL contain `thinking.type` `enabled` and `reasoning_effort` `max`
 
-#### Scenario: Off on a chat-template backend
+#### Scenario: Off on a reasoning-effort backend
 
-- **GIVEN** an OpenAI-compatible provider with dialect `ChatTemplateKwargs`
+- **GIVEN** an OpenAI-compatible provider with dialect `ReasoningEffort`
 - **AND** a definition on that provider with `Thinking` `Off`
 - **WHEN** a session calls the model
-- **THEN** the request body SHALL contain `chat_template_kwargs.enable_thinking` `false`
+- **THEN** the request body SHALL contain `reasoning_effort` `none`
+
+#### Scenario: OpenRouter keeps exclude with the effort
+
+- **GIVEN** an OpenRouter provider with `ExcludeReasoning` true
+- **AND** a definition on that provider with `Thinking` `High`
+- **WHEN** a session calls the model
+- **THEN** the request body SHALL contain `reasoning.effort` `high` and `reasoning.exclude` true
 
 #### Scenario: Unset level sends nothing
 
@@ -59,16 +120,55 @@ thinking field.
 - **WHEN** a session calls the model
 - **THEN** the request SHALL contain no thinking field and no effort field
 
+### Requirement: Thinking capability of a model
+
+The capability resolvers SHALL report a thinking capability for each model:
+`Unknown`, `None`, `AlwaysOn`, or `Controllable` with a set of levels. They
+SHALL also report the model's maximum output when a source gives it. A
+provider-native probe SHALL win over a catalog, and a catalog SHALL win over
+`Unknown`. The system SHALL offer a thinking level only when the dialect can
+express it and the capability includes it. When the capability is `Unknown`,
+the system SHALL offer only `Off`, and only when the dialect can express `Off`.
+The system SHALL NOT guess a level.
+
+#### Scenario: Catalog levels are offered
+
+- **GIVEN** an OpenRouter model whose catalog entry lists the efforts low, medium, and high, with `mandatory` true
+- **WHEN** the operator opens the thinking picker for that model
+- **THEN** the picker SHALL offer `Low`, `Medium`, and `High`
+- **AND** it SHALL grey out `Off` with the reason that the model always thinks
+
+#### Scenario: Native probe wins over the catalog
+
+- **GIVEN** the Anthropic Models API reports a model's supported efforts
+- **AND** the OpenRouter catalog reports different values for the same model
+- **WHEN** the capabilities are resolved
+- **THEN** the Anthropic values SHALL apply
+
+#### Scenario: Unknown capability offers only Off
+
+- **GIVEN** a vLLM provider with dialect `ReasoningEffort` and a model that no source knows
+- **WHEN** the operator runs `model set` with `--thinking low`
+- **THEN** the command SHALL fail with "thinking support unknown for this endpoint"
+- **AND** `netclaw.json` SHALL stay unchanged
+- **AND** `--thinking off` on the same model SHALL be saved
+
+#### Scenario: Model without thinking offers no level
+
+- **GIVEN** a catalog entry without reasoning support
+- **WHEN** the operator sets `--thinking off`
+- **THEN** the command SHALL fail with the reason that the model does not think
+
 ### Requirement: Unsupported thinking level is rejected
 
-The system SHALL reject a thinking level that the provider's resolved dialect
-cannot send. Rejection SHALL occur in `netclaw model set`, in the TUI model
-manager, in `netclaw doctor`, and in startup validation. The system SHALL NOT
-map a level to a different level. The error SHALL name the provider, the
-dialect, and the levels that the dialect supports. The output limit SHALL stay
-usable when the thinking level is unsupported.
+The system SHALL reject a thinking level that is not offered. Rejection SHALL
+occur in `netclaw model set`, in the TUI model manager, and in `netclaw doctor`.
+Startup validation SHALL reject a level that the provider's dialect cannot
+express. The system SHALL NOT map a level to a different level. The error SHALL
+name the provider, the offered levels, and the reason for each missing level.
+The output limit SHALL stay usable when no thinking level is offered.
 
-#### Scenario: Supported level is accepted
+#### Scenario: Offered level is accepted
 
 - **GIVEN** provider `deepseek` uses the DeepSeek dialect
 - **WHEN** the operator runs `netclaw model set main deepseek deepseek-v4 --thinking max`
@@ -76,18 +176,11 @@ usable when the thinking level is unsupported.
 
 #### Scenario: Missing level is rejected before persistence
 
-- **GIVEN** provider `deepseek` uses the DeepSeek dialect, which supports `Off`, `High`, and `Max`
-- **WHEN** the operator runs `netclaw model set main deepseek deepseek-v4 --thinking low`
+- **GIVEN** provider `deepseek` uses the DeepSeek dialect, which offers `Off`, `Low`, `High`, and `Max`
+- **WHEN** the operator runs `netclaw model set main deepseek deepseek-v4 --thinking medium`
 - **THEN** the command SHALL exit with a non-zero code
-- **AND** the error SHALL list `off`, `high`, and `max`
+- **AND** the error SHALL list `off`, `low`, `high`, and `max`
 - **AND** `netclaw.json` SHALL stay unchanged
-
-#### Scenario: On/off backend rejects a graded level
-
-- **GIVEN** an OpenAI-compatible provider with dialect `ChatTemplateKwargs`
-- **WHEN** the operator sets `--thinking medium` on a model of that provider
-- **THEN** the command SHALL fail and SHALL say that only `off` is supported
-- **AND** the error SHALL say that an unset level uses the model's default
 
 #### Scenario: Hand-edited unsupported level fails startup
 
@@ -115,15 +208,14 @@ SHALL fail doctor and startup.
 #### Scenario: Detected dialect is saved once
 
 - **GIVEN** a llama.cpp provider without `ThinkingDialect`
-- **AND** the chat template from the endpoint reads `enable_thinking`
 - **WHEN** the operator runs `netclaw model set main llama qwen3 --thinking off`
-- **THEN** the command SHALL save `ThinkingDialect` `ChatTemplateKwargs` on the provider
+- **THEN** the command SHALL save `ThinkingDialect` `ReasoningEffort` on the provider
 - **AND** it SHALL save `Thinking` `Off` on the definition in the same write
 - **AND** it SHALL print the detected dialect
 
 #### Scenario: Undetectable dialect asks for one setting
 
-- **GIVEN** a vLLM provider without `ThinkingDialect`, whose endpoint does not show its chat template
+- **GIVEN** a vLLM provider without `ThinkingDialect`
 - **WHEN** the operator sets `--thinking off` on a model of that provider
 - **THEN** the command SHALL fail without a write
 - **AND** the error SHALL name the `ThinkingDialect` key and its four values
@@ -137,12 +229,12 @@ SHALL fail doctor and startup.
 ### Requirement: Call-site values take precedence over model settings
 
 A value that a call site sets on a request SHALL win over the model
-definition's value. The model value SHALL fill only a field that the call site
-left unset. The reasoning suppression intent SHALL count as a call-site thinking
-level of `Off` for each dialect that can send `Off` in the request body. For
-any other dialect, the suppression intent SHALL send no thinking field, as it
-does today. A call that has the suppression intent SHALL NOT fail because the
-dialect lacks `Off`.
+definition's value and over the default. The model value SHALL fill only a
+field that the call site left unset. The reasoning suppression intent SHALL
+count as a call-site thinking level of `Off` for each dialect that can send
+`Off` in the request body. For any other dialect, the suppression intent SHALL
+send no thinking field, as it does today. A call that has the suppression
+intent SHALL NOT fail because the dialect lacks `Off`.
 
 #### Scenario: Curation keeps its own limit
 
@@ -186,41 +278,24 @@ candidate receives. Each candidate SHALL apply its own definition's settings.
 - **WHEN** the first candidate fails and the fallback runs
 - **THEN** the fallback request SHALL NOT contain that field
 
-### Requirement: Anthropic output limit when unset
-
-When the effective output limit for an Anthropic call is unset, the Anthropic
-provider SHALL send a documented Netclaw default of 32000 tokens. It SHALL NOT
-send the SDK default of 1024. The startup line and the debug line SHALL show the
-source of this value as the provider default.
-
-#### Scenario: Unset Anthropic limit uses the documented default
-
-- **GIVEN** an Anthropic definition without `MaxOutputTokens`
-- **WHEN** a session calls the model
-- **THEN** the request SHALL set `max_tokens` to 32000
-
-#### Scenario: Configured Anthropic limit wins
-
-- **GIVEN** an Anthropic definition with `MaxOutputTokens` 64000
-- **WHEN** a session calls the model
-- **THEN** the request SHALL set `max_tokens` to 64000
-
 ### Requirement: Effective output limit and thinking level are visible
 
 At startup, the daemon SHALL log one line for each model client. The line SHALL
-show the effective output limit and its source (`model`, `provider-default`, or
-`unset`), the thinking level, and the thinking dialect. At debug level, each
-model call SHALL log the effective limit and level with their sources (`call`,
-`model`, `provider-default`, `suppressed`, or `unset`).
+show the configured limit or the default with its known inputs (context window
+and model maximum), the thinking level with its source, the thinking dialect,
+and the thinking capability. At debug level, each model call SHALL log the
+effective limit with its source (`call`, `configured`, `default`, or
+`default-clamped`), the prompt estimate, and the level with its source
+(`call`, `configured`, `suppressed`, or `unset`).
 
 #### Scenario: Startup line shows the values
 
-- **GIVEN** Main has `MaxOutputTokens` 32000 and `Thinking` `Low` on an OpenAI provider
+- **GIVEN** Main has `Thinking` `Low` on an OpenAI provider and no `MaxOutputTokens`
 - **WHEN** the daemon starts
-- **THEN** the log SHALL contain one line with `maxOutputTokens=32000 (model)` and `thinking=Low (model)` and the dialect
+- **THEN** the log SHALL contain one line with the default limit, `thinking=Low (configured)`, the dialect, and the capability
 
-#### Scenario: Debug line shows the call-site source
+#### Scenario: Debug line shows the clamp
 
 - **GIVEN** debug logs are on
-- **WHEN** memory curation calls a model with its own limit
-- **THEN** the debug line SHALL show `maxOutputTokens=4096 (call)`
+- **WHEN** a session call clamps the default
+- **THEN** the debug line SHALL show the sent value with source `default-clamped` and the prompt estimate
