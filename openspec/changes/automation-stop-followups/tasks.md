@@ -13,20 +13,20 @@ does not edit the tests. No test uses `Thread.Sleep` or `Task.Delay`. Each test 
 
 ## 3. The compaction end (implementation)
 
-- [ ] 3.1 `AdvanceAfterCompaction` returns `EndTurn` for a tool-loop resume with an automation owner and a waiting person, after the restart check (design D1). Verify the compaction rows of task 2.2 pass.
-- [ ] 3.2 The actor handles `EndTurn` at the compaction end like the tool-batch end. Verify row `PersonDuringToolLoopCompaction` passes on its turn and call checks.
+- [x] 3.1 `AdvanceAfterCompaction` returns `EndTurn` for a tool-loop resume with an automation owner and a waiting person, after the restart check (design D1). Verify the compaction rows of task 2.2 pass.
+- [x] 3.2 The actor handles `EndTurn` at the compaction end like the tool-batch end. Verify row `PersonDuringToolLoopCompaction` passes on its turn and call checks.
 
 ## 4. The end-point compaction (implementation)
 
-- [ ] 4.1 At `ToolBatchNextAction.EndTurn`, compact after the close when `ShouldCompact()` is true (design D2). Do not add a compaction check to the failed-turn path. Verify row `DueCompactionAtTheEndPoint` passes its compaction order check.
+- [x] 4.1 At `ToolBatchNextAction.EndTurn`, compact after the close when `ShouldCompact()` is true (design D2). Do not add a compaction check to the failed-turn path. Verify row `DueCompactionAtTheEndPoint` passes its compaction order check.
 
 ## 5. The stop note (implementation)
 
-- [ ] 5.1 Keep one actor-local pending note. Set it at each stop. Put it in the per-turn context block of the first call of the next person turn, then clear it (design D3). Keep the note text as one C# string literal in `src/Netclaw.Actors/Sessions/`, because the eval reads it from source. Verify all rows of task 2.1 pass.
+- [x] 5.1 Keep one actor-local pending note. Set it at each stop. Put it in the per-turn context block of the first call of the next person turn, then clear it (design D3). Keep the note text as one C# string literal in `src/Netclaw.Actors/Sessions/`, because the eval reads it from source. Verify all rows of task 2.1 pass.
 
 ## 6. Docs and gates
 
-- [ ] 6.1 Update `docs/architecture/tool-authorization.md`, section "One authority per turn": the check runs at the tool-batch end and at the tool-loop compaction end, a due compaction runs before the person's turn, and the person's turn gets the note.
-- [ ] 6.2 Update `feeds/skills/.system/files/netclaw-operations/SKILL.md` with the stop note and bump `metadata.version`.
-- [ ] 6.3 Add the new compaction-end stop call to `scripts/run-input-one-authority-mutations.sh` with its measured count, after task 2.2 kills its removal mutant. Verify the script passes.
+- [x] 6.1 Update `docs/architecture/tool-authorization.md`, section "One authority per turn": the check runs at the tool-batch end and at the tool-loop compaction end, a due compaction runs before the person's turn, and the person's turn gets the note.
+- [x] 6.2 Update `feeds/skills/.system/files/netclaw-operations/SKILL.md` with the stop note and bump `metadata.version`.
+- [x] 6.3 Add the new compaction-end stop call to `scripts/run-input-one-authority-mutations.sh` with its measured count, after task 2.2 kills its removal mutant. Verify the script passes.
 - [ ] 6.4 Run `dotnet slopwatch analyze`, `./scripts/Add-FileHeaders.ps1 -Verify`, and `openspec validate automation-stop-followups --strict`. Run the full eval suite, because the prompt changed.

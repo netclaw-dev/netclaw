@@ -15,8 +15,11 @@ set -euo pipefail
 # in that check.
 # The gate also selects the check of SessionInputFlow.AdvanceAfterToolBatch: an
 # Operator or TrustedInternal person who waits ends an automation turn at the
-# tool-batch end. ChildConsentPauseMutationTests must kill every mutant in the
-# call site and in PersonWaitsBehindAutomation.
+# tool-batch end. The gate also selects the same check of
+# SessionInputFlow.AdvanceAfterCompaction: the person ends the automation turn at
+# the end of a tool-loop compaction, and an overflow replay keeps its turn (#2633).
+# ChildConsentPauseMutationTests must kill every mutant in both call sites and in
+# PersonWaitsBehindAutomation.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionInputFlow.cs"
@@ -48,9 +51,11 @@ owner_marker='var adoptsAuthority = !continuesTurn && !_buffer[0].IsReplay;
 # The join rule: a replay joins its own turn; another input joins only for the same requester.
 join_marker='=> input.IsReplay || (owner is not null && BufferedAuthority(input.Message).HasSameRequester(owner));'
 
-# The person check: the call site in AdvanceAfterToolBatch and the predicate.
+# The person check: the call sites in AdvanceAfterToolBatch and AdvanceAfterCompaction, and the predicate.
 end_call_marker='if (PersonWaitsBehindAutomation())
             return new ToolBatchInputAdvance(null, ToolBatchNextAction.EndTurn);'
+compaction_call_marker='if (resume && PersonWaitsBehindAutomation())
+            return new CompactionContinuation(InputProgressAction.EndTurn, false, null, null);'
 person_marker='=> _context is { } owner
            && SessionToolWorkflow.IsAutomation(owner.RequesterPrincipal)
            && _buffer.Any(static queued => !queued.IsReplay
@@ -61,6 +66,8 @@ person_marker='=> _context is { } owner
 read -r owner_start owner_end owner_first owner_last < <(select_span "$owner_marker")
 read -r join_start join_end join_first join_last < <(select_span "$join_marker")
 read -r end_call_start end_call_end end_call_first end_call_last < <(select_span "$end_call_marker")
+read -r compaction_call_start compaction_call_end compaction_call_first compaction_call_last \
+  < <(select_span "$compaction_call_marker")
 read -r person_start person_end person_first person_last < <(select_span "$person_marker")
 
 # The automation check: the call site in PlanNewInputAbandonment and the principal set.
@@ -77,6 +84,7 @@ read -r automation_start automation_end automation_first automation_last < <(sel
     --mutate "Sessions/Handlers/SessionInputFlow.cs{$owner_start..$owner_end}" \
     --mutate "Sessions/Handlers/SessionInputFlow.cs{$join_start..$join_end}" \
     --mutate "Sessions/Handlers/SessionInputFlow.cs{$end_call_start..$end_call_end}" \
+    --mutate "Sessions/Handlers/SessionInputFlow.cs{$compaction_call_start..$compaction_call_end}" \
     --mutate "Sessions/Handlers/SessionInputFlow.cs{$person_start..$person_end}" \
     --mutate "Sessions/SessionToolWorkflow.Recovery.cs{$wait_start..$wait_end}" \
     --mutate "Sessions/SessionToolWorkflow.Recovery.cs{$automation_start..$automation_end}" \
@@ -90,6 +98,7 @@ expected_join_count=3
 expected_wait_count=2
 expected_automation_count=1
 expected_end_call_count=1
+expected_compaction_call_count=3
 expected_person_count=6
 
 # A compile error does not count as a tested mutant. The "or" to "and" pattern mutant of the principal set
@@ -117,10 +126,11 @@ check_span "$join_first" "$join_last" "$expected_join_count" "same-requester joi
 check_span "$wait_first" "$wait_last" "$expected_wait_count" "automation wait" "$recovery_file"
 check_span "$automation_first" "$automation_last" "$expected_automation_count" "automation principal" "$recovery_file"
 check_span "$end_call_first" "$end_call_last" "$expected_end_call_count" "automation turn end"
+check_span "$compaction_call_first" "$compaction_call_last" "$expected_compaction_call_count" "compaction turn end"
 check_span "$person_first" "$person_last" "$expected_person_count" "waiting person"
 
 total=$((expected_owner_count + expected_join_count + expected_wait_count + expected_automation_count
-  + expected_end_call_count + expected_person_count))
+  + expected_end_call_count + expected_compaction_call_count + expected_person_count))
 jq -e --argjson count "$total" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count

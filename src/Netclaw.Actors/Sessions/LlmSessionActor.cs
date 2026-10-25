@@ -123,6 +123,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     // The held continuations that a fresh restart reminder authorized (ContinuationAuthorized). Rebuilt by replay.
     private readonly HashSet<InputId> _authorizedContinuations = [];
     private string? _turnRestartNotice;
+    // A person input ended an automation turn, and the next person turn has not yet taken the stop note (#2633).
+    // Actor-local: a restart drops it, and the restart path posts its own notice.
+    private bool _pendingStopNote;
     // Replay only: the requester of the journal turn that the last replayed tool batch belongs to. Actor-local.
     private TurnContext? _replayTurnOwner;
     // The continuation input of a stopped turn that the drain writes, and the stop that waits for it (#2632).
@@ -1158,6 +1161,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
+        // A person waits behind the automation turn whose tool loop this compaction stopped. The turn ends, and the
+        // drain then runs again with no tool-loop resume, so the restart check and the deferred approval still apply.
+        if (continuation.Action == InputProgressAction.EndTurn)
+        {
+            TurnLog().Warning("turn_person_input_end_at_compaction reminder={ReminderId} job={BackgroundJobId}",
+                _input.Authority.Source?.ReminderId?.Value, _input.Authority.Source?.BackgroundJobId?.Value);
+            EndAutomationTurnForPerson(DrainBufferOrReady);
+            return;
+        }
+
         if (continuation.ResumeToolLoop)
             _log.Info("Post-compaction: resuming tool loop with follow-up LLM call");
 
@@ -1602,6 +1615,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     // The cleanup of a failed turn, without the error reply and the error output. The turn completes.
     private void FinishTurnWithoutReply()
     {
+        CompleteTurnQuietly();
+        DrainBufferedMessagesOrBecomeReady();
+    }
+
+    private void CompleteTurnQuietly()
+    {
         _input.FailedTurn();
         _execution.ReleaseAll();
         _deliveryRetry.Clear();
@@ -1619,8 +1638,21 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             QuietEnd = true,
             OpenChildRunIds = _state.GetOpenChildRunIds()
         });
+    }
 
-        DrainBufferedMessagesOrBecomeReady();
+    // A person's input waits behind this automation turn at a safe boundary (SessionInputFlow.PersonWaitsBehindAutomation).
+    // The turn ends quietly, with no further model call, and the next person turn gets the stop note. Then the
+    // boundary continues: a tool-batch end compacts when due, and a compaction end drains.
+    private void EndAutomationTurnForPerson(Action thenContinue)
+    {
+        _toolWorkflow.ClearNormalBatch();
+        _execution.ClearToolTracking();
+        CloseActiveInputs(() =>
+        {
+            CompleteTurnQuietly();
+            _pendingStopNote = true;
+            thenContinue();
+        });
     }
 
     private void RecordIntermediateUsage(UsageDetails? usage)
@@ -3013,6 +3045,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         var (callId, modelToken) = _execution.BeginModel();
 
+        // The stop note joins the per-turn notice. Only the first call of a turn inspects the context and writes that
+        // block into history, so the note is taken only by that call, and later calls of the turn keep one copy.
+        var stopNote = _pendingStopNote && _input.PersonOwnsTurn ? SessionModelContext.AutomationStopNote : null;
+        var turnNotice = stopNote is null || _turnRestartNotice is null
+            ? stopNote ?? _turnRestartNotice
+            : $"{_turnRestartNotice}\n\n{stopNote}";
         var call = _modelContext.StartCall(
             callId,
             _state,
@@ -3021,8 +3059,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _input.Authority.Trust,
             recallQuery,
             slashCommandSkillContent,
-            _turnRestartNotice,
+            turnNotice,
             modelToken);
+        if (stopNote is not null && call is ContextCall.Inspect)
+            _pendingStopNote = false;
         if (call is ContextCall.Inspect { Audit: var audit })
         {
             // The observer audit is independent of model-visible recall content.
@@ -4451,11 +4491,23 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         // the person's input then starts its own turn (SessionInputFlow.AdvanceAfterToolBatch).
         if (advance.Next == ToolBatchNextAction.EndTurn)
         {
-            _toolWorkflow.ClearNormalBatch();
-            _execution.ClearToolTracking();
             TurnLog().Warning("turn_person_input_end_at_tool_batch iteration={Iteration} reminder={ReminderId} job={BackgroundJobId}",
                 _turnState.ToolIterationCount, _input.Authority.Source?.ReminderId?.Value, _input.Authority.Source?.BackgroundJobId?.Value);
-            CloseActiveInputs(FinishTurnWithoutReply);
+            // A compaction that is due at this batch commits before the person's first model call, so that call cannot
+            // overflow. The compaction end then drains with no tool-loop resume.
+            EndAutomationTurnForPerson(() =>
+            {
+                if (!ShouldCompact())
+                {
+                    DrainBufferedMessagesOrBecomeReady();
+                    return;
+                }
+
+                _log.Info("Compaction threshold reached at a person stop ({InputTokens} tokens >= {Threshold} limit), starting compaction",
+                    _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
+                Self.Tell(new CompactionTriggered(_lastInputTokenCount));
+                TransitionTo(SessionPhase.Compacting);
+            });
             return;
         }
 

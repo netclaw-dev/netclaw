@@ -693,11 +693,11 @@ internal sealed class SessionInputFlow
 
     // Security boundary (one authority per turn): a person's input never joins an automation turn, because the
     // requesters differ. An automation turn has the principal VerifiedAutomation or SystemProcess. A waiting Operator
-    // or TrustedInternal person ends it at the tool-batch end: no input joins, and the turn makes no further model
-    // call. Each waiting input then starts a turn under its own recorded authority, so no model call mixes two
-    // authorities. An UntrustedExternal person waits, so a stranger cannot stop automation work. The pause never holds
-    // a person, so this check ignores the pause. A child result notice is automated input by its kind, so it never
-    // ends a turn. A person never ends the turn of another person.
+    // or TrustedInternal person ends it at a safe boundary (a tool-batch end or a tool-loop compaction end): no input
+    // joins, and the turn makes no further model call. Each waiting input then starts a turn under its own recorded
+    // authority, so no model call mixes two authorities. An UntrustedExternal person waits, so a stranger cannot stop
+    // automation work. The pause never holds a person, so this check ignores the pause. A child result notice is
+    // automated input by its kind, so it never ends a turn. A person never ends the turn of another person.
     private bool PersonWaitsBehindAutomation()
         => _context is { } owner
            && SessionToolWorkflow.IsAutomation(owner.RequesterPrincipal)
@@ -705,6 +705,12 @@ internal sealed class SessionInputFlow
                                            && queued.Message.Notice is null
                                            && BufferedAuthority(queued.Message).RequesterPrincipal
                                                is PrincipalClassification.Operator or PrincipalClassification.TrustedInternal);
+
+    // The stop note goes to the first turn of a person after a stop (#2633). A child result notice turn can carry a
+    // person's principal, but it is automated input by its kind, so it does not take the note.
+    public bool PersonOwnsTurn
+        => _context?.RequesterPrincipal is PrincipalClassification.Operator or PrincipalClassification.TrustedInternal
+           && _noticeRunIds.Count == 0;
 
     public void MarkTextEmitted() => _emittedText = true;
     public void ToolBatchCommitted() { _selectedIds.Clear(); _emittedText = false; }
@@ -781,6 +787,12 @@ internal sealed class SessionInputFlow
 
         var resume = _resumeToolLoopAfterCompaction;
         _resumeToolLoopAfterCompaction = false;
+        // The end of a tool-loop compaction is the second safe boundary (#2633): a waiting person ends the automation
+        // turn, as at the tool-batch end. An overflow compaction resumes no tool loop, so its replay keeps the turn.
+        // A deferred approval stays for the drain that follows the close.
+        if (resume && PersonWaitsBehindAutomation())
+            return new CompactionContinuation(InputProgressAction.EndTurn, false, null, null);
+
         var batch = DrainBufferedBatch(continuesTurn: resume, childConsentPaused);
         // The actor replays this response only after it applies the phase transition.
         var deferred = _deferredApproval;

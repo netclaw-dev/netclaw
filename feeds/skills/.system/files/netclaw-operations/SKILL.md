@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.138.0"
+  version: "2.139.0"
 ---
 
 # Netclaw Operations
@@ -252,6 +252,16 @@ audience, and a CLI chat is Personal (#2330).
 Full reminder detail — delivery contract, proactive channel messaging, approval
 scoping — is in
 `skill_read_resource('netclaw-operations', 'references/scheduling.md')`.
+
+A person's message ends a running automation turn (a reminder fire, a background
+job result, a webhook, or an approval notice) at the next tool-batch end or
+tool-loop compaction end. The automation turn completes quietly and makes no
+further model call. Then the person's turn starts under the person's own
+authority. Its first request holds this fixed note before the person's message:
+"The automated turn above stopped unfinished because a person sent a message."
+When you see that note, answer the person's message. Do not continue the stopped
+work unless the person asks for it. The session log shows
+`turn_person_input_end_at_tool_batch` or `turn_person_input_end_at_compaction`.
 
 Background shell: set `_background: true` on `shell_execute`, then use
 `check_background_job`. Netclaw runs at most 5 jobs at a time and stops them when

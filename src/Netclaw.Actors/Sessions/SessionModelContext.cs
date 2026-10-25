@@ -72,6 +72,11 @@ internal sealed class SessionModelContext
         "Skills contain user-specific preferences and project conventions that override your general knowledge — even if you already know a topic, the user may have standards defined in a skill. " +
         "When in doubt, load — a redundant load is cheap, a missed skill is not.";
 
+    // The stop note (#2633): the first call of a person's turn holds it after a person input ended an automation turn.
+    // It is fixed text with no kind label, because a webhook sets its own source kind. Keep it one literal: the eval
+    // automation_stop_note_person_first reads it from this source.
+    internal const string AutomationStopNote = "The automated turn above stopped unfinished because a person sent a message. Answer the person's message. Do not continue the stopped work unless the person asks for it.";
+
     internal SessionModelContext(
         SessionId sessionId,
         SessionStoragePaths storage,
