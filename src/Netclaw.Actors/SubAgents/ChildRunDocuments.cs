@@ -155,6 +155,27 @@ internal static class ChildRunDocuments
         }
     }
 
+    /// <summary>Writes through a temporary file and a rename, like <see cref="WriteAtomicAsync"/>, for a caller that cannot await.</summary>
+    public static void WriteAtomic(string path, string content)
+    {
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException("A child run file requires a parent directory.");
+        Directory.CreateDirectory(directory);
+        var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+        var moved = false;
+        try
+        {
+            File.WriteAllText(temporary, content, new UTF8Encoding(false));
+            File.Move(temporary, path, overwrite: true);
+            moved = true;
+        }
+        finally
+        {
+            if (!moved)
+                File.Delete(temporary);
+        }
+    }
+
     /// <summary>The words that tell the parent model why a child run with the reason owner_restarted ended.</summary>
     public const string RestartLoss =
         "The parent session restarted (for example, a daemon restart). The child did not survive. The runtime does not start the child again.";

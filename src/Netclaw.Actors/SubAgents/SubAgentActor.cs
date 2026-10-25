@@ -1482,14 +1482,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var storage = ToolExecutionContext.SessionStorage
                 ?? throw new InvalidOperationException("The child run has no session storage.");
             var path = Path.Combine(storage.ArtifactDirectory.Value, TruncatedOutputArtifactName);
-            var redacted = PreviewRedacted(stub, int.MaxValue).Replace("\\n", "\n", StringComparison.Ordinal);
+            // Redact the real text, so the file keeps its line breaks. The escaped pass catches a secret
+            // that spans two lines. It replaces the body only when it found one.
+            var single = SecretOutputRedactor.Redact(stub);
+            var escaped = single.ReplaceLineEndings("\\n");
+            var escapedRedacted = SecretOutputRedactor.Redact(escaped);
+            var redacted = escapedRedacted == escaped ? single : escapedRedacted;
             var content = "# Partial output (cut off at the model output limit)\n\n"
                 + "This file is partial. The model reached its output limit, so the text ends early. It is not a result.\n\n"
                 + redacted + "\n";
-            ChildRunDocuments.WriteAtomicAsync(path, content, CancellationToken.None).GetAwaiter().GetResult();
+            ChildRunDocuments.WriteAtomic(path, content);
             return path;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
         {
             _log.Warning(ex, "SubAgent [{AgentName}] could not save its truncated output as an artifact", _definition.Name);
             return null;

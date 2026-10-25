@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.6.1"
+  version: "1.6.2"
 ---
 
 # Subagent Authoring
@@ -116,8 +116,11 @@ Two more rules end a run with outcome `failed`:
   counts from the start of the call, so prefill time counts.
 - `output_truncated`: the model reply stopped at its output limit and has no
   tool call. The text is cut off, so it is not a result. The run does not retry.
-  The failure text holds a short, redacted preview of the cut-off text. A reply
-  that has a tool call still runs its tools.
+  The failure text holds a short, redacted preview of the cut-off text. The
+  runtime also saves the full redacted answer text as `truncated-output.md` in
+  the run artifact folder, marked as partial, and the failure text names its
+  path. A thinking-only reply saves no file. A reply that has a tool call still
+  runs its tools.
 
 When a subagent fails with `output_truncated`, ask for a shorter answer. If the
 subagent has a file write tool, tell it to write long output to a file and to
