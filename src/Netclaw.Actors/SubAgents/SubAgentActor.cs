@@ -42,6 +42,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 {
 
     private const string EmptyResponseMarker = "(no response)";
+    private const string TruncatedOutputArtifactName = "truncated-output.md";
     private const string MalformedFinalOutputMessage = "Subagent produced malformed final output: it emitted unexecuted tool calls as text. This was not a timeout.";
     private const string MalformedFinalOutputNudge =
         "The previous response emitted unexecuted tool-call markup as plain text. "
@@ -517,10 +518,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     _definition.Name,
                     analysis.TextChars,
                     analysis.ThinkingChars);
+                var savedAt = SaveTruncatedOutput(stub);
                 Complete(
                     false,
                     "Subagent output was truncated: the model reached its output limit before it finished, "
                     + "and it made no tool call. The text is cut off and is not a result. "
+                    + (savedAt is null ? "" : $"The full cut-off text is saved at {savedAt}. ")
                     + $"Cut-off text: {PreviewRedacted(stub, 300)}",
                     SubAgentRunOutcome.Failed,
                     SubAgentOutcomeReason.OutputTruncated);
@@ -1465,6 +1468,33 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         => _noProgressBudget
            ?? throw new InvalidOperationException(
                "A no-progress watchdog expiry arrived, but the sub-agent has no no-progress budget.");
+
+    // Keeps the whole cut-off answer text, so the parent can use the partial work. The
+    // text takes the same redaction as the preview. A write failure is logged and returns
+    // null: it must not hide the output_truncated failure.
+    private string? SaveTruncatedOutput(string? stub)
+    {
+        if (string.IsNullOrWhiteSpace(stub))
+            return null;
+
+        try
+        {
+            var storage = ToolExecutionContext.SessionStorage
+                ?? throw new InvalidOperationException("The child run has no session storage.");
+            var path = Path.Combine(storage.ArtifactDirectory.Value, TruncatedOutputArtifactName);
+            var redacted = PreviewRedacted(stub, int.MaxValue).Replace("\\n", "\n", StringComparison.Ordinal);
+            var content = "# Partial output (cut off at the model output limit)\n\n"
+                + "This file is partial. The model reached its output limit, so the text ends early. It is not a result.\n\n"
+                + redacted + "\n";
+            ChildRunDocuments.WriteAtomicAsync(path, content, CancellationToken.None).GetAwaiter().GetResult();
+            return path;
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "SubAgent [{AgentName}] could not save its truncated output as an artifact", _definition.Name);
+            return null;
+        }
+    }
 
     internal static string PreviewForLog(string? text, int maxChars)
         => PreviewRedacted(text, maxChars);
