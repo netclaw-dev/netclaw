@@ -35,6 +35,7 @@ internal static partial class NetclawProtoMapper
         InputAdmitted v => ToProto(v),
         InputClosed v => ToProto(v),
         SessionTitleSet v => ToProto(v),
+        ContinuationAuthorized v => ToProto(v),
         SessionCompacted v => ToProto(v),
         ToolBatchStarted v => ToProto(v),
         ToolCallRecorded v => ToProto(v),
@@ -270,6 +271,22 @@ internal static partial class NetclawProtoMapper
         ClosedAtMs = proto.ClosedAtMs,
         ChildContinuation = proto.ChildContinuation is null ? null : FromProto(proto.ChildContinuation),
         KeepsTurn = proto.HasKeepsTurn && proto.KeepsTurn
+    };
+
+    // ── ContinuationAuthorized ──
+
+    internal static Proto.ContinuationAuthorizedProto ToProto(ContinuationAuthorized evt) => new()
+    {
+        SessionId = ToProto(evt.SessionId),
+        InputId = evt.InputId.Value,
+        AuthorizedAtMs = evt.AuthorizedAtMs
+    };
+
+    internal static ContinuationAuthorized FromProto(Proto.ContinuationAuthorizedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        InputId = new InputId(proto.InputId),
+        AuthorizedAtMs = proto.AuthorizedAtMs
     };
 
     // ── SessionTitleSet ──

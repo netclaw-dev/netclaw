@@ -54,9 +54,11 @@ expiry instruction closes.
 
 ### D2. What the expiry signal closes
 
-The signal closes the inputs that the resume would take (`ValidateRestartResume`: the leading pending inputs of one
-requester that no turn selected), in one `InputClosed` write, and emits the stopped-turn notice in the journal
-callback. It closes a person input that the drain stopped at its first model call as well as a continuation. The
+The signal closes every input that was pending at `RecoveryCompleted` and that no turn selected, also the inputs of
+other requesters, in one `InputClosed` write, and emits the stopped-turn notice in the journal callback. The recovered
+set is actor-local, so an input that arrived after the restart stays open. The signal leaves approval notices, child
+result notices, and automated input that the pause holds, except a continuation. While a parent approval is open, the
+signal closes nothing, as the resume path does. It closes a person input that the drain stopped at its first model call as well as a continuation. The
 signal starts no model call, writes no `InputAdmitted`, and replies `RestartResumeNotNeeded`. With nothing to close it
 posts nothing.
 
@@ -68,6 +70,9 @@ posts nothing.
 - `PersistReplacingInput` keeps a continuation for an approval notice or a child result notice only when the queue
   holds it (unchanged rule). With no reminder, the queue does not hold it, so the approval notice after the last
   answer closes it and posts the notice.
+- The fresh reminder journals `ContinuationAuthorized` for the held continuation. No existing record can name a
+  pending input without closing or consuming it, and a passivation loses the actor-local queue. Recovery queues an
+  authorized continuation behind the pause. A pending input blocks a snapshot, so the snapshot needs no field.
 - After a fresh reminder, the continuation waits for the last answer with no deadline. The requester who answers is
   present, and the reminder already authorized the resume.
 
@@ -102,9 +107,9 @@ resumes.
 
 ### D6. A rejected drain park is a restart loss
 
-`ChildEventRejected` carries whether the rejected park had zero requests (actor-local, no serialization). For a drain
-park, `EndParkedRun` takes the restart-loss branch. The rejected park is not in the state, so the run keeps the file
-activity of its last checkpoint. The tests check the outcome only.
+`ChildEventRejected` carries the park of a rejected drain park (a park with zero requests; actor-local, no
+serialization). `EndParkedRun` then takes the restart-loss branch and ends the run from the file activity of that park,
+as a refused drain park does (`park-too-large`). The tests check the outcome only.
 
 ### Owners and data
 
@@ -113,7 +118,7 @@ activity of its last checkpoint. The tests check the outcome only.
 | Expired or fresh | `RestartRecoveryService` | the manifest (durable); the clock |
 | The expiry signal text | `SessionProtocol.RestartExpiredInstruction` | static |
 | Close on the expiry signal | `LlmSessionActor` restart-resume path | durable `InputClosed` |
-| Queue a held continuation | `LlmSessionActor.TryResumeInterruptedInput` (reminder) | actor-local queue |
+| Queue a held continuation | `LlmSessionActor.TryResumeInterruptedInput` (reminder) | actor-local queue; durable `ContinuationAuthorized` |
 | Leave out a continuation at recovery | `QueueInputsHeldByThePause` | actor-local queue |
 | Continuation or ordinary | `SessionInputFlow.IsContinuation` over the marker | durable marker |
 | Legacy read | `NetclawProtoMapper.FromProto(InputAdmittedProto)` | durable bytes |

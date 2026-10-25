@@ -33,6 +33,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string LegacyToolTaskAdoptedManifest = "tta-v1";
     private const string InputClosedManifest = "ic-v1";
     private const string SessionTitleSetManifest = "sts-v1";
+    private const string ContinuationAuthorizedManifest = "cau-v1";
     private const string SessionCompactedManifest = "sc-v1";
     private const string LegacySessionSnapshotManifest = "ss-v1";
     private const string SessionSnapshotManifest = "ss-v2";
@@ -66,6 +67,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(InputAdmitted)] = InputAdmittedManifest,
         [typeof(InputClosed)] = InputClosedManifest,
         [typeof(SessionTitleSet)] = SessionTitleSetManifest,
+        [typeof(ContinuationAuthorized)] = ContinuationAuthorizedManifest,
         [typeof(SessionCompacted)] = SessionCompactedManifest,
         [typeof(SessionSnapshot)] = SessionSnapshotManifest,
         [typeof(ChildRunAccepted)] = ChildRunAcceptedManifest,
@@ -136,6 +138,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
             InputClosedManifest => ReadInputClosed(bytes),
             SessionTitleSetManifest => NetclawProtoMapper.FromProto(
                 Proto.SessionTitleSetProto.Parser.ParseFrom(bytes)),
+            ContinuationAuthorizedManifest => NetclawProtoMapper.FromProto(
+                Proto.ContinuationAuthorizedProto.Parser.ParseFrom(bytes)),
             SessionCompactedManifest => NetclawProtoMapper.FromProto(
                 Proto.SessionCompactedProto.Parser.ParseFrom(bytes)),
             LegacySessionSnapshotManifest => NetclawProtoMapper.FromLegacySnapshot(

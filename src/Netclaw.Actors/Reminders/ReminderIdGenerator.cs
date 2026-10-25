@@ -10,6 +10,12 @@ namespace Netclaw.Actors.Reminders;
 
 public static partial class ReminderIdGenerator
 {
+    /// <summary>
+    /// The ID prefix of a restart reminder (#2632, #2659). Only the system creates such a reminder: the session reads it
+    /// as a restart resume or as the expiry signal, which closes stored work.
+    /// </summary>
+    public const string RestartReminderIdPrefix = "restart-resume-";
+
     [GeneratedRegex("[^a-z0-9\\-]", RegexOptions.Compiled)]
     private static partial Regex InvalidChars();
 

@@ -25,6 +25,9 @@ public sealed class RestartRecoveryService : IHostedService
     private static readonly TimeSpan ReminderStartDelay = TimeSpan.FromMilliseconds(250);
     // The expiry signal must outlive its fire time, so the reminder manager delivers it after a slow startup.
     private static readonly TimeSpan ExpirySignalLifetime = TimeSpan.FromMinutes(10);
+    // The reminder manager ends a one-shot whose expiry passed at its fire, with no delivery. A saved restart reminder
+    // stays valid at least this long after its fire time, or startup sends the expiry signal in its place.
+    private static readonly TimeSpan MinimumFireWindow = TimeSpan.FromMinutes(1);
 
     private readonly RestartManifestStore _manifestStore;
     private readonly IRequiredActor<ReminderManagerActorKey> _reminderManagerProvider;
@@ -84,7 +87,7 @@ public sealed class RestartRecoveryService : IHostedService
         var reminder = stored with { Schedule = stored.Schedule with { FireAt = fireAt } };
         // An expired restart reminder becomes the expiry signal (#2659 design D1). It takes the same delivery route, so
         // the session closes the stopped work and the restart notice reaches the thread. The signal resumes nothing.
-        if (stored.ExpiresAt is not { } expiresAt || expiresAt <= fireAt)
+        if (stored.ExpiresAt is not { } expiresAt || expiresAt < fireAt + MinimumFireWindow)
         {
             _logger.LogWarning(
                 "Restart reminder {ReminderId} expired before startup recovery; the session closes the stopped work with a notice.",

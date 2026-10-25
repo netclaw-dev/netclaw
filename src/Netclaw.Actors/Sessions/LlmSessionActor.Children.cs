@@ -823,14 +823,14 @@ public sealed partial class LlmSessionActor
     }
 
     // Queues each pending input that the pause holds and that the queue does not hold yet. A continuation input stays
-    // out: only a fresh restart reminder lets it run (TryResumeInterruptedInput, #2659 design D3). Unqueued, the next
+    // out unless a fresh restart reminder authorized it (ContinuationAuthorized, #2659 design D3). Unqueued, the next
     // admission closes it and posts the restart notice once, also the approval notice of the last answer.
     private void QueueInputsHeldByThePause()
     {
         var selected = _input.SelectedInputs.Ids;
         var queued = _input.RestoreWaitingInputs(
             SplitByThePause(_state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId))).Held
-                .Where(static input => !SessionInputFlow.IsContinuation(input)).ToArray(),
+                .Where(input => !SessionInputFlow.IsContinuation(input) || _authorizedContinuations.Contains(input.InputId)).ToArray(),
             _sessionId);
         if (queued > 0)
             _log.Info("Queued {HeldCount} input(s) that the child consent pause held before the restart", queued);

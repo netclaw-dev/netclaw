@@ -151,6 +151,14 @@ message InputClosedProto {
   optional bool keeps_turn = 8;
 }
 
+// A fresh restart reminder authorized the held continuation input (#2659). Recovery queues that input behind the child
+// consent pause, so the authority survives a passivation. No existing record can name a pending input without closing it.
+message ContinuationAuthorizedProto {
+  SessionIdProto session_id = 1;
+  string input_id = 2;
+  int64 authorized_at_ms = 3;
+}
+
 message SessionTitleSetProto {
   SessionIdProto session_id = 1;
   string title = 2;

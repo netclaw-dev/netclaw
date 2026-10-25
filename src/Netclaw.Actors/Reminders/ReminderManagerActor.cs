@@ -296,6 +296,16 @@ public sealed partial class ReminderManagerActor : ReceiveActor, IWithTimers
                 return;
         }
 
+        // Security boundary (#2659): the session reads a restart reminder as a resume or as the expiry signal, which
+        // closes stored work. A model must not forge one through set_reminder, so only the system may save the prefix.
+        if (id.Value.StartsWith(ReminderIdGenerator.RestartReminderIdPrefix, StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(cmd.Definition.CreatedBy) && cmd.Definition.CreatedBy != "system")
+        {
+            replyTo.Tell(ValidationFailure(id, title,
+                $"The reminder ID prefix '{ReminderIdGenerator.RestartReminderIdPrefix}' is reserved for the system."));
+            return;
+        }
+
         var now = _timeProvider.GetUtcNow();
         var authorization = ValidateRequestedAudience(cmd.Definition.Audience, cmd.Authorization);
         if (!authorization.IsSuccess)

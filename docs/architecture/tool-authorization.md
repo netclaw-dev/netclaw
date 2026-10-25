@@ -898,11 +898,13 @@ automation authority and a person turn keeps the person's authority. The input w
 not start it, and it never joins the turn of another requester. A later input that arrives first closes it in the same
 journal write, and the session posts the stop notice once. Only a fresh restart reminder authorizes the
 continuation. Recovery does not queue a continuation that the child consent pause holds
-(`QueueInputsHeldByThePause`); the fresh reminder queues it (`TryResumeInterruptedInput`). An approval notice or a
+(`QueueInputsHeldByThePause`); the fresh reminder queues it (`TryResumeInterruptedInput`) and journals
+`ContinuationAuthorized`, so recovery after a passivation queues it again. An approval notice or a
 child result notice never stands in for the reminder, so with no reminder the approval notice of the last answer
 closes the continuation. An expired restart reminder comes back from startup as the expiry signal
-(`SessionProtocol.RestartExpiredInstruction`): the session closes the stopped work with the notice and grants
-nothing. `SessionExecutionLifetime.ContinuesStoppedTurn`
+(`SessionProtocol.RestartExpiredInstruction`): the session closes the inputs that were pending at recovery with the
+notice and grants nothing. `ReminderManagerActor` rejects a `restart-resume-` reminder ID from any creator other than
+the system, so a model cannot forge a resume or an expiry signal through `set_reminder`. `SessionExecutionLifetime.ContinuesStoppedTurn`
 decides if the turn is kept. A turn with partial text, another pending input, an overflow replay, a live background
 job, an unanswered tool call, or no channel type gets the stop notice instead.
 The actor writes grants, persists events, and emits outputs. The lifetime owner owns task cancellation and stop completion.

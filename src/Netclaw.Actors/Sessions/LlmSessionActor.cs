@@ -117,6 +117,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private bool RestartDrainRequested => _execution.RestartDrainRequested;
     private string? _pendingRestartNotice;
+    // The inputs that were pending at RecoveryCompleted. The expiry signal closes only these, so it never closes work
+    // that arrived after the restart (#2659).
+    private IReadOnlySet<InputId> _recoveredPendingInputIds = new HashSet<InputId>();
+    // The held continuations that a fresh restart reminder authorized (ContinuationAuthorized). Rebuilt by replay.
+    private readonly HashSet<InputId> _authorizedContinuations = [];
     private string? _turnRestartNotice;
     // Replay only: the requester of the journal turn that the last replayed tool batch belongs to. Actor-local.
     private TurnContext? _replayTurnOwner;
@@ -217,6 +222,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _deliveryRetry.Clear();
         });
         Recover<InputClosed>(RecoverParentClosure);
+        Recover<ContinuationAuthorized>(evt => _authorizedContinuations.Add(evt.InputId));
         Recover<ChildRunAccepted>(evt => _state = _state.Apply(evt));
         // Replay does not close child approvals here. RecoveryCompleted closes every child entry that replay left open.
         Recover<ChildRunEvent>(evt => _state = _state.Apply(evt));
@@ -260,6 +266,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
             // Always read fresh from disk — identity file edits take effect immediately
             SetSystemPrompt();
+            _recoveredPendingInputIds = _state.GetExecutablePendingInputs().Select(static input => input.InputId).ToHashSet();
 
             // A child owner never survives a restart. Close the child entries that remain before a stashed command
             // runs, then log the approvals that stay open. Replay itself logs none (see ApplyToolApprovalRequested).
@@ -1181,8 +1188,6 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             Self.Tell(deferred);
         }
     }
-
-    private const string RestartReminderIdPrefix = "restart-resume-";
 
     // Bounds the reap-on-passivation handshake; the Ask always resolves within
     // this window (ack or piped failure), so passivation can never wedge on it.
@@ -2453,31 +2458,36 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private static bool IsRestartReminder(SendUserMessage cmd, string instruction)
         => cmd.Source?.ReminderId?.Value is { } reminderId
-           && reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
+           && reminderId.StartsWith(ReminderIdGenerator.RestartReminderIdPrefix, StringComparison.Ordinal)
            && string.Equals(cmd.Content, instruction, StringComparison.Ordinal);
 
     // The expiry signal (#2659 design D1, D2): startup registers a restart reminder that expired before recovery with
-    // RestartExpiredInstruction. The signal is not an input and grants nothing. It closes the stopped work that the
-    // resume would take, in one write, and posts the restart notice once in the journal callback. It starts no model
-    // call. It leaves the session-made notices and the inputs that the pause holds, so a child park and its consent
-    // prompts stay. A continuation input is stopped work also when the pause holds it.
+    // RestartExpiredInstruction. The signal is not an input and grants nothing. It closes every input that was pending
+    // at recovery and that no turn selected, in one write, and posts the restart notice once in the journal callback.
+    // It starts no model call. It leaves the session-made notices and the inputs that the pause holds, so a child park
+    // and its consent prompts stay. A continuation input is stopped work also when the pause holds it. An open parent
+    // approval owns the next turn, as on the resume path, so the signal then closes nothing.
     private bool TryCloseExpiredRestartWork(SendUserMessage cmd)
     {
         if (!IsRestartReminder(cmd, SessionProtocol.RestartExpiredInstruction))
             return false;
 
+        if (_toolWorkflow.HasParkedApprovals())
+        {
+            AckRestartResumeNoOp(cmd);
+            return true;
+        }
+
         var selected = _input.SelectedInputs.Ids;
         var paused = _toolWorkflow.IsChildConsentPaused;
-        var stopped = _state.GetExecutablePendingInputs()
-            .Where(input => !selected.Contains(input.InputId)
+        InputId[] closes = [.. _state.GetExecutablePendingInputs()
+            .Where(input => _recoveredPendingInputIds.Contains(input.InputId) && !selected.Contains(input.InputId)
                             && (SessionInputFlow.IsContinuation(input)
                                 || input.ChildNotice is null
                                 && TurnContext.TryFromRecord(input.TurnContext, out var authority, out _)
                                 && authority is { IsChildConsentNotice: false }
                                 && !(paused && ChildConsentPause.Holds(authority, isChildNotice: false))))
-            .ToArray();
-        // One turn serves one requester, so the resume takes the leading inputs of the first requester.
-        InputId[] closes = [.. stopped.Take(_execution.ValidateRestartResume(stopped).ResumeCount).Select(static input => input.InputId)];
+            .Select(static input => input.InputId)];
         _log.Info("restart_expired reminder={ReminderId} closes={CloseCount}", cmd.Source?.ReminderId, closes.Length);
         if (closes.Length == 0)
         {
@@ -2533,14 +2543,12 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var pending = _state.GetExecutablePendingInputs();
         // N1 (durable-child-park-recovery): an open parked request holds automated input and child notices, also the
         // continuation of an automation turn. The reminder starts no turn for them. They run after the last answer.
-        // Recovery leaves a held continuation out of the queue, so this fresh reminder queues it (#2659 design D3).
+        // Recovery leaves a held continuation out of the queue, so this fresh reminder queues it (#2659 design D3), and
+        // the journal keeps that authority for a recovery after a passivation.
         if (_toolWorkflow.IsChildConsentPaused)
         {
             var (held, free) = SplitByThePause(pending);
-            var selected = _input.SelectedInputs.Ids;
-            _input.RestoreWaitingInputs(
-                held.Where(input => SessionInputFlow.IsContinuation(input) && !selected.Contains(input.InputId)).ToArray(),
-                _sessionId);
+            AuthorizeHeldContinuations(held);
             pending = free;
         }
         if (pending.Count == 0)
@@ -2594,6 +2602,18 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         FireInitialTurnLlmCall(recallQuery);
         TransitionTo(SessionPhase.Processing);
         return true;
+    }
+
+    private void AuthorizeHeldContinuations(IReadOnlyList<InputAdmitted> held)
+    {
+        var selected = _input.SelectedInputs.Ids;
+        var continuations = held.Where(input => SessionInputFlow.IsContinuation(input) && !selected.Contains(input.InputId)).ToArray();
+        _input.RestoreWaitingInputs(continuations, _sessionId);
+        var authorized = continuations.Where(input => !_authorizedContinuations.Contains(input.InputId))
+            .Select(input => new ContinuationAuthorized { SessionId = _sessionId, InputId = input.InputId, AuthorizedAtMs = NowMs() })
+            .ToArray();
+        if (authorized.Length > 0)
+            PersistAll(authorized, committed => _authorizedContinuations.Add(committed.InputId));
     }
 
     private bool TryResumeSlashCommand(IReadOnlyList<InputAdmitted> pending)
@@ -2905,6 +2925,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         if (@event is InputAdmitted)
             TryReplyNack("The input journal rejected the message. The session did not start a model call.");
+        else if (@event is ContinuationAuthorized authorization)
+            _log.Error(cause, "The journal rejected the authority of continuation {InputId}. A restart closes it with the notice.",
+                authorization.InputId);
         else if (@event is InputClosed { KeepsTurn: true } waitingClose)
             _log.Error(cause, "The journal rejected the close of waiting input(s) {InputIds}", string.Join(",", waitingClose.InputIds));
         else if (_phase.Current == SessionPhase.Processing)

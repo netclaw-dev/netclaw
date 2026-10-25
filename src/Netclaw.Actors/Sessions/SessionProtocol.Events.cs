@@ -357,6 +357,22 @@ public static partial class SessionProtocol
     }
 
     /// <summary>
+    /// A fresh restart reminder authorized the continuation input <see cref="InputId"/> that the child consent pause holds
+    /// (#2659). Recovery queues only an authorized continuation behind the pause. A pending input blocks a snapshot, so
+    /// the record matters only in the journal.
+    /// </summary>
+    public sealed record ContinuationAuthorized : ISessionEvent
+    {
+        public SessionId SessionId { get; init; }
+
+        public InputId InputId { get; init; }
+
+        public long AuthorizedAtMs { get; init; }
+
+        public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(AuthorizedAtMs);
+    }
+
+    /// <summary>
     /// Persisted event recording that the session title was set or updated.
     /// </summary>
     public sealed record SessionTitleSet : ISessionEvent
