@@ -123,9 +123,11 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     // The held continuations that a fresh restart reminder authorized (ContinuationAuthorized). Rebuilt by replay.
     private readonly HashSet<InputId> _authorizedContinuations = [];
     private string? _turnRestartNotice;
-    // A person input ended an automation turn, and the next person turn has not yet taken the stop note (#2633).
+    // A person input ended an automation turn, and no batch of a person's requester has started since (#2633).
     // Actor-local: a restart drops it, and the restart path posts its own notice.
     private bool _pendingStopNote;
+    // The current turn takes the stop note in its first model call. Actor-local.
+    private bool _turnStopNote;
     // Replay only: the requester of the journal turn that the last replayed tool batch belongs to. Actor-local.
     private TurnContext? _replayTurnOwner;
     // The continuation input of a stopped turn that the drain writes, and the stop that waits for it (#2632).
@@ -1655,6 +1657,17 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         });
     }
 
+    // The first batch that adopts a person's requester after a stop ends the pending stop note. The turn takes the note
+    // when the batch holds a person's own message. A batch of child result notices only, or a slash command, does not.
+    private void SettleStopNote(BufferedInputBatch batch)
+    {
+        if (!_pendingStopNote || !batch.AdoptsAuthority
+            || _input.Authority.Context?.RequesterPrincipal is not (PrincipalClassification.Operator or PrincipalClassification.TrustedInternal))
+            return;
+        _pendingStopNote = false;
+        _turnStopNote = !batch.DispatchesCommand && batch.Messages.Any(static message => message.Notice is null);
+    }
+
     private void RecordIntermediateUsage(UsageDetails? usage)
     {
         if (usage is null)
@@ -1879,6 +1892,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void ApplyBufferedBatch(BufferedInputBatch batch)
     {
+        SettleStopNote(batch);
         if (batch.AdoptsAuthority)
         {
             // The batch starts a turn for its own requester. Derive trust and the prompt audience from that
@@ -3047,7 +3061,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         // The stop note joins the per-turn notice. Only the first call of a turn inspects the context and writes that
         // block into history, so the note is taken only by that call, and later calls of the turn keep one copy.
-        var stopNote = _pendingStopNote && _input.PersonOwnsTurn ? SessionModelContext.AutomationStopNote : null;
+        var stopNote = _turnStopNote ? SessionModelContext.AutomationStopNote : null;
         var turnNotice = stopNote is null || _turnRestartNotice is null
             ? stopNote ?? _turnRestartNotice
             : $"{_turnRestartNotice}\n\n{stopNote}";
@@ -3061,8 +3075,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             slashCommandSkillContent,
             turnNotice,
             modelToken);
-        if (stopNote is not null && call is ContextCall.Inspect)
-            _pendingStopNote = false;
+        if (call is ContextCall.Inspect)
+            _turnStopNote = false;
         if (call is ContextCall.Inspect { Audit: var audit })
         {
             // The observer audit is independent of model-visible recall content.
@@ -4156,6 +4170,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             TransitionTo(SessionPhase.Ready);
         }
 
+        SettleStopNote(batch);
         TurnLog().Info("turn_buffer_command input={InputId}", batch.Messages[0].AdmittedInputId);
         // Admission already sent the acknowledgement. Keep this decision through any input-close callback.
         ContinueIncomingUserMessage(batch.Messages[0], replyAck: false);

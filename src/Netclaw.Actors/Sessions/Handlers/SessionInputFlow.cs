@@ -686,8 +686,12 @@ internal sealed class SessionInputFlow
         if (PersonWaitsBehindAutomation())
             return new ToolBatchInputAdvance(null, ToolBatchNextAction.EndTurn);
 
-        var batch = DrainBufferedBatch(continuesTurn: true, childConsentPaused);
+        // A due compaction comes first. Input of the turn's requester joins at the compaction end
+        // (AdvanceAfterCompaction), so a stop there never closes an input that no model request carried.
         var next = completion.ChooseNext(compactionDue);
+        var batch = next == ToolBatchNextAction.RequestCompaction
+            ? null
+            : DrainBufferedBatch(continuesTurn: true, childConsentPaused);
         return new ToolBatchInputAdvance(batch, next);
     }
 
@@ -705,12 +709,6 @@ internal sealed class SessionInputFlow
                                            && queued.Message.Notice is null
                                            && BufferedAuthority(queued.Message).RequesterPrincipal
                                                is PrincipalClassification.Operator or PrincipalClassification.TrustedInternal);
-
-    // The stop note goes to the first turn of a person after a stop (#2633). A child result notice turn can carry a
-    // person's principal, but it is automated input by its kind, so it does not take the note.
-    public bool PersonOwnsTurn
-        => _context?.RequesterPrincipal is PrincipalClassification.Operator or PrincipalClassification.TrustedInternal
-           && _noticeRunIds.Count == 0;
 
     public void MarkTextEmitted() => _emittedText = true;
     public void ToolBatchCommitted() { _selectedIds.Clear(); _emittedText = false; }

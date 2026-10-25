@@ -18,6 +18,8 @@ apply these rules in this order:
   after the close and before the first model call of the person's turn.
 - Each waiting input SHALL then start its own turn under its own recorded authority, in admission order.
 
+A stop SHALL NOT close an input that no model request carried.
+
 The first model request of the person's turn SHALL hold this note once, in a per-turn system context message after the
 history of the stopped turn and before the person's message:
 
