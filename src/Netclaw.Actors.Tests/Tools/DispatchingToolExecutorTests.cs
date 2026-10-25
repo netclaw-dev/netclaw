@@ -2412,7 +2412,7 @@ public partial class DispatchingToolExecutorTests : IDisposable
                 logger: logger);
             var toolCall = CreateToolCall("call-failure-log", "failure_probe", ToolInput.Empty());
 
-            var propagated = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var propagated = await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
 
             Assert.Same(expectedException, propagated);
@@ -2506,6 +2506,38 @@ public partial class DispatchingToolExecutorTests : IDisposable
             {
                 { "git status \\\n", "git status" }
             };
+
+    [Theory]
+    [InlineData("cat /protected/secret.txt", nameof(ToolAuthorizationOutcome.Denied), LogLevel.Warning,
+        nameof(ToolAccessDeniedException))]
+    [InlineData("file_read --path notes.txt", nameof(ToolAuthorizationOutcome.RequiresAgentCorrection), LogLevel.Information,
+        nameof(ToolCorrectionRequiredException))]
+    public async Task Expected_authorization_outcome_logs_one_line_and_no_error(
+        string command,
+        string outcome,
+        LogLevel expectedLevel,
+        string expectedExceptionType)
+    {
+        var logger = new RecordingLogger<DispatchingToolExecutor>();
+        var executor = CreateApprovalGatedShellExecutor(deniedPaths: ["/protected"], logger: logger);
+        var context = CreateInteractivePersonalContext("signalr/expected-outcome-log");
+        var toolCall = CreateToolCall("call-expected-outcome-log", "shell_execute", ToolInput.Create("Command", command));
+
+        var thrown = await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+            executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+
+        Assert.Equal(expectedExceptionType, thrown.GetType().Name);
+        var outcomeLog = Assert.Single(logger.LogRecords, entry =>
+            Equals(entry.Properties.GetValueOrDefault("AuthorizationOutcome"), outcome));
+        Assert.Equal(expectedLevel, outcomeLog.Level);
+        if (thrown is ToolAccessDeniedException denied)
+        {
+            Assert.Equal("shell_references_protected_path", denied.DenyReason);
+            Assert.Equal("shell_references_protected_path", outcomeLog.Properties["AuthorizationReason"]);
+        }
+
+        Assert.DoesNotContain(logger.LogRecords, entry => entry.Level >= LogLevel.Error);
+    }
 
     [Fact]
     public async Task One_time_approval_bypasses_policy_for_matching_shell_patterns()
