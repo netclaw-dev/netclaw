@@ -1,0 +1,80 @@
+## Why
+
+An operator must know each provider's own switch to limit the reply length or
+to set the thinking depth. Aaron's requirement: "I shouldn't need to know the
+different switches for all these different inference providers."
+
+Today, Netclaw has no per-model setting for either value. Only memory curation
+sets an output limit. Thus each Anthropic call except curation uses the SDK
+default of 1024 output tokens. Since `fail-truncated-reply-and-cap-thinking`,
+a reply that hits that limit fails the turn.
+
+Source PRDs: `PRD-005` (MP-002 Provider Abstraction, MP-009 Primary + Fallback
+Configuration) and `PRD-004` (CLI onboarding and config).
+
+## What Changes
+
+- A model definition gets two optional, provider-neutral fields:
+  - `MaxOutputTokens`: a positive integer.
+  - `Thinking`: one of `Off`, `Low`, `Medium`, `High`, `Max`.
+- Each provider maps the two fields onto its own request switch. The existing
+  reasoning-suppression dialect becomes the thinking dialect, and it owns this
+  mapping. Netclaw adds no second mechanism.
+- A self-hosted OpenAI-compatible provider gets its thinking dialect once per
+  provider. `netclaw model set` detects it where the endpoint shows it. Else
+  the operator sets `Providers:<name>:VendorOptions:ThinkingDialect`.
+- Netclaw rejects a thinking level that the provider's dialect cannot send.
+  `model set`, the TUI model manager, `doctor`, and startup validation all
+  reject it. Netclaw never maps a level to a different level.
+- A call-site value wins over the model value. Memory curation keeps its own
+  4096-token limit and its reasoning suppression.
+- When `MaxOutputTokens` is unset, Netclaw sends no limit. One exception
+  applies: the Anthropic provider sends a documented default of 32000 tokens
+  in place of the SDK default of 1024. This is an open decision for Aaron.
+- Each failover attempt gets its own copy of the request options. This change
+  fixes issue #2681.
+- `netclaw model set` gets `--max-output-tokens`, `--clear-max-output-tokens`,
+  `--thinking`, and `--clear-thinking`. The TUI model manager gets two fields.
+- The startup model line and the per-call debug line show the effective limit
+  and thinking level, with the source of each value.
+
+In scope for MVP: the two fields, the per-provider mapping, the CLI and TUI
+editors, doctor validation, and the #2681 fix.
+
+Out of scope: a per-role or per-call-site override, a thinking token budget, a
+per-model table of which levels a hosted model accepts, and a context-budget
+reserve for the output limit.
+
+## Capabilities
+
+### New Capabilities
+
+None.
+
+### Modified Capabilities
+
+- `named-model-definitions`: a definition owns the output limit and the
+  thinking level.
+- `netclaw-model-providers`: provider-neutral mapping through the thinking
+  dialect, rejection of unsupported levels, call-site precedence, failover
+  option isolation, the Anthropic default, and log visibility.
+- `netclaw-cli`: `model set` flags and TUI model manager fields, with
+  validation before persistence.
+
+## Impact
+
+- Code: `ModelReference`, `ModelEntryWriter`, `ModelCommand`, the TUI model
+  manager, `ProviderPluginFactory` (the per-model client stack), the provider
+  descriptors and plugins, `OpenAiCompatibleChatClient`,
+  `OpenRouterReasoningExcludePolicy`, `ModelConfigurationValidation`, and the
+  config schema.
+- Docs: `docs/spec/GLOSSARY.md` (two terms), SPEC-008, and the
+  `netclaw-operations` system skill.
+- Security: no new grant, tool, or authorization context. The change does not
+  touch `docs/architecture/tool-authorization.md`.
+- Operations:
+  - Anthropic replies can be longer than 1024 tokens without configuration.
+    The cost per call can increase.
+  - A hand-edited unsupported level now fails startup with a remediation.
+  - A fallback provider no longer receives the first provider's dialect
+    fields.
