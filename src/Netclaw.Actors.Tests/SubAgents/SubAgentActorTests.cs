@@ -364,6 +364,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
     [Fact]
     public async Task Text_reply_cut_off_by_length_fails_with_output_truncated_reason()
     {
+        using var dir = new DisposableTempDir();
         var fakeClient = new FakeChatClient
         {
             ResponseContentsByCall =
@@ -375,7 +376,7 @@ public class SubAgentActorTests : SubAgentActorTestBase
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient, PermissivePolicy()));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Write the scene file", Timeout = TimeSpan.FromSeconds(5) },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(sessionDirectory: dir.Path), Task = "Write the scene file", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);

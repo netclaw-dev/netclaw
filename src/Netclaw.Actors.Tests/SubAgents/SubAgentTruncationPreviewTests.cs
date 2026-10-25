@@ -133,6 +133,8 @@ public sealed class SubAgentTruncationPreviewTests(ITestOutputHelper output) : T
 
     private async Task<SubAgentResult> RunTruncatedAsync(string cutOffText)
     {
+        // The run saves the cut-off text under the session folder, so the folder must be a temp folder.
+        using var dir = new DisposableTempDir();
         var client = new FakeChatClient
         {
             ResponseContentsByCall = [[new TextContent(cutOffText)]],
@@ -150,7 +152,7 @@ public sealed class SubAgentTruncationPreviewTests(ITestOutputHelper output) : T
             SubAgentActorTests.PermissivePolicy()));
 
         return await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Scope = SubAgentTestScope.Create(), Task = "Write the scene file", Timeout = TimeSpan.FromSeconds(5) },
+            new RunSubAgent { Scope = SubAgentTestScope.Create(sessionDirectory: dir.Path), Task = "Write the scene file", Timeout = TimeSpan.FromSeconds(5) },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 

@@ -37,23 +37,34 @@ public sealed class SubAgentTruncatedArtifactTests(ITestOutputHelper output) : T
 
     [Theory]
     [InlineData("text-cut-off")]
+    [InlineData("write-failure")]
     [InlineData("thinking-only")]
     public async Task Truncated_reply_keeps_its_answer_text_as_a_partial_artifact_and_never_its_reasoning(string row)
     {
         using var dir = new DisposableTempDir();
         var scope = SubAgentTestScope.Create(scopeId: "test-session/subagent/test/run-2679", sessionDirectory: dir.Path);
-        var artifactPath = Path.Combine(
-            ((ToolSessionScope.Bound)scope.Authority.Session).Storage.ArtifactDirectory.Value, ArtifactName);
+        var artifactDirectory = ((ToolSessionScope.Bound)scope.Authority.Session).Storage.ArtifactDirectory.Value;
+        var artifactPath = Path.Combine(artifactDirectory, ArtifactName);
+
+        if (row == "write-failure")
+        {
+            // A file where the folder belongs makes the write fail.
+            Directory.CreateDirectory(Path.GetDirectoryName(artifactDirectory)!);
+            await File.WriteAllTextAsync(artifactDirectory, "not a folder", TestContext.Current.CancellationToken);
+        }
 
         // The answer is far longer than the 300 character preview. The secret sits after the preview, so only
-        // a redaction of the full text can remove it from the file.
-        var answer = new string('a', 400) + " ghp_" + SecretBody + " " + TailMarker;
-        var textCutOff = row == "text-cut-off";
+        // a redaction of the full text can remove it from the file. The text has a real line break and a
+        // literal backslash-n, and the file must keep both as they are.
+        var head = new string('a', 400) + "\nline two\nC:\\new\\notes \\n end of line\n";
+        var tail = " tail\n" + TailMarker;
+        var answer = head + "ghp_" + SecretBody + tail;
+        var thinkingOnly = row == "thinking-only";
         var client = new FakeChatClient
         {
-            ResponseContentsByCall = textCutOff
-                ? [[new TextReasoningContent(ReasoningMarker), new TextContent(answer)]]
-                : Enumerable.Repeat<IReadOnlyList<AIContent>>([new TextReasoningContent(ReasoningMarker)], 10).ToList(),
+            ResponseContentsByCall = thinkingOnly
+                ? Enumerable.Repeat<IReadOnlyList<AIContent>>([new TextReasoningContent(ReasoningMarker)], 10).ToList()
+                : [[new TextReasoningContent(ReasoningMarker), new TextContent(answer)]],
             FinishReasonsByCall = Enumerable.Repeat<ChatFinishReason?>(ChatFinishReason.Length, 10).ToList()
         };
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
@@ -74,21 +85,20 @@ public sealed class SubAgentTruncatedArtifactTests(ITestOutputHelper output) : T
         // The outcome does not change. A thinking-only reply is still retried and then ends as an empty reply.
         Assert.False(result.Success);
         Assert.Equal(SubAgentRunOutcome.Failed, result.Outcome);
-        Assert.Equal(textCutOff ? "output_truncated" : "empty_final_response", result.OutcomeReason?.Value);
+        Assert.Equal(thinkingOnly ? "empty_final_response" : "output_truncated", result.OutcomeReason?.Value);
 
         // Raw reasoning is not in the output or in any file under the run folder.
         Assert.DoesNotContain(ReasoningMarker, result.Output, StringComparison.Ordinal);
-        var runFolder = Path.GetDirectoryName(Path.GetDirectoryName(artifactPath))!;
-        if (Directory.Exists(runFolder))
-        {
-            foreach (var file in Directory.EnumerateFiles(runFolder, "*", SearchOption.AllDirectories))
-                Assert.DoesNotContain(ReasoningMarker, await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken), StringComparison.Ordinal);
-        }
+        foreach (var file in Directory.EnumerateFiles(dir.Path, "*", SearchOption.AllDirectories))
+            Assert.DoesNotContain(ReasoningMarker, await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken), StringComparison.Ordinal);
 
-        if (!textCutOff)
+        if (row != "text-cut-off")
         {
-            Assert.False(File.Exists(artifactPath), "A reply with only reasoning has no answer text to keep.");
+            // thinking-only guards the empty-response path: it ends before the new code runs.
+            // write-failure: the failed write must not hide the outcome or name a file that is not there.
+            Assert.False(File.Exists(artifactPath));
             Assert.DoesNotContain(ArtifactName, result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain(artifactDirectory, result.Output, StringComparison.Ordinal);
             return;
         }
 
@@ -97,7 +107,9 @@ public sealed class SubAgentTruncatedArtifactTests(ITestOutputHelper output) : T
 
         var saved = await File.ReadAllTextAsync(artifactPath, TestContext.Current.CancellationToken);
         Assert.Contains("partial", saved, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(TailMarker, saved, StringComparison.Ordinal);
         Assert.DoesNotContain(SecretBody[..8], saved, StringComparison.Ordinal);
+        // Apart from the redacted secret, the file holds the answer text exactly.
+        Assert.Contains(head, saved, StringComparison.Ordinal);
+        Assert.Contains(tail, saved, StringComparison.Ordinal);
     }
 }
