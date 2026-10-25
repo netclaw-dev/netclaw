@@ -107,6 +107,36 @@ public sealed class ContinuationMarkerTests
         Assert.Equal(input.UserMessage.Content, restored.UserMessage.Content);
     }
 
+    /// <summary>
+    /// A compaction snapshot deletes the journal records before it, also each ContinuationAuthorized record. The snapshot
+    /// carries the authorized continuation input IDs, so a recovery after a passivation still queues an authorized
+    /// continuation behind the pause (#2659 design D3). Rows: authorized (the set survives the snapshot bytes) and
+    /// old-snapshot (a snapshot written with no set restores an empty set; a repeated field with no entries has the
+    /// bytes of a snapshot from a binary without the field).
+    /// Planted bug: the snapshot drops the set, so a passivation after a compaction closes an authorized continuation.
+    /// </summary>
+    [Theory]
+    [InlineData("authorized")]
+    [InlineData("old-snapshot")]
+    public void The_snapshot_keeps_the_authorized_continuations(string row)
+    {
+        // Arrange
+        var continuation = Input("") with { ContinuesStoppedTurn = true };
+        var snapshot = SessionState.Empty.Apply(continuation).ToSnapshot();
+        if (row == "authorized")
+            snapshot = snapshot with { AuthorizedContinuationInputIds = [continuation.InputId] };
+
+        // Act
+        var bytes = NetclawProtoMapper.ToProtoV2(snapshot).ToByteArray();
+        var restored = NetclawProtoMapper.FromProto(
+            Netclaw.Actors.Serialization.Proto.SessionSnapshotV2Proto.Parser.ParseFrom(bytes));
+
+        // Assert
+        Assert.Equal(row == "authorized" ? [continuation.InputId] : Array.Empty<InputId>(),
+            restored.AuthorizedContinuationInputIds);
+        Assert.Equal(continuation.InputId, Assert.Single(restored.PendingInputs).InputId);
+    }
+
     // The fields that a 0.28.0-beta.3 binary writes for an admitted input. That binary has no continuation marker.
     private static InputAdmittedProto Beta3Record(InputAdmitted input)
     {

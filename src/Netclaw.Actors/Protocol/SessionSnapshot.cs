@@ -112,4 +112,11 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
 
     public IReadOnlyList<string> RecentSourceMessageKeys { get; init; } =
         Array.Empty<string>();
+
+    /// <summary>
+    /// The pending continuation inputs that a fresh restart reminder authorized (ContinuationAuthorized, #2659). A
+    /// compaction snapshot deletes the journal records before it, so the snapshot carries the set.
+    /// </summary>
+    public IReadOnlyList<SessionProtocol.InputId> AuthorizedContinuationInputIds { get; init; } =
+        Array.Empty<SessionProtocol.InputId>();
 }
