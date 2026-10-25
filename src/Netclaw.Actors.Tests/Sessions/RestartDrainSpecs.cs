@@ -212,8 +212,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Task? reached = null;
         switch (point)
         {
-            case DrainPoint.FirstModelCall or DrainPoint.ExpiredReminderAtFirstModelCall or DrainPoint.EmptyInputAtFirstModelCall
-                or DrainPoint.EmptyInputBuffered:
+            case DrainPoint.FirstModelCall or DrainPoint.ExpiredReminderAtFirstModelCall or DrainPoint.EmptyInputAtFirstModelCall:
                 _chat.Script(Step.StreamUntilCancelled);
                 break;
             case DrainPoint.EmptyInputJoinsToolLoop:
@@ -222,7 +221,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             case DrainPoint.ModelCallAfterToolBatch or DrainPoint.BufferedInput or DrainPoint.AutomationTurnAfterToolBatch
                 or DrainPoint.TurnWithoutChannelType or DrainPoint.SecondDeliveryAfterToolBatch
                 or DrainPoint.NewInputBeforeReminder or DrainPoint.AutomaticInputBeforeReminder
-                or DrainPoint.ExpiredReminderAfterToolBatch:
+                or DrainPoint.ExpiredReminderAfterToolBatch or DrainPoint.EmptyInputBuffered:
                 _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
                 break;
             case DrainPoint.LiveBackgroundJobAtDrain:
@@ -315,7 +314,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     // after an attachment download failed (#2659).
     private static string TurnText(DrainPoint point) => point == DrainPoint.EmptyInputAtFirstModelCall ? "" : TurnInputText;
 
-    // The model call streams. The person sends an empty message and then a text message, and the session buffers both.
+    // As BufferedInput: the model call after the tool batch streams. The person sends an empty message and then a text
+    // message, and the session buffers both.
     // The empty message is an ordinary input: the later admission must not close it as a stopped-turn continuation, and
     // no restart notice posts before the drain (#2659).
     private async Task AssertLaterInputKeepsTheEmptyInputAsync(SessionId sessionId)
