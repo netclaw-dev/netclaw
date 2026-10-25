@@ -154,6 +154,12 @@ public static class ReminderEndpointRouteBuilderExtensions
             if (request.Definition is null)
                 return TypedResults.BadRequest(new ReminderErrorResponse("Reminder definition is required."));
 
+            // Security boundary (#2659): the session reads a restart reminder as a resume or as the expiry signal. An
+            // import names its own creator, so the endpoint rejects the reserved prefix whatever createdBy says.
+            if (request.Definition.Id.Value?.StartsWith(ReminderIdGenerator.RestartReminderIdPrefix, StringComparison.Ordinal) == true)
+                return TypedResults.BadRequest(new ReminderErrorResponse(
+                    $"The reminder ID prefix '{ReminderIdGenerator.RestartReminderIdPrefix}' is reserved for the system."));
+
             var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
 
             var mode = request.WriteMode?.Trim().ToLowerInvariant() switch

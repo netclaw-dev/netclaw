@@ -174,5 +174,8 @@ last consent answer
 
 - Upgrade from 0.28.0-beta.3: a pending continuation that beta.3 wrote has no marker. The legacy read rule keeps it a
   continuation. A beta.3 restart manifest with an expired reminder becomes an expiry signal.
-- Downgrade to 0.28.0-beta.3: beta.3 ignores field 15 and keeps its shape rule. No journal format break.
+- The format is forward-only. 0.28.0-beta.3 ignores field 15 and keeps its shape rule, but it cannot read the
+  `cau-v1` record (`ContinuationAuthorized`) or snapshot field 22 (`authorized_continuation_input_ids`). These appear
+  only with an open child park, and beta.3 cannot read the park records either. Restore the `netclaw.db` backup before
+  a downgrade.
 - Ship in a prerelease first.

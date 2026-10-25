@@ -241,6 +241,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             if (offer.Snapshot is SessionSnapshot snapshot)
             {
                 _state = SessionState.FromSnapshot(snapshot);
+                _authorizedContinuations.Clear();
+                _authorizedContinuations.UnionWith(snapshot.AuthorizedContinuationInputIds);
                 HydrateLegacyChildApprovals();
                 if (snapshot.EligibleDeliveryTurnNumber is { } eligibleTurn)
                 {
@@ -2474,6 +2476,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         if (_toolWorkflow.HasParkedApprovals())
         {
+            _log.Info("restart_expired_skipped reminder={ReminderId} reason=open_parent_approval", cmd.Source?.ReminderId);
             AckRestartResumeNoOp(cmd);
             return true;
         }
@@ -3615,7 +3618,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         {
             EligibleDeliveryTurnNumber = _deliveryRetry.EligibleTurnNumber,
             EligibleDeliveryReminderId = _deliveryRetry.UnreportedEligibleReminder,
-            EligibleDeliveryTurnRoutedSkill = _deliveryRetry.EligibleTurnIsRoutedSkill
+            EligibleDeliveryTurnRoutedSkill = _deliveryRetry.EligibleTurnIsRoutedSkill,
+            AuthorizedContinuationInputIds = [.. _state.PendingInputs.Select(static input => input.InputId)
+                .Where(_authorizedContinuations.Contains)]
         };
     }
 

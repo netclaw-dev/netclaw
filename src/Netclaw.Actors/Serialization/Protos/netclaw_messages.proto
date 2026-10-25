@@ -380,6 +380,9 @@ message SessionSnapshotProto {
   repeated BackgroundChildRunProto child_runs = 19;
   optional string eligible_delivery_reminder_id = 20;
   optional bool eligible_delivery_turn_routed_skill = 21;
+  // The pending continuations that a fresh restart reminder authorized (ContinuationAuthorized, #2659). A compaction
+  // snapshot deletes those records, so the snapshot carries the set.
+  repeated string authorized_continuation_input_ids = 22;
 }
 
 // ── Session state ──

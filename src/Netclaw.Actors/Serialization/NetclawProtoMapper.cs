@@ -690,6 +690,7 @@ internal static partial class NetclawProtoMapper
         proto.AdoptedContextRecords.AddRange(snap.AdoptedContextRecords.Select(ToAdoptedContextSnapshotRecord));
         proto.PendingInputs.AddRange(snap.PendingInputs.Select(ToProto));
         proto.RecentSourceMessageKeys.AddRange(snap.RecentSourceMessageKeys);
+        proto.AuthorizedContinuationInputIds.AddRange(snap.AuthorizedContinuationInputIds.Select(static id => id.Value));
         return proto;
     }
 
@@ -713,7 +714,8 @@ internal static partial class NetclawProtoMapper
             .Select(static id => new BackgroundJobId(id)).ToArray(),
         AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray(),
         PendingInputs = proto.PendingInputs.Select(FromProto).ToArray(),
-        RecentSourceMessageKeys = proto.RecentSourceMessageKeys.ToArray()
+        RecentSourceMessageKeys = proto.RecentSourceMessageKeys.ToArray(),
+        AuthorizedContinuationInputIds = proto.AuthorizedContinuationInputIds.Select(static id => new InputId(id)).ToArray()
     };
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord ToAdoptedContextSnapshotRecord(

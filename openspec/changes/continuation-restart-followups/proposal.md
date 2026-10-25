@@ -66,5 +66,6 @@ Security impact:
 Operational impact:
 
 - The person gets the stopped-turn notice after a stop longer than ten minutes, at the next daemon start.
-- Wire: the new optional field is invisible to 0.28.0-beta.3. A beta.3 binary still finds the continuation by its
-  shape, so a rollback runs no extra turn. A record that beta.3 wrote reads with the shape rule.
+- Wire: the format is forward-only. 0.28.0-beta.3 ignores the new optional field 15 and finds the continuation by its
+  shape. It cannot read the new `cau-v1` record or the new snapshot field, the same as the park records. A record
+  that beta.3 wrote reads with the shape rule.
