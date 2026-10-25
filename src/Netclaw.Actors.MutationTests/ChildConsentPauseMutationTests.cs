@@ -167,7 +167,8 @@ public sealed class ChildConsentPauseMutationTests
     }
 
     /// <summary>
-    /// A person's input ends a running automation turn at the tool-batch end (<c>PersonInputEndsAutomationTurnSpecs</c>).
+    /// A person's input ends a running automation turn at a safe boundary (<c>PersonInputEndsAutomationTurnSpecs</c>).
+    /// There are two safe boundaries: a tool-batch end, and the end of a compaction that the tool loop started (#2633).
     /// The flow tells the actor to start no model call: no input joins, and the next action is EndTurn. Each waiting
     /// input then starts a turn with its own authority, in admission order. An automation input does not join a turn
     /// that ends, so no input is consumed without a model call. Other input keeps the join rule. A child result notice
@@ -175,21 +176,35 @@ public sealed class ChildConsentPauseMutationTests
     /// or a TrustedInternal person ends the turn. An UntrustedExternal person waits, as before. The pause never holds a
     /// person, so a person also ends the turn while the pause applies. A person's slash command also ends it, and the
     /// command then drains alone (#2591). A replay is the running turn's own message, so it joins that turn.
+    /// <para>
+    /// At the compaction end, a restart request wins over the person. An overflow compaction resumes no tool loop: its
+    /// replay continues the turn and the person waits, because the replay has no recorded authority of its own.
+    /// </para>
     /// </summary>
     [Theory]
-    [InlineData("reminder", "alice", false, "ends")]
-    [InlineData("notice", "alice", false, "ends")]
-    [InlineData("reminder", "alice", true, "ends")]
-    [InlineData("reminder", "reminder alice", false, "ends")]
-    [InlineData("reminder", "stranger", false, "waits")]
-    [InlineData("reminder", "insider", false, "ends")]
-    [InlineData("reminder", "/review", false, "ends")]
-    [InlineData("alice", "bob", false, "waits")]
-    [InlineData("reminder", "child-result", false, "waits")]
-    [InlineData("reminder", "reminder", false, "joins")]
-    [InlineData("reminder", "replay", false, "joins")]
-    [InlineData("alice", "alice", false, "joins")]
-    public void A_person_input_ends_an_automation_turn_at_the_tool_batch_end(string owner, string waiting, bool paused, string effect)
+    [InlineData("ReminderThenPerson", Batch, "reminder", "alice", false, "ends")]
+    [InlineData("NoticeThenPerson", Batch, "notice", "alice", false, "ends")]
+    [InlineData("PausedReminderThenPerson", Batch, "reminder", "alice", true, "ends")]
+    [InlineData("ReminderThenReminderAndPerson", Batch, "reminder", "reminder alice", false, "ends")]
+    [InlineData("ReminderThenStranger", Batch, "reminder", "stranger", false, "waits")]
+    [InlineData("ReminderThenInsider", Batch, "reminder", "insider", false, "ends")]
+    [InlineData("ReminderThenSlashCommand", Batch, "reminder", "/review", false, "ends")]
+    [InlineData("PersonThenOtherPerson", Batch, "alice", "bob", false, "waits")]
+    [InlineData("ReminderThenChildResult", Batch, "reminder", "child-result", false, "waits")]
+    [InlineData("ReminderThenReminder", Batch, "reminder", "reminder", false, "joins")]
+    [InlineData("ReminderThenReplay", Batch, "reminder", "replay", false, "joins")]
+    [InlineData("PersonThenSamePerson", Batch, "alice", "alice", false, "joins")]
+    [InlineData("CompactionReminderThenPerson", ToolLoopCompaction, "reminder", "alice", false, "ends")]
+    [InlineData("CompactionNoticeThenPerson", ToolLoopCompaction, "notice", "alice", false, "ends")]
+    [InlineData("CompactionReminderThenInsider", ToolLoopCompaction, "reminder", "insider", false, "ends")]
+    [InlineData("CompactionReminderThenStranger", ToolLoopCompaction, "reminder", "stranger", false, "waits")]
+    [InlineData("CompactionPersonThenOtherPerson", ToolLoopCompaction, "alice", "bob", false, "waits")]
+    [InlineData("CompactionReminderThenChildResult", ToolLoopCompaction, "reminder", "child-result", false, "waits")]
+    [InlineData("CompactionReminderThenReminder", ToolLoopCompaction, "reminder", "reminder", false, "joins")]
+    [InlineData("CompactionRestartWins", RestartAtCompaction, "reminder", "alice", false, "restart")]
+    [InlineData("CompactionReplayKeepsTurn", OverflowCompaction, "reminder", "replay alice", false, "replay")]
+    public void A_person_input_ends_an_automation_turn_at_a_safe_boundary(
+        string row, string boundary, string owner, string waiting, bool paused, string effect)
     {
         // Arrange
         var flow = new SessionInputFlow();
@@ -220,33 +235,66 @@ public sealed class ChildConsentPauseMutationTests
         }
 
         // Act
-        var advance = flow.AdvanceAfterToolBatch(Completion(), compactionDue: false, childConsentPaused: paused);
+        var (batch, next) = Advance(flow, boundary, paused);
 
         // Assert
-        if (effect == "joins")
+        Assert.True(next == ExpectedNext(boundary, effect), $"{row}: the next step is {next}.");
+        if (effect is "joins" or "replay")
         {
-            Assert.Equal(contents, advance.Batch!.Messages.Select(static message => message.Content));
-            Assert.Equal(ToolBatchNextAction.ContinueModel, advance.Next);
-            return;
+            string[] joined = effect == "replay" ? ["replay"] : contents;
+            Assert.Equal(joined, batch!.Messages.Select(static message => message.Content));
+            if (effect == "joins")
+                return;
+        }
+        else
+        {
+            Assert.True(batch is null, $"{row}: an input joined the running turn.");
+            if (effect is "waits" or "restart")
+                return;
         }
 
-        Assert.Null(advance.Batch);
-        if (effect == "waits")
-        {
-            Assert.Equal(ToolBatchNextAction.ContinueModel, advance.Next);
-            return;
-        }
-
-        Assert.Equal(ToolBatchNextAction.EndTurn, advance.Next);
+        // The turn ended, or the replay ran. Each other waiting input then starts its own turn, in admission order.
+        Assert.False(flow.ResumesToolLoopAfterCompaction, $"{row}: the tool-loop resume is still set.");
         var served = new List<string>();
-        while (flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: paused) is { Batch: { } batch })
+        while (flow.AdvanceAfterTurn(restartDrainRequested: false, childConsentPaused: paused) is { Batch: { } after })
         {
-            Assert.True(batch.AdoptsAuthority);
-            served.AddRange(batch.Messages.Select(static message => message.Content));
+            Assert.True(after.AdoptsAuthority);
+            served.AddRange(after.Messages.Select(static message => message.Content));
         }
 
-        Assert.Equal(contents, served);
+        Assert.Equal(contents.Where(static content => content != "replay"), served);
     }
+
+    private const string Batch = "batch";
+    private const string ToolLoopCompaction = "tool-loop-compaction";
+    private const string RestartAtCompaction = "restart-at-compaction";
+    private const string OverflowCompaction = "overflow-compaction";
+
+    // The flow decision at the boundary, as a batch and a next step. A tool-loop compaction resumes the tool loop of
+    // the running turn. An overflow compaction resumes no tool loop; its replay waits at the buffer head.
+    private static (BufferedInputBatch? Batch, string Next) Advance(SessionInputFlow flow, string boundary, bool paused)
+    {
+        if (boundary == Batch)
+        {
+            var advance = flow.AdvanceAfterToolBatch(Completion(), compactionDue: false, childConsentPaused: paused);
+            return (advance.Batch, advance.Next.ToString());
+        }
+
+        if (boundary != OverflowCompaction)
+            flow.ResumeToolLoopAfterCompaction();
+        var continuation = flow.AdvanceAfterCompaction(restartDrainRequested: boundary == RestartAtCompaction, paused);
+        return (continuation.Batch, $"{continuation.Action}/resume={continuation.ResumeToolLoop}");
+    }
+
+    private static string ExpectedNext(string boundary, string effect) => (boundary, effect) switch
+    {
+        (Batch, "ends") => nameof(ToolBatchNextAction.EndTurn),
+        (Batch, _) => nameof(ToolBatchNextAction.ContinueModel),
+        (_, "ends") => $"{InputProgressAction.EndTurn}/resume=False",
+        (_, "restart") => $"{InputProgressAction.Restart}/resume=False",
+        (_, "replay") => $"{InputProgressAction.FollowUp}/resume=False",
+        _ => $"{InputProgressAction.FollowUp}/resume=True"
+    };
 
     private static SessionToolWorkflow Paused()
     {

@@ -61,7 +61,9 @@ internal readonly record struct TurnTelemetryFacts(
     string? MessageId,
     ChannelType? ChannelType);
 
-internal enum InputProgressAction { Restart, FollowUp, Ready }
+// EndTurn: only the compaction end returns it. A person waits behind an automation turn whose tool loop the compaction
+// stopped, so the turn ends quietly and makes no further model call.
+internal enum InputProgressAction { Restart, FollowUp, Ready, EndTurn }
 internal readonly record struct AfterTurnResult(InputProgressAction Action, BufferedInputBatch? Batch);
 
 internal readonly record struct CompactionContinuation(
