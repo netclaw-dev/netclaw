@@ -100,6 +100,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         EmptyInputAtFirstModelCall,
         EmptyInputJoinsToolLoop,
         EmptyInputBuffered,
+        ExpiredReminderWithTwoRequesters,
+        LateExpirySignalAfterNewInput,
     }
 
     [Theory]
@@ -138,6 +140,10 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     // interrupted first model call.
     [InlineData(DrainPoint.ExpiredReminderAfterToolBatch, "daemon-stop", true, true)]
     [InlineData(DrainPoint.ExpiredReminderAtFirstModelCall, "config-reload", true, true)]
+    // Alice's first model call stopped, and Bob's input waits too. One signal closes both in one write with one notice.
+    [InlineData(DrainPoint.ExpiredReminderWithTwoRequesters, "config-reload", true, true)]
+    // Bob's message closed the continuation after the restart. A late expiry signal must not close Bob's follow-up.
+    [InlineData(DrainPoint.LateExpirySignalAfterNewInput, "daemon-stop", true, true)]
     // #2659: a person input with no text and no media is an ordinary input, not a continuation. It reaches the model
     // after the restart, it joins a tool loop, and a later input does not close it.
     [InlineData(DrainPoint.EmptyInputAtFirstModelCall, "daemon-stop", true, true)]
@@ -212,7 +218,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Task? reached = null;
         switch (point)
         {
-            case DrainPoint.FirstModelCall or DrainPoint.ExpiredReminderAtFirstModelCall or DrainPoint.EmptyInputAtFirstModelCall:
+            case DrainPoint.FirstModelCall or DrainPoint.ExpiredReminderAtFirstModelCall or DrainPoint.EmptyInputAtFirstModelCall
+                or DrainPoint.ExpiredReminderWithTwoRequesters:
                 _chat.Script(Step.StreamUntilCancelled);
                 break;
             case DrainPoint.EmptyInputJoinsToolLoop:
@@ -221,7 +228,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             case DrainPoint.ModelCallAfterToolBatch or DrainPoint.BufferedInput or DrainPoint.AutomationTurnAfterToolBatch
                 or DrainPoint.TurnWithoutChannelType or DrainPoint.SecondDeliveryAfterToolBatch
                 or DrainPoint.NewInputBeforeReminder or DrainPoint.AutomaticInputBeforeReminder
-                or DrainPoint.ExpiredReminderAfterToolBatch or DrainPoint.EmptyInputBuffered:
+                or DrainPoint.ExpiredReminderAfterToolBatch or DrainPoint.EmptyInputBuffered
+                or DrainPoint.LateExpirySignalAfterNewInput:
                 _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
                 break;
             case DrainPoint.LiveBackgroundJobAtDrain:
@@ -303,6 +311,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         await (reached ?? _chat.Reached.Task).WaitAsync(Deadline, TestContext.Current.CancellationToken);
         if (point == DrainPoint.BufferedInput)
             await SendAsync(sessionId, "Also check the beta feed", PersonSource);
+        if (point == DrainPoint.ExpiredReminderWithTwoRequesters)
+            await SendAsync(sessionId, OtherInputText, OtherPersonSource);
         if (point == DrainPoint.EmptyInputBuffered)
             await AssertLaterInputKeepsTheEmptyInputAsync(sessionId);
         if (point == DrainPoint.EmptyInputJoinsToolLoop)
@@ -516,9 +526,12 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         }
 
         Assert.Empty(notices);
-        var resumable = events.OfType<InputAdmitted>().Where(input => pending.Contains(input.InputId)).ToArray();
+        // The input of another requester waits for its own turn, so it is not part of the stopped turn.
+        var resumable = events.OfType<InputAdmitted>()
+            .Where(input => pending.Contains(input.InputId) && Requester(input.TurnContext) == Requester(turnInput.TurnContext))
+            .ToArray();
         Assert.True(resumable.Length == 1,
-            $"A resumable turn must leave exactly one pending input, but {resumable.Length} stay pending.");
+            $"A resumable turn must leave exactly one pending input of its requester, but {resumable.Length} stay pending.");
         var resumed = resumable[0];
         Assert.Equal(Requester(turnInput.TurnContext), Requester(resumed.TurnContext));
         // The session writes the continuation input after the last tool batch of the stopped turn. An input that a person
@@ -573,7 +586,14 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             return;
         }
 
-        if (point is DrainPoint.ExpiredReminderAfterToolBatch or DrainPoint.ExpiredReminderAtFirstModelCall)
+        if (point == DrainPoint.LateExpirySignalAfterNewInput)
+        {
+            await AssertLateExpirySignalKeepsTheNewWorkAsync(sessionId, subscriber, reason, reminder);
+            return;
+        }
+
+        if (point is DrainPoint.ExpiredReminderAfterToolBatch or DrainPoint.ExpiredReminderAtFirstModelCall
+            or DrainPoint.ExpiredReminderWithTwoRequesters)
         {
             await AssertExpirySignalClosesTheStoppedWorkAsync(sessionId, subscriber, reason, reminder, resumed);
             return;
@@ -685,6 +705,12 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             ReadNotices();
             Assert.True(notices.Count == 1, $"The expiry signal posted {notices.Count} restart notices.");
         }, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+        // One write closes every input of the stopped work, also the input of a second requester that waited.
+        var first = await ReadJournalAsync(sessionId);
+        var stillPending = PendingInputIds(first);
+        Assert.True(stillPending.Count == 0,
+            $"The first expiry signal must close every pending input in one write, but {stillPending.Count} stay pending.");
+        Assert.Single(first.OfType<InputClosed>(), close => close.InputIds.Contains(resumed.InputId));
 
         var again = await SendRestartReminderAsync(sessionId, signal);
         Assert.True(again is RestartResumeNotNeeded, $"The second expiry signal must resume nothing. The session replied {again}.");
@@ -697,6 +723,53 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Assert.Contains(events.OfType<InputClosed>(), close => close.InputIds.Contains(resumed.InputId));
         Assert.DoesNotContain(events.OfType<InputAdmitted>(), input => input.UserMessage.Content == RestartExpiredInstruction);
         Assert.Empty(PendingInputIds(events));
+    }
+
+    // Bob writes after the restart, so his admission closes Alice's continuation with one notice. His turn holds its
+    // model call, and he sends a follow-up that waits in the buffer. The expiry signal of Alice's stopped work then
+    // arrives late. It must not close Bob's follow-up and must post no second notice. The follow-up runs (#2659).
+    private async Task AssertLateExpirySignalKeepsTheNewWorkAsync(
+        SessionId sessionId, Akka.TestKit.TestProbe subscriber, string reason, ReminderDefinition reminder)
+    {
+        const string followUp = "Also list the open pull requests.";
+        _chat.Script(Step.HeldToolCall);
+        var notices = 0;
+        void ReadNotices()
+        {
+            while (subscriber.HasMessages)
+            {
+                if (subscriber.ReceiveOne(TimeSpan.Zero) is TextOutput text
+                    && (text.Text == RestartNoticeRuleTests.ExpectedNotice(reason)
+                        || text.Text == RestartNoticeRuleTests.ExpectedNotice("config-reload")))
+                    notices++;
+            }
+        }
+
+        await SendAsync(sessionId, OtherInputText, OtherPersonSource);
+        await _chat.Reached.Task.WaitAsync(Deadline, TestContext.Current.CancellationToken);
+        await AwaitAssertAsync(() =>
+        {
+            ReadNotices();
+            Assert.True(notices == 1, $"Bob's message posted {notices} restart notices for the stopped turn.");
+        }, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+        await SendAsync(sessionId, followUp, OtherPersonSource);
+
+        var reply = await SendRestartReminderAsync(sessionId, reminder with { Instructions = RestartExpiredInstruction });
+        Assert.True(reply is RestartResumeNotNeeded, $"The late expiry signal must resume nothing. The session replied {reply}.");
+        await PingAsync(sessionId);
+        var events = await ReadJournalAsync(sessionId);
+        var waiting = Assert.Single(events.OfType<InputAdmitted>(), input => input.UserMessage.Content == followUp);
+        Assert.False(events.OfType<InputClosed>().Any(close => close.InputIds.Contains(waiting.InputId)),
+            "The late expiry signal closed Bob's follow-up, which is new work after the restart.");
+        ReadNotices();
+        Assert.True(notices == 1, $"The late expiry signal posted a second restart notice ({notices} in total).");
+
+        _chat.ReleaseHeldCall();
+        await AwaitAssertAsync(async () =>
+        {
+            var consumers = AssertNoTurnMixesRequesters(await ReadJournalAsync(sessionId), reminder);
+            Assert.Contains(consumers, ids => ids.Contains(waiting.InputId));
+        }, Deadline, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     // The resumed turn starts a tool batch, which consumes the pending input. The session actor then stops without a

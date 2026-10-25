@@ -491,6 +491,44 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
             Assert.Contains("exceeds creator authority", response.ErrorMessage);
     }
 
+    /// <summary>
+    /// The restart reminder shape is reserved for the daemon (#2659). The session treats a current-session reminder with
+    /// a "restart-resume-" ID and the expiry instruction as the expiry signal, which closes stored work. Rows:
+    /// tool-forged-expiry (a model creates it through set_reminder, so the tool is the creator) and system-expiry-signal
+    /// (startup registers it from the restart manifest; the control).
+    /// Planted bug: any creator can save the expiry signal, so a model can close the pending work of its session.
+    /// </summary>
+    [Theory]
+    [InlineData("tool-forged-expiry", "llm-tool", "set_reminder", false)]
+    [InlineData("system-expiry-signal", "system", "restart manifest", true)]
+    public async Task Save_reserves_the_restart_expiry_signal_for_the_system(
+        string row, string createdBy, string authoritySource, bool shouldSucceed)
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition(row, RestartExpiredInstruction) with
+        {
+            Id = new ReminderId($"restart-resume-{row}"),
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.CurrentSession, SessionId = "C0123ABC/1234567890.123456",
+                OriginChannelType = ChannelType.Slack
+            },
+            DeliveryInstructions = null,
+            CreatedBy = createdBy
+        };
+
+        var response = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                definition,
+                Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, authoritySource)),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(shouldSucceed == response.Success,
+            $"Row {row}: the save {(response.Success ? "succeeded" : $"failed ({response.ErrorMessage})")}.");
+        Assert.Equal(shouldSucceed, _definitionStore.Get(definition.Id) is not null);
+    }
+
     [Fact]
     public async Task Save_rejects_missing_authorization_context()
     {

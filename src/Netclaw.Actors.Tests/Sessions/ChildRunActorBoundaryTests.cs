@@ -293,6 +293,13 @@ public sealed class ChildRunActorBoundaryTests(ITestOutputHelper output) : LlmSe
         await subscriber.FishForMessageAsync<ToolInteractionRequest>(
             item => item.ToolName.Value == "authority_probe", Deadline, cancellationToken: Cancellation);
         var accepted = await control.Acceptance.Task.WaitAsync(Deadline, Cancellation);
+        if (row == "legacy-request")
+        {
+            // The rewrite took effect: the journal holds the request as its own row and no park record of the run.
+            await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<ToolApprovalRequested>(),
+                request => request.SourceChildRunId == accepted.Run.RunId), Deadline, cancellationToken: Cancellation);
+            Assert.DoesNotContain(control.Committed.OfType<ChildRunEvent.Parked>(), parked => parked.RunId == accepted.Run.RunId);
+        }
         using var cancelled = JsonDocument.Parse(await session.Ask<string>(
             new ChildRunControl(accepted.Run.RunId, true, accepted.Run.OriginalContext), Deadline, Cancellation));
         await AwaitAssertAsync(() => Assert.Contains(control.Committed.OfType<ChildRunEvent.TerminalRecorded>(),

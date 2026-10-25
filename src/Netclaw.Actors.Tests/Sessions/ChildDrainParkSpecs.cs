@@ -50,6 +50,10 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
     /// call. That call runs under Alice's recorded authority only.</item>
     /// <item>crash-resumed: the session stops after the Resumed record commits and before the child ends. The next
     /// recovery records the run as lost and starts no child.</item>
+    /// <item>missed-wait-expired: as missed-wait, so the restart reminder covers the child run only. The restart takes
+    /// longer than the reminder lifetime. A join wakes the session, and the notice turn of the lost child runs. Alice
+    /// writes during that turn, and then the expiry signal arrives. The signal has no stopped turn to close: it must not
+    /// close Alice's input and must post no restart notice. Alice's input runs (#2659).</item>
     /// </list>
     /// Planted bug: the drain kills a running child, the acknowledgement does not wait for the park record, a parked call
     /// runs twice, a resumed drain park replays its batch, a model reply that came after the park enters the history, an
@@ -64,6 +68,7 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
     [InlineData("missed-wait")]
     [InlineData("other-requester")]
     [InlineData("crash-resumed")]
+    [InlineData("missed-wait-expired")]
     public async Task A_running_child_parks_at_a_graceful_drain_and_resumes_after_the_restart(string row)
     {
         // Arrange
@@ -94,7 +99,7 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
             await firstSibling.WaitAsync(Deadline, Cancellation);
             drain = await BeginDrainAsync(id);
         }
-        if (row == "missed-wait")
+        if (row is "missed-wait" or "missed-wait-expired")
         {
             Assert.False(drain!.Ack.IsCompleted, "The session acknowledged the drain while a child runs inside the child wait.");
             await EventFilter.Warning(new Regex(@"child_wait_ended live_children=1$")).ExpectAsync(1,
@@ -108,7 +113,7 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
             Sibling.Release();
         var park = await AssertDrainParkAsync(journal, id, run, row switch
         {
-            "missed-wait" => null,
+            "missed-wait" or "missed-wait-expired" => null,
             "consent" => 1,
             _ => 0
         }, drain!);
@@ -151,6 +156,9 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
                     cancellationToken: Cancellation);
                 bobHold.TrySetResult();
                 break;
+            case "missed-wait-expired":
+                await WriteDuringTheLostNoticeTurnThenExpireAsync(journal, id, run, reminder!);
+                break;
             case "crash-resumed":
                 var secondRound = Sibling.HoldNext();
                 AssertAck(await SendRestartReminderAsync(id, reminder!));
@@ -172,7 +180,7 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
             Sibling.Calls.Select(static call => call.CallId).ToArray());
         switch (row)
         {
-            case "missed-wait" or "crash-resumed":
+            case "missed-wait" or "missed-wait-expired" or "crash-resumed":
                 Assert.True(terminal.Lost);
                 Assert.Equal(SubAgentOutcomeReason.OwnerRestarted, terminal.Result.OutcomeReason);
                 if (row == "crash-resumed")
@@ -201,8 +209,8 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
     /// <item>held-park: the journal holds the write of the drain park. The session does not acknowledge while the
     /// write is held.</item>
     /// <item>park-rejected: the journal rejects the write of the drain park. The run ends as a restart loss, as a
-    /// refused drain park does (design R6): Partial with owner_restarted and the "effects uncertain" text. The rejection
-    /// does not carry the park, so the row checks the outcome only (#2659 gap B).</item>
+    /// refused drain park does (design R6): Partial with owner_restarted and the "effects uncertain" text (#2659 gap B).
+    /// The row checks the outcome and not the file activity, because its child changes no file.</item>
     /// </list>
     /// Planted bug: the terminal record does not continue the drain (it waits for the child wait), the session
     /// acknowledges before the park record commits, or a refused drain park says that nothing ran.
@@ -285,6 +293,31 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
                 Assert.True(terminal.Result.Success, terminal.Result.Output);
                 break;
         }
+    }
+
+    // The join wakes the session, and recovery records the run as lost. Its notice turn holds its model call while Alice
+    // writes, and the expiry signal arrives. Alice's input must stay open and run after the notice turn.
+    private async Task WriteDuringTheLostNoticeTurnThenExpireAsync(AcceptanceFault journal, SessionId id, ChildRunAccepted run,
+        Netclaw.Actors.Reminders.ReminderDefinition reminder)
+    {
+        const string aliceText = "Alice writes during the notice turn.";
+        var noticeHold = NewGate();
+        var noticeEntered = ParentGate.Arm(request => FreshUserTexts(request).Any(text =>
+            text.Contains(run.Run.RunId.Value, StringComparison.Ordinal)), noticeHold);
+        await JoinRecorderAsync(id);
+        await noticeEntered.WaitAsync(Deadline, Cancellation);
+        await SendAsync(id, aliceText, AliceSource);
+        var reply = await SendRestartReminderAsync(id, reminder with { Instructions = RestartExpiredInstruction });
+        Assert.True(reply is RestartResumeNotNeeded, $"The expiry signal must resume nothing. The session replied {reply}.");
+        await BarrierAsync(id, run);
+        var alice = Assert.Single(journal.Committed.OfType<InputAdmitted>(), input => input.UserMessage.Content == aliceText);
+        Assert.False(journal.Committed.OfType<InputClosed>().Any(close => close.InputIds.Contains(alice.InputId)),
+            "The expiry signal of a child-only reminder closed Alice's new input.");
+        Assert.DoesNotContain(Outputs<TextOutput>(), output => output.Text == RestartNoticeRuleTests.ExpectedNotice("daemon-stop")
+                                                             || output.Text == RestartNoticeRuleTests.ExpectedNotice("config-reload"));
+        noticeHold.TrySetResult();
+        await AwaitAssertAsync(() => Assert.True(TurnRuns(journal, alice.InputId) > 0, "Alice's input did not run in a turn."),
+            Deadline, cancellationToken: Cancellation);
     }
 
     // Records the drain reply in Tell, on the thread of the sender. A TestProbe takes a reply through its own mailbox,

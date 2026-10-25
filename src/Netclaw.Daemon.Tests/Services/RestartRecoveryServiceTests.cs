@@ -91,6 +91,52 @@ public sealed class RestartRecoveryServiceTests : IDisposable
         Assert.Null(await manifestStore.ReadAsync(CancellationToken.None));
     }
 
+    /// <summary>
+    /// A restart reminder must never expire before the reminder manager can fire it (#2659). The manager ends a one-shot
+    /// whose expiry has passed at its fire, with no delivery, so the session would get neither a resume nor the expiry
+    /// signal. Every reminder that startup saves must stay valid for at least one minute after its fire time. Rows:
+    /// near-expiry (the stored reminder expires 59 seconds after the startup fire time, inside the margin) and fresh
+    /// (it expires 10 minutes after; the control).
+    /// Planted bug: startup keeps the resume instruction and the stored expiry for a reminder that expires seconds after
+    /// it fires.
+    /// </summary>
+    [Theory]
+    [InlineData("near-expiry", 59)]
+    [InlineData("fresh", 600)]
+    public async Task StartAsync_never_saves_a_restart_reminder_that_expires_before_it_can_fire(string row, int secondsAfterFire)
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
+        var saved = new ConcurrentQueue<SaveReminderCommand>();
+        var reminderActor = _system.ActorOf(Props.Create(() => new ReminderActor(saved)));
+        var manifestStore = new RestartManifestStore(_paths);
+        var catalog = new SessionCatalogService(
+            _paths,
+            time,
+            new TestSessionStorageResolver(_paths),
+            NullLogger<SessionCatalogService>.Instance);
+        // Startup fires a restart reminder 250 ms after it starts.
+        var fireAt = time.GetUtcNow().AddMilliseconds(250);
+        await manifestStore.WriteAsync(new RestartManifest
+        {
+            RestartReminders = [CreateReminder(row, fireAt.AddSeconds(secondsAfterFire))]
+        }, CancellationToken.None);
+        var sut = new RestartRecoveryService(
+            manifestStore,
+            new StubRequiredActor<ReminderManagerActorKey>(reminderActor),
+            catalog,
+            time,
+            NullLogger<RestartRecoveryService>.Instance);
+
+        await sut.StartAsync(CancellationToken.None);
+
+        var definition = Assert.Single(saved).Definition;
+        var window = definition.ExpiresAt - definition.Schedule.FireAt;
+        Assert.True(window >= TimeSpan.FromMinutes(1),
+            $"Row {row}: startup saved a reminder with the instruction \"{definition.Instructions}\" that expires {window} after it fires.");
+        if (row == "fresh")
+            Assert.Equal(ResumeInstruction, definition.Instructions);
+    }
+
     public void Dispose()
     {
         _system.Terminate().GetAwaiter().GetResult();
