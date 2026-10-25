@@ -41,6 +41,8 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
     }
 
     public string TypeKey => "openai";
+
+    public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => ThinkingDialect.Native;
     public string DisplayName => "OpenAI";
     public string DefaultEndpoint => "https://api.openai.com";
     public string ModelListingPath => "/v1/models";

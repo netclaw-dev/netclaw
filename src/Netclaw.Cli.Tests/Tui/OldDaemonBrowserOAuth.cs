@@ -141,6 +141,8 @@ internal sealed class OldDaemonBrowserOAuth : IHttpClientFactory
     {
         public string TypeKey => inner.TypeKey;
 
+        public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => inner.ResolveThinkingDialect(entry);
+
         public string DisplayName
         {
             get

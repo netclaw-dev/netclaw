@@ -22,6 +22,8 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
     }
 
     public string TypeKey => "openai-compatible";
+
+    public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => ThinkingDialect.Unresolved;
     public string DisplayName => "OpenAI-compatible (llama.cpp / vLLM / DwarfStar ds4)";
     public string DefaultEndpoint => "http://localhost:11434";
     public string ModelListingPath => "/v1/models";

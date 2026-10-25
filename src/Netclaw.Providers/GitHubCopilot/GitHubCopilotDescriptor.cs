@@ -26,6 +26,8 @@ public sealed class GitHubCopilotDescriptor(
     internal const string PublicApiEndpoint = "https://api.githubcopilot.com";
 
     public string TypeKey => "github-copilot";
+
+    public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => ThinkingDialect.Native;
     public string DisplayName => "GitHub Copilot";
     public string DefaultEndpoint => PublicApiEndpoint;
     public string ModelListingPath => "/models";

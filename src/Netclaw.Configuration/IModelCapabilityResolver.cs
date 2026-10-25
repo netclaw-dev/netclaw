@@ -14,7 +14,14 @@ public sealed record ResolvedModelCapabilities(
     string ModelId,
     ModelModality? InputModalities,
     ModelModality? OutputModalities,
-    int? ContextWindowTokens = null);
+    int? ContextWindowTokens = null)
+{
+    /// <summary>Whether the model thinks, and the levels that it accepts.</summary>
+    public ThinkingSupport Thinking { get; init; } = ThinkingSupport.Unknown;
+
+    /// <summary>The model's maximum output in tokens, when a source reports it.</summary>
+    public int? MaxOutputTokens { get; init; }
+}
 
 /// <summary>
 /// Resolves model capabilities from a specific source (provider-native API,

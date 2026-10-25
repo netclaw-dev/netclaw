@@ -252,6 +252,8 @@ public sealed class ProviderOAuthRefreshingProbeTests
     {
         public string? ProbedAccessToken { get; private set; }
         public string TypeKey => "test-oauth";
+
+        public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => ThinkingDialect.Native;
         public string DisplayName => "Test OAuth";
         public string DefaultEndpoint => "https://api.example.com";
         public string ModelListingPath => "/models";

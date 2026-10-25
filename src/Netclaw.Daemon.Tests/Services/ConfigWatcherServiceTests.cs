@@ -10,10 +10,12 @@ using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Services;
+using Netclaw.Daemon.Tests.Providers;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
+
 
 namespace Netclaw.Daemon.Tests.Services;
 
@@ -46,6 +48,8 @@ public sealed class ConfigWatcherServiceTests : IDisposable
             _restartCoordinator,
             _rejectedConfig,
             plugins,
+            new FakeCapabilityResolver(null),
+            NullLoggerFactory.Instance,
             _logger);
     }
 

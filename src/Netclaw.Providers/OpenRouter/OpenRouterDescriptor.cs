@@ -21,6 +21,8 @@ public sealed class OpenRouterDescriptor : IProviderDescriptor
     }
 
     public string TypeKey => "openrouter";
+
+    public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => ThinkingDialect.Native;
     public string DisplayName => "OpenRouter";
     public string DefaultEndpoint => "https://openrouter.ai/api/v1";
     public string ModelListingPath => "/models";

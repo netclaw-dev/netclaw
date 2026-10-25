@@ -21,6 +21,8 @@ public sealed class VeniceAiDescriptor : IProviderDescriptor
     }
 
     public string TypeKey => "veniceai";
+
+    public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => ThinkingDialect.Native;
     public string DisplayName => "Venice.ai";
 
     // Venice's OpenAI-compatible API lives under /api/v1 (not /v1).

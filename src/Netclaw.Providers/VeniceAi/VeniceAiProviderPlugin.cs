@@ -31,6 +31,8 @@ public sealed class VeniceAiProviderPlugin : ProviderPluginBase<VeniceAiDescript
         var vendorOptions = entry.GetVendorOptions<VeniceAiVendorOptions>() ?? new VeniceAiVendorOptions();
 
         var options = new OpenAIClientOptions { Endpoint = endpoint };
+        if (CreateTransportOverride() is { } transport)
+            options.Transport = transport;
         if (!vendorOptions.IncludeVeniceSystemPrompt)
             options.AddPolicy(new VeniceAiSystemPromptOverridePolicy(), PipelinePosition.PerCall);
 

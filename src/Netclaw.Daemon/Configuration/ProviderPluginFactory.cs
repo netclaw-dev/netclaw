@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Configuration.Providers;
@@ -22,7 +23,9 @@ public sealed class ProviderPluginFactory
 
     public ProviderPluginFactory(
         Dictionary<string, ProviderEntry> providers,
-        IEnumerable<ILlmProviderPlugin> plugins)
+        IEnumerable<ILlmProviderPlugin> plugins,
+        IModelCapabilityResolver capabilities,
+        ILoggerFactory loggerFactory)
     {
         _providers = providers;
         _plugins = new Dictionary<string, ILlmProviderPlugin>(StringComparer.OrdinalIgnoreCase);

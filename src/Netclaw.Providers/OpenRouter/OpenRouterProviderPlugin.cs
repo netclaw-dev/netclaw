@@ -30,6 +30,8 @@ public sealed class OpenRouterProviderPlugin : ProviderPluginBase<OpenRouterDesc
         var vendorOptions = entry.GetVendorOptions<OpenRouterVendorOptions>() ?? new OpenRouterVendorOptions();
 
         var options = new OpenAIClientOptions { Endpoint = endpoint };
+        if (CreateTransportOverride() is { } transport)
+            options.Transport = transport;
         if (vendorOptions.ExcludeReasoning)
             options.AddPolicy(new OpenRouterReasoningExcludePolicy(), PipelinePosition.PerCall);
 

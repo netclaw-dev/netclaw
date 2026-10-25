@@ -8,6 +8,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
+using Netclaw.Daemon.Tests.Providers;
 using Netclaw.Providers;
 using Netclaw.Providers.Anthropic;
 using Netclaw.Providers.OpenAi;
@@ -283,6 +284,6 @@ public sealed class ProviderPluginFactoryTests
         var dict = new Dictionary<string, ProviderEntry>();
         foreach (var (name, entry) in providers)
             dict[name] = entry;
-        return new ProviderPluginFactory(dict, AllPlugins);
+        return new ProviderPluginFactory(dict, AllPlugins, new FakeCapabilityResolver(null), NullLoggerFactory.Instance);
     }
 }

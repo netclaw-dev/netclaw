@@ -34,4 +34,10 @@ public interface IProviderDescriptor
     /// </summary>
     Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default);
+
+    /// <summary>
+    /// The thinking dialect of a provider entry. The CLI, doctor, and the daemon use this one
+    /// resolution, so each surface offers and sends the same levels.
+    /// </summary>
+    ThinkingDialect ResolveThinkingDialect(ProviderEntry entry);
 }

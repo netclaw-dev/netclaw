@@ -482,6 +482,8 @@ public sealed class ProviderOAuthEndpointTests : IDisposable
     private sealed class TestOAuthDescriptor : IProviderDescriptor
     {
         public string TypeKey => "test-oauth";
+
+        public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => ThinkingDialect.Native;
         public string DisplayName => "Test OAuth";
         public string DefaultEndpoint => "https://api.example.com";
         public string ModelListingPath => "/v1/models";

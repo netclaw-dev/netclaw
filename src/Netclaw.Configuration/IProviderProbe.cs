@@ -25,6 +25,12 @@ public sealed record ProviderProbeResult(
     /// unclassified failure is never silently masked.
     /// </summary>
     public bool Transient { get; init; }
+
+    /// <summary>
+    /// The thinking dialect that the probe detected for the endpoint, for example
+    /// <see cref="ThinkingDialect.ReasoningEffort"/> for llama.cpp. Null when the endpoint does not show it.
+    /// </summary>
+    public ThinkingDialect? DetectedThinkingDialect { get; init; }
 }
 
 /// <summary>

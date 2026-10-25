@@ -48,6 +48,8 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
             {
                 Endpoint = new Uri("https://chatgpt.com/backend-api/codex")
             };
+            if (CreateTransportOverride() is { } codexTransport)
+                options.Transport = codexTransport;
             var credential = new ApiKeyCredential(token.Value);
             options.AddPolicy(
                 _tokenRefreshService is null
@@ -73,7 +75,10 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
 
         // API key path → standard endpoint
         var apiKey = GetRequiredApiKey(entry, TypeKey);
-        return new OpenAI.Responses.ResponsesClient(apiKey)
+        var apiKeyOptions = new OpenAI.Responses.ResponsesClientOptions();
+        if (CreateTransportOverride() is { } transport)
+            apiKeyOptions.Transport = transport;
+        return new OpenAI.Responses.ResponsesClient(new ApiKeyCredential(apiKey), apiKeyOptions)
             .AsIChatClient(model.ModelId);
     }
 }

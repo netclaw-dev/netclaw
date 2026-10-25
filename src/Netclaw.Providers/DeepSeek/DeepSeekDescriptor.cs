@@ -18,6 +18,8 @@ public sealed class DeepSeekDescriptor(HttpClient httpClient) : IProviderDescrip
 
     public string TypeKey => "deepseek";
 
+    public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => ThinkingDialect.DeepSeek;
+
     public string DisplayName => "DeepSeek";
 
     public string DefaultEndpoint => "https://api.deepseek.com/v1";

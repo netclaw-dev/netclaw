@@ -17,9 +17,9 @@ public sealed class CompositeCapabilityResolverTests
     {
         // Models the vLLM + HuggingFace handoff: first resolver supplies
         // context window only, second resolver supplies modalities only.
-        var contextOnly = new FakeResolver(
+        var contextOnly = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("test-model", null, null, 256_000));
-        var modalityOnly = new FakeResolver(
+        var modalityOnly = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("test-model", ModelModality.Text | ModelModality.Image, ModelModality.Text, null));
 
         var composite = new CompositeCapabilityResolver(
@@ -37,9 +37,9 @@ public sealed class CompositeCapabilityResolverTests
     [Fact]
     public async Task FirstNonNullWinsPerField()
     {
-        var first = new FakeResolver(
+        var first = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("test-model", ModelModality.Text, null, 200_000));
-        var second = new FakeResolver(
+        var second = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("test-model", ModelModality.Text | ModelModality.Image, ModelModality.Text, 256_000));
 
         var composite = new CompositeCapabilityResolver(
@@ -57,9 +57,9 @@ public sealed class CompositeCapabilityResolverTests
     [Fact]
     public async Task NonPositiveContext_DoesNotBlockLaterResolver()
     {
-        var first = new FakeResolver(
+        var first = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("test-model", ModelModality.Text, null, 0));
-        var second = new FakeResolver(
+        var second = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("test-model", null, ModelModality.Text, 256_000));
 
         var composite = new CompositeCapabilityResolver(
@@ -79,8 +79,8 @@ public sealed class CompositeCapabilityResolverTests
     {
         // Defaulting now lives at the consumption boundary
         // (ModelCapabilityResolution), not in the composite.
-        var first = new FakeResolver(null);
-        var second = new FakeResolver(null);
+        var first = new FakeCapabilityResolver(null);
+        var second = new FakeCapabilityResolver(null);
 
         var composite = new CompositeCapabilityResolver(
             [first, second],
@@ -95,7 +95,7 @@ public sealed class CompositeCapabilityResolverTests
     public async Task FirstResolver_Throws_ContinuesChain()
     {
         var first = new ThrowingResolver();
-        var second = new FakeResolver(
+        var second = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("test-model", ModelModality.Text, ModelModality.Text, 65_536));
 
         var composite = new CompositeCapabilityResolver(
@@ -114,10 +114,10 @@ public sealed class CompositeCapabilityResolverTests
     {
         // Active provider for the model is openai-compatible; the ollama
         // resolver must not be invoked.
-        var ollama = new FakeResolver(
+        var ollama = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("model", ModelModality.Text, ModelModality.Text, 32_768),
             providerType: "ollama");
-        var openAiCompat = new FakeResolver(
+        var openAiCompat = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("model", null, null, 256_000),
             providerType: "openai-compatible");
 
@@ -137,10 +137,10 @@ public sealed class CompositeCapabilityResolverTests
     [Fact]
     public async Task OracleResolver_RunsRegardlessOfProvider()
     {
-        var openAiCompat = new FakeResolver(
+        var openAiCompat = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("model", null, null, 256_000),
             providerType: "openai-compatible");
-        var oracle = new FakeResolver(
+        var oracle = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("model", ModelModality.Text | ModelModality.Image, ModelModality.Text, null),
             providerType: null); // oracle
 
@@ -162,10 +162,10 @@ public sealed class CompositeCapabilityResolverTests
     {
         // Backward compatibility: when no lookup is provided, the
         // composite behaves as if every resolver is eligible.
-        var ollama = new FakeResolver(
+        var ollama = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("model", null, null, 32_768),
             providerType: "ollama");
-        var openAiCompat = new FakeResolver(null, providerType: "openai-compatible");
+        var openAiCompat = new FakeCapabilityResolver(null, providerType: "openai-compatible");
 
         var composite = new CompositeCapabilityResolver(
             [ollama, openAiCompat],
@@ -176,26 +176,6 @@ public sealed class CompositeCapabilityResolverTests
         Assert.NotNull(result);
         Assert.True(ollama.WasCalled);
         Assert.True(openAiCompat.WasCalled);
-    }
-
-    private sealed class FakeResolver : IModelCapabilityResolver
-    {
-        private readonly ResolvedModelCapabilities? _result;
-        public bool WasCalled { get; private set; }
-        public string? ProviderType { get; }
-
-        public FakeResolver(ResolvedModelCapabilities? result, string? providerType = null)
-        {
-            _result = result;
-            ProviderType = providerType;
-        }
-
-        public Task<ResolvedModelCapabilities?> ResolveAsync(
-            string modelId, CancellationToken ct = default)
-        {
-            WasCalled = true;
-            return Task.FromResult(_result);
-        }
     }
 
     private sealed class ThrowingResolver : IModelCapabilityResolver

@@ -38,6 +38,8 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
     private readonly IDaemonRestartCoordinator _restartCoordinator;
     private readonly RejectedConfigState _rejectedConfig;
     private readonly IReadOnlyList<ILlmProviderPlugin> _plugins;
+    private readonly IModelCapabilityResolver _capabilities;
+    private readonly ILoggerFactory _loggerFactory;
     private (string Reason, string Content)? _lastRejection;
     private readonly ILogger<ConfigWatcherService> _logger;
 
@@ -65,8 +67,12 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         IDaemonRestartCoordinator restartCoordinator,
         RejectedConfigState rejectedConfig,
         IEnumerable<ILlmProviderPlugin> plugins,
+        IModelCapabilityResolver capabilities,
+        ILoggerFactory loggerFactory,
         ILogger<ConfigWatcherService> logger)
     {
+        _capabilities = capabilities;
+        _loggerFactory = loggerFactory;
         _rejectedConfig = rejectedConfig;
         _plugins = plugins.ToList();
         _paths = paths;
@@ -272,7 +278,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
             return check.Error;
 
         return valid.Validation.Status == ProviderRuntimeStatus.Valid
-            ? new ProviderPluginFactory(valid.Providers, _plugins).Validate(valid.Models)
+            ? new ProviderPluginFactory(valid.Providers, _plugins, _capabilities, _loggerFactory).Validate(valid.Models)
             : null;
     }
 

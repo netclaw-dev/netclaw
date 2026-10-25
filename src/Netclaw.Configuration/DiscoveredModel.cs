@@ -43,4 +43,10 @@ public sealed record DiscoveredModel
     /// it rather than persisting a guessed default.
     /// </summary>
     public ModelModality? OutputModalities { get; init; }
+
+    /// <summary>Whether the model thinks, and the levels that it accepts, when the provider reported it.</summary>
+    public ThinkingSupport Thinking { get; init; } = ThinkingSupport.Unknown;
+
+    /// <summary>The model's maximum output in tokens, when the provider reported it.</summary>
+    public int? MaxOutputTokens { get; init; }
 }

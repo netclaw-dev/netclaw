@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
@@ -33,6 +34,17 @@ public abstract class ProviderPluginBase<TDescriptor> : ILlmProviderPlugin
     public Task<ProviderProbeResult> ProbeAsync(ProviderEntry entry, CancellationToken ct = default)
         => Descriptor.ProbeAsync(entry, ct);
 
+    public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => Descriptor.ResolveThinkingDialect(entry);
+
+    // Test seam: when set, every HTTP request of the model client goes to this handler instead of
+    // the network, so a test can capture the request body that the provider receives. Never set in
+    // production wiring.
+    internal HttpMessageHandler? HttpHandlerOverride { get; init; }
+
+    /// <summary>The OpenAI SDK transport for <see cref="HttpHandlerOverride"/>, or null for the SDK default.</summary>
+    protected PipelineTransport? CreateTransportOverride()
+        => HttpHandlerOverride is null ? null : new HttpClientPipelineTransport(new HttpClient(HttpHandlerOverride));
+
     public abstract IChatClient CreateChatClient(ProviderEntry entry, ModelReference model);
 
     public virtual IVendorOptionsSource? CreateVendorOptionsSource(ProviderEntry entry) => null;
@@ -47,9 +59,12 @@ public abstract class ProviderPluginBase<TDescriptor> : ILlmProviderPlugin
     /// are the authoritative timeout layer; the HttpClient timeout is a last-resort safety
     /// net that should never fire before the watchdog.
     /// </summary>
-    protected static HttpClient CreateLlmHttpClient(Uri? baseAddress = null)
+    protected HttpClient CreateLlmHttpClient(Uri? baseAddress = null)
     {
-        return new HttpClient(new SessionAffinityHandler())
+        var handler = HttpHandlerOverride is null
+            ? new SessionAffinityHandler()
+            : new SessionAffinityHandler(HttpHandlerOverride);
+        return new HttpClient(handler)
         {
             BaseAddress = baseAddress,
             Timeout = TimeSpan.FromHours(1)

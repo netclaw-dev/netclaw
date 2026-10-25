@@ -39,4 +39,16 @@ public sealed class ModelReference
     /// automated capability detection for this model.
     /// </summary>
     public ModelModality? OutputModalities { get; set; }
+
+    /// <summary>
+    /// The output limit in tokens that every call of this model sends, unless the call site sets
+    /// its own. Null means the clamped default.
+    /// </summary>
+    public int? MaxOutputTokens { get; set; }
+
+    /// <summary>
+    /// The thinking level that every call of this model sends, unless the call site sets its own.
+    /// Null means the model's default.
+    /// </summary>
+    public ThinkingLevel? Thinking { get; set; }
 }
