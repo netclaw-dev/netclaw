@@ -263,14 +263,21 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         {
             CompleteExceptionOutcome(context, ex, ct);
             sw.Stop();
-            _logger.LogError(ex,
-                "Tool execution failed: {ToolName} ({Duration}ms) " +
-                "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
-                toolCall.Name,
-                sw.ElapsedMilliseconds,
-                context.Approval.AuthorizationAttemptId.Value,
-                context.SessionId,
-                toolCall.CallId);
+            // A policy denial and a correction request are expected outcomes. The authorization
+            // decision log already records each one, so they must not add an Error line.
+            // CompleteExceptionOutcome above still records the denial receipt.
+            if (ex is not (ToolAccessDeniedException or ToolCorrectionRequiredException))
+            {
+                _logger.LogError(ex,
+                    "Tool execution failed: {ToolName} ({Duration}ms) " +
+                    "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                    toolCall.Name,
+                    sw.ElapsedMilliseconds,
+                    context.Approval.AuthorizationAttemptId.Value,
+                    context.SessionId,
+                    toolCall.CallId);
+            }
+
             throw;
         }
     }
