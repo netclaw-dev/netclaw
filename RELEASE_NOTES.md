@@ -1,5 +1,51 @@
 # NetClaw Release Notes
 
+## 0.28.0-beta.4 (2026-10-25)
+
+Follow-up beta to 0.28.0-beta.3. A child that runs during a graceful restart now parks, and it resumes after the restart. An expired restart reminder closes the stopped work with one notice. When a person ends an automation turn, the model gets a short stop note.
+
+> **Caution: this release is forward-only.**
+> - 0.28.0-beta.3 cannot recover a session in which a child parked at a graceful restart (a park with no consent requests). The beta.3 replay rejects the park, or the resumed child fails.
+> - 0.28.0-beta.3 cannot recover a session that holds the new `ContinuationAuthorized` record until a snapshot replaces that record.
+> - If 0.28.0-beta.3 starts while a restart expiry signal waits, beta.3 treats the signal as a normal reminder fire and runs one automation turn.
+> - Never start 0.27.1 or older on a database that 0.28.0-beta.1 or newer wrote. 0.27.1 reads the child notice rows wrongly. It replays a notice as user input, and it can deliver a child result a second time.
+> - To roll back, you must have the backup from before this upgrade. To roll back to 0.27.1, you must have the backup from before the first 0.28 beta upgrade.
+>
+> Use these steps to make the backup and to roll back:
+> 1. Before you upgrade, stop the daemon: `netclaw daemon stop`.
+> 2. Copy the database: `cp ~/.netclaw/netclaw.db ~/.netclaw/netclaw.db.bak.$(date +%s)`.
+> 3. To roll back, stop the daemon, restore that copy, and then start the older binary. A restore loses the journal records that the new release wrote after the backup.
+
+### Sub-agents
+
+- **A child that runs during a graceful restart parks and resumes after the restart.** Before, a graceful restart ended each active child run as `owner_restarted`. Now the restart drain tells each live child to park. A child in a tool batch parks when the batch ends. A child that waits for a model reply cancels that call and parks at once. After the restart, the child resumes under the authority of the person who started it ([#2672](https://github.com/netclaw-dev/netclaw/pull/2672)).
+  - The session writes the park to the run record before the drain ends. The park uses the same record as a consent park, with no consent requests.
+  - A child that does not park in time ends as `owner_restarted`, and a tool that was still active never runs again. The session logs `Restart drain child_wait_ended live_children={N}`.
+  - When Netclaw refuses a drain park, the run ends as a restart loss: `owner_restarted`, with the changed files of the park, and "effects uncertain" ([#2672](https://github.com/netclaw-dev/netclaw/pull/2672), [#2676](https://github.com/netclaw-dev/netclaw/pull/2676)).
+  - A park that does not agree with its answers ends with `park_damaged` and an Error log.
+  - **Upgrade impact:** a graceful restart with an active child can take up to about 18 seconds longer. This change is forward-only. Read the caution at the top of this section.
+- **A late click after a failed resume gets the withdrawal reason.** Before, the click got "already answered" ([#2676](https://github.com/netclaw-dev/netclaw/pull/2676)).
+
+### Sessions
+
+- **An expired restart reminder closes the stopped work with one notice.** When a restart reminder expires before it runs, the daemon sends an expiry signal at startup. The session closes the held continuation, and a person input that the drain stopped at its first model call. It resumes nothing, and the person gets one short notice ([#2676](https://github.com/netclaw-dev/netclaw/pull/2676)).
+  - An expired continuation never cancels a durable child park.
+  - While a parent approval is open, the signal closes nothing and the session logs `restart_expired_skipped`. A second delivery of the signal closes nothing.
+  - A restart reminder must stay valid for 1 minute after its fire time. Otherwise startup sends the expiry signal.
+- **A held continuation runs only with a fresh restart reminder.** After the last consent answer, a held automation continuation runs only when a fresh restart reminder authorized it. Otherwise the continuation closes, and the person gets the restart notice one time. A new `ContinuationAuthorized` journal record keeps that authorization across passivation ([#2676](https://github.com/netclaw-dev/netclaw/pull/2676)).
+- **A continuation input has an explicit marker.** Thus Netclaw never reads an empty input from a person as a continuation ([#2676](https://github.com/netclaw-dev/netclaw/pull/2676)).
+- **The model gets a stop note when a person ends an automation turn.** The first turn of the person holds one fixed note: "The automated turn above stopped unfinished because a person sent a message. Answer the person's message first, and do not resume the stopped work in this reply unless the person asks for it." Later turns do not get the note ([#2677](https://github.com/netclaw-dev/netclaw/pull/2677)).
+- **A due compaction runs where a person ends an automation turn.** The compaction runs before the first model call of the person. After a compaction, the session also ends an automation turn when a person waits. A stop never closes an input that no model request carried ([#2677](https://github.com/netclaw-dev/netclaw/pull/2677)).
+
+### Reminders
+
+- **Restart reminder IDs are reserved for the system.** The reminder manager refuses a `restart-resume-` ID from any creator other than the system. `/api/reminders/import` refuses that prefix with HTTP 400 ([#2676](https://github.com/netclaw-dev/netclaw/pull/2676)).
+  - **Upgrade impact:** an import file that has a `restart-resume-` ID now fails. Remove those entries from the file.
+
+### Internal
+
+- Test reliability for the chat close expiry scenario, the notice order test, and the redactor time guard ([#2673](https://github.com/netclaw-dev/netclaw/pull/2673), [#2674](https://github.com/netclaw-dev/netclaw/pull/2674), [#2675](https://github.com/netclaw-dev/netclaw/pull/2675)).
+
 ## 0.28.0-beta.3 (2026-10-24)
 
 Follow-up beta to 0.28.0-beta.2. A child that waits for operator consent now parks, and the park survives a daemon restart. A restart also resumes a turn that the restart drain stopped in a tool loop. Memory recall and memory curation get two fixes.
