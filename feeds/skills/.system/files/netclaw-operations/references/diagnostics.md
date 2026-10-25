@@ -114,7 +114,10 @@ A graceful stop can resume a safe model turn through a standard reminder.
 This includes a turn that the drain stopped after a tool batch: the drain keeps
 one continuation input without text, and the reminder starts the next model call
 of that turn. A message that arrives before the reminder ends that resume, and
-the session then posts the stop notice. The reminder expires ten minutes after the interruption. A
+the session then posts the stop notice. The reminder expires ten minutes after the interruption.
+When the daemon starts after that time, startup logs a Warning `Restart reminder <id> expired before startup
+recovery; the session closes the stopped work with a notice.` The session closes the stopped turn, posts the
+stop notice once, and runs nothing. A child park stays open. A
 completed reply leaves the session quiet. A partial reply, a live background
 job, an overflow replay, or a turn without a channel type gets no reminder. The
 session log then has

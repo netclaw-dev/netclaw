@@ -47,6 +47,9 @@ A running child also survives a graceful restart (a daemon stop or a config relo
 It finishes its current tool step, or it drops its current model call, and it parks with no prompt.
 After the restart the restart reminder wakes the session, and the child continues with its next model call under its original authority. Do not respawn it.
 The restart reminder needs the channel type of the recorded context. A context with no channel type gets no reminder, and the park then waits for the next message in the session.
+A restart reminder that expired closes the stopped parent turn with one notice. It does not end a parked child or withdraw its prompt.
+If the journal rejects the park record of a running child, the child ends `partial` with `owner_restarted`, and its effects are uncertain.
+If the session cannot resume a parked child after the answers, a late click gets the withdrawal text, not "already answered". Nothing ran.
 The drain waits for running children for about 18 seconds (the drain deadline minus 2 seconds).
 A child that does not park in that time is lost with `owner_restarted`, and its running tool does not run again.
 The session then logs one Warning that ends with `child_wait_ended live_children=N`.

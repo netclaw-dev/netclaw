@@ -65,8 +65,11 @@ internal sealed record ParkForDrain : INoSerializationVerificationNeeded
 /// <summary>
 /// The journal rejected an event of a child run (design D3). The owner records the end of the run only when the run
 /// still has the lifecycle that the event expected (<see cref="ChildParkRules.RejectedEventEnds"/>).
+/// <paramref name="DrainPark"/> is the park of a rejected drain park (a Parked record with no request), else null. The
+/// state never held that park, so only this message can tell the owner to end the run as a restart loss (#2659 gap B).
 /// </summary>
-internal sealed record ChildEventRejected(SubAgentRunId RunId, ChildRejectedEvent Kind) : INoSerializationVerificationNeeded;
+internal sealed record ChildEventRejected(SubAgentRunId RunId, ChildRejectedEvent Kind, ChildRunPark? DrainPark)
+    : INoSerializationVerificationNeeded;
 
 /// <summary>The start of a resumed child: the park, and the recorded answer of each parked call by its call ID.</summary>
 internal sealed record ChildRunResume(ChildRunPark Park, IReadOnlyDictionary<string, ApprovalRedriveEntry> Answers);

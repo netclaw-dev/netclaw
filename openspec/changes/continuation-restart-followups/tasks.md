@@ -17,25 +17,25 @@ does not edit the tests. No test uses `Thread.Sleep` or `Task.Delay`. Each test 
 
 ## 3. The marker (implementation)
 
-- [ ] 3.1 Add `optional bool continues_stopped_turn = 15` to `InputAdmittedProto`, write it always, and read an absent field with the legacy shape rule. Verify `ContinuationMarkerTests` passes.
-- [ ] 3.2 Set the marker in `KeepStoppedTurnThen`. Make `IsContinuation` and `ApplyBufferedBatch` read it. Copy `AdoptedSpeakerIds` as normal admission does. Verify the `RestartDrainSpecs` marker and empty-input rows pass.
+- [x] 3.1 Add `optional bool continues_stopped_turn = 15` to `InputAdmittedProto`, write it always, and read an absent field with the legacy shape rule. Verify `ContinuationMarkerTests` passes.
+- [x] 3.2 Set the marker in `KeepStoppedTurnThen`. Make `IsContinuation` and `ApplyBufferedBatch` read it. Copy `AdoptedSpeakerIds` as normal admission does. Verify the `RestartDrainSpecs` marker and empty-input rows pass.
 
 ## 4. The expiry signal (implementation)
 
-- [ ] 4.1 `RestartRecoveryService` registers an expired restart reminder as the expiry signal. Verify task 2.7 passes.
-- [ ] 4.2 The session closes the resumable inputs on the expiry signal, posts the notice once, and replies `RestartResumeNotNeeded`. Verify rows `ExpiredReminderAfterToolBatch`, `ExpiredReminderAtFirstModelCall`, and `continuation-expired` pass.
+- [x] 4.1 `RestartRecoveryService` registers an expired restart reminder as the expiry signal. Verify task 2.7 passes.
+- [x] 4.2 The session closes the resumable inputs on the expiry signal, posts the notice once, and replies `RestartResumeNotNeeded`. Verify rows `ExpiredReminderAfterToolBatch`, `ExpiredReminderAtFirstModelCall`, and `continuation-expired` pass.
 
 ## 5. The held continuation (implementation)
 
-- [ ] 5.1 `QueueInputsHeldByThePause` leaves out continuation inputs. A restart reminder during the pause queues the held continuation. Verify rows `continuation-no-reminder` and `automation-continuation` pass.
+- [x] 5.1 `QueueInputsHeldByThePause` leaves out continuation inputs. A restart reminder during the pause queues the held continuation. Verify rows `continuation-no-reminder` and `automation-continuation` pass.
 
 ## 6. Refusal outcomes (implementation)
 
-- [ ] 6.1 A refused resume after the answer read leaves the answers unused. Verify task 2.3 passes and row `unbound` still passes.
-- [ ] 6.2 `ChildEventRejected` tells a rejected drain park from a consent park. Verify task 2.4 passes and S2 row `rejected` still passes.
+- [x] 6.1 A refused resume after the answer read leaves the answers unused. Verify task 2.3 passes and row `unbound` still passes.
+- [x] 6.2 `ChildEventRejected` tells a rejected drain park from a consent park. Verify task 2.4 passes and S2 row `rejected` still passes.
 
 ## 7. Docs and gates
 
 - [ ] 7.1 Update the `netclaw-operations` skill (restart reminder expiry and notice) and bump `metadata.version`. Verify `./evals/run-evals.sh` passes.
-- [ ] 7.2 Run slopwatch, the header check, and `openspec validate continuation-restart-followups --strict`. Verify all pass.
+- [x] 7.2 Run slopwatch, the header check, and `openspec validate continuation-restart-followups --strict`. Verify all pass.
 - [ ] 7.3 After the merge: archive this change after `durable-child-park-recovery`. Verify `openspec validate --strict` passes on the main specs.

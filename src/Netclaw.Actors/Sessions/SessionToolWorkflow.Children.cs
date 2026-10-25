@@ -79,8 +79,8 @@ internal sealed partial class SessionToolWorkflow
 
         var closedEntries = CloseChildApprovals(evt);
         var withdrawn = RememberClosedChildCalls(closedEntries, _ => reason);
-        // A resume takes the answers of its park first, so an answer that is still here was never used. A late click
-        // gets the reason of the run end, not "already answered".
+        // A resume closes the answers of its park only after its Resumed record commits (UseParkedAnswers), so an
+        // answer that is still here was never used. A late click gets the reason of the run end, not "already answered".
         foreach (var (callId, _) in closedEntries.Where(static pair => pair.Value is ResolvedToolApproval))
             _closedChildCalls[callId] = new ChildApprovalResolution.Withdrawn(reason);
         return withdrawn
@@ -198,7 +198,8 @@ internal sealed partial class SessionToolWorkflow
 
     /// <summary>
     /// Takes the recorded answers of a parked run, keyed by the child call ID, for its resume (design D3 and D4). The
-    /// entries close, so a later click on a prompt of the park gets "already answered".
+    /// entries stay open until <see cref="UseParkedAnswers"/>, so a resume that the session refuses after this read
+    /// leaves them for the run end to withdraw, and no answer counts as used (#2659 gap A).
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// The park cannot bind a recorded answer to its call. The entries stay, so the run end withdraws them and no
@@ -223,11 +224,20 @@ internal sealed partial class SessionToolWorkflow
                 throw new InvalidOperationException($"The parked call ID {childCallId} is not unique.");
         }
 
-        // Only a bound resume uses the answers. A failure above leaves the entries for the run end to withdraw.
+        return answers;
+    }
+
+    /// <summary>
+    /// The resume of a parked run started: its Resumed record committed. The answered entries close, so a later click on
+    /// a prompt of the park gets "already answered".
+    /// </summary>
+    public void UseParkedAnswers(SubAgentRunId runId)
+    {
+        var answered = _calls.Where(pair => pair.Value is ResolvedToolApproval && pair.Value.Pending.Request.SourceChildRunId == runId)
+            .ToArray();
         foreach (var pair in answered)
             _calls.Remove(pair.Key);
         RememberClosedChildCalls(answered, static _ => throw new InvalidOperationException("A parked run has an open request."));
-        return answers;
     }
 
     // The resumed child runs the calls of the last assistant message of the transcript (SubAgentActor.ResumeFromPark).

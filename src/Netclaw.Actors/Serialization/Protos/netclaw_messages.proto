@@ -115,6 +115,9 @@ message InputAdmittedProto {
   optional string source_child_run_id = 13;
   // The input reports the end of a child run. The reducer marks the run reported and applies the reviewed context.
   ChildNoticeProto child_notice = 14;
+  // The continuation input of a stopped turn (#2659). The writer always sets it. A 0.28.0-beta.3 record has no value,
+  // and the reader applies the old shape rule to it.
+  optional bool continues_stopped_turn = 15;
   reserved 7, 8;
 }
 

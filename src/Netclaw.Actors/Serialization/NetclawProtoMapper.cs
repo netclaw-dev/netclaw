@@ -200,7 +200,8 @@ internal static partial class NetclawProtoMapper
             SessionId = ToProto(evt.SessionId),
             InputId = evt.InputId.Value,
             UserMessage = ToProto(evt.UserMessage),
-            AdmittedAtMs = evt.AdmittedAtMs
+            AdmittedAtMs = evt.AdmittedAtMs,
+            ContinuesStoppedTurn = evt.ContinuesStoppedTurn
         };
         if (evt.SourceBackgroundJobId is { } sourceBackgroundJobId)
             proto.SourceBackgroundJobId = sourceBackgroundJobId.Value;
@@ -214,21 +215,33 @@ internal static partial class NetclawProtoMapper
         return proto;
     }
 
-    internal static InputAdmitted FromProto(Proto.InputAdmittedProto proto) => new()
+    internal static InputAdmitted FromProto(Proto.InputAdmittedProto proto)
     {
-        SessionId = FromProto(proto.SessionId),
-        InputId = new InputId(proto.InputId),
-        SourceBackgroundJobId = proto.HasSourceBackgroundJobId
-            ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
-        SourceMessageId = proto.HasSourceMessageId ? proto.SourceMessageId : null,
-        UserMessage = FromProto(proto.UserMessage),
-        ExecutableText = proto.HasExecutableText ? proto.ExecutableText : null,
-        TurnContext = proto.TurnContext is null
-            ? throw new InvalidDataException("An admitted input has no turn context.")
-            : FromProto(proto.TurnContext),
-        ChildNotice = proto.ChildNotice is null ? null : FromProto(proto.ChildNotice),
-        AdmittedAtMs = proto.AdmittedAtMs
-    };
+        var input = new InputAdmitted
+        {
+            SessionId = FromProto(proto.SessionId),
+            InputId = new InputId(proto.InputId),
+            SourceBackgroundJobId = proto.HasSourceBackgroundJobId
+                ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
+            SourceMessageId = proto.HasSourceMessageId ? proto.SourceMessageId : null,
+            UserMessage = FromProto(proto.UserMessage),
+            ExecutableText = proto.HasExecutableText ? proto.ExecutableText : null,
+            TurnContext = proto.TurnContext is null
+                ? throw new InvalidDataException("An admitted input has no turn context.")
+                : FromProto(proto.TurnContext),
+            ChildNotice = proto.ChildNotice is null ? null : FromProto(proto.ChildNotice),
+            AdmittedAtMs = proto.AdmittedAtMs
+        };
+        // A 0.28.0-beta.3 record has no marker. That binary wrote its continuation with no text, no media, no
+        // executable text, and no notice, so the legacy read keeps that shape rule (#2659 design D4).
+        return input with
+        {
+            ContinuesStoppedTurn = proto.HasContinuesStoppedTurn
+                ? proto.ContinuesStoppedTurn
+                : input.UserMessage.Content.Length == 0 && input.UserMessage.MediaReferences.Count == 0
+                  && input.ExecutableText is null && input.ChildNotice is null
+        };
+    }
 
     internal static Proto.InputClosedProto ToProto(InputClosed evt)
     {

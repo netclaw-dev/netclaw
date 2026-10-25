@@ -10,6 +10,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.Sessions;
 using Netclaw.Daemon.Gateway;
 using static Netclaw.Actors.Reminders.ReminderProtocol;
 
@@ -22,6 +23,8 @@ public sealed class RestartRecoveryService : IHostedService
 {
     private static readonly TimeSpan AskTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ReminderStartDelay = TimeSpan.FromMilliseconds(250);
+    // The expiry signal must outlive its fire time, so the reminder manager delivers it after a slow startup.
+    private static readonly TimeSpan ExpirySignalLifetime = TimeSpan.FromMinutes(10);
 
     private readonly RestartManifestStore _manifestStore;
     private readonly IRequiredActor<ReminderManagerActorKey> _reminderManagerProvider;
@@ -77,18 +80,22 @@ public sealed class RestartRecoveryService : IHostedService
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        if (stored.ExpiresAt is not { } expiresAt || expiresAt <= now + ReminderStartDelay)
+        var fireAt = now + ReminderStartDelay;
+        var reminder = stored with { Schedule = stored.Schedule with { FireAt = fireAt } };
+        // An expired restart reminder becomes the expiry signal (#2659 design D1). It takes the same delivery route, so
+        // the session closes the stopped work and the restart notice reaches the thread. The signal resumes nothing.
+        if (stored.ExpiresAt is not { } expiresAt || expiresAt <= fireAt)
         {
             _logger.LogWarning(
-                "Restart reminder {ReminderId} expired before startup recovery; the session stays quiet.",
+                "Restart reminder {ReminderId} expired before startup recovery; the session closes the stopped work with a notice.",
                 stored.Id.Value);
-            return true;
+            reminder = reminder with
+            {
+                Instructions = SessionProtocol.RestartExpiredInstruction,
+                ExpiresAt = fireAt + ExpirySignalLifetime
+            };
         }
 
-        var reminder = stored with
-        {
-            Schedule = stored.Schedule with { FireAt = now + ReminderStartDelay }
-        };
         try
         {
             var result = await reminderManager.Ask<ReminderSavedResponse>(

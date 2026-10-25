@@ -890,12 +890,19 @@ The workflow decides whether every unfinished tool call waits on a durable appro
 The lifetime owner also validates the complete stored turn authority before a restart reminder or resumed turn.
 The actor passes the durable input records to that check. The input owner does not store another durable copy.
 A tool batch consumes the turn input. When the restart drain stops a turn after its tool batch, the actor journals one
-continuation `InputAdmitted` for the turn (#2632). The record has no text and carries the turn's recorded
-`TurnContext`, never a wider one. The restart reminder then takes its authority from that pending input, as from any
+continuation `InputAdmitted` for the turn (#2632). The record has no text, carries the turn's recorded
+`TurnContext`, never a wider one, and sets the durable marker `ContinuesStoppedTurn` (#2659). Only the marker makes an
+input a continuation (`SessionInputFlow.IsContinuation`), so an empty person input stays an ordinary input. The restart reminder then takes its authority from that pending input, as from any
 pending input, and the resumed turn runs under it. The reminder is only the signal, so an automation turn keeps its
 automation authority and a person turn keeps the person's authority. The input waits for the reminder: recovery does
 not start it, and it never joins the turn of another requester. A later input that arrives first closes it in the same
-journal write, and the session posts the stop notice once. `SessionExecutionLifetime.ContinuesStoppedTurn`
+journal write, and the session posts the stop notice once. Only a fresh restart reminder authorizes the
+continuation. Recovery does not queue a continuation that the child consent pause holds
+(`QueueInputsHeldByThePause`); the fresh reminder queues it (`TryResumeInterruptedInput`). An approval notice or a
+child result notice never stands in for the reminder, so with no reminder the approval notice of the last answer
+closes the continuation. An expired restart reminder comes back from startup as the expiry signal
+(`SessionProtocol.RestartExpiredInstruction`): the session closes the stopped work with the notice and grants
+nothing. `SessionExecutionLifetime.ContinuesStoppedTurn`
 decides if the turn is kept. A turn with partial text, another pending input, an overflow replay, a live background
 job, an unanswered tool call, or no channel type gets the stop notice instead.
 The actor writes grants, persists events, and emits outputs. The lifetime owner owns task cancellation and stop completion.

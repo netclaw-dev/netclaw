@@ -110,7 +110,8 @@ public sealed partial class LlmSessionActor
                     message.RunId);
                 return;
             }
-            EndParkedRun(message.RunId, DrainParkOf(_state.ChildRuns[message.RunId].Lifecycle), SubAgentOutcomeReason.ToolExecutionFailed,
+            EndParkedRun(message.RunId, message.DrainPark ?? DrainParkOf(_state.ChildRuns[message.RunId].Lifecycle),
+                SubAgentOutcomeReason.ToolExecutionFailed,
                 $"The journal rejected the {message.Kind} record of the child.", ActorRefs.Nobody);
         });
         Command<ChildStopFailed>(message => _log.Error(message.Error, "Child cancellation callback failed for {RunId}", message.RunId));
@@ -351,6 +352,9 @@ public sealed partial class LlmSessionActor
         Persist(evt, committed =>
         {
             _state = _state.Apply(committed);
+            // The answers count as used only now (#2659 gap A). A refusal above, or a rejected Resumed record, leaves the
+            // entries open for the run end, so a late click gets the withdrawal reason and not "already answered".
+            _toolWorkflow.UseParkedAnswers(runId);
             // The prompt counter makes each incarnation name new, so it never meets an old actor that still stops. A
             // resume emits no second Started output.
             StartChildActor(run, prepared with { ActorName = $"{prepared.ActorName}-{run.PromptsIssued}" });
@@ -818,12 +822,15 @@ public sealed partial class LlmSessionActor
         StartWaitingInputAfterApproval();
     }
 
-    // Queues each pending input that the pause holds and that the queue does not hold yet.
+    // Queues each pending input that the pause holds and that the queue does not hold yet. A continuation input stays
+    // out: only a fresh restart reminder lets it run (TryResumeInterruptedInput, #2659 design D3). Unqueued, the next
+    // admission closes it and posts the restart notice once, also the approval notice of the last answer.
     private void QueueInputsHeldByThePause()
     {
         var selected = _input.SelectedInputs.Ids;
         var queued = _input.RestoreWaitingInputs(
-            SplitByThePause(_state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId))).Held,
+            SplitByThePause(_state.GetExecutablePendingInputs().Where(input => !selected.Contains(input.InputId))).Held
+                .Where(static input => !SessionInputFlow.IsContinuation(input)).ToArray(),
             _sessionId);
         if (queued > 0)
             _log.Info("Queued {HeldCount} input(s) that the child consent pause held before the restart", queued);

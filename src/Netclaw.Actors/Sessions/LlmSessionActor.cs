@@ -481,6 +481,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 return;
             }
 
+            if (TryCloseExpiredRestartWork(cmd))
+                return;
+
             if (IsRestartResume(cmd))
             {
                 QueueRestartResume(cmd);
@@ -917,6 +920,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
                 TryReplyNack(SessionIngressGate.RestartInProgressMessage);
                 return;
             }
+
+            if (TryCloseExpiredRestartWork(cmd))
+                return;
 
             if (IsRestartResume(cmd))
             {
@@ -1858,8 +1864,10 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
         foreach (var message in batch.Messages)
         {
-            // The continuation input of a stopped turn has no text for the model (#2632).
-            if (string.IsNullOrEmpty(message.Content) && message.MediaReferences.Count == 0)
+            // The continuation input of a stopped turn has no text for the model (#2632). Only its marker counts: an
+            // empty person input reaches the model as a user message (#2659).
+            if (message.AdmittedInputId is { } admittedId
+                && _state.PendingInputs.Any(input => input.InputId == admittedId && SessionInputFlow.IsContinuation(input)))
                 continue;
             var refs = message.MediaReferences.Count > 0 ? message.MediaReferences : null;
             _state = _state.AddUserMessage(message.Content, refs);
@@ -2096,7 +2104,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
-        if (TryResumeInterruptedInput(cmd))
+        if (TryCloseExpiredRestartWork(cmd) || TryResumeInterruptedInput(cmd))
             return;
 
         if (TryRejectIncompatibleInput(cmd.MediaReferences, cmd.Source))
@@ -2441,9 +2449,52 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     // The restart reminder is not an input. It only resumes inputs that the journal already holds.
     private static bool IsRestartResume(SendUserMessage cmd)
+        => IsRestartReminder(cmd, SessionExecutionLifetime.RestartReminderInstruction);
+
+    private static bool IsRestartReminder(SendUserMessage cmd, string instruction)
         => cmd.Source?.ReminderId?.Value is { } reminderId
            && reminderId.StartsWith(RestartReminderIdPrefix, StringComparison.Ordinal)
-           && string.Equals(cmd.Content, SessionExecutionLifetime.RestartReminderInstruction, StringComparison.Ordinal);
+           && string.Equals(cmd.Content, instruction, StringComparison.Ordinal);
+
+    // The expiry signal (#2659 design D1, D2): startup registers a restart reminder that expired before recovery with
+    // RestartExpiredInstruction. The signal is not an input and grants nothing. It closes the stopped work that the
+    // resume would take, in one write, and posts the restart notice once in the journal callback. It starts no model
+    // call. It leaves the session-made notices and the inputs that the pause holds, so a child park and its consent
+    // prompts stay. A continuation input is stopped work also when the pause holds it.
+    private bool TryCloseExpiredRestartWork(SendUserMessage cmd)
+    {
+        if (!IsRestartReminder(cmd, SessionProtocol.RestartExpiredInstruction))
+            return false;
+
+        var selected = _input.SelectedInputs.Ids;
+        var paused = _toolWorkflow.IsChildConsentPaused;
+        var stopped = _state.GetExecutablePendingInputs()
+            .Where(input => !selected.Contains(input.InputId)
+                            && (SessionInputFlow.IsContinuation(input)
+                                || input.ChildNotice is null
+                                && TurnContext.TryFromRecord(input.TurnContext, out var authority, out _)
+                                && authority is { IsChildConsentNotice: false }
+                                && !(paused && ChildConsentPause.Holds(authority, isChildNotice: false))))
+            .ToArray();
+        // One turn serves one requester, so the resume takes the leading inputs of the first requester.
+        InputId[] closes = [.. stopped.Take(_execution.ValidateRestartResume(stopped).ResumeCount).Select(static input => input.InputId)];
+        _log.Info("restart_expired reminder={ReminderId} closes={CloseCount}", cmd.Source?.ReminderId, closes.Length);
+        if (closes.Length == 0)
+        {
+            ReplyRestartResumeNotNeeded();
+            return true;
+        }
+
+        var closed = new InputClosed { SessionId = _sessionId, InputIds = closes, ClosedAtMs = NowMs(), KeepsTurn = true };
+        _ = _state.Apply(closed);
+        Persist(closed, committed =>
+        {
+            ApplyInputClosed(committed);
+            EmitRestartStoppedTurnNotice(ReminderEligibility.None, 0);
+            ReplyRestartResumeNotNeeded();
+        });
+        return true;
+    }
 
     // Akka.Reminders can redeliver the restart reminder. In an idle session with nothing to resume, this message
     // resumes nothing and no turn runs for it, so the session acknowledges and the reminder run ends in success.
@@ -2482,8 +2533,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         var pending = _state.GetExecutablePendingInputs();
         // N1 (durable-child-park-recovery): an open parked request holds automated input and child notices, also the
         // continuation of an automation turn. The reminder starts no turn for them. They run after the last answer.
+        // Recovery leaves a held continuation out of the queue, so this fresh reminder queues it (#2659 design D3).
         if (_toolWorkflow.IsChildConsentPaused)
-            pending = SplitByThePause(pending).Free;
+        {
+            var (held, free) = SplitByThePause(pending);
+            var selected = _input.SelectedInputs.Ids;
+            _input.RestoreWaitingInputs(
+                held.Where(input => SessionInputFlow.IsContinuation(input) && !selected.Contains(input.InputId)).ToArray(),
+                _sessionId);
+            pending = free;
+        }
         if (pending.Count == 0)
         {
             AckRestartResumeNoOp(cmd);
@@ -2820,7 +2879,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             _log.Error(cause, "The journal rejected the {Kind} record of child run {RunId}", rejected.Kind, rejected.RunId);
             if (rejected.Kind == ChildRejectedEvent.Answer)
                 TryReplyNack(ApprovalNackReasons.PersistFailed);
-            Self.Tell(new ChildEventRejected(rejected.RunId, rejected.Kind));
+            Self.Tell(new ChildEventRejected(rejected.RunId, rejected.Kind,
+                @event is ChildRunEvent.Parked { Requests.Count: 0 } drainPark ? drainPark.Park : null));
             base.OnPersistRejected(cause, @event, sequenceNr);
             return;
         }
@@ -4579,7 +4639,9 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             SessionId = _sessionId,
             InputId = InputId.New(),
             UserMessage = new SerializableChatMessage { Role = Protocol.ChatRole.User },
-            TurnContext = context.ToRecord(),
+            // As normal admission does (SessionInputFlow.PrepareAdmission): persist a concrete array.
+            TurnContext = context.ToRecord() with { AdoptedSpeakerIds = context.AdoptedSpeakerIds.ToArray() },
+            ContinuesStoppedTurn = true,
             AdmittedAtMs = NowMs()
         };
         _continuationWrite = (continuation, stop);

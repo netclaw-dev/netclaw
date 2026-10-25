@@ -516,10 +516,9 @@ internal sealed class SessionInputFlow
         return pending.Where(static item => !IsContinuation(item)).Select(static item => item.UserMessage).ToArray();
     }
 
-    // The continuation input of a stopped turn (#2632): the drain writes it with no text, no media, and no notice.
-    public static bool IsContinuation(InputAdmitted input)
-        => input.UserMessage.Content.Length == 0 && input.UserMessage.MediaReferences.Count == 0
-           && input.ExecutableText is null && input.ChildNotice is null;
+    // The continuation input of a stopped turn (#2632). Only the durable marker counts: a person input with no text and
+    // no media is an ordinary input (#2659).
+    public static bool IsContinuation(InputAdmitted input) => input.ContinuesStoppedTurn;
 
     public void BufferReplay(SendUserMessage command) => _buffer.Insert(0, (command, true));
 
