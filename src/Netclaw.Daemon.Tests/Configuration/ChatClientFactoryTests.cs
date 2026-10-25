@@ -5,15 +5,19 @@
 // -----------------------------------------------------------------------
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Tests.Providers;
+using Netclaw.Daemon.Tests.Providers.GitHubCopilot;
 using Netclaw.Providers;
 using Netclaw.Providers.Anthropic;
+using Netclaw.Providers.DeepSeek;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
 using Netclaw.Providers.SelfHosted;
+using Netclaw.Providers.VeniceAi;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Configuration;
@@ -49,13 +53,11 @@ public sealed class ProviderPluginFactoryTests
     }
 
     // Regression guard: every client the factory returns must carry the
-    // ReasoningSuppressionChatClient guarantee (NetclawChatOptionKeys.SuppressReasoning is
-    // always stripped before the wire), not just the ones curation happens to call — the
-    // factory is the single seam that can promise this. This asserts on the concrete wrapper
-    // type (internal, visible via InternalsVisibleTo) rather than on wire behavior because the
-    // real inner clients here would otherwise require a live network call to exercise.
+    // ModelRequestSettingsChatClient guarantee (own options copy, the model settings, and
+    // NetclawChatOptionKeys.SuppressReasoning always stripped before the wire). The factory is the single
+    // seam that can promise this, so the wrapper must be the outermost client.
     [Fact]
-    public void Create_AlwaysWrapsWithReasoningSuppressionChatClient()
+    public void Create_AlwaysWrapsWithModelRequestSettingsChatClient()
     {
         var factory = CreateFactory(("local", new ProviderEntry
         {
@@ -65,7 +67,7 @@ public sealed class ProviderPluginFactoryTests
 
         var client = factory.Create(new ModelReference { Provider = "local", ModelId = "qwen3:30b" });
 
-        Assert.IsType<ReasoningSuppressionChatClient>(client);
+        Assert.IsType<ModelRequestSettingsChatClient>(client);
     }
 
     [Fact]
@@ -252,31 +254,93 @@ public sealed class ProviderPluginFactoryTests
         Assert.Null(plugin.CreateVendorOptionsSource(entry));
     }
 
-    [Fact]
-    public void OllamaProviderPlugin_DeclaresOllamaThinkDialect()
+    // The CLI, doctor, and the daemon all use IProviderDescriptor.ResolveThinkingDialect (design D2, D6).
+    [Theory]
+    [InlineData("ollama_resolves_ollama_think", "ollama", null, ThinkingDialect.OllamaThink)]
+    [InlineData("deepseek_resolves_deepseek", "deepseek", null, ThinkingDialect.DeepSeek)]
+    [InlineData("compat_without_value_resolves_unresolved", "openai-compatible", null, ThinkingDialect.Unresolved)]
+    [InlineData("compat_with_value_resolves_it", "openai-compatible", "ReasoningEffort", ThinkingDialect.ReasoningEffort)]
+    [InlineData("compat_none_value_resolves_none", "openai-compatible", "None", ThinkingDialect.None)]
+    [InlineData("anthropic_resolves_native", "anthropic", null, ThinkingDialect.Native)]
+    [InlineData("openai_resolves_native", "openai", null, ThinkingDialect.Native)]
+    [InlineData("openrouter_resolves_native", "openrouter", null, ThinkingDialect.Native)]
+    [InlineData("venice_resolves_native", "veniceai", null, ThinkingDialect.Native)]
+    [InlineData("copilot_resolves_native", "github-copilot", null, ThinkingDialect.Native)]
+    public void Descriptor_resolves_thinking_dialect(string row, string type, string? configured, ThinkingDialect expected)
     {
-        var plugin = new OllamaProviderPlugin(new OllamaDescriptor(SharedHttp));
+        var entry = new ProviderEntry { Type = type };
+        if (configured is not null)
+            entry.SetVendorOptions(new JsonObject { ["ThinkingDialect"] = configured });
 
-        Assert.Equal(ReasoningSuppressionDialect.OllamaThink, plugin.SuppressionDialect);
+        var descriptor = ProviderDescriptors().Single(d => d.TypeKey == type);
+
+        Assert.True(expected == descriptor.ResolveThinkingDialect(entry), row);
     }
 
-    [Fact]
-    public void OpenAiCompatibleProviderPlugin_DeclaresChatTemplateKwargsDialect()
+    // Startup validation checks only the dialect, because the capability is resolved at runtime (D5).
+    [Theory]
+    [InlineData("startup_fails_on_hand_edited_unsupported_level", "None", ThinkingLevel.Low, true)]
+    [InlineData("startup_fails_on_invalid_thinking_dialect", "Banana", ThinkingLevel.Off, true)]
+    [InlineData("startup_accepts_level_that_the_dialect_sends", "ReasoningEffort", ThinkingLevel.Low, false)]
+    public void Validate_checks_thinking_level_against_the_dialect(
+        string row, string dialect, ThinkingLevel level, bool fails)
     {
-        var plugin = new OpenAiCompatibleProviderPlugin(
-            new OpenAiCompatibleDescriptor(SharedHttp), NullLoggerFactory.Instance);
+        var entry = WireCapture.Entry("openai-compatible");
+        entry.SetVendorOptions(new JsonObject { ["ThinkingDialect"] = dialect });
+        var factory = WireCapture.Factory(new() { ["my-vllm"] = entry }, _ => new WireCapture().Handler);
+        var models = new ModelSelection
+        {
+            Main = new ModelReference { Provider = "my-vllm", ModelId = "qwen3", Thinking = level },
+        };
 
-        Assert.Equal(ReasoningSuppressionDialect.ChatTemplateKwargs, plugin.SuppressionDialect);
+        var error = factory.Validate(models);
+
+        Assert.True(fails == error is not null, $"{row}: {error ?? "(no error)"}");
+        if (!fails)
+            return;
+        Assert.Contains("my-vllm", error, StringComparison.Ordinal);
+        Assert.Contains(dialect == "Banana" ? "ThinkingDialect" : level.ToString(), error, StringComparison.OrdinalIgnoreCase);
     }
 
-    // Plugins backed by strict SDKs (OpenAI, Anthropic, OpenRouter — all official OpenAI-SDK
-    // adapters) have no known dialect and must inherit the safe strip-only default. Excludes
-    // Ollama from AllPlugins, which declares OllamaThink (covered above).
+    // Design D10: one Information line for each model client, with the inputs of the default limit.
     [Fact]
-    public void StrictSdkProviderPlugins_InheritNoneDialect()
+    public void startup_line_shows_limit_inputs_level_dialect_and_capability()
     {
-        foreach (var plugin in AllPlugins.Where(p => p.TypeKey != "ollama"))
-            Assert.Equal(ReasoningSuppressionDialect.None, plugin.SuppressionDialect);
+        var logs = new CapturingLoggerProvider();
+        using var loggerFactory = new LoggerFactory([logs]);
+        var factory = WireCapture.Factory(
+            new() { ["my-openai"] = WireCapture.Entry("openai") }, _ => new WireCapture().Handler, loggerFactory);
+
+        factory.Create(new ModelReference
+        {
+            Provider = "my-openai",
+            ModelId = "gpt-5",
+            ContextWindow = 131_072,
+            Thinking = ThinkingLevel.Low,
+        });
+
+        var line = Assert.Single(logs.Entries, e => e.Level == LogLevel.Information && e.Message.Contains("gpt-5")).Message;
+        Assert.Contains("maxOutputTokens=default 32000", line, StringComparison.Ordinal);
+        Assert.Contains("window=131072", line, StringComparison.Ordinal);
+        Assert.Contains("thinking=Low (configured)", line, StringComparison.Ordinal);
+        Assert.Contains("dialect=Native", line, StringComparison.Ordinal);
+        Assert.Contains("capability=", line, StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<IProviderDescriptor> ProviderDescriptors()
+    {
+        var exchanger = GitHubCopilotProviderPluginTests.ExchangerReturning("copilot-token", apiBase: null);
+        return
+        [
+            new OllamaDescriptor(SharedHttp),
+            new OpenAiCompatibleDescriptor(SharedHttp),
+            new DeepSeekDescriptor(SharedHttp),
+            new AnthropicDescriptor(SharedHttp),
+            new OpenAiDescriptor(SharedHttp),
+            new OpenRouterDescriptor(SharedHttp),
+            new VeniceAiDescriptor(SharedHttp),
+            GitHubCopilotProviderPluginTests.DescriptorWithModels(exchanger),
+        ];
     }
 
     private static ProviderPluginFactory CreateFactory(params (string name, ProviderEntry entry)[] providers)

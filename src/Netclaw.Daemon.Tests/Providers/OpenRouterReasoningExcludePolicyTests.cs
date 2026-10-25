@@ -49,7 +49,7 @@ public sealed class OpenRouterReasoningExcludePolicyTests
     }
 
     [Fact]
-    public void OverwritesExistingReasoningField()
+    public void MergesExcludeWithExistingReasoningEffort()
     {
         var policy = new OpenRouterReasoningExcludePolicy();
         var body = new JsonObject
@@ -61,8 +61,9 @@ public sealed class OpenRouterReasoningExcludePolicyTests
         var result = PipelinePolicyTestHarness.RunSync(policy, body);
 
         Assert.NotNull(result);
-        // The policy overwrites any existing reasoning config
+        // The thinking level sets the effort; the exclude switch must not drop it (design D3).
         Assert.True(result!["reasoning"]?["exclude"]?.GetValue<bool>());
+        Assert.Equal("high", result["reasoning"]?["effort"]?.GetValue<string>());
     }
 
     [Fact]

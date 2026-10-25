@@ -237,6 +237,34 @@ public sealed class DoctorFixServiceTests : IDisposable
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
 
+    // doctor --fix must not delete or replace an invalid output limit. Doctor reports it, and the
+    // operator fixes it. The stale SkillSync switch makes sure that a fix plan exists.
+    [Fact]
+    public async Task doctor_fix_keeps_invalid_limit()
+    {
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Definitions": {
+                  "primary": { "Provider": "example-provider", "ModelId": "example-model", "MaxOutputTokens": -1 }
+                },
+                "Roles": { "Main": "primary" }
+              },
+              "SkillSync": { "Enabled": true, "DisableSystemSkillSync": true }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var plan = await ConfigOnlyService(paths).BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        var fix = Assert.Single(plan.Fixes);
+        using var updated = JsonDocument.Parse(fix.UpdatedText);
+        Assert.Equal(-1, updated.RootElement.GetProperty("Models").GetProperty("Definitions")
+            .GetProperty("primary").GetProperty("MaxOutputTokens").GetInt32());
+    }
+
     [Fact]
     public async Task DynamicDescriptionReflectsAppliedFixes()
     {

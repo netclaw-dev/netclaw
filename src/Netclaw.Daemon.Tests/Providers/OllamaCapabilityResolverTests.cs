@@ -140,4 +140,31 @@ public sealed class OllamaCapabilityResolverTests
         Assert.Null(result.ContextWindowTokens);
         Assert.Equal(ModelModality.Text, result.InputModalities);
     }
+
+
+    [Theory]
+    [InlineData("thinking_values_strings_map_to_levels", """{"values":["low","medium","high"],"default":"medium"}""")]
+    [InlineData("thinking_values_false_maps_to_none", """{"values":[false],"default":false}""")]
+    [InlineData("no_thinking_object_maps_to_unknown", null)]
+    public void ParseShowResponse_ReadsThinkingCapability(string row, string? thinkingJson)
+    {
+        var thinking = thinkingJson is null ? "" : $",\"thinking\":{thinkingJson}";
+        var json = $$"""
+        {
+          "model_info": { "general.architecture": "gptoss", "gptoss.context_length": 131072 }{{thinking}}
+        }
+        """;
+
+        var result = OllamaCapabilityResolver.ParseShowResponse(json, "gpt-oss:20b");
+
+        Assert.NotNull(result);
+        var expected = row switch
+        {
+            "thinking_values_strings_map_to_levels" =>
+                ThinkingSupport.Controllable(ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High),
+            "thinking_values_false_maps_to_none" => ThinkingSupport.None,
+            _ => ThinkingSupport.Unknown,
+        };
+        Assert.Equal(expected, result.Thinking);
+    }
 }

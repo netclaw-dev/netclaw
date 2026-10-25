@@ -193,4 +193,66 @@ public sealed class OpenRouterOracleResolverTests
 
         Assert.Equal(ModelModality.Text | ModelModality.Image, result);
     }
+
+
+    // Pinned from the live catalog (2026-10-25): openai/gpt-5, qwen/qwen3-32b, deepseek/deepseek-chat.
+    private const string ThinkingCatalog = """
+    {
+      "data": [
+        {
+          "id": "openai/gpt-5",
+          "supported_parameters": ["max_completion_tokens", "max_tokens", "reasoning", "reasoning_effort", "tools"],
+          "reasoning": { "mandatory": true, "supported_efforts": ["high", "medium", "low", "minimal"], "default_effort": "medium" },
+          "top_provider": { "context_length": 400000, "max_completion_tokens": 128000, "is_moderated": true }
+        },
+        {
+          "id": "qwen/qwen3-32b",
+          "supported_parameters": ["max_tokens", "reasoning", "tools"],
+          "reasoning": { "mandatory": false },
+          "top_provider": { "context_length": 40960, "max_completion_tokens": 16384, "is_moderated": false }
+        },
+        {
+          "id": "deepseek/deepseek-chat",
+          "supported_parameters": ["max_tokens", "tools"],
+          "reasoning": null,
+          "top_provider": { "context_length": 128000, "max_completion_tokens": 16000, "is_moderated": false }
+        }
+      ]
+    }
+    """;
+
+    [Theory]
+    [InlineData("mandatory_with_efforts_maps_to_controllable_without_off")]
+    [InlineData("no_reasoning_parameter_maps_to_none")]
+    [InlineData("reasoning_without_efforts_maps_to_controllable_with_off")]
+    [InlineData("top_provider_max_completion_tokens_maps_to_max_output")]
+    public void ParseCatalog_ReadsThinkingCapability(string row)
+    {
+        var catalog = OpenRouterOracleResolver.ParseCatalog(ThinkingCatalog);
+
+        switch (row)
+        {
+            case "mandatory_with_efforts_maps_to_controllable_without_off":
+                // "minimal" has no Netclaw level; a mandatory model cannot turn thinking off.
+                Assert.Equal(
+                    ThinkingSupport.Controllable(ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High),
+                    catalog["openai/gpt-5"].Thinking);
+                break;
+            case "no_reasoning_parameter_maps_to_none":
+                Assert.Equal(ThinkingSupport.None, catalog["deepseek/deepseek-chat"].Thinking);
+                break;
+            case "reasoning_without_efforts_maps_to_controllable_with_off":
+                Assert.Equal(
+                    ThinkingSupport.Controllable(ThinkingLevel.Off, ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High, ThinkingLevel.Max),
+                    catalog["qwen/qwen3-32b"].Thinking);
+                break;
+            case "top_provider_max_completion_tokens_maps_to_max_output":
+                Assert.Equal(128_000, catalog["openai/gpt-5"].MaxOutputTokens);
+                Assert.Equal(16_384, catalog["qwen/qwen3-32b"].MaxOutputTokens);
+                break;
+            default:
+                Assert.Fail($"unknown row {row}");
+                break;
+        }
+    }
 }

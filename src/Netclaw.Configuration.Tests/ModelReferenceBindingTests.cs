@@ -91,4 +91,40 @@ public sealed class ModelReferenceBindingTests
             ModelModality.Text | ModelModality.Image | ModelModality.Audio | ModelModality.Video,
             selection.Main.InputModalities);
     }
+
+    [Fact]
+    public void limit_and_thinking_bind_from_named_definition()
+    {
+        var main = ModelConfigurationResolver.Resolve(NamedDefinition("MaxOutputTokens", "32000", "Thinking", "Low"))
+            .Selection.Main;
+
+        Assert.Equal(32000, main.MaxOutputTokens);
+        Assert.Equal(ThinkingLevel.Low, main.Thinking);
+    }
+
+    [Theory]
+    [InlineData("invalid_thinking_fails_with_key_path", "Thinking", "Turbo")]
+    [InlineData("zero_limit_fails_with_key_path", "MaxOutputTokens", "0")]
+    public void Invalid_setting_fails_with_key_path(string row, string key, string value)
+    {
+        var check = ModelConfigurationValidation.Check(NamedDefinition(key, value));
+
+        Assert.True(check.Error is not null, row);
+        Assert.Contains($"Models:Definitions:d:{key}", check.Error, StringComparison.Ordinal);
+        Assert.Null(check.Valid);
+    }
+
+    private static IConfiguration NamedDefinition(params string[] keyValues)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Providers:p:Type"] = "ollama",
+            ["Models:Definitions:d:Provider"] = "p",
+            ["Models:Definitions:d:ModelId"] = "m",
+            ["Models:Roles:Main"] = "d",
+        };
+        for (var i = 0; i < keyValues.Length; i += 2)
+            values[$"Models:Definitions:d:{keyValues[i]}"] = keyValues[i + 1];
+        return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+    }
 }

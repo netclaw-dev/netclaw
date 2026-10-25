@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Configuration;
@@ -1021,6 +1023,212 @@ public sealed class ModelCommandTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Equal(original, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    // ── Output limit and thinking level (model-output-and-thinking-settings, tasks 2.10) ──
+    //
+    // A reject row must exit non-zero, print its reason, and leave the netclaw.json bytes unchanged.
+    // A save row must exit zero, and a fresh load through ModelConfigurationResolver must give the
+    // values that the daemon reads at startup.
+
+    private sealed record SettingsRow(
+        string ProviderType,
+        string ModelId,
+        string[] Flags,
+        ProviderProbeResult Probe,
+        Dictionary<string, object>? VendorOptions = null,
+        Dictionary<string, object>? SeededMain = null,
+        string? RejectPattern = null,
+        Action<ModelReference, JsonDocument>? AssertSaved = null);
+
+    private const string SettingsProvider = "prov";
+
+    private static ProviderProbeResult ProbeOf(
+        string modelId,
+        ThinkingSupport? thinking = null,
+        int? maxOutputTokens = null,
+        ThinkingDialect? detectedDialect = null)
+        => new(true, null,
+        [
+            new DiscoveredModel
+            {
+                ModelId = new Netclaw.Configuration.ModelId(modelId),
+                Thinking = thinking ?? ThinkingSupport.Unknown,
+                MaxOutputTokens = maxOutputTokens,
+            }
+        ])
+        { DetectedThinkingDialect = detectedDialect };
+
+    private static readonly ThinkingSupport AllLevels = ThinkingSupport.Controllable(
+        ThinkingLevel.Off, ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High, ThinkingLevel.Max);
+
+    private static readonly Dictionary<string, object> ReasoningEffortDialect = new() { ["ThinkingDialect"] = "ReasoningEffort" };
+
+    private static readonly Dictionary<string, SettingsRow> SettingsRows = new()
+    {
+        ["set_saves_limit_and_thinking_and_reload_resolves_them"] = new(
+            "openai", "gpt-5", ["--max-output-tokens", "32000", "--thinking", "low"],
+            ProbeOf("gpt-5", ThinkingSupport.Controllable(ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High)),
+            AssertSaved: (main, file) =>
+            {
+                Assert.Equal(32000, main.MaxOutputTokens);
+                Assert.Equal(ThinkingLevel.Low, main.Thinking);
+                var definition = ReadActiveModel(file, "Main");
+                Assert.Equal(32000, definition.GetProperty("MaxOutputTokens").GetInt32());
+                Assert.Equal("Low", definition.GetProperty("Thinking").GetString());
+            }),
+        ["zero_limit_rejected_file_unchanged"] = new(
+            "openai", "gpt-5", ["--max-output-tokens", "0"], ProbeOf("gpt-5"),
+            RejectPattern: Regex.Escape("--max-output-tokens must be a positive integer")),
+        ["limit_not_below_context_window_rejected_file_unchanged"] = new(
+            "openai", "gpt-5", ["--max-output-tokens", "32768"], ProbeOf("gpt-5"),
+            SeededMain: new() { ["Provider"] = SettingsProvider, ["ModelId"] = "gpt-5", ["ContextWindow"] = 32768 },
+            RejectPattern: "(?i)context window"),
+        ["limit_above_known_model_max_rejected_file_unchanged"] = new(
+            "openai", "gpt-5", ["--max-output-tokens", "32000"], ProbeOf("gpt-5", maxOutputTokens: 16384),
+            RejectPattern: "16,?384"),
+        ["deepseek_medium_rejected_lists_offered_levels_file_unchanged"] = new(
+            "deepseek", "deepseek-v4", ["--thinking", "medium"], ProbeOf("deepseek-v4", AllLevels),
+            RejectPattern: Regex.Escape("off, low, high, max")),
+        ["unknown_capability_low_rejected_file_unchanged"] = new(
+            "openai-compatible", "qwen3", ["--thinking", "low"], ProbeOf("qwen3"),
+            VendorOptions: ReasoningEffortDialect,
+            RejectPattern: Regex.Escape("thinking support unknown for this endpoint")),
+        ["unknown_capability_off_saved"] = new(
+            "openai-compatible", "qwen3", ["--thinking", "off"], ProbeOf("qwen3"),
+            VendorOptions: ReasoningEffortDialect,
+            AssertSaved: (main, _) => Assert.Equal(ThinkingLevel.Off, main.Thinking)),
+        ["vllm_without_dialect_thinking_rejected_names_key_file_unchanged"] = new(
+            "openai-compatible", "qwen3", ["--thinking", "off"], ProbeOf("qwen3"),
+            RejectPattern: "(?s)(?=.*ThinkingDialect)(?=.*ChatTemplateKwargs)(?=.*ReasoningEffort)(?=.*DeepSeek)(?=.*None)"),
+        ["vllm_without_dialect_limit_saved"] = new(
+            "openai-compatible", "qwen3", ["--max-output-tokens", "16000"], ProbeOf("qwen3"),
+            AssertSaved: (main, _) =>
+            {
+                Assert.Equal(16000, main.MaxOutputTokens);
+                Assert.Null(main.Thinking);
+            }),
+        ["llama_cpp_detected_dialect_saved_with_definition"] = new(
+            "openai-compatible", "qwen3", ["--thinking", "off"],
+            ProbeOf("qwen3", detectedDialect: ThinkingDialect.ReasoningEffort),
+            AssertSaved: (main, file) =>
+            {
+                Assert.Equal(ThinkingLevel.Off, main.Thinking);
+                Assert.Equal("ReasoningEffort", file.RootElement.GetProperty("Providers").GetProperty(SettingsProvider)
+                    .GetProperty("VendorOptions").GetProperty("ThinkingDialect").GetString());
+            }),
+        ["ollama_disable_thinking_conflict_rejected_file_unchanged"] = new(
+            "ollama", "qwen3:30b", ["--thinking", "low"],
+            ProbeOf("qwen3:30b", ThinkingSupport.Controllable(ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High)),
+            VendorOptions: new() { ["DisableThinking"] = true },
+            RejectPattern: "DisableThinking"),
+        ["clear_flags_remove_settings"] = new(
+            "openai", "gpt-5", ["--clear-max-output-tokens", "--clear-thinking"], ProbeOf("gpt-5", AllLevels),
+            SeededMain: new() { ["Provider"] = SettingsProvider, ["ModelId"] = "gpt-5", ["MaxOutputTokens"] = 32000, ["Thinking"] = "Low" },
+            AssertSaved: (main, file) =>
+            {
+                Assert.Null(main.MaxOutputTokens);
+                Assert.Null(main.Thinking);
+                var definition = ReadActiveModel(file, "Main");
+                Assert.False(definition.TryGetProperty("MaxOutputTokens", out _));
+                Assert.False(definition.TryGetProperty("Thinking", out _));
+            }),
+        ["set_and_clear_together_rejected"] = new(
+            "openai", "gpt-5", ["--thinking", "low", "--clear-thinking"], ProbeOf("gpt-5", AllLevels),
+            RejectPattern: "cannot be combined"),
+    };
+
+    public static TheoryData<string> SettingsRowNames => new(SettingsRows.Keys);
+
+    [Theory]
+    [MemberData(nameof(SettingsRowNames))]
+    public async Task Set_validates_output_limit_and_thinking_before_persistence(string row)
+    {
+        var spec = SettingsRows[row];
+        var provider = new Dictionary<string, object> { ["Type"] = spec.ProviderType };
+        if (spec.ProviderType is "openai-compatible" or "ollama")
+            provider["Endpoint"] = "http://localhost:8080";
+        if (spec.VendorOptions is not null)
+            provider["VendorOptions"] = spec.VendorOptions;
+        var config = new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object> { [SettingsProvider] = provider },
+        };
+        if (spec.SeededMain is not null)
+        {
+            config["Models"] = new Dictionary<string, object>
+            {
+                ["Definitions"] = new Dictionary<string, object> { ["seeded"] = spec.SeededMain },
+                ["Roles"] = new Dictionary<string, object> { ["Main"] = "seeded" },
+            };
+        }
+
+        WriteConfig(config);
+        if (spec.ProviderType is "openai" or "deepseek")
+        {
+            WriteSecrets(new Dictionary<string, object>
+            {
+                ["Providers"] = new Dictionary<string, object>
+                {
+                    [SettingsProvider] = new Dictionary<string, object> { ["ApiKey"] = "test-key" },
+                },
+            });
+        }
+
+        _fakeProbe.NextResult = spec.Probe;
+        var before = File.ReadAllBytes(_paths.NetclawConfigPath);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", SettingsProvider, spec.ModelId, .. spec.Flags], _paths, _fakeProbe, _output);
+
+        var output = _output.ToString();
+        if (spec.RejectPattern is { } pattern)
+        {
+            Assert.NotEqual(0, exitCode);
+            Assert.Matches(pattern, output);
+            Assert.Equal(before, File.ReadAllBytes(_paths.NetclawConfigPath));
+            return;
+        }
+
+        Assert.True(exitCode == 0, output);
+        var reloaded = ModelConfigurationResolver.Resolve(new ConfigurationBuilder()
+            .AddJsonFile(_paths.NetclawConfigPath, optional: false, reloadOnChange: false)
+            .Build()).Selection;
+        using var file = ReadConfigFile(_paths.NetclawConfigPath);
+        spec.AssertSaved!(reloaded.Main, file);
+    }
+
+    [Fact]
+    public async Task list_shows_max_out_and_thinking_columns()
+    {
+        var config = ProvidersOnly();
+        config["Models"] = new Dictionary<string, object>
+        {
+            ["Definitions"] = new Dictionary<string, object>
+            {
+                ["main-def"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "my-ollama", ["ModelId"] = "qwen3:30b", ["MaxOutputTokens"] = 64000, ["Thinking"] = "Low",
+                },
+                ["compaction-def"] = new Dictionary<string, object> { ["Provider"] = "my-ollama", ["ModelId"] = "qwen3:8b" },
+            },
+            ["Roles"] = new Dictionary<string, object> { ["Main"] = "main-def", ["Compaction"] = "compaction-def" },
+        };
+        WriteConfig(config);
+
+        Assert.Equal(0, await ModelCommand.RunAsync(["model", "list"], _paths, output: _output));
+
+        var lines = _output.ToString().Split('\n');
+        var header = lines.Single(line => line.Contains("Role", StringComparison.Ordinal));
+        Assert.Contains("Max out", header, StringComparison.Ordinal);
+        Assert.Contains("Thinking", header, StringComparison.Ordinal);
+        var main = lines.Single(line => line.StartsWith("Main", StringComparison.Ordinal));
+        Assert.Matches("64,?000", main);
+        Assert.Contains("low", main, StringComparison.Ordinal);
+        var compaction = lines.Single(line => line.StartsWith("Compaction", StringComparison.Ordinal));
+        Assert.Contains("default 32000", compaction, StringComparison.Ordinal);
+        Assert.Matches(@"default 32000.*\bdefault\b", compaction);
     }
 
     private static Dictionary<string, object> WithMainEntry(Dictionary<string, object> main)

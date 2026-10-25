@@ -808,6 +808,29 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
     }
 
     [Fact]
+    public async Task schema_accepts_both_fields()
+    {
+        var paths = new NetclawPaths(CreateTempBasePath());
+        paths.EnsureDirectoriesExist();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Definitions": {
+                  "d": { "Provider": "p", "ModelId": "m", "MaxOutputTokens": 32000, "Thinking": "Low" }
+                },
+                "Roles": { "Main": "d" }
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var result = await new ConfigSchemaDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(result.Severity == DoctorSeverity.Pass, result.Message);
+    }
+
+    [Fact]
     public async Task ReturnsPass_WhenInputModalitiesIsValidCommaString()
     {
         var basePath = CreateTempBasePath();

@@ -3,6 +3,11 @@
 # Validates configured roles and provider changes in the model picker.
 # This covers the keyed-layout refresh and the .WithFillHeight() scroll fix
 # from #1351 without a live daemon.
+#
+# It also edits the output limit and the thinking level of the Compaction
+# definition in the P properties panel. The DeepSeek provider points at the
+# smoke server, which reports no thinking capability, so only `off` is offered
+# and the other levels show the unknown-capability reason.
 
 Output "/tmp/tape-model-manager.gif"
 
@@ -22,6 +27,14 @@ Wait+Screen@10s /Set main model to alpha-models\/deepseek-v4-flash/
 Type "netclaw model set fallback alpha-models fallback-model"
 Enter
 Wait+Screen@10s /Set fallback model to alpha-models\/fallback-model/
+
+Type "netclaw provider add charlie-ds deepseek --endpoint __SMOKE_LLM_ENDPOINT__/v1 --api-key smoke-key"
+Enter
+Wait+Screen@10s /Added provider 'charlie-ds'/
+
+Type "netclaw model set compaction charlie-ds deepseek-v4-flash"
+Enter
+Wait+Screen@10s /Set compaction model to charlie-ds\/deepseek-v4-flash/
 
 # ─── Launch ──────────────────────────────────────────────────────────
 Type "netclaw model"
@@ -62,6 +75,26 @@ Wait+Screen@10s /Fallback role is not set/
 Up
 Type "c"
 Wait+Screen@10s /Cannot clear the main model role/
+
+# ─── Edit the Compaction properties with P ──────────────────────────
+# The cursor is on Main. Two rows down is Compaction.
+Down
+Down
+Type "p"
+Wait+Screen@10s /Max output tokens/
+
+Type "32000"
+Wait+Screen@10s /Max output tokens.*32000/
+
+# The level picker greys out each level that the endpoint does not offer,
+# with its reason.
+Tab
+Wait+Screen@10s /thinking support unknown for this endpoint/
+
+# The picker rows are default, off, low, medium, high, max. Down selects off.
+Down
+Enter
+Wait+Screen@10s /Saved model properties/
 
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Ctrl+Q

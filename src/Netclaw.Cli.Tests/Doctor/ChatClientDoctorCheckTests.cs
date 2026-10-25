@@ -476,6 +476,42 @@ public sealed class ChatClientDoctorCheckTests : IDisposable
         }
     }
 
+    // Doctor uses the one validator of model set and startup. These rows need no probe: the limit
+    // check and the dialect check use only the configuration and the provider descriptor.
+    [Theory]
+    [InlineData("doctor_reports_negative_limit_with_key_path",
+        """{"local":{"Type":"ollama"}}""",
+        """{"Provider":"local","ModelId":"qwen3:30b","MaxOutputTokens":-1}""",
+        new[] { "Models:Definitions:d:MaxOutputTokens" }, null)]
+    [InlineData("doctor_reports_unoffered_level_with_remediation",
+        """{"ds":{"Type":"deepseek","AuthMethod":"ApiKey"}}""",
+        """{"Provider":"ds","ModelId":"deepseek-v4","Thinking":"Medium"}""",
+        new[] { "ds", "off, low, high, max" }, "--thinking")]
+    [InlineData("doctor_reports_invalid_thinking_dialect",
+        """{"gpu":{"Type":"openai-compatible","Endpoint":"http://gpu.example","VendorOptions":{"ThinkingDialect":"Banana"}}}""",
+        """{"Provider":"gpu","ModelId":"qwen3"}""",
+        new[] { "VendorOptions:ThinkingDialect", "ChatTemplateKwargs", "ReasoningEffort", "DeepSeek", "None" }, null)]
+    public async Task Reports_model_settings_problems(
+        string row, string providersJson, string definitionJson, string[] messageParts, string? remediationPart)
+    {
+        var paths = CreatePathsWithConfig($$"""
+            {
+              "configVersion": 1,
+              "Providers": {{providersJson}},
+              "Models": { "Definitions": { "d": {{definitionJson}} }, "Roles": { "Main": "d" } }
+            }
+            """);
+        WriteSecrets(paths, """{ "Providers": { "ds": { "ApiKey": "sk-test" } } }""");
+
+        var result = await CreateCheck(paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(result.Severity == DoctorSeverity.Error, $"{row}: {result.Severity} {result.Message}");
+        foreach (var part in messageParts)
+            Assert.Contains(part, result.Message, StringComparison.Ordinal);
+        if (remediationPart is not null)
+            Assert.Contains(remediationPart, result.Remediation, StringComparison.Ordinal);
+    }
+
     private NetclawPaths CreatePathsWithConfig(string configJson)
     {
         var basePath = CreateTempBasePath();

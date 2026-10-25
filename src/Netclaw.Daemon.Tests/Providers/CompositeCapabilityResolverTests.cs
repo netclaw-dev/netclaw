@@ -184,4 +184,53 @@ public sealed class CompositeCapabilityResolverTests
             string modelId, CancellationToken ct = default)
             => throw new HttpRequestException("Network error");
     }
+
+
+    [Fact]
+    public async Task native_thinking_wins_over_catalog()
+    {
+        var native = new FakeCapabilityResolver(
+            new ResolvedModelCapabilities("m", null, null, null)
+            {
+                Thinking = ThinkingSupport.Controllable(ThinkingLevel.Low, ThinkingLevel.High),
+                MaxOutputTokens = 64_000,
+            });
+        var catalog = new FakeCapabilityResolver(
+            new ResolvedModelCapabilities("m", ModelModality.Text, ModelModality.Text, 200_000)
+            {
+                Thinking = ThinkingSupport.Controllable(ThinkingLevel.Off, ThinkingLevel.Medium),
+                MaxOutputTokens = 128_000,
+            });
+        var composite = new CompositeCapabilityResolver(
+            [native, catalog], NullLogger<CompositeCapabilityResolver>.Instance);
+
+        var result = await composite.ResolveAsync("m", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(ThinkingSupport.Controllable(ThinkingLevel.Low, ThinkingLevel.High), result.Thinking);
+        Assert.Equal(64_000, result.MaxOutputTokens);
+    }
+
+    [Fact]
+    public async Task catalog_wins_over_unknown()
+    {
+        // The native probe fills every older field, so the chain must not stop before the catalog.
+        var native = new FakeCapabilityResolver(
+            new ResolvedModelCapabilities("m", ModelModality.Text, ModelModality.Text, 131_072));
+        var catalog = new FakeCapabilityResolver(
+            new ResolvedModelCapabilities("m", null, null, null)
+            {
+                Thinking = ThinkingSupport.None,
+                MaxOutputTokens = 16_384,
+            });
+        var composite = new CompositeCapabilityResolver(
+            [native, catalog], NullLogger<CompositeCapabilityResolver>.Instance);
+
+        var result = await composite.ResolveAsync("m", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(ThinkingSupport.None, result.Thinking);
+        Assert.Equal(16_384, result.MaxOutputTokens);
+        Assert.Equal(131_072, result.ContextWindowTokens);
+    }
 }

@@ -64,44 +64,6 @@ public sealed class DeepSeekProviderTests
         Assert.Null(unknown.OutputModalities);
     }
 
-    [Theory]
-    [InlineData(ReasoningEffort.None, "disabled", null)]
-    [InlineData(ReasoningEffort.Low, "enabled", "high")]
-    [InlineData(ReasoningEffort.Medium, "enabled", "high")]
-    [InlineData(ReasoningEffort.High, "enabled", "high")]
-    [InlineData(ReasoningEffort.ExtraHigh, "enabled", "max")]
-    public async Task DeepSeekProfileMapsReasoningEffort(
-        ReasoningEffort effort,
-        string thinkingType,
-        string? expectedEffort)
-    {
-        string? body = null;
-        using var handler = new RecordingHandler(request =>
-        {
-            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
-            return ChatResponse();
-        });
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.deepseek.com") };
-        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl(
-            "https://api.deepseek.com/v1", "test-deepseek-key");
-        var client = new OpenAiCompatibleChatClient(
-            http, endpoint, "deepseek-v4-pro", OpenAiCompatibleWireProfile.DeepSeek);
-
-        await client.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "hello")],
-            new ChatOptions { Reasoning = new ReasoningOptions { Effort = effort } },
-            TestContext.Current.CancellationToken);
-
-        using var document = JsonDocument.Parse(body!);
-        var root = document.RootElement;
-        Assert.Equal(thinkingType, root.GetProperty("thinking").GetProperty("type").GetString());
-        if (expectedEffort is null)
-            Assert.False(root.TryGetProperty("reasoning_effort", out _));
-        else
-            Assert.Equal(expectedEffort, root.GetProperty("reasoning_effort").GetString());
-        Assert.Equal("test-deepseek-key", handler.Requests[0].Headers.Authorization!.Parameter);
-    }
-
     [Fact]
     public void DeepSeekProfileReplaysReasoningWithToolCall()
     {
@@ -193,9 +155,10 @@ public sealed class DeepSeekProviderTests
         Assert.True(genericBody.RootElement.GetProperty("return_progress").GetBoolean());
         Assert.False(genericBody.RootElement.TryGetProperty("thinking", out _));
 
+        // The DeepSeek thinking fields come from the DeepSeek thinking dialect, not from the wire
+        // profile (design D2). The profile keeps only its message replay rules.
         using var deepSeekBody = JsonDocument.Parse(bodies[1]);
         Assert.False(deepSeekBody.RootElement.TryGetProperty("return_progress", out _));
-        Assert.Equal("enabled", deepSeekBody.RootElement.GetProperty("thinking").GetProperty("type").GetString());
     }
 
     private static async Task DrainAsync(IAsyncEnumerable<ChatResponseUpdate> updates)

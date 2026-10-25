@@ -8,6 +8,10 @@
 # without selecting, so a keybinding that reads SelectedItems sees an empty list
 # and clears nothing. The on-disk result proves the highlighted row reached the
 # writer, and that clearing a role leaves its definition in place.
+#
+# The tape then sets the Compaction output limit to 32000 and its thinking level
+# to off in the P properties panel. The definition must hold both values in the
+# canonical form that the daemon reads.
 
 set -euo pipefail
 
@@ -40,9 +44,17 @@ assert_field '.Models.Roles | has("Fallback")' 'false' "$config_json" \
 assert_field '.Models.Definitions | has("alpha-models-fallback-model")' 'true' "$config_json" \
   || true
 
+# The P properties panel persisted both settings on the Compaction definition.
+assert_field '.Models.Roles.Compaction' 'charlie-ds-deepseek-v4-flash' "$config_json" \
+  || true
+assert_field '.Models.Definitions["charlie-ds-deepseek-v4-flash"].MaxOutputTokens' '32000' "$config_json" \
+  || true
+assert_field '.Models.Definitions["charlie-ds-deepseek-v4-flash"].Thinking' 'Off' "$config_json" \
+  || true
+
 if [[ $assert_fail -ne 0 ]]; then
-  echo "model-manager: FAILED (C clear-role or definition retention)" >&2
+  echo "model-manager: FAILED (C clear-role, definition retention, or P properties)" >&2
   exit 1
 fi
 
-echo "model-manager: OK (Main kept, Fallback unmapped by C, definition retained)"
+echo "model-manager: OK (Main kept, Fallback unmapped by C, definition retained, P properties saved)"

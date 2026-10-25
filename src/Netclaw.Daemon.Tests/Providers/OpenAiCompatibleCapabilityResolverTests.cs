@@ -244,4 +244,47 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
         Assert.Null(result.OutputModalities);
         Assert.Null(result.ContextWindowTokens);
     }
+
+
+    [Theory]
+    [InlineData("llama_cpp_supports_reasoning_effort_maps_to_levels")]
+    [InlineData("llama_cpp_enable_thinking_marker_maps_to_off_only")]
+    [InlineData("vllm_maps_to_unknown")]
+    public void ResolveFromProbe_ReadsThinkingCapability(string row)
+    {
+        const string llamaModels = """
+        { "object": "list", "data": [ { "id": "qwen3.gguf", "meta": { "n_ctx": 131072 } } ] }
+        """;
+        const string vllmModels = """
+        { "object": "list", "data": [ { "id": "qwen3", "object": "model", "owned_by": "vllm", "max_model_len": 131072 } ] }
+        """;
+        const string capsProps = """
+        {
+          "default_generation_settings": { "n_ctx": 131072 },
+          "chat_template": "{% if enable_thinking %}<think>{% endif %}",
+          "chat_template_caps": { "supports_tools": true, "supports_reasoning_effort": true }
+        }
+        """;
+        const string markerProps = """
+        {
+          "default_generation_settings": { "n_ctx": 131072 },
+          "chat_template": "{% if enable_thinking is defined and not enable_thinking %}<think></think>{% endif %}",
+          "chat_template_caps": { "supports_tools": true, "supports_reasoning_effort": false }
+        }
+        """;
+
+        var (modelId, models, props, expected) = row switch
+        {
+            "llama_cpp_supports_reasoning_effort_maps_to_levels" => ("qwen3.gguf", llamaModels, capsProps,
+                ThinkingSupport.Controllable(ThinkingLevel.Off, ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High)),
+            "llama_cpp_enable_thinking_marker_maps_to_off_only" => ("qwen3.gguf", llamaModels, markerProps,
+                ThinkingSupport.Controllable(ThinkingLevel.Off)),
+            _ => ("qwen3", vllmModels, (string?)null, ThinkingSupport.Unknown),
+        };
+
+        var result = OpenAiCompatibleCapabilityResolver.ResolveFromProbe(modelId, models, props);
+
+        Assert.NotNull(result);
+        Assert.Equal(expected, result.Thinking);
+    }
 }
