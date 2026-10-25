@@ -259,8 +259,9 @@ tool-loop compaction end. The automation turn completes quietly and makes no
 further model call. Then the person's turn starts under the person's own
 authority. Its first request holds this fixed note before the person's message:
 "The automated turn above stopped unfinished because a person sent a message."
-When you see that note, answer the person's message. Do not continue the stopped
-work unless the person asks for it. The session log shows
+When you see that note, answer the person's message first. Do not resume the
+stopped work in that reply unless the person asks for it. A later reminder fire or
+other automation turn may still do its work. The session log shows
 `turn_person_input_end_at_tool_batch` or `turn_person_input_end_at_compaction`.
 
 Background shell: set `_background: true` on `shell_execute`, then use

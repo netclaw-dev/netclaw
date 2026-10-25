@@ -14,7 +14,8 @@ Source: `docs/prd/PRD-001-netclaw-mvp.md` FR-002 (turn processing), FR-004 (conv
 
 - **The person's turn gets a stop note.** When a person input ends an automation turn, the first model request of
   the person's turn holds one fixed note: the automated turn stopped unfinished because a person sent a message. The
-  note tells the model to answer the person and not to continue the stopped work unless the person asks.
+  note tells the model to answer the person first and not to resume the stopped work in that reply unless the person
+  asks. A later automation turn may still do its work.
 - **A due compaction runs at the end point.** When a person input ends an automation turn and a compaction is due at
   that tool batch, the session closes the automation turn, commits the compaction, and then starts the person's turn.
 - **A waiting person ends the turn at a tool-loop compaction end.** After a tool-loop compaction, a waiting person

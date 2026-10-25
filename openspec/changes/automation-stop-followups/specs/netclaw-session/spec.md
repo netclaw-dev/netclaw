@@ -23,7 +23,7 @@ A stop SHALL NOT close an input that no model request carried.
 The first model request of the person's turn SHALL hold this note once, in a per-turn system context message after the
 history of the stopped turn and before the person's message:
 
-`The automated turn above stopped unfinished because a person sent a message. Answer the person's message. Do not continue the stopped work unless the person asks for it.`
+`The automated turn above stopped unfinished because a person sent a message. Answer the person's message first, and do not resume the stopped work in this reply unless the person asks for it.`
 
 The note SHALL be fixed text. It SHALL NOT hold a source kind, a sender, or other text that an input sets. Later
 requests of the person's turn SHALL keep that history entry and SHALL NOT add a second note.
