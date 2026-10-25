@@ -67,7 +67,7 @@ public sealed class PersonInputEndsAutomationTurnSpecs(ITestOutputHelper output)
     // kind and no sender text, because a webhook sets its own source kind. The eval automation_stop_note_person_first
     // reads the same literal from the source.
     private const string StopNote = "The automated turn above stopped unfinished because a person sent a message. "
-                                    + "Answer the person's message. Do not continue the stopped work unless the person asks for it.";
+                                    + "Answer the person's message first, and do not resume the stopped work in this reply unless the person asks for it.";
 
     // Above the compaction limit of the 128k context window (0.75 * 128k).
     private static readonly UsageDetails OverLimit = new() { InputTokenCount = 200_000, OutputTokenCount = 1, TotalTokenCount = 200_001 };
