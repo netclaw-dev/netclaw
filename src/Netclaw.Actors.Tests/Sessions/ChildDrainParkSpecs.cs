@@ -200,6 +200,9 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
     /// releases the drain.</item>
     /// <item>held-park: the journal holds the write of the drain park. The session does not acknowledge while the
     /// write is held.</item>
+    /// <item>park-rejected: the journal rejects the write of the drain park. The run ends as a restart loss, as a
+    /// refused drain park does (design R6): Partial with owner_restarted and the "effects uncertain" text. The rejection
+    /// does not carry the park, so the row checks the outcome only (#2659 gap B).</item>
     /// </list>
     /// Planted bug: the terminal record does not continue the drain (it waits for the child wait), the session
     /// acknowledges before the park record commits, or a refused drain park says that nothing ran.
@@ -208,6 +211,7 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
     [InlineData("park-too-large")]
     [InlineData("cancelled")]
     [InlineData("held-park")]
+    [InlineData("park-rejected")]
     public async Task A_drain_acknowledges_from_the_journal_callback_of_the_last_child_record(string row)
     {
         // Arrange: the drain starts while the child runs a held sibling batch.
@@ -238,6 +242,10 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
                 await session.Ask<string>(new ChildRunControl(run.Run.RunId, true, run.Run.OriginalContext), Deadline, Cancellation);
                 Sibling.Release();
                 break;
+            case "park-rejected":
+                journal.RejectWritesOf(static evt => evt is ChildRunEvent.Parked);
+                Sibling.Release();
+                break;
             case "held-park":
                 journal.HoldNext(static evt => evt is ChildRunEvent.Parked);
                 Sibling.Release();
@@ -261,10 +269,11 @@ public sealed class ChildDrainParkSpecs(ITestOutputHelper output) : ChildParkTes
         var terminal = await AssertRunInvariantsAsync(journal, id, run, probeRuns: 0);
         switch (row)
         {
-            case "park-too-large":
+            case "park-too-large" or "park-rejected":
                 Assert.Equal(SubAgentRunOutcome.Partial, terminal.Result.Outcome);
                 Assert.Equal(SubAgentOutcomeReason.OwnerRestarted, terminal.Result.OutcomeReason);
-                Assert.Contains(changed, terminal.Result.WorkingContext?.ConfirmedChangedFiles ?? []);
+                if (row == "park-too-large")
+                    Assert.Contains(changed, terminal.Result.WorkingContext?.ConfirmedChangedFiles ?? []);
                 Assert.Contains(ChildRunDocuments.RestartLoss, terminal.Result.Output, StringComparison.Ordinal);
                 Assert.Contains("uncertain", terminal.Result.Output, StringComparison.OrdinalIgnoreCase);
                 Assert.DoesNotContain("The parked calls did not run.", terminal.Result.Output, StringComparison.Ordinal);

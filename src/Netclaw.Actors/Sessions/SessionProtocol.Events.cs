@@ -97,6 +97,12 @@ public static partial class SessionProtocol
         /// </summary>
         public ChildNotice? ChildNotice { get; init; }
 
+        /// <summary>
+        /// Marks the continuation input that a restart drain writes for a turn that it stopped after a tool batch
+        /// (#2632, #2659). A record with no marker on the wire reads with the old shape rule.
+        /// </summary>
+        public bool ContinuesStoppedTurn { get; init; }
+
         public long AdmittedAtMs { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(AdmittedAtMs);

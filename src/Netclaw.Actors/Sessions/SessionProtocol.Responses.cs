@@ -29,6 +29,14 @@ public static partial class SessionProtocol
     public sealed record RestartResumeNotNeeded(SessionId SessionId) : CommandAck(SessionId);
 
     /// <summary>
+    /// The instruction of a restart reminder that expired before startup recovery (#2659). Startup registers the expired
+    /// reminder with this instruction in place of the resume instruction. The session closes the stored work of the
+    /// stopped turn with one notice and resumes nothing.
+    /// </summary>
+    public const string RestartExpiredInstruction =
+        "Close the work that the daemon restart interrupted. The restart took longer than the resume window.";
+
+    /// <summary>
     /// Reports that a session stopped and supplies any reminder that startup must register.
     /// </summary>
     public sealed record DaemonRestartPrepared(

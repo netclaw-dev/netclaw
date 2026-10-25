@@ -95,6 +95,11 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         CompactionReplay,
         PreparedModelRequest,
         BufferedInput,
+        ExpiredReminderAfterToolBatch,
+        ExpiredReminderAtFirstModelCall,
+        EmptyInputAtFirstModelCall,
+        EmptyInputJoinsToolLoop,
+        EmptyInputBuffered,
     }
 
     [Theory]
@@ -128,6 +133,16 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
     [InlineData(DrainPoint.GraceEmptyReplyRetry, "config-reload", true, true)]
     [InlineData(DrainPoint.PreparedModelRequest, "config-reload", true, true)]
     [InlineData(DrainPoint.BufferedInput, "config-reload", false, true)]
+    // #2659: the restart took longer than the reminder lifetime, so startup sends the expiry signal. The signal closes
+    // the stopped work with one notice and runs nothing: the continuation after a tool batch, or the input of the
+    // interrupted first model call.
+    [InlineData(DrainPoint.ExpiredReminderAfterToolBatch, "daemon-stop", true, true)]
+    [InlineData(DrainPoint.ExpiredReminderAtFirstModelCall, "config-reload", true, true)]
+    // #2659: a person input with no text and no media is an ordinary input, not a continuation. It reaches the model
+    // after the restart, it joins a tool loop, and a later input does not close it.
+    [InlineData(DrainPoint.EmptyInputAtFirstModelCall, "daemon-stop", true, true)]
+    [InlineData(DrainPoint.EmptyInputJoinsToolLoop, "config-reload", true, true)]
+    [InlineData(DrainPoint.EmptyInputBuffered, "config-reload", false, true)]
     public async Task A_restart_drain_meets_the_drain_contract(
         DrainPoint point,
         string reason,
@@ -178,7 +193,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
 
         // Assert
         var resumed = await AssertDrainContractAsync(
-            sessionId, session, subscriber, prepared, before, reason, turnResumes, reminderExpected);
+            sessionId, session, subscriber, prepared, before, reason, turnResumes, reminderExpected, TurnText(point));
         if (resumed is not null)
             await AssertTurnResumesAfterRestartAsync(point, reason, sessionId, prepared.RestartReminder!, resumed);
         if (point == DrainPoint.GraceToolCallsAfterText)
@@ -197,12 +212,17 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Task? reached = null;
         switch (point)
         {
-            case DrainPoint.FirstModelCall:
+            case DrainPoint.FirstModelCall or DrainPoint.ExpiredReminderAtFirstModelCall or DrainPoint.EmptyInputAtFirstModelCall
+                or DrainPoint.EmptyInputBuffered:
                 _chat.Script(Step.StreamUntilCancelled);
+                break;
+            case DrainPoint.EmptyInputJoinsToolLoop:
+                _chat.Script(Step.HeldToolCall, Step.StreamUntilCancelled);
                 break;
             case DrainPoint.ModelCallAfterToolBatch or DrainPoint.BufferedInput or DrainPoint.AutomationTurnAfterToolBatch
                 or DrainPoint.TurnWithoutChannelType or DrainPoint.SecondDeliveryAfterToolBatch
-                or DrainPoint.NewInputBeforeReminder or DrainPoint.AutomaticInputBeforeReminder:
+                or DrainPoint.NewInputBeforeReminder or DrainPoint.AutomaticInputBeforeReminder
+                or DrainPoint.ExpiredReminderAfterToolBatch:
                 _chat.Script(Step.ToolCall, Step.StreamUntilCancelled);
                 break;
             case DrainPoint.LiveBackgroundJobAtDrain:
@@ -275,7 +295,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             release = _chat.HoldSummary().SetResult;
         }
 
-        await SendAsync(sessionId, TurnInputText, point switch
+        await SendAsync(sessionId, TurnText(point), point switch
         {
             DrainPoint.AutomationTurnAfterToolBatch => AutomationSource,
             DrainPoint.TurnWithoutChannelType => null,
@@ -284,7 +304,44 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         await (reached ?? _chat.Reached.Task).WaitAsync(Deadline, TestContext.Current.CancellationToken);
         if (point == DrainPoint.BufferedInput)
             await SendAsync(sessionId, "Also check the beta feed", PersonSource);
+        if (point == DrainPoint.EmptyInputBuffered)
+            await AssertLaterInputKeepsTheEmptyInputAsync(sessionId);
+        if (point == DrainPoint.EmptyInputJoinsToolLoop)
+            await AssertEmptyInputJoinsTheToolLoopAsync(sessionId);
         return release;
+    }
+
+    // The text of the input that starts the turn. A person can send a message with no text and no media, for example
+    // after an attachment download failed (#2659).
+    private static string TurnText(DrainPoint point) => point == DrainPoint.EmptyInputAtFirstModelCall ? "" : TurnInputText;
+
+    // The model call streams. The person sends an empty message and then a text message, and the session buffers both.
+    // The empty message is an ordinary input: the later admission must not close it as a stopped-turn continuation, and
+    // no restart notice posts before the drain (#2659).
+    private async Task AssertLaterInputKeepsTheEmptyInputAsync(SessionId sessionId)
+    {
+        await SendAsync(sessionId, "", PersonSource);
+        await SendAsync(sessionId, "Also check the beta feed", PersonSource);
+        await PingAsync(sessionId);
+        var events = await ReadJournalAsync(sessionId);
+        var empty = Assert.Single(events.OfType<InputAdmitted>(), input => input.UserMessage.Content == "");
+        Assert.False(empty.ContinuesStoppedTurn, "A person input is never a continuation input.");
+        Assert.False(events.OfType<InputClosed>().Any(close => close.InputIds.Contains(empty.InputId)),
+            "A later input closed the empty person input as a stopped-turn continuation.");
+    }
+
+    // The first model call holds its tool call. The person sends an empty message, which the session buffers. The tool
+    // batch ends, the message joins the turn, and the next model request must end with it as a user message (#2659).
+    private async Task AssertEmptyInputJoinsTheToolLoopAsync(SessionId sessionId)
+    {
+        await SendAsync(sessionId, "", PersonSource);
+        _chat.ReleaseHeldCall();
+        await AwaitAssertAsync(() => Assert.Equal(2, _chat.MainCalls), Deadline,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var request = _chat.MainRequests[1];
+        Assert.True(request[^1].Role == AiChatRole.User && string.IsNullOrEmpty(request[^1].Text),
+            $"The model request after the tool batch must end with the empty person input, but it ends with a "
+            + $"{request[^1].Role} message.");
     }
 
     private sealed record Activity(int MainCalls, int ToolRuns, int ToolBatches);
@@ -412,7 +469,8 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Activity before,
         string reason,
         bool turnResumes,
-        bool reminderExpected)
+        bool reminderExpected,
+        string turnText)
     {
         AssertNoWorkAfterDrain(before);
         var notices = new List<string>();
@@ -431,7 +489,7 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         Assert.True(Count<ToolBatchStarted>(events) == before.ToolBatches,
             "The session recorded a tool batch after the drain request.");
         var pending = PendingInputIds(events);
-        var turnInput = events.OfType<InputAdmitted>().Single(input => input.UserMessage.Content == TurnInputText);
+        var turnInput = events.OfType<InputAdmitted>().First(input => input.UserMessage.Content == turnText);
         var consumedByBatch = events.OfType<ToolBatchStarted>().Any(batch => batch.ConsumedInputIds.Contains(turnInput.InputId));
         Assert.True(pending.Contains(turnInput.InputId) == (turnResumes && !consumedByBatch),
             "The turn input must stay pending exactly when the turn resumes and no tool batch consumed it.");
@@ -463,11 +521,20 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             $"A resumable turn must leave exactly one pending input, but {resumable.Length} stay pending.");
         var resumed = resumable[0];
         Assert.Equal(Requester(turnInput.TurnContext), Requester(resumed.TurnContext));
-        if (consumedByBatch)
+        // The session writes the continuation input after the last tool batch of the stopped turn. An input that a person
+        // sent earlier is never a continuation input, also when it has no text (#2659).
+        var journal = events.ToList();
+        var writtenByDrain = consumedByBatch
+                             && journal.IndexOf(resumed) > journal.FindLastIndex(static payload => payload is ToolBatchStarted);
+        if (writtenByDrain)
         {
+            Assert.True(resumed.ContinuesStoppedTurn,
+                "The continuation input of a stopped turn must carry the explicit continuation marker.");
             Assert.True(string.IsNullOrEmpty(resumed.UserMessage.Content) && string.IsNullOrEmpty(resumed.ExecutableText),
                 "The continuation input of a stopped turn must carry no new text.");
         }
+        else
+            Assert.False(resumed.ContinuesStoppedTurn, "A person input is never a continuation input.");
 
         return resumed;
     }
@@ -506,6 +573,12 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             return;
         }
 
+        if (point is DrainPoint.ExpiredReminderAfterToolBatch or DrainPoint.ExpiredReminderAtFirstModelCall)
+        {
+            await AssertExpirySignalClosesTheStoppedWorkAsync(sessionId, subscriber, reason, reminder, resumed);
+            return;
+        }
+
         var calls = _chat.MainCalls;
         var reply = await SendRestartReminderAsync(sessionId, reminder);
         Assert.True(reply is CommandAck and not RestartResumeNotNeeded,
@@ -522,8 +595,13 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
             Assert.DoesNotContain(request, message => message.Text?.Contains(reminder.Instructions, StringComparison.Ordinal) == true);
             // The summary of a tool-loop compaction replaced the turn input. Each other row holds it exactly once.
             var turnInputCopies = request.Count(message => message.Role == AiChatRole.User && message.Text == TurnInputText);
-            Assert.True(turnInputCopies == (point == DrainPoint.ToolLoopCompaction ? 0 : 1),
+            Assert.True(turnInputCopies == (point is DrainPoint.ToolLoopCompaction or DrainPoint.EmptyInputAtFirstModelCall ? 0 : 1),
                 $"The resumed model request holds {turnInputCopies} copies of the turn input.");
+            // A continuation input adds no user message. An empty message that a person sent adds one (#2659).
+            var emptyUserMessages = request.Count(message => message.Role == AiChatRole.User && string.IsNullOrEmpty(message.Text));
+            var personEmptyMessages = point is DrainPoint.EmptyInputAtFirstModelCall or DrainPoint.EmptyInputJoinsToolLoop ? 1 : 0;
+            Assert.True(emptyUserMessages == personEmptyMessages,
+                $"The resumed model request holds {emptyUserMessages} empty user messages, but the person sent {personEmptyMessages}.");
             AssertPairedToolHistory(request);
         }
 
@@ -575,6 +653,49 @@ public sealed class RestartDrainSpecs : LlmSessionTestBase
         var later = Assert.Single(events.OfType<InputAdmitted>(), input => input.UserMessage.Content == OtherInputText);
         Assert.Equal(laterSource.SenderId.Value, later.TurnContext.RequesterSenderId?.Value);
         Assert.Contains(consumers, ids => ids.Contains(later.InputId));
+        Assert.Empty(PendingInputIds(events));
+    }
+
+    // The restart took longer than the reminder lifetime, so startup registers the expiry signal in place of the
+    // restart reminder (#2659). The signal resumes nothing: the session closes the stopped work in one write, posts the
+    // restart notice that the drain held back once, starts no model call, and records no input for the signal. A second
+    // delivery of the signal closes nothing and posts nothing.
+    private async Task AssertExpirySignalClosesTheStoppedWorkAsync(
+        SessionId sessionId, Akka.TestKit.TestProbe subscriber, string reason, ReminderDefinition reminder, InputAdmitted resumed)
+    {
+        var calls = _chat.MainCalls;
+        var signal = reminder with { Instructions = RestartExpiredInstruction };
+        var notices = new List<string>();
+        void ReadNotices()
+        {
+            while (subscriber.HasMessages)
+            {
+                // The new incarnation of the session may not know the reason of the drain, so each notice text counts.
+                if (subscriber.ReceiveOne(TimeSpan.Zero) is TextOutput text
+                    && (text.Text == RestartNoticeRuleTests.ExpectedNotice(reason)
+                        || text.Text == RestartNoticeRuleTests.ExpectedNotice("config-reload")))
+                    notices.Add(text.Text);
+            }
+        }
+
+        var reply = await SendRestartReminderAsync(sessionId, signal);
+        Assert.True(reply is RestartResumeNotNeeded, $"The expiry signal must resume nothing. The session replied {reply}.");
+        await AwaitAssertAsync(() =>
+        {
+            ReadNotices();
+            Assert.True(notices.Count == 1, $"The expiry signal posted {notices.Count} restart notices.");
+        }, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+
+        var again = await SendRestartReminderAsync(sessionId, signal);
+        Assert.True(again is RestartResumeNotNeeded, $"The second expiry signal must resume nothing. The session replied {again}.");
+        await PingAsync(sessionId);
+        ReadNotices();
+        Assert.True(notices.Count == 1, $"Two expiry signals posted {notices.Count} restart notices.");
+        Assert.True(_chat.MainCalls == calls, $"The session made {_chat.MainCalls - calls} model calls for the expiry signal.");
+
+        var events = await ReadJournalAsync(sessionId);
+        Assert.Contains(events.OfType<InputClosed>(), close => close.InputIds.Contains(resumed.InputId));
+        Assert.DoesNotContain(events.OfType<InputAdmitted>(), input => input.UserMessage.Content == RestartExpiredInstruction);
         Assert.Empty(PendingInputIds(events));
     }
 

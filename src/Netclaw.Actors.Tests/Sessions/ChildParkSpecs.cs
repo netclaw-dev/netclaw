@@ -322,7 +322,8 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
     /// Recovery closes the notice with no turn, and it admits no new notice for the empty open set.</item>
     /// <item>wrong-user: Bob answers after the restart. He gets the nack, and nothing persists.</item>
     /// <item>damaged: the stored park has EqualRounds = 7. Recovery completes, and the prompt stays open. The answer
-    /// ends the run with park_damaged, and the call does not run.</item>
+    /// ends the run with park_damaged, and the call does not run. The resume refused the park after it read the
+    /// answers, so no answer was used: a late click gets the withdrawal reason, not "already answered" (#2659 gap A).</item>
     /// <item>unbound: the stored park has a shell request whose call is not in the park transcript, so no one-time
     /// consent can bind its shell source (#2665). The answer ends the run with park_damaged, no call runs, and a late
     /// click does not get "already answered".</item>
@@ -531,6 +532,8 @@ public sealed class ChildParkSpecs(ITestOutputHelper output) : ChildParkTestBase
                 break;
             case "damaged":
                 Assert.Equal(SubAgentOutcomeReason.ParkDamaged, terminal.Result.OutcomeReason);
+                Assert.Equal(ApprovalNackReasons.Withdrawn,
+                    Assert.IsType<CommandNack>(await AnswerAsync(id, prompts[0].CallId, Alice)).Reason);
                 break;
             case "unbound":
                 Assert.Equal(SubAgentOutcomeReason.ParkDamaged, terminal.Result.OutcomeReason);
