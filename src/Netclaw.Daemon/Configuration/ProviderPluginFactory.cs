@@ -22,6 +22,7 @@ public sealed class ProviderPluginFactory
     private readonly Dictionary<string, ILlmProviderPlugin> _plugins;
     private readonly IModelCapabilityResolver _capabilities;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger _logger;
 
     public ProviderPluginFactory(
@@ -34,6 +35,7 @@ public sealed class ProviderPluginFactory
         _providers = providers;
         _capabilities = capabilities;
         _loggerFactory = loggerFactory;
+        _timeProvider = timeProvider;
         _logger = loggerFactory.CreateLogger<ProviderPluginFactory>();
         _plugins = new Dictionary<string, ILlmProviderPlugin>(StringComparer.OrdinalIgnoreCase);
         foreach (var plugin in plugins)
@@ -100,7 +102,8 @@ public sealed class ProviderPluginFactory
         // caller's options before any wrapper below changes them (#2681), applies the definition's
         // limit and level, and always removes the NetclawChatOptionKeys.SuppressReasoning intent key.
         var settings = new ModelRequestSettingsChatClient(
-            decorated, model, dialect, plugin.IsSelfHosted, _capabilities, _loggerFactory.CreateLogger<ModelRequestSettingsChatClient>());
+            decorated, model, dialect, plugin.IsSelfHosted, _capabilities, _timeProvider,
+            _loggerFactory.CreateLogger<ModelRequestSettingsChatClient>());
         LogModelClient(model, dialect, plugin.IsSelfHosted, settings.ResolvedCapability);
         return settings;
     }
@@ -113,7 +116,7 @@ public sealed class ProviderPluginFactory
             ? $"{configured} (configured)"
             : selfHosted
                 ? $"default {OutputLimitResolver.DefaultLimit} (clamped per call to the endpoint window; none while the window is unknown)"
-                : $"default {OutputLimitResolver.DefaultLimit} (capped to the model max)";
+                : $"default {OutputLimitResolver.DefaultLimit} (clamped per call to the model max and the window)";
         var thinking = model.Thinking is { } level ? $"{level} (configured)" : "unset";
         _logger.LogInformation(
             "Model client: provider={Provider} model={ModelId} maxOutputTokens={MaxOutputTokens} window={Window} modelMax={ModelMax} thinking={Thinking} dialect={Dialect} capability={Capability}",

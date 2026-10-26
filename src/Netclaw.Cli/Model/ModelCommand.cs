@@ -429,7 +429,7 @@ internal static class ModelCommand
             writer.WriteLine($"Detected thinking dialect {saved}; saved Providers:{providerName}:VendorOptions:{ThinkingDialectMap.VendorOptionKey}.");
         }
 
-        if (settingsChanged && ModelEntryWriter.OtherRolesOf(modelsSection, roleKey, definitionName) is { Count: > 0 } otherRoles)
+        if (ModelEntryWriter.OtherRolesOf(modelsSection, roleKey, definitionName) is { Count: > 0 } otherRoles)
             writer.WriteLine($"Note: definition '{definitionName}' is also used by: {string.Join(", ", otherRoles)}. The change applies to each of them.");
 
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);

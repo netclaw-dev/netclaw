@@ -147,13 +147,14 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
 /// </summary>
 public sealed class ProviderCapabilityResolver : IModelCapabilityResolver
 {
-    private readonly IReadOnlyDictionary<string, IModelCapabilityResolver> _chainsByProvider;
+    private readonly Dictionary<string, IModelCapabilityResolver> _chainsByProvider;
     private readonly ModelSelection _models;
 
     public ProviderCapabilityResolver(
         IReadOnlyDictionary<string, IModelCapabilityResolver> chainsByProvider, ModelSelection models)
     {
-        _chainsByProvider = chainsByProvider;
+        // Provider names are configuration keys, which the binder reads without case.
+        _chainsByProvider = new Dictionary<string, IModelCapabilityResolver>(chainsByProvider, StringComparer.OrdinalIgnoreCase);
         _models = models;
     }
 
@@ -163,13 +164,14 @@ public sealed class ProviderCapabilityResolver : IModelCapabilityResolver
             : Task.FromResult<ResolvedModelCapabilities?>(null);
 
     /// <summary>
-    /// A caller with only a model ID gets the chain of the role definition that names the model, or
-    /// Main's chain when no role names it.
+    /// A caller with only a model ID gets the chain of the role definition that names the model. A
+    /// model that no role names has no known provider, so its capability is unknown: another
+    /// endpoint's chain must not answer for it.
     /// </summary>
     public Task<ResolvedModelCapabilities?> ResolveAsync(string modelId, CancellationToken ct = default)
-    {
-        var model = new[] { _models.Main, _models.Fallback, _models.Compaction }
-            .FirstOrDefault(m => m is not null && string.Equals(m.ModelId, modelId, StringComparison.OrdinalIgnoreCase));
-        return ResolveAsync(new ModelReference { Provider = (model ?? _models.Main).Provider, ModelId = modelId }, ct);
-    }
+        => new[] { _models.Main, _models.Fallback, _models.Compaction }
+                .FirstOrDefault(m => m is not null && string.Equals(m.ModelId, modelId, StringComparison.OrdinalIgnoreCase))
+            is { } model
+            ? ResolveAsync(model, ct)
+            : Task.FromResult<ResolvedModelCapabilities?>(null);
 }

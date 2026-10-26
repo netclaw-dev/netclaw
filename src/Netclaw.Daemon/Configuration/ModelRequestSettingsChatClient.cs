@@ -28,8 +28,14 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
     private readonly IModelCapabilityResolver _capabilities;
     private readonly bool _selfHosted;
     private readonly ILogger _logger;
+    private readonly TimeProvider _timeProvider;
     private readonly Lock _lookupGate = new();
     private Task<ResolvedModelCapabilities?>? _lookup;
+    private DateTimeOffset _missExpiresAt;
+    private bool _missLogged;
+
+    /// <summary>How long a lookup without a result stands before a call asks again.</summary>
+    internal static readonly TimeSpan MissCacheDuration = TimeSpan.FromMinutes(10);
 
     /// <param name="selfHosted">
     /// The default-limit rule of the provider (design D4). A hosted API gets min(32000, its known model
@@ -42,6 +48,7 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         ThinkingDialect dialect,
         bool selfHosted,
         IModelCapabilityResolver capabilities,
+        TimeProvider timeProvider,
         ILogger logger)
         : base(innerClient)
     {
@@ -49,6 +56,7 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         _dialect = dialect;
         _selfHosted = selfHosted;
         _capabilities = capabilities;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -84,13 +92,13 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         var capability = await LookupCapabilityAsync().WaitAsync(cancellationToken);
 
         // A self-hosted server: only its own probe or the operator knows its window, and a catalog
-        // maximum describes another host. A hosted API: its known model max caps the default, and its
-        // window is large and enforced by the provider, so the default is not clamped to it.
-        var window = _selfHosted
-            ? _model.ContextWindow ?? (capability is { ContextWindowTokens: > 0, ContextWindowFromCatalog: false }
-                ? capability.ContextWindowTokens
-                : null)
-            : null;
+        // maximum describes another host. A hosted API: its known model max caps the default, and a
+        // catalog window describes the same hosted model, so it clamps too (a hosted API can reject
+        // input + max_tokens above the window).
+        var window = _model.ContextWindow ?? (capability is { ContextWindowTokens: > 0 }
+                                              && (!_selfHosted || !capability.ContextWindowFromCatalog)
+            ? capability.ContextWindowTokens
+            : null);
         var modelMax = _selfHosted ? null : capability?.MaxOutputTokens;
         var prompt = EstimatePromptTokens(messages, options);
         string limitText;
@@ -116,7 +124,7 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
 
         _logger.LogDebug(
             "Model {ModelId} request: maxOutputTokens={MaxOutputTokens} promptEstimate={PromptEstimate} window={Window} thinking={Thinking} ({ThinkingSource}) dialect={Dialect}",
-            _model.ModelId, limitText, prompt, window?.ToString() ?? (_selfHosted ? "unknown" : "not clamped"),
+            _model.ModelId, limitText, prompt, window?.ToString() ?? "unknown",
             level, levelSource, _dialect);
         return options;
     }
@@ -154,13 +162,15 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         return ("unset", "unset");
     }
 
-    // A lookup that ended without a result is not cached: a network failure or a model that a source
-    // does not list yet is a normal runtime condition, so a later call looks the model up again.
+    // A result is kept for the client's lifetime. A lookup without a result (a network failure, or a
+    // model that no source lists yet) stands for MissCacheDuration, so a later call looks the model
+    // up again without a lookup on every call.
     private Task<ResolvedModelCapabilities?> LookupCapabilityAsync()
     {
         lock (_lookupGate)
         {
-            if (_lookup is null || (_lookup.IsCompleted && _lookup.Result is null))
+            var missed = _lookup is { IsCompleted: true } done && (!done.IsCompletedSuccessfully || done.Result is null);
+            if (_lookup is null || (missed && _timeProvider.GetUtcNow() >= _missExpiresAt))
                 _lookup = ResolveCapabilityAsync();
             return _lookup;
         }
@@ -171,6 +181,14 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         try
         {
             var capability = await _capabilities.ResolveAsync(_model, CancellationToken.None);
+            if (capability is null)
+            {
+                RecordMiss();
+                if (_missLogged)
+                    return null;
+                _missLogged = true;
+            }
+
             _logger.LogInformation(
                 "Model {ModelId} capability resolved: thinking={Thinking} modelMaxOutputTokens={ModelMax} window={Window}",
                 _model.ModelId,
@@ -183,11 +201,18 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         {
             // A failed lookup is a normal runtime condition (network). The default limit then
             // uses only the configured window, and this line says that the inputs are unknown.
+            RecordMiss();
             _logger.LogWarning(ex,
                 "Model {ModelId} capability lookup failed; the model maximum output and the thinking capability are unknown.",
                 _model.ModelId);
             return null;
         }
+    }
+
+    private void RecordMiss()
+    {
+        lock (_lookupGate)
+            _missExpiresAt = _timeProvider.GetUtcNow() + MissCacheDuration;
     }
 
     // The compaction rule (PromptTokenEstimate): characters / 4, with media at its base64 size. The
