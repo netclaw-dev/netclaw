@@ -4,21 +4,23 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
-using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Tests.Providers;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Configuration;
 
 /// <summary>
-/// Precedence of design D8 and the per-call debug line of D10: a call-site value wins, the model value
-/// fills an unset field, and the clamped default fills the rest. Every row also proves the shared
-/// post-conditions: the inner client gets its own copy of the options (D9), the suppression intent key
-/// never reaches it, and the caller's options do not change.
+/// Precedence of design D8, the self-hosted clamp of D4, and the per-call debug line of D10. Each row
+/// goes through the real <see cref="Netclaw.Daemon.Configuration.ProviderPluginFactory"/> stack of a
+/// self-hosted OpenAI-compatible provider and reads the request body. The probe of that endpoint
+/// (a fake capability resolver) knows the window when a row says so. Every row also proves the shared
+/// post-conditions: the suppression intent key never reaches the wire, and the caller's options do not
+/// change.
 /// </summary>
 public sealed class ModelRequestSettingsChatClientTests
 {
@@ -26,17 +28,17 @@ public sealed class ModelRequestSettingsChatClientTests
         ModelReference Model,
         ThinkingDialect Dialect,
         Func<ChatOptions?> CallerOptions,
-        Action<ChatOptions> Expect,
+        Action<JsonElement> Expect,
+        int? ProbeWindow = null,
         int PromptChars = 20,
         bool Streaming = false,
         string[]? DebugLinePatterns = null,
         bool ExpectWarning = false);
 
-    private static ModelReference Model(int? limit = null, ThinkingLevel? thinking = null, int? window = 131_072) => new()
+    private static ModelReference Model(int? limit = null, ThinkingLevel? thinking = null) => new()
     {
-        Provider = "p",
-        ModelId = "m",
-        ContextWindow = window,
+        Provider = "local",
+        ModelId = "qwen3",
         MaxOutputTokens = limit,
         Thinking = thinking,
     };
@@ -47,42 +49,62 @@ public sealed class ModelRequestSettingsChatClientTests
         AdditionalProperties = new() { [NetclawChatOptionKeys.SuppressReasoning] = true },
     };
 
+    // About 15000 tokens of tool schema text: the clamp must count it.
+    private static ChatOptions WithLargeTool() => new()
+    {
+        Tools = [AIFunctionFactory.Create(() => "ok", "large_tool", new string('d', 60_000))],
+    };
+
     private static readonly Dictionary<string, Row> Rows = new()
     {
         // Memory curation sizes its JSON reply to 4096 tokens.
-        ["call_site_limit_wins_over_model"] = new(Model(limit: 32_000), ThinkingDialect.Native,
+        ["call_site_limit_wins_over_model"] = new(Model(limit: 32_000), ThinkingDialect.ReasoningEffort,
             () => new ChatOptions { MaxOutputTokens = 4_096 },
-            o => Assert.Equal(4_096, o.MaxOutputTokens)),
-        ["model_limit_fills_unset_call_limit"] = new(Model(limit: 32_000), ThinkingDialect.Native,
+            b => Assert.Equal("4096", WireCapture.Text(b, "max_tokens"))),
+        ["model_limit_fills_unset_call_limit"] = new(Model(limit: 32_000), ThinkingDialect.ReasoningEffort,
             () => new ChatOptions(),
-            o => Assert.Equal(32_000, o.MaxOutputTokens),
+            b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens")),
             Streaming: true),
-        ["default_fills_unset_model_limit"] = new(Model(), ThinkingDialect.Native,
+        ["default_fills_unset_model_limit"] = new(Model(), ThinkingDialect.ReasoningEffort,
             () => null,
-            o => Assert.Equal(32_000, o.MaxOutputTokens)),
+            b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens")),
+            ProbeWindow: 131_072),
         ["suppression_wins_over_model_level"] = new(Model(thinking: ThinkingLevel.High), ThinkingDialect.DeepSeek,
             () => Suppressed(),
-            o =>
+            b =>
             {
-                var body = Body(o);
-                Assert.Equal("disabled", body.GetProperty("thinking").GetProperty("type").GetString());
-                Assert.False(body.TryGetProperty("reasoning_effort", out _), "suppression sends no effort");
+                Assert.Equal("disabled", WireCapture.Text(b, "thinking", "type"));
+                Assert.Null(WireCapture.Text(b, "reasoning_effort"));
             }),
         // Window 40960, prompt 40000 tokens (160000 characters / 4): the headroom is below the floor.
-        ["debug_line_shows_default_clamped_and_prompt_estimate"] = new(Model(window: 40_960), ThinkingDialect.Native,
+        ["debug_line_shows_default_clamped_and_prompt_estimate"] = new(Model(), ThinkingDialect.ReasoningEffort,
             () => new ChatOptions(),
-            o => Assert.Equal(1_024, o.MaxOutputTokens),
+            b => Assert.Equal("1024", WireCapture.Text(b, "max_tokens")),
+            ProbeWindow: 40_960,
             PromptChars: 160_000,
             DebugLinePatterns: [@"maxOutputTokens=1,?024 \(default-clamped\)", @"promptEstimate=40,?000"],
             ExpectWarning: true),
         ["debug_line_shows_call_source_for_curation_limit"] = new(Model(limit: 32_000, thinking: ThinkingLevel.Low), ThinkingDialect.ReasoningEffort,
             () => Suppressed(limit: 4_096),
-            o =>
+            b =>
             {
-                Assert.Equal(4_096, o.MaxOutputTokens);
-                Assert.Equal("none", Body(o).GetProperty("reasoning_effort").GetString());
+                Assert.Equal("4096", WireCapture.Text(b, "max_tokens"));
+                Assert.Equal("none", WireCapture.Text(b, "reasoning_effort"));
             },
             DebugLinePatterns: [@"maxOutputTokens=4,?096 \(call\)", @"thinking=Off \(suppressed\)", @"dialect=ReasoningEffort"]),
+        // 40960 - 30000 - 2048 = 8912
+        ["prompt_without_tools_sends_8912"] = new(Model(), ThinkingDialect.ReasoningEffort,
+            () => new ChatOptions(),
+            b => Assert.Equal("8912", WireCapture.Text(b, "max_tokens")),
+            ProbeWindow: 40_960,
+            PromptChars: 120_000),
+        // The same prompt plus about 15000 tokens of tool schemas leaves less than the floor.
+        ["clamp_counts_tool_schemas"] = new(Model(), ThinkingDialect.ReasoningEffort,
+            WithLargeTool,
+            b => Assert.Equal("1024", WireCapture.Text(b, "max_tokens")),
+            ProbeWindow: 40_960,
+            PromptChars: 120_000,
+            ExpectWarning: true),
     };
 
     public static TheoryData<string> RowNames => new(Rows.Keys);
@@ -94,40 +116,31 @@ public sealed class ModelRequestSettingsChatClientTests
         var spec = Rows[row];
         var callerOptions = spec.CallerOptions();
         var callerBefore = Snapshot(callerOptions);
-        ChatOptions? forwarded = null;
-        var inner = new FakeChatClient(
-            (_, opts, _) =>
-            {
-                forwarded = opts;
-                return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
-            },
-            streamHandler: (_, opts, _) =>
-            {
-                forwarded = opts;
-                return StreamOne();
-            });
+        var capture = new WireCapture();
         var logs = new CapturingLoggerProvider();
-        var client = new ModelRequestSettingsChatClient(
-            inner, spec.Model, spec.Dialect, new FakeCapabilityResolver(null), logs.CreateLogger("model-settings"));
+        using var loggerFactory = new LoggerFactory([logs]);
+        var entry = WireCapture.Entry("openai-compatible");
+        entry.SetVendorOptions(new JsonObject { ["ThinkingDialect"] = spec.Dialect.ToString() });
+        var probe = spec.ProbeWindow is { } window ? new ResolvedModelCapabilities("qwen3", null, null, window) : null;
+        var factory = WireCapture.Factory(
+            new() { ["local"] = entry }, _ => capture.Handler, loggerFactory, new FakeCapabilityResolver(probe));
+        var client = factory.Create(spec.Model);
         ChatMessage[] messages = [new(ChatRole.User, new string('x', spec.PromptChars))];
 
-        if (spec.Streaming)
-        {
-            await foreach (var _ in client.GetStreamingResponseAsync(messages, callerOptions, TestContext.Current.CancellationToken))
+        // The capture handler answers 400, so the client throws after it sends the request.
+        var error = spec.Streaming
+            ? await Record.ExceptionAsync(async () =>
             {
-            }
-        }
-        else
-        {
-            await client.GetResponseAsync(messages, callerOptions, TestContext.Current.CancellationToken);
-        }
+                await foreach (var _ in client.GetStreamingResponseAsync(messages, callerOptions, TestContext.Current.CancellationToken))
+                {
+                }
+            })
+            : await Record.ExceptionAsync(() => client.GetResponseAsync(messages, callerOptions, TestContext.Current.CancellationToken));
 
-        Assert.NotNull(forwarded);
-        Assert.NotSame(callerOptions, forwarded);
-        Assert.False(forwarded.AdditionalProperties?.ContainsKey(NetclawChatOptionKeys.SuppressReasoning) ?? false,
-            "the suppression intent key must never reach the provider client");
+        var body = capture.SingleBody(error);
+        Assert.Null(WireCapture.Text(body, NetclawChatOptionKeys.SuppressReasoning));
         Assert.Equal(callerBefore, Snapshot(callerOptions));
-        spec.Expect(forwarded);
+        spec.Expect(body);
 
         var debugLines = logs.Entries.Where(e => e.Level == LogLevel.Debug).Select(e => e.Message).ToList();
         foreach (var pattern in spec.DebugLinePatterns ?? [])
@@ -142,14 +155,6 @@ public sealed class ModelRequestSettingsChatClientTests
             options.MaxOutputTokens,
             Effort = options.Reasoning?.Effort,
             Properties = options.AdditionalProperties,
+            Tools = options.Tools?.Count,
         });
-
-    private static JsonElement Body(ChatOptions options)
-        => JsonSerializer.SerializeToElement(options.AdditionalProperties ?? new AdditionalPropertiesDictionary());
-
-    private static async IAsyncEnumerable<ChatResponseUpdate> StreamOne()
-    {
-        await Task.CompletedTask;
-        yield return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("ok")] };
-    }
 }

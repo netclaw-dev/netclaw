@@ -1133,6 +1133,16 @@ public sealed class ModelCommandTests : IDisposable
                 Assert.False(definition.TryGetProperty("MaxOutputTokens", out _));
                 Assert.False(definition.TryGetProperty("Thinking", out _));
             }),
+        // A context window alone runs the whole validator: the stored limit must stay below it.
+        ["context_window_below_stored_limit_rejected_file_unchanged"] = new(
+            "openai", "gpt-5", ["--context-window", "16384"], ProbeOf("gpt-5"),
+            SeededMain: new() { ["Provider"] = SettingsProvider, ["ModelId"] = "gpt-5", ["MaxOutputTokens"] = 32000 },
+            RejectPattern: "(?is)(context window.*32,?000|32,?000.*context window)"),
+        // The output limit needs no capability, so a failed probe does not block it.
+        ["limit_only_saved_when_probe_fails"] = new(
+            "openai-compatible", "qwen3", ["--max-output-tokens", "16000"],
+            new ProviderProbeResult(false, "connection refused", []),
+            AssertSaved: (main, _) => Assert.Equal(16000, main.MaxOutputTokens)),
         ["set_and_clear_together_rejected"] = new(
             "openai", "gpt-5", ["--thinking", "low", "--clear-thinking"], ProbeOf("gpt-5", AllLevels),
             RejectPattern: "cannot be combined"),
@@ -1197,6 +1207,39 @@ public sealed class ModelCommandTests : IDisposable
             .Build()).Selection;
         using var file = ReadConfigFile(_paths.NetclawConfigPath);
         spec.AssertSaved!(reloaded.Main, file);
+    }
+
+    // Two definitions of one model (sonnet-low and sonnet-high). model set edits the definition that
+    // the role uses now, not the first definition of that model, and names the other roles of it.
+    [Fact]
+    public async Task set_edits_the_roles_current_definition_and_names_its_other_roles()
+    {
+        var config = ProvidersOnly();
+        config["Models"] = new Dictionary<string, object>
+        {
+            ["Definitions"] = new Dictionary<string, object>
+            {
+                ["sonnet-low"] = new Dictionary<string, object> { ["Provider"] = "my-ollama", ["ModelId"] = "sonnet", ["Thinking"] = "Low" },
+                ["sonnet-high"] = new Dictionary<string, object> { ["Provider"] = "my-ollama", ["ModelId"] = "sonnet", ["Thinking"] = "High" },
+            },
+            ["Roles"] = new Dictionary<string, object> { ["Main"] = "sonnet-high", ["Fallback"] = "sonnet-low", ["Compaction"] = "sonnet-high" },
+        };
+        WriteConfig(config);
+        _fakeProbe.NextResult = ProbeOf("sonnet", AllLevels);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "sonnet", "--max-output-tokens", "16000"], _paths, _fakeProbe, _output);
+
+        var output = _output.ToString();
+        Assert.True(exitCode == 0, output);
+        using var file = ReadConfigFile(_paths.NetclawConfigPath);
+        var models = file.RootElement.GetProperty("Models");
+        Assert.Equal("sonnet-high", models.GetProperty("Roles").GetProperty("Main").GetString());
+        var high = models.GetProperty("Definitions").GetProperty("sonnet-high");
+        Assert.Equal(16000, high.GetProperty("MaxOutputTokens").GetInt32());
+        Assert.Equal("High", high.GetProperty("Thinking").GetString());
+        Assert.False(models.GetProperty("Definitions").GetProperty("sonnet-low").TryGetProperty("MaxOutputTokens", out _));
+        Assert.Matches("(?i)also used by:? *Compaction", output);
     }
 
     [Fact]

@@ -39,7 +39,16 @@ public sealed class ProviderRequestMappingTests
         Action<JsonElement> Expect,
         int? Limit = null,
         ThinkingLevel? Thinking = null,
-        string? VendorOptions = null);
+        string? VendorOptions = null,
+        int? Window = 200_000,
+        ResolvedModelCapabilities? Capability = null,
+        int PromptChars = 5);
+
+    // Aaron's default-limit rule (review of PR #2694): a hosted API gets min(32000, its own known
+    // model max) and no window clamp; a self-hosted server gets the window clamp only when the probe
+    // of that endpoint knows the window, and no limit field at all when it does not.
+    private static ResolvedModelCapabilities Probe(int? window = null, int? modelMax = null) =>
+        new("m", null, null, window) { MaxOutputTokens = modelMax };
 
     private static readonly Dictionary<string, Row> Rows = new()
     {
@@ -111,6 +120,23 @@ public sealed class ProviderRequestMappingTests
         ["compat_chat_template_off_sends_enable_thinking_false"] = new("openai-compatible",
             b => Assert.Equal("false", WireCapture.Text(b, "chat_template_kwargs", "enable_thinking")),
             Thinking: ThinkingLevel.Off, VendorOptions: """{"ThinkingDialect":"ChatTemplateKwargs"}"""),
+
+        ["compat_unknown_window_sends_no_max_tokens"] = new("openai-compatible",
+            b => Assert.Null(WireCapture.Text(b, "max_tokens")), Window: null),
+        // 131072 - 110000 - 6553 = 14519
+        ["compat_probe_window_clamps_default"] = new("openai-compatible",
+            b => Assert.Equal("14519", WireCapture.Text(b, "max_tokens")),
+            Window: null, Capability: Probe(window: 131_072), PromptChars: 440_000),
+        // A catalog maximum describes another host, so it does not cap a self-hosted server.
+        ["compat_catalog_max_does_not_cap_self_hosted"] = new("openai-compatible",
+            b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens")),
+            Window: null, Capability: Probe(window: 131_072, modelMax: 16_384)),
+        ["hosted_unknown_model_max_sends_32000_without_window_clamp"] = new("openai",
+            b => Assert.Equal("32000", WireCapture.Text(b, "max_output_tokens")),
+            Window: 131_072, PromptChars: 440_000),
+        ["hosted_known_model_max_caps_default"] = new("anthropic",
+            b => Assert.Equal("16384", WireCapture.Text(b, "max_tokens")),
+            Capability: Probe(modelMax: 16_384)),
     };
 
     public static TheoryData<string> RowNames => new(Rows.Keys);
@@ -124,21 +150,48 @@ public sealed class ProviderRequestMappingTests
         var entry = WireCapture.Entry(spec.ProviderType);
         if (spec.VendorOptions is { } vendorOptions)
             entry.SetVendorOptions(JsonNode.Parse(vendorOptions)!.AsObject());
-        var factory = WireCapture.Factory(new() { ["p"] = entry }, _ => capture.Handler);
+        var factory = WireCapture.Factory(
+            new() { ["p"] = entry }, _ => capture.Handler, capabilities: new FakeCapabilityResolver(spec.Capability));
         var client = factory.Create(new ModelReference
         {
             Provider = "p",
             ModelId = WireCapture.ModelIdFor(spec.ProviderType),
-            ContextWindow = 200_000,
+            ContextWindow = spec.Window,
             MaxOutputTokens = spec.Limit,
             Thinking = spec.Thinking,
         });
 
         // The capture handler answers 400, so the SDK throws after it sends the request.
         var error = await Record.ExceptionAsync(() => client.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken));
+            [new ChatMessage(ChatRole.User, new string('x', spec.PromptChars))],
+            cancellationToken: TestContext.Current.CancellationToken));
 
         spec.Expect(capture.SingleBody(error));
+    }
+
+    // A failed capability lookup is a normal network condition, so it is not cached for the client's
+    // lifetime: a later call looks the capability up again and then uses the model max.
+    [Fact]
+    public async Task failed_capability_lookup_is_retried_on_a_later_call()
+    {
+        var capture = new WireCapture();
+        var capabilities = new FakeCapabilityResolver(new ResolvedModelCapabilities("gpt-5", null, null) { MaxOutputTokens = 16_384 })
+        {
+            FailuresBeforeResult = 1,
+        };
+        var factory = WireCapture.Factory(
+            new() { ["p"] = WireCapture.Entry("openai") }, _ => capture.Handler, capabilities: capabilities);
+        var client = factory.Create(new ModelReference { Provider = "p", ModelId = "gpt-5" });
+
+        for (var call = 0; call < 2; call++)
+        {
+            await Record.ExceptionAsync(() => client.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken));
+        }
+
+        Assert.Equal(2, capabilities.Calls);
+        var bodies = capture.Bodies.Select(body => JsonDocument.Parse(body).RootElement).ToList();
+        Assert.Equal(["32000", "16384"], bodies.Select(body => WireCapture.Text(body, "max_output_tokens")));
     }
 }
 
@@ -226,7 +279,8 @@ internal sealed class WireCapture
     public static ProviderPluginFactory Factory(
         Dictionary<string, ProviderEntry> providers,
         Func<string, HttpMessageHandler> handlerFor,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IModelCapabilityResolver? capabilities = null)
     {
         var http = new HttpClient();
         var exchanger = GitHubCopilotProviderPluginTests.ExchangerReturning(
@@ -254,6 +308,6 @@ internal sealed class WireCapture
         ];
 
         return new ProviderPluginFactory(
-            providers, plugins, new FakeCapabilityResolver(null), loggerFactory ?? NullLoggerFactory.Instance);
+            providers, plugins, capabilities ?? new FakeCapabilityResolver(null), loggerFactory ?? NullLoggerFactory.Instance);
     }
 }

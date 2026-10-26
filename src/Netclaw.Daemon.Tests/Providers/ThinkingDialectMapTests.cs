@@ -175,6 +175,10 @@ public sealed class OfferedLevelsTests
             [ThinkingLevel.Off], "thinking support unknown for this endpoint", ThinkingLevel.Low),
         ["unknown_without_dialect_offers_nothing"] = new(ThinkingDialect.Unresolved, ThinkingSupport.Unknown,
             [], "ThinkingDialect"),
+        // A Native Off fails on a hosted model that cannot turn thinking off, so an unknown hosted
+        // model gets no level at all (review of PR #2694).
+        ["native_unknown_offers_nothing"] = new(ThinkingDialect.Native, ThinkingSupport.Unknown,
+            [], "thinking support unknown for this endpoint"),
         ["none_offers_nothing_with_reason"] = new(ThinkingDialect.Native, ThinkingSupport.None,
             [], "does not think"),
         ["always_on_offers_nothing_with_reason"] = new(ThinkingDialect.Native, ThinkingSupport.AlwaysOn,

@@ -178,6 +178,25 @@ public sealed class CompositeCapabilityResolverTests
         Assert.True(openAiCompat.WasCalled);
     }
 
+    // The early stop of an Ollama-only setup: when the native probe knows the three original fields
+    // (input, output, window), the chain makes no catalog call for the newer fields.
+    [Fact]
+    public async Task ollama_early_stop_makes_no_catalog_call()
+    {
+        var ollama = new FakeCapabilityResolver(
+            new ResolvedModelCapabilities("qwen3:30b", ModelModality.Text, ModelModality.Text, 131_072), "ollama");
+        var catalog = new FakeCapabilityResolver(
+            new ResolvedModelCapabilities("qwen3:30b", null, null, null) { MaxOutputTokens = 16_384 });
+        var composite = new CompositeCapabilityResolver(
+            [ollama, catalog], NullLogger<CompositeCapabilityResolver>.Instance, _ => "ollama");
+
+        var result = await composite.ResolveAsync("qwen3:30b", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(131_072, result.ContextWindowTokens);
+        Assert.False(catalog.WasCalled, "the catalog was called after the native probe knew the three fields");
+    }
+
     private sealed class ThrowingResolver : IModelCapabilityResolver
     {
         public Task<ResolvedModelCapabilities?> ResolveAsync(
@@ -214,9 +233,9 @@ public sealed class CompositeCapabilityResolverTests
     [Fact]
     public async Task catalog_wins_over_unknown()
     {
-        // The native probe fills every older field, so the chain must not stop before the catalog.
+        // The native probe knows only the window, so the chain goes on to the catalog.
         var native = new FakeCapabilityResolver(
-            new ResolvedModelCapabilities("m", ModelModality.Text, ModelModality.Text, 131_072));
+            new ResolvedModelCapabilities("m", null, null, 131_072));
         var catalog = new FakeCapabilityResolver(
             new ResolvedModelCapabilities("m", null, null, null)
             {

@@ -302,6 +302,24 @@ public sealed class ProviderPluginFactoryTests
         Assert.Contains(dialect == "Banana" ? "ThinkingDialect" : level.ToString(), error, StringComparison.OrdinalIgnoreCase);
     }
 
+    // The Ollama DisableThinking switch already forces think=false, so a Thinking value on the same
+    // provider conflicts with it; startup rejects the pair instead of sending both.
+    [Fact]
+    public void startup_fails_on_thinking_with_ollama_disable_thinking()
+    {
+        var entry = WireCapture.Entry("ollama");
+        entry.SetVendorOptions(new JsonObject { ["DisableThinking"] = true });
+        var factory = WireCapture.Factory(new() { ["local"] = entry }, _ => new WireCapture().Handler);
+
+        var error = factory.Validate(new ModelSelection
+        {
+            Main = new ModelReference { Provider = "local", ModelId = "qwen3:30b", Thinking = ThinkingLevel.Low },
+        });
+
+        Assert.NotNull(error);
+        Assert.Contains("DisableThinking", error, StringComparison.Ordinal);
+    }
+
     // Design D10: one Information line for each model client, with the inputs of the default limit.
     [Fact]
     public void startup_line_shows_limit_inputs_level_dialect_and_capability()

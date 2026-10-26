@@ -243,6 +243,27 @@ public sealed class RoleBasedFailoverRouterTests
         Assert.Equal(compaction.MaxOutputTokens, built[compactionFirst].MaxOutputTokens);
     }
 
+    // Provider names are configuration keys, which the binder reads without case.
+    [Fact]
+    public void provider_name_case_shares_one_pipeline()
+    {
+        var calls = 0;
+        var router = new RoleBasedFailoverRouter(_ =>
+        {
+            calls++;
+            return new FakeChatClient();
+        }, new ModelSelection
+        {
+            Main = new ModelReference { Provider = "Anthropic", ModelId = "claude-opus-5-5" },
+            Compaction = new ModelReference { Provider = "anthropic", ModelId = "claude-opus-5-5" },
+        });
+
+        Assert.Same(
+            router.Route(new ChatRoutingContext { Role = ModelRole.Main })[0],
+            router.Route(new ChatRoutingContext { Role = ModelRole.Compaction })[0]);
+        Assert.Equal(1, calls);
+    }
+
     [Fact]
     public void fallback_with_other_thinking_gets_own_pipeline()
     {

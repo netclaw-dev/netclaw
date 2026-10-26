@@ -37,6 +37,23 @@ public sealed class AnthropicCapabilityResolverTests
     }
     """;
 
+    // An older model has effort flags but no adaptive thinking mode. Netclaw sends the levels in
+    // adaptive mode, so that model gets only Off (or no level).
+    [Fact]
+    public void effort_without_adaptive_offers_only_off()
+    {
+        var olderModel = ModelJson
+            .Replace("\"id\": \"claude-opus-5-5\"", "\"id\": \"claude-older\"", StringComparison.Ordinal)
+            .Replace("\"adaptive\": { \"supported\": true }", "\"adaptive\": { \"supported\": false }", StringComparison.Ordinal)
+            .Replace("\"enabled\": { \"supported\": false }", "\"enabled\": { \"supported\": true }", StringComparison.Ordinal);
+        Assert.Contains("\"adaptive\": { \"supported\": false }", olderModel, StringComparison.Ordinal);
+
+        var result = AnthropicCapabilityResolver.ParseModel(olderModel, "claude-older");
+
+        Assert.NotNull(result);
+        Assert.DoesNotContain(result.Thinking.Levels, level => level != ThinkingLevel.Off);
+    }
+
     [Theory]
     [InlineData("effort_flags_map_to_levels")]
     [InlineData("max_tokens_maps_to_max_output")]

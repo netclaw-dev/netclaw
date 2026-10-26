@@ -491,6 +491,10 @@ public sealed class ChatClientDoctorCheckTests : IDisposable
         """{"gpu":{"Type":"openai-compatible","Endpoint":"http://gpu.example","VendorOptions":{"ThinkingDialect":"Banana"}}}""",
         """{"Provider":"gpu","ModelId":"qwen3"}""",
         new[] { "VendorOptions:ThinkingDialect", "ChatTemplateKwargs", "ReasoningEffort", "DeepSeek", "None" }, null)]
+    [InlineData("doctor_reports_thinking_with_ollama_disable_thinking",
+        """{"local":{"Type":"ollama","VendorOptions":{"DisableThinking":true}}}""",
+        """{"Provider":"local","ModelId":"qwen3:30b","Thinking":"Low"}""",
+        new[] { "DisableThinking" }, null)]
     public async Task Reports_model_settings_problems(
         string row, string providersJson, string definitionJson, string[] messageParts, string? remediationPart)
     {

@@ -187,6 +187,20 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task thinking_with_ollama_disable_thinking_is_rejected_on_reload()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+            { "Providers": { "p": { "Type": "ollama", "VendorOptions": { "DisableThinking": true } } },
+              "Models": { "Definitions": { "d": { "Provider": "p", "ModelId": "m", "Thinking": "Low" } }, "Roles": { "Main": "d" } } }
+            """);
+
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+
+        Assert.Equal(0, _restartCoordinator.RequestCount);
+        Assert.Contains("DisableThinking", _rejectedConfig.Reason);
+    }
+
+    [Fact]
     public async Task RejectionFollowsTheLatestEdit_NotTheFirstReason()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": { "p": { "Type": "ollama" } }, "Models": { "Definitions": { "d": { "Provider": "p", "ModelId": "m", "ContextWindow": 100 } }, "Roles": { "Main": "d" } } }""");
