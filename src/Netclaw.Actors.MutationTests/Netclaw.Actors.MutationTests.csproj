@@ -90,6 +90,10 @@
              Link="Providers/ThinkingDialectMapTests.cs" />
     <Compile Include="../Netclaw.Daemon.Tests/Configuration/DefaultOutputLimitTests.cs"
              Link="Configuration/DefaultOutputLimitTests.cs" />
+    <Compile Include="../Netclaw.Daemon.Tests/Configuration/RoleBasedFailoverRouterTests.cs"
+             Link="Configuration/RoleBasedFailoverRouterTests.cs" />
+    <Compile Include="../Netclaw.Daemon.Tests/Configuration/FakeChatClient.cs"
+             Link="Configuration/FakeChatClient.cs" />
   </ItemGroup>
 
 </Project>

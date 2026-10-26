@@ -366,6 +366,6 @@ public sealed class ProviderPluginFactoryTests
         var dict = new Dictionary<string, ProviderEntry>();
         foreach (var (name, entry) in providers)
             dict[name] = entry;
-        return new ProviderPluginFactory(dict, AllPlugins, new FakeCapabilityResolver(null), NullLoggerFactory.Instance);
+        return new ProviderPluginFactory(dict, AllPlugins, new FakeCapabilityResolver(null), NullLoggerFactory.Instance, TimeProvider.System);
     }
 }

@@ -55,7 +55,8 @@ public static class DaemonProviderServiceExtensions
                 providers,
                 sp.GetServices<ILlmProviderPlugin>(),
                 sp.GetRequiredService<IModelCapabilityResolver>(),
-                sp.GetRequiredService<ILoggerFactory>()));
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<TimeProvider>()));
 
         // Transport retry budget/backoff. The RetryingChatClient layer is the single
         // owner of LLM transient-failure retry; this is its configured policy

@@ -11,6 +11,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Tests.Providers.GitHubCopilot;
@@ -131,9 +132,15 @@ public sealed class ProviderRequestMappingTests
         ["compat_catalog_max_does_not_cap_self_hosted"] = new("openai-compatible",
             b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens")),
             Window: null, Capability: Probe(window: 131_072, modelMax: 16_384)),
-        ["hosted_unknown_model_max_sends_32000_without_window_clamp"] = new("openai",
+        // A hosted model with an unknown window and an unknown model max gets the full default.
+        ["hosted_unknown_window_and_max_sends_32000"] = new("openai",
             b => Assert.Equal("32000", WireCapture.Text(b, "max_output_tokens")),
-            Window: 131_072, PromptChars: 440_000),
+            Window: null, PromptChars: 440_000),
+        // A hosted API rejects input + max_tokens above the window (Anthropic before Claude 4.5), so a
+        // catalog window clamps a hosted default too: 200000 - 170000 - 10000 = 20000.
+        ["hosted_catalog_window_clamps_default"] = new("anthropic",
+            b => Assert.Equal("20000", WireCapture.Text(b, "max_tokens")),
+            Window: null, Capability: Probe(window: 200_000), PromptChars: 680_000),
         ["hosted_known_model_max_caps_default"] = new("anthropic",
             b => Assert.Equal("16384", WireCapture.Text(b, "max_tokens")),
             Capability: Probe(modelMax: 16_384)),
@@ -169,8 +176,38 @@ public sealed class ProviderRequestMappingTests
         spec.Expect(capture.SingleBody(error));
     }
 
+    // A lookup with no result is cached for about 10 minutes: within that time a call does not ask
+    // again, after it a call asks again. Only the first miss logs the "capability resolved" line.
+    [Fact]
+    public async Task capability_miss_is_cached_for_a_short_time()
+    {
+        var capture = new WireCapture();
+        var capabilities = new FakeCapabilityResolver(null);
+        var time = new FakeTimeProvider();
+        var logs = new CapturingLoggerProvider();
+        using var loggerFactory = new LoggerFactory([logs]);
+        var factory = WireCapture.Factory(
+            new() { ["p"] = WireCapture.Entry("openai") }, _ => capture.Handler, loggerFactory, capabilities, time);
+        var client = factory.Create(new ModelReference { Provider = "p", ModelId = "gpt-5" });
+
+        async Task CallAsync() => await Record.ExceptionAsync(() => client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken));
+
+        await CallAsync();
+        await CallAsync();
+        Assert.Equal(1, capabilities.Calls);
+
+        time.Advance(TimeSpan.FromMinutes(11));
+        await CallAsync();
+        Assert.Equal(2, capabilities.Calls);
+
+        Assert.Single(logs.Entries,
+            e => e.Level == LogLevel.Information && e.Message.Contains("capability resolved", StringComparison.Ordinal));
+    }
+
     // A failed capability lookup is a normal network condition, so it is not cached for the client's
-    // lifetime: a later call looks the capability up again and then uses the model max.
+    // lifetime: a later call (after the short miss cache) looks the capability up again and then
+    // uses the model max.
     [Fact]
     public async Task failed_capability_lookup_is_retried_on_a_later_call()
     {
@@ -179,14 +216,16 @@ public sealed class ProviderRequestMappingTests
         {
             FailuresBeforeResult = 1,
         };
+        var time = new FakeTimeProvider();
         var factory = WireCapture.Factory(
-            new() { ["p"] = WireCapture.Entry("openai") }, _ => capture.Handler, capabilities: capabilities);
+            new() { ["p"] = WireCapture.Entry("openai") }, _ => capture.Handler, capabilities: capabilities, timeProvider: time);
         var client = factory.Create(new ModelReference { Provider = "p", ModelId = "gpt-5" });
 
         for (var call = 0; call < 2; call++)
         {
             await Record.ExceptionAsync(() => client.GetResponseAsync(
                 [new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken));
+            time.Advance(TimeSpan.FromMinutes(11));
         }
 
         Assert.Equal(2, capabilities.Calls);
@@ -280,7 +319,8 @@ internal sealed class WireCapture
         Dictionary<string, ProviderEntry> providers,
         Func<string, HttpMessageHandler> handlerFor,
         ILoggerFactory? loggerFactory = null,
-        IModelCapabilityResolver? capabilities = null)
+        IModelCapabilityResolver? capabilities = null,
+        TimeProvider? timeProvider = null)
     {
         var http = new HttpClient();
         var exchanger = GitHubCopilotProviderPluginTests.ExchangerReturning(
@@ -308,6 +348,10 @@ internal sealed class WireCapture
         ];
 
         return new ProviderPluginFactory(
-            providers, plugins, capabilities ?? new FakeCapabilityResolver(null), loggerFactory ?? NullLoggerFactory.Instance);
+            providers,
+            plugins,
+            capabilities ?? new FakeCapabilityResolver(null),
+            loggerFactory ?? NullLoggerFactory.Instance,
+            timeProvider ?? TimeProvider.System);
     }
 }

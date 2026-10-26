@@ -1242,6 +1242,30 @@ public sealed class ModelCommandTests : IDisposable
         Assert.Matches("(?i)also used by:? *Compaction", output);
     }
 
+    // A context-window change edits a shared definition, so it names the other roles too.
+    [Fact]
+    public async Task context_window_change_names_the_other_roles()
+    {
+        var config = ProvidersOnly();
+        config["Models"] = new Dictionary<string, object>
+        {
+            ["Definitions"] = new Dictionary<string, object>
+            {
+                ["shared"] = new Dictionary<string, object> { ["Provider"] = "my-ollama", ["ModelId"] = "qwen3:30b" },
+            },
+            ["Roles"] = new Dictionary<string, object> { ["Main"] = "shared", ["Compaction"] = "shared" },
+        };
+        WriteConfig(config);
+        _fakeProbe.NextResult = ProbeOf("qwen3:30b");
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "my-ollama", "qwen3:30b", "--context-window", "65536"], _paths, _fakeProbe, _output);
+
+        var output = _output.ToString();
+        Assert.True(exitCode == 0, output);
+        Assert.Matches("(?i)also used by:? *Compaction", output);
+    }
+
     [Fact]
     public async Task list_shows_max_out_and_thinking_columns()
     {

@@ -253,3 +253,61 @@ public sealed class CompositeCapabilityResolverTests
         Assert.Equal(131_072, result.ContextWindowTokens);
     }
 }
+
+/// <summary>
+/// Each definition resolves against the capability chain of its own provider (review item 3 of PR
+/// #2694), so a Compaction or Fallback model on another endpoint never gets Main's window or levels.
+/// The rows use the same model ID on two providers, so only the provider can pick the chain.
+/// </summary>
+public sealed class ProviderCapabilityResolverTests
+{
+    private static readonly ModelReference Main = new() { Provider = "main-vllm", ModelId = "qwen3" };
+    private static readonly ModelReference Other = new() { Provider = "small-ollama", ModelId = "qwen3" };
+
+    [Theory]
+    [InlineData("compaction_on_other_provider_uses_its_own_chain", "small-ollama", 8_192)]
+    [InlineData("fallback_on_other_provider_uses_its_own_chain", "small-ollama", 8_192)]
+    [InlineData("main_uses_its_own_chain", "main-vllm", 131_072)]
+    // The resolver returns unknown for a provider without a chain; the caller then uses no model max
+    // and, for a self-hosted server, no window. Startup validation rejects an unknown provider first.
+    [InlineData("unknown_provider_returns_unknown", "missing", null)]
+    // Provider names are configuration keys, which the binder reads without case.
+    [InlineData("provider_name_case_does_not_matter", "Small-Ollama", 8_192)]
+    public async Task Resolves_against_the_definitions_own_provider(string row, string provider, int? expectedWindow)
+    {
+        var mainChain = new FakeCapabilityResolver(new ResolvedModelCapabilities("qwen3", null, null, 131_072));
+        var otherChain = new FakeCapabilityResolver(new ResolvedModelCapabilities("qwen3", null, null, 8_192));
+        // An ordinal dictionary: the resolver itself must not depend on the comparer of its caller.
+        var chains = new Dictionary<string, IModelCapabilityResolver>
+        {
+            [Main.Provider] = mainChain,
+            [Other.Provider] = otherChain,
+        };
+        var models = row.StartsWith("fallback", StringComparison.Ordinal)
+            ? new ModelSelection { Main = Main, Fallback = Other }
+            : new ModelSelection { Main = Main, Compaction = Other };
+        var resolver = new ProviderCapabilityResolver(chains, models);
+
+        var result = await resolver.ResolveAsync(
+            new ModelReference { Provider = provider, ModelId = "qwen3" }, TestContext.Current.CancellationToken);
+
+        Assert.True(expectedWindow == result?.ContextWindowTokens, $"{row}: window {result?.ContextWindowTokens}");
+        Assert.True((expectedWindow == 131_072) == mainChain.WasCalled, $"{row}: Main's chain called = {mainChain.WasCalled}");
+    }
+
+    // The model-ID overload serves callers that know only an ID. An ID that no role names has no
+    // provider, so the answer is unknown; Main's chain must not answer for another endpoint's model.
+    [Fact]
+    public async Task model_id_that_no_role_names_returns_unknown()
+    {
+        var mainChain = new FakeCapabilityResolver(new ResolvedModelCapabilities("qwen3", null, null, 131_072));
+        var resolver = new ProviderCapabilityResolver(
+            new Dictionary<string, IModelCapabilityResolver> { [Main.Provider] = mainChain },
+            new ModelSelection { Main = Main });
+
+        var result = await resolver.ResolveAsync("unnamed-model", TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+        Assert.False(mainChain.WasCalled, "Main's chain answered for a model that no role names");
+    }
+}

@@ -278,7 +278,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
             return check.Error;
 
         return valid.Validation.Status == ProviderRuntimeStatus.Valid
-            ? new ProviderPluginFactory(valid.Providers, _plugins, _capabilities, _loggerFactory).Validate(valid.Models)
+            ? new ProviderPluginFactory(valid.Providers, _plugins, _capabilities, _loggerFactory, _timeProvider).Validate(valid.Models)
             : null;
     }
 

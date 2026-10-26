@@ -66,7 +66,8 @@ public sealed class LlmSessionModelSettingsTests : LlmSessionTestBase
             new Dictionary<string, ProviderEntry> { ["local-vllm"] = entry },
             [plugin],
             new FakeCapabilityResolver(),
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            TimeProvider.System);
         var main = factory.Create(new ModelReference
         {
             Provider = "local-vllm",

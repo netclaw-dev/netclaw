@@ -28,7 +28,8 @@ public sealed class ProviderPluginFactory
         Dictionary<string, ProviderEntry> providers,
         IEnumerable<ILlmProviderPlugin> plugins,
         IModelCapabilityResolver capabilities,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        TimeProvider timeProvider)
     {
         _providers = providers;
         _capabilities = capabilities;

@@ -100,4 +100,13 @@ run_gate output-limit Netclaw.Daemon.csproj \
   17 \
   "public static OutputLimit Resolve(" "if (headroom < value)" \
   "value = (int)Math.Min(value, Math.Max(FloorLimit, headroom));" "" || failed=1
+# The router reuses a pipeline only for the same provider (without case), model ID, and settings.
+# EstimatePromptTokens and ApplyThinking stay outside the gate: they are private members of the
+# model client that only the wire rows reach, and those rows need the whole provider wire harness.
+run_gate pipeline-key Netclaw.Daemon.csproj \
+  "$repo_root/src/Netclaw.Daemon/Configuration/ChatClientRouter.cs" \
+  "Configuration/ChatClientRouter.cs" \
+  10 \
+  "internal RoleBasedFailoverRouter(Func<ModelReference, IChatClient> create" \
+  "public IReadOnlyList<IChatClient> Route(ChatRoutingContext context)" || failed=1
 exit "$failed"
