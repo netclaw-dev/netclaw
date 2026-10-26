@@ -26,7 +26,17 @@ namespace Netclaw.Actors.MutationTests;
 
 public sealed class ReminderExecutionMutationTests : IAsyncLifetime
 {
-    private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(2);
+    // Two bounds with two jobs. Do not merge them.
+    // KillTimeout bounds a wait that a gate mutant can starve: the acceptance reply (the mutant removes
+    // it) and a later dispatch (the cleanup mutants keep the guard). Stryker reports a mutant as Killed
+    // only when a test fails before its per-mutant time limit, so this bound stays short.
+    // ReadyTimeout bounds a wait that every gate mutant still completes: host start, health replies,
+    // the termination barrier, the first dispatch of a test, and the local execution. These waits do
+    // the cold work of a new process (JIT, a new actor system, the first stream materializer). On a
+    // loaded Windows or macOS runner that work took more than 2 s. Correct code always replies, so
+    // this bound only stops a real hang.
+    private static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(30);
     private readonly NetclawPaths _paths = new(Path.Combine(
         Path.GetTempPath(), "netclaw-reminder-mutations", Guid.NewGuid().ToString("N")));
     private readonly HeldPipeline _pipeline = new();
@@ -212,10 +222,10 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
 
         // Act
         var started = await _localExecutionParent.Ask<LocalExecutionStarted>(
-            new StartLocalExecution(executionId, definition, pipeline, envelope), ReplyTimeout);
-        var outcome = await _localOutcomes.Reader.ReadAsync().AsTask().WaitAsync(ReplyTimeout);
-        var input = await pipeline.InputCaptured.WaitAsync(ReplyTimeout);
-        var terminated = await _localTerminations.Reader.ReadAsync().AsTask().WaitAsync(ReplyTimeout);
+            new StartLocalExecution(executionId, definition, pipeline, envelope), ReadyTimeout);
+        var outcome = await _localOutcomes.Reader.ReadAsync().AsTask().WaitAsync(ReadyTimeout);
+        var input = await pipeline.InputCaptured.WaitAsync(ReadyTimeout);
+        var terminated = await _localTerminations.Reader.ReadAsync().AsTask().WaitAsync(ReadyTimeout);
 
         // Assert
         Assert.Equal(executionId, started.ExecutionId);
@@ -230,11 +240,14 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
 
     private async Task<Guid> DispatchAsync()
     {
+        // No gate mutant can stop the first dispatch of a test: the tracker is new and the schedule is
+        // an interval. A later dispatch follows a release, and the cleanup mutants block it.
+        var dispatchTimeout = _occurrence == 0 ? ReadyTimeout : KillTimeout;
         _manager.Tell(new ReminderEnvelope<ReminderPayload>(
             new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
             new ReminderKey(_id.Value), _now.AddSeconds(++_occurrence), ReminderDeadline.Infinite,
             new ReminderPayload { Id = _id }));
-        var executionId = await _dispatches.Reader.ReadAsync().AsTask().WaitAsync(ReplyTimeout);
+        var executionId = await _dispatches.Reader.ReadAsync().AsTask().WaitAsync(dispatchTimeout);
         Assert.Equal(1, (await HealthAsync()).ActiveExecutions);
         return executionId;
     }
@@ -244,15 +257,15 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
         var accepted = await _manager.Ask<ReminderExecutionAccepted>(new ReminderExecutionCompleted(
             executionId, _id, success,
             new HistoryRecord(_now, success, 10, $"reminder/{executionId:N}", success ? null : "probe failure"),
-            success ? null : "probe failure"), ReplyTimeout);
+            success ? null : "probe failure"), KillTimeout);
         Assert.Equal(executionId, accepted.ExecutionId);
     }
 
     private Task<ReminderHealthResponse> HealthAsync() =>
-        _manager.Ask<ReminderHealthResponse>(GetReminderHealthQuery.Instance, ReplyTimeout);
+        _manager.Ask<ReminderHealthResponse>(GetReminderHealthQuery.Instance, ReadyTimeout);
 
     private Task<ReminderHealthResponse> TerminateAsync(Guid executionId) =>
-        _barrier.Ask<ReminderHealthResponse>(new ReminderExecutionTerminated(executionId, _id), ReplyTimeout);
+        _barrier.Ask<ReminderHealthResponse>(new ReminderExecutionTerminated(executionId, _id), ReadyTimeout);
 
     private ReminderDefinition Definition() => Assert.IsType<ReminderDefinition>(_definitions.Get(_id));
 

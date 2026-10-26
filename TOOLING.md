@@ -1052,6 +1052,11 @@ Seven settlement cases use the real manager, execution tracker, actor mailbox, d
 An isolated host supplies the local Akka.Reminders scheduler with an in-memory store.
 The fixture observes execution IDs through the existing dispatch event and holds the session pipeline on a task.
 Actor replies provide barriers. The tests use no delay or sleep to wait for state.
+The fixture has two wait bounds. Do not merge them.
+The 2-second bound applies only to a wait that a gate mutant can starve: the acceptance reply and a dispatch after a release.
+A mutant must fail a test before the Stryker limit for each mutant (27.4 seconds in a local run), or the gate reports `Timeout`.
+The 30-second bound applies to host start, health replies, the termination barrier, the first dispatch of a test, and the local execution.
+Every gate mutant completes these waits. On a loaded Windows or macOS runner, their cold work took more than 2 seconds.
 
 The stale-message cases complete attempt A, start attempt B, and replay A's completion or termination.
 They require B's guard, history, failure count, and alerts to remain unchanged.
