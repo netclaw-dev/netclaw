@@ -23,8 +23,28 @@ public enum ModelManagerState
     SelectProvider,
     DiscoverModels,
     ConfirmAssignment,
-    Loading
+    Loading,
+    Properties
 }
+
+/// <summary>
+/// The properties panel of one model definition: the output limit and the thinking level. The
+/// offered levels come from the provider dialect and the probed model capability.
+/// </summary>
+/// <param name="DialectProblem">Why no level can be set, or null when the dialect resolves.</param>
+/// <param name="ProbeNote">Why the capability is unknown, or null when the probe listed the model.</param>
+public sealed record ModelPropertiesState(
+    string Role,
+    string DefinitionName,
+    ModelReference Model,
+    IReadOnlyList<string> AlsoUsedBy,
+    ProviderEntry Entry,
+    IProviderDescriptor Descriptor,
+    OfferedThinkingLevels Offered,
+    ThinkingSupport Capability,
+    int? ModelMaxOutputTokens,
+    string? DialectProblem,
+    string? ProbeNote);
 
 /// <summary>
 /// Reactive ViewModel for the <c>netclaw model</c> interactive TUI.
@@ -38,6 +58,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     private readonly IProviderProbe _probe;
     private readonly ProviderDescriptorRegistry? _registry;
     private CancellationTokenSource? _probeCts;
+    private CancellationTokenSource? _propertiesCts;
 
     internal Action<string>? RouteRequested { get; set; }
 
@@ -74,6 +95,10 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     /// Completes when the provider probe finishes. Used for testing.
     /// </summary>
     internal Task? ProbeCompletion { get; private set; }
+
+    // ── Properties panel ──
+    /// <summary>The loaded panel, or null while its probe runs.</summary>
+    public ModelPropertiesState? Properties { get; private set; }
 
     public ModelManagerViewModel(NetclawPaths paths, IProviderProbe probe,
         ProviderDescriptorRegistry? registry = null, EmbeddedConfigHostMarker? embeddedHost = null)
@@ -284,6 +309,213 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Opens the properties panel of the definition that <paramref name="role"/> selects. The panel
+    /// probes the provider first, because the offered levels depend on the model capability.
+    /// </summary>
+    public void OpenProperties(string role)
+    {
+        var model = role switch
+        {
+            "Main" => Models?.Main,
+            "Fallback" => Models?.Fallback,
+            "Compaction" => Models?.Compaction,
+            _ => null,
+        };
+        var roleDefinitions = ReadRoleDefinitions();
+        if (model is null || !roleDefinitions.TryGetValue(role, out var definitionName))
+        {
+            StatusMessage.Value = model is null
+                ? $"{role} role is not set."
+                : "Model properties need named model definitions. Run `netclaw doctor --fix` to migrate the Models section.";
+            RequestRedraw();
+            return;
+        }
+
+        var provider = Providers.FirstOrDefault(p => string.Equals(p.Name, model.Provider, StringComparison.OrdinalIgnoreCase));
+        if (provider.Entry is null || _registry is null || !_registry.TryGet(provider.Entry.Type, out var descriptor))
+        {
+            StatusMessage.Value = $"Provider '{model.Provider}' of the {role} role is not configured or has an unknown type.";
+            RequestRedraw();
+            return;
+        }
+
+        var alsoUsedBy = roleDefinitions
+            .Where(pair => pair.Key != role && string.Equals(pair.Value, definitionName, StringComparison.OrdinalIgnoreCase))
+            .Select(pair => pair.Key)
+            .ToList();
+
+        CancelProperties();
+        Properties = null;
+        StatusMessage.Value = "";
+        CurrentState.Value = ModelManagerState.Properties;
+        NotifyStateChanged();
+        _propertiesCts = new CancellationTokenSource();
+        PropertiesCompletion = LoadPropertiesAsync(
+            role, definitionName, model, alsoUsedBy, provider.Name, provider.Entry, descriptor, _propertiesCts.Token);
+    }
+
+    /// <summary>Completes when the properties probe finishes. Used for testing.</summary>
+    internal Task? PropertiesCompletion { get; private set; }
+
+    private async Task LoadPropertiesAsync(
+        string role,
+        string definitionName,
+        ModelReference model,
+        IReadOnlyList<string> alsoUsedBy,
+        string providerName,
+        ProviderEntry entry,
+        IProviderDescriptor descriptor,
+        CancellationToken ct)
+    {
+        ProviderProbeResult result;
+        try
+        {
+            result = await _probe.ProbeAsync(entry, ct).WaitAsync(ProbeTimeouts.InteractiveWallClock, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex) when (ex is TimeoutException or HttpRequestException or InvalidOperationException)
+        {
+            result = new ProviderProbeResult(false, ex.Message, []);
+        }
+
+        var discovered = result.Success
+            ? result.Models.FirstOrDefault(m => string.Equals(m.ModelId.Value, model.ModelId, StringComparison.OrdinalIgnoreCase))
+            : null;
+        var probeNote = discovered is not null
+            ? null
+            : result.Success
+                ? $"Provider '{providerName}' did not list '{model.ModelId}'; the thinking capability is unknown."
+                : $"The probe of '{providerName}' failed ({result.ErrorMessage}); the thinking capability is unknown.";
+        var capability = discovered?.Thinking ?? ThinkingSupport.Unknown;
+
+        string? dialectProblem = null;
+        var dialect = ThinkingDialect.Unresolved;
+        try
+        {
+            dialect = descriptor.ResolveThinkingDialect(entry);
+        }
+        catch (InvalidOperationException ex)
+        {
+            dialectProblem = $"Providers:{providerName}:{ex.Message}";
+        }
+
+        if (dialectProblem is null && dialect == ThinkingDialect.Unresolved)
+        {
+            dialectProblem = $"No thinking dialect is set. Set Providers:{providerName}:VendorOptions:{ThinkingDialectMap.VendorOptionKey} "
+                             + $"to {ThinkingDialectMap.ConfigurableDialectList}. Only the output limit is editable.";
+        }
+
+        Properties = new ModelPropertiesState(
+            role, definitionName, model, alsoUsedBy, entry, descriptor,
+            ThinkingDialectMap.OfferedLevels(dialect, capability), capability, discovered?.MaxOutputTokens,
+            dialectProblem, probeNote);
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Validates and saves the panel. <paramref name="limitText"/> blank means the default limit.
+    /// <paramref name="level"/> null leaves the level unchanged; <c>"default"</c> removes it.
+    /// </summary>
+    public void SaveProperties(string limitText, string? level)
+    {
+        if (Properties is not { } panel)
+            return;
+
+        ValueOverride<int> limit;
+        if (string.IsNullOrWhiteSpace(limitText))
+            limit = ValueOverride<int>.Clear;
+        else if (int.TryParse(limitText.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+            limit = ValueOverride<int>.Set(parsed);
+        else
+        {
+            NotSaved("Max output tokens must be a positive integer, or blank for the default.");
+            return;
+        }
+
+        var thinking = ValueOverride<ThinkingLevel>.Unset;
+        if (level == ModelPropertiesLevels.Default)
+            thinking = ValueOverride<ThinkingLevel>.Clear;
+        else if (level is not null)
+        {
+            var value = Enum.Parse<ThinkingLevel>(level, ignoreCase: true);
+            if (panel.Offered.Unavailable.TryGetValue(value, out var reason))
+            {
+                NotSaved(reason);
+                return;
+            }
+
+            thinking = ValueOverride<ThinkingLevel>.Set(value);
+        }
+
+        var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
+        var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
+        try
+        {
+            ModelEntryWriter.WriteSettings(modelsSection, panel.DefinitionName, limit, thinking);
+            var error = ModelSettingsValidator.Check(
+                $"Models:Definitions:{panel.DefinitionName}",
+                panel.Model.Provider,
+                panel.Entry,
+                panel.Descriptor,
+                ModelEntryWriter.ReadDefinition(modelsSection, panel.DefinitionName),
+                panel.Capability,
+                panel.ModelMaxOutputTokens);
+            if (error is not null)
+            {
+                NotSaved(error);
+                return;
+            }
+
+            ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            NotSaved(ex.Message);
+            return;
+        }
+
+        Refresh();
+        Properties = null;
+        StatusMessage.Value = $"Saved model properties of {panel.DefinitionName}. {ConfigFileHelper.DaemonAppliesChange}";
+        CurrentState.Value = ModelManagerState.RoleOverview;
+        NotifyStateChanged();
+    }
+
+    private void NotSaved(string reason)
+    {
+        StatusMessage.Value = $"Not saved: {reason}";
+        RequestRedraw();
+    }
+
+    private Dictionary<string, string> ReadRoleDefinitions()
+    {
+        var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
+        var roles = ConfigFileHelper.GetSectionOrNull(config, "Models") is { } models
+            ? ConfigFileHelper.GetSectionOrNull(models, "Roles")
+            : null;
+        return roles is null
+            ? []
+            : roles
+                .Where(pair => pair.Value is string or JsonElement { ValueKind: JsonValueKind.String })
+                .ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value is JsonElement element ? element.GetString()! : (string)pair.Value,
+                    StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void CancelProperties()
+    {
+        if (_propertiesCts is null)
+            return;
+        _propertiesCts.Cancel();
+        _propertiesCts.Dispose();
+        _propertiesCts = null;
+    }
+
+    /// <summary>
     /// Start model discovery for a specific provider without assigning.
     /// </summary>
     public void StartDiscovery(string providerName)
@@ -301,6 +533,12 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
             case ModelManagerState.SelectProvider:
             case ModelManagerState.ConfirmAssignment:
                 ClearAssignmentState();
+                CurrentState.Value = ModelManagerState.RoleOverview;
+                NotifyStateChanged();
+                break;
+            case ModelManagerState.Properties:
+                CancelProperties();
+                Properties = null;
                 CurrentState.Value = ModelManagerState.RoleOverview;
                 NotifyStateChanged();
                 break;
@@ -483,6 +721,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     public override void Dispose()
     {
         CancelProbe();
+        CancelProperties();
         CurrentState.Dispose();
         StatusMessage.Dispose();
         IsProbing.Dispose();
@@ -491,4 +730,13 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         StateVersion.Dispose();
         base.Dispose();
     }
+}
+
+/// <summary>The rows of the level picker of the properties panel.</summary>
+public static class ModelPropertiesLevels
+{
+    public const string Default = "default";
+
+    public static IReadOnlyList<string> Rows { get; } =
+        [Default, .. Enum.GetValues<ThinkingLevel>().Select(ThinkingDialectMap.Format)];
 }

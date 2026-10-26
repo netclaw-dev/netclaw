@@ -159,9 +159,34 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
                     $"Run `netclaw provider` to fix the credentials for '{model.Provider}', or `netclaw provider add {model.Provider} {provider.Type} --api-key <key>` to overwrite them in place. "
                     + "Editing `secrets.json` by hand does not reload a running daemon: run `netclaw daemon stop` then `netclaw daemon start`. Then rerun `netclaw doctor`.");
             }
+
+            // The startup rule: the dialect resolves and can send the configured level. The model
+            // capability needs a probe, so `netclaw model set` checks it, not this check.
+            if (ModelSettingsValidator.CheckDialect(model.Provider, provider, descriptor, model) is { } settingsError)
+            {
+                return DoctorCheckResult.Error(
+                    CheckName,
+                    $"Invalid model configuration: model '{role}': {settingsError} Daemon startup will fail until this is resolved.",
+                    DialectResolves(provider, descriptor)
+                        ? $"Run `netclaw model set {role.ToLowerInvariant()} {model.Provider} {model.ModelId} --thinking <level>` with an offered level, or with --clear-thinking. Then rerun `netclaw doctor`."
+                        : $"Set Providers:{model.Provider}:VendorOptions:{ThinkingDialectMap.VendorOptionKey} in `netclaw.json` to {ThinkingDialectMap.ConfigurableDialectList}, or remove it. Then rerun `netclaw doctor`.");
+            }
         }
 
         return null;
+    }
+
+    private static bool DialectResolves(ProviderEntry provider, IProviderDescriptor descriptor)
+    {
+        try
+        {
+            descriptor.ResolveThinkingDialect(provider);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static IEnumerable<(string Role, ModelReference Model, bool Configured)> EnumerateConfiguredRoles(

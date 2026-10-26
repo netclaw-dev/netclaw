@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Providers;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -20,12 +21,17 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 {
+    private const int MaxOutWidth = 13;
+    private const int ThinkingWidth = 8;
+
     private readonly IAnsiTerminal _terminal;
     private SelectionListNode<string>? _roleList;
     private SelectionListNode<string>? _providerList;
     private SelectionListNode<string>? _modelList;
     private TextInputNode? _manualModelInput;
     private SelectionListNode<string>? _confirmList;
+    private TextInputNode? _limitInput;
+    private SelectionListNode<string>? _levelList;
 
     private IFocusable? _lastFocusedList;
     private TextInputNode? _lastFocusedInput;
@@ -79,6 +85,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                     ModelManagerState.SelectProvider => BuildProviderSelection(),
                     ModelManagerState.DiscoverModels => BuildDiscoverModels(),
                     ModelManagerState.ConfirmAssignment => BuildConfirmAssignment(),
+                    ModelManagerState.Properties => BuildProperties(),
                     _ => Layouts.Empty()
                 };
             },
@@ -99,6 +106,8 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         if (ViewModel.CurrentState.Value != ModelManagerState.DiscoverModels)
         {
             var content = (ModelManagerContent)ViewModel.CurrentState.Value;
+            if (content == ModelManagerContent.Properties && ViewModel.Properties is null)
+                content = ModelManagerContent.PropertiesProbing;
             var revision = content == ModelManagerContent.RoleOverview ? ViewModel.StateVersion.Value : 0;
             return (content, revision);
         }
@@ -133,10 +142,12 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                     ModelManagerState.RoleOverview =>
                         // Embedded in `netclaw config`, Esc backs out to the dashboard; standalone Ctrl+Q quits.
                         ViewModel.IsEmbeddedInConfig
-                            ? " [\u2191/\u2193] Navigate  [Enter] Assign  [D] Discover  [C] Clear  [Esc] Back  [Ctrl+Q] Quit"
-                            : " [\u2191/\u2193] Navigate  [Enter] Assign  [D] Discover  [C] Clear  [Ctrl+Q] Quit",
+                            ? " [\u2191/\u2193] Navigate  [Enter] Assign  [D] Discover  [P] Properties  [C] Clear  [Esc] Back  [Ctrl+Q] Quit"
+                            : " [\u2191/\u2193] Navigate  [Enter] Assign  [D] Discover  [P] Properties  [C] Clear  [Ctrl+Q] Quit",
                     ModelManagerState.ConfirmAssignment =>
                         " [Enter] Confirm  [Esc] Cancel",
+                    ModelManagerState.Properties =>
+                        " [Tab] Switch field  [\u2191/\u2193] Level  [Enter] Save  [Esc] Cancel  [Ctrl+Q] Quit",
                     _ =>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit"
                 };
@@ -169,15 +180,16 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                 _ => null
             });
 
-        // Size the Provider (capped) and Model ID columns to their longest values so
-        // Status stays aligned, leaving room for the Role (12) and Status (12) columns
-        // and the list prefix and panel border.
-        var available = _terminal.Width - 12 - 12 - 12;
+        // Size the Model ID and Provider (capped) columns to their longest values so
+        // Status stays aligned, leaving room for the Role (12), Max out, Thinking, and
+        // Status (12) columns and the list prefix and panel border. The model ID gets the
+        // room first, because a cut model ID cannot be told apart from another one.
+        var available = _terminal.Width - 12 - 12 - 12 - (MaxOutWidth + 1) - (ThinkingWidth + 1);
         var providerLabels = models.Values.Select(ProviderLabel).ToList();
-        var providerWidth = NetclawTuiChrome.FitColumnWidth(providerLabels, "Provider",
-            Math.Min(NetclawTuiChrome.MaxProviderColumnWidth, available - 20));
         var modelWidth = NetclawTuiChrome.FitColumnWidth(
-            models.Values.Select(static m => m?.ModelId ?? "\u2014"), "Model ID", available - providerWidth);
+            models.Values.Select(static m => m?.ModelId ?? "\u2014"), "Model ID", available - 20);
+        var providerWidth = NetclawTuiChrome.FitColumnWidth(providerLabels, "Provider",
+            Math.Min(NetclawTuiChrome.MaxProviderColumnWidth, available - modelWidth));
 
         // A clear rebuilds this subtree while the user stays on the role table. Keep the cursor
         // on the same row instead of snapping back to Main. The previous list is still alive
@@ -210,11 +222,11 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Model Role Assignments").WithForeground(Color.White).Bold())
-            .WithChild(new TextNode($"   {"Role",-12} {NetclawTuiChrome.FitColumn("Provider", providerWidth)} {NetclawTuiChrome.FitColumn("Model ID", modelWidth)} Status")
+            .WithChild(new TextNode($"   {"Role",-12} {NetclawTuiChrome.FitColumn("Provider", providerWidth)} {NetclawTuiChrome.FitColumn("Model ID", modelWidth)} {"Max out",-MaxOutWidth} {"Thinking",-ThinkingWidth} Status")
                 .WithForeground(Color.Gray))
             .WithChild(_roleList)
             .WithChild(new TextNode("").Height(1))
-            .WithChild(new TextNode("  [Enter] Assign model  [D] Discover models  [C] Clear optional role")
+            .WithChild(new TextNode("  [Enter] Assign model  [D] Discover models  [P] Model properties  [C] Clear optional role")
                 .WithForeground(Color.Gray));
     }
 
@@ -231,9 +243,12 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
     private string FormatRoleItem(string role, ModelReference? model, int providerWidth, int modelWidth)
     {
         if (model is null)
-            return $"{role,-12} {NetclawTuiChrome.FitColumn(ProviderLabel(null), providerWidth)} {NetclawTuiChrome.FitColumn("\u2014", modelWidth)} \u2014";
+            return $"{role,-12} {NetclawTuiChrome.FitColumn(ProviderLabel(null), providerWidth)} {NetclawTuiChrome.FitColumn("\u2014", modelWidth)} {"\u2014",-MaxOutWidth} {"\u2014",-ThinkingWidth} \u2014";
 
-        return $"{role,-12} {NetclawTuiChrome.FitColumn(ProviderLabel(model), providerWidth)} {NetclawTuiChrome.FitColumn(model.ModelId, modelWidth)} {(model.Provenance?.ToString() ?? "unknown")}";
+        var maxOut = model.MaxOutputTokens?.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                     ?? $"default {ModelReference.DefaultMaxOutputTokens}";
+        var thinking = model.Thinking is { } level ? ThinkingDialectMap.Format(level) : ModelPropertiesLevels.Default;
+        return $"{role,-12} {NetclawTuiChrome.FitColumn(ProviderLabel(model), providerWidth)} {NetclawTuiChrome.FitColumn(model.ModelId, modelWidth)} {maxOut,-MaxOutWidth} {thinking,-ThinkingWidth} {(model.Provenance?.ToString() ?? "unknown")}";
     }
 
     private ILayoutNode BuildProviderSelection()
@@ -410,6 +425,73 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
             .WithChild(_confirmList);
     }
 
+    private ILayoutNode BuildProperties()
+    {
+        _limitInput = null;
+        _levelList = null;
+        if (ViewModel.Properties is not { } panel)
+        {
+            return Layouts.Vertical()
+                .WithChild(SpinnerViews.Labeled("Probing the provider for the model capability...", Color.Yellow));
+        }
+
+        _limitInput = new TextInputNode().WithPlaceholder($"default {ModelReference.DefaultMaxOutputTokens}");
+        NetclawTuiChrome.SeedTextInput(_limitInput, panel.Model.MaxOutputTokens?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        _limitInput.OnFocused();
+        _lastFocusedInput = _limitInput;
+
+        var layout = Layouts.Vertical()
+            .WithChild(new TextNode($"  Model properties: {panel.DefinitionName}").WithForeground(Color.White).Bold())
+            .WithChild(new TextNode($"    Role: {panel.Role}   Provider: {panel.Model.Provider}   Model: {panel.Model.ModelId}")
+                .WithForeground(Color.White));
+        if (panel.AlsoUsedBy.Count > 0)
+        {
+            layout = layout.WithChild(new TextNode($"    Also used by: {string.Join(", ", panel.AlsoUsedBy)}. A change applies to each role.")
+                .WithForeground(Color.Yellow));
+        }
+
+        layout = layout
+            .WithChild(new TextNode("").Height(1))
+            .WithChild(Layouts.Horizontal()
+                .WithChild(new TextNode("  Max output tokens: ").WithForeground(Color.White))
+                .WithChild(_limitInput)
+                .Height(1))
+            .WithChild(new TextNode($"    Blank means the default: {ModelReference.DefaultMaxOutputTokens}, clamped per call. Thinking tokens count inside the limit.")
+                .WithForeground(Color.Gray))
+            .WithChild(new TextNode("").Height(1));
+
+        if (panel.ProbeNote is { } note)
+            layout = layout.WithChild(new TextNode($"  {note}").WithForeground(Color.Yellow));
+
+        if (panel.DialectProblem is { } problem)
+        {
+            // Only the output field is editable: no level can be sent without a dialect.
+            return layout.WithChild(new TextNode($"  Thinking level: {problem}").WithForeground(Color.Yellow));
+        }
+
+        var rows = ModelPropertiesLevels.Rows;
+        var current = panel.Model.Thinking is { } level ? ThinkingDialectMap.Format(level) : ModelPropertiesLevels.Default;
+        _levelList = Layouts.SelectionList(rows, row => FormatLevelRow(panel, row))
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan)
+            .WithHighlightedIndex(Math.Max(0, rows.ToList().IndexOf(current)));
+
+        return layout
+            .WithChild(new TextNode("  Thinking level:").WithForeground(Color.White))
+            .WithChild(_levelList);
+    }
+
+    // A level that is not offered stays in the list, greyed by its reason, so the operator sees why.
+    private static string FormatLevelRow(ModelPropertiesState panel, string row)
+    {
+        if (row == ModelPropertiesLevels.Default)
+            return "default (the model's own default)";
+        var level = Enum.Parse<ThinkingLevel>(row, ignoreCase: true);
+        return panel.Offered.Unavailable.TryGetValue(level, out var reason)
+            ? $"{row,-7} \u2014 not offered: {reason}"
+            : row;
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // Input handling
     // ═══════════════════════════════════════════════════════════════════
@@ -431,6 +513,12 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
             return;
         }
 
+        if (state == ModelManagerState.Properties)
+        {
+            HandlePropertiesKey(keyInfo);
+            return;
+        }
+
         // Role overview shortcuts
         if (state == ModelManagerState.RoleOverview)
         {
@@ -446,6 +534,10 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                         ViewModel.StateVersion.Value++;
                         ViewModel.RequestRedraw();
                     }
+                    return;
+                case ConsoleKey.P:
+                    if (_roleList?.HighlightedItem is { } propertiesRole)
+                        ViewModel.OpenProperties(propertiesRole.Value);
                     return;
                 case ConsoleKey.C:
                     // Read the live highlight, not SelectedItems. In single mode an arrow key
@@ -480,11 +572,50 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         SelectProvider = ModelManagerState.SelectProvider,
         ConfirmAssignment = ModelManagerState.ConfirmAssignment,
         Loading = ModelManagerState.Loading,
-        DiscoverProbing,
+        Properties = ModelManagerState.Properties,
+        // Sub-states start after the last state, so no two contents share a key.
+        DiscoverProbing = 100,
         DiscoverFailed,
         DiscoverEmpty,
         DiscoverManualEntry,
-        DiscoverList
+        DiscoverList,
+        PropertiesProbing,
+    }
+
+    private void HandlePropertiesKey(ConsoleKeyInfo keyInfo)
+    {
+        if (ViewModel.Properties is null || _limitInput is null)
+            return;
+
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.Enter:
+                // Enter saves from either field. The picker highlight starts on the stored level, so
+                // a save from the limit field keeps the level unless the operator moved the picker.
+                ViewModel.SaveProperties(_limitInput.Text, _levelList?.HighlightedItem?.Value);
+                return;
+            case ConsoleKey.Tab when _levelList is not null:
+                if (_lastFocusedInput is not null)
+                {
+                    _limitInput.OnBlurred();
+                    _lastFocusedInput = null;
+                    _levelList.OnFocused();
+                    _lastFocusedList = _levelList;
+                }
+                else
+                {
+                    _levelList.OnBlurred();
+                    _lastFocusedList = null;
+                    _limitInput.OnFocused();
+                    _lastFocusedInput = _limitInput;
+                }
+
+                ViewModel.RequestRedraw();
+                return;
+            default:
+                RouteInputToActiveComponent(keyInfo);
+                return;
+        }
     }
 
     private void RouteInputToActiveComponent(ConsoleKeyInfo keyInfo)
