@@ -27,8 +27,8 @@ public interface IChatClientRouter
 /// <summary>
 /// Today's policy: route by <see cref="ModelRole"/> with primary→fallback failover.
 /// Builds one pipeline per distinct model via <see cref="PipelineChatClientFactory"/>
-/// and maps each role to an ordered candidate list. Two references name the same model
-/// when Provider and ModelId both match.
+/// and maps each role to an ordered candidate list. Two references share a pipeline
+/// when Provider, ModelId, ContextWindow, MaxOutputTokens, and Thinking all match.
 /// <list type="bullet">
 /// <item>Main / Fallback → <c>[main]</c>, plus <c>fallback</c> when a different
 /// fallback model is configured.</item>
@@ -52,11 +52,11 @@ public sealed class RoleBasedFailoverRouter : IChatClientRouter
     // plumbing PipelineChatClientFactory needs.
     internal RoleBasedFailoverRouter(Func<ModelReference, IChatClient> create, ModelSelection models)
     {
-        var built = new Dictionary<(string Provider, string ModelId), IChatClient>();
+        var built = new Dictionary<PipelineKey, IChatClient>();
 
         IChatClient Pipeline(ModelReference model)
         {
-            var key = (model.Provider, model.ModelId);
+            var key = PipelineKey.Of(model);
             if (!built.TryGetValue(key, out var client))
                 built[key] = client = create(model);
             return client;
@@ -82,8 +82,17 @@ public sealed class RoleBasedFailoverRouter : IChatClientRouter
                 : _mainCandidates;
     }
 
-    private static bool IsSameModel(ModelReference a, ModelReference b) =>
-        a.Provider == b.Provider && a.ModelId == b.ModelId;
+    private static bool IsSameModel(ModelReference a, ModelReference b) => PipelineKey.Of(a) == PipelineKey.Of(b);
+
+    // A pipeline carries the definition's request settings (the context window of the clamp, the
+    // output limit, and the thinking level), so two definitions share a pipeline only when they
+    // name the same model with the same settings.
+    private readonly record struct PipelineKey(
+        string Provider, string ModelId, int? ContextWindow, int? MaxOutputTokens, ThinkingLevel? Thinking)
+    {
+        public static PipelineKey Of(ModelReference model) =>
+            new(model.Provider, model.ModelId, model.ContextWindow, model.MaxOutputTokens, model.Thinking);
+    }
 
     public IReadOnlyList<IChatClient> Route(ChatRoutingContext context) => context.Role switch
     {
