@@ -455,14 +455,16 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         try
         {
             ModelEntryWriter.WriteSettings(modelsSection, panel.DefinitionName, limit, thinking);
-            var error = ModelSettingsValidator.Check(
-                $"Models:Definitions:{panel.DefinitionName}",
-                panel.Model.Provider,
-                panel.Entry,
-                panel.Descriptor,
-                ModelEntryWriter.ReadDefinition(modelsSection, panel.DefinitionName),
-                panel.Capability,
-                panel.ModelMaxOutputTokens);
+            var keyPath = $"Models:Definitions:{panel.DefinitionName}";
+            var written = ModelEntryWriter.ReadDefinition(modelsSection, panel.DefinitionName);
+            // The probed capability applies only to the field that the operator changed.
+            var error = ModelSettingsValidator.Check(keyPath, panel.Model.Provider, panel.Entry, panel.Descriptor, written)
+                ?? (written.MaxOutputTokens != panel.Model.MaxOutputTokens
+                    ? ModelSettingsValidator.CheckModelMax(keyPath, written, panel.ModelMaxOutputTokens)
+                    : null)
+                ?? (written.Thinking != panel.Model.Thinking
+                    ? ModelSettingsValidator.CheckOfferedLevel(panel.Model.Provider, panel.Entry, panel.Descriptor, written, panel.Capability)
+                    : null);
             if (error is not null)
             {
                 NotSaved(error);

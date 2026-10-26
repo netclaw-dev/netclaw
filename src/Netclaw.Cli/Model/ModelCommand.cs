@@ -385,46 +385,52 @@ internal static class ModelCommand
             outputOverride);
 
         if (settingsChanged)
-        {
             ModelEntryWriter.WriteSettings(modelsSection, definitionName, maxOutputOverride, thinkingOverride);
-            var registry = probe as ProviderDescriptorRegistry ?? ProviderCommand.CreateDefaultRegistry();
-            if (!registry.TryGet(providerEntry.Type, out var descriptor))
-            {
-                writer.WriteLine($"Error: Provider '{providerName}' has unknown type '{providerEntry.Type}'.");
-                return 1;
-            }
 
-            var detectedDialect = DetectedDialectToSave(descriptor, providerEntry, probeResult);
-            if (detectedDialect is { } detected)
-            {
-                var vendorOptions = providerEntry.VendorOptions?.DeepClone() as JsonObject ?? new JsonObject();
-                vendorOptions[ThinkingDialectMap.VendorOptionKey] = detected.ToString();
-                providerEntry.SetVendorOptions(vendorOptions);
-            }
-
-            // One validator before persistence: a rejected value leaves netclaw.json unchanged.
-            var settingsError = ModelSettingsValidator.Check(
-                $"Models:Definitions:{definitionName}",
-                providerName,
-                providerEntry,
-                descriptor,
-                ModelEntryWriter.ReadDefinition(modelsSection, definitionName),
-                discoveredModel?.Thinking ?? ThinkingSupport.Unknown,
-                discoveredModel?.MaxOutputTokens);
-            if (settingsError is not null)
-            {
-                writer.WriteLine($"Error: {settingsError}");
-                return 1;
-            }
-
-            if (detectedDialect is { } saved)
-            {
-                var providerSection = ConfigFileHelper.GetOrCreateSection(
-                    ConfigFileHelper.GetOrCreateSection(config, "Providers"), providerName);
-                ConfigFileHelper.GetOrCreateSection(providerSection, "VendorOptions")[ThinkingDialectMap.VendorOptionKey] = saved.ToString();
-                writer.WriteLine($"Detected thinking dialect {saved}; saved Providers:{providerName}:VendorOptions:{ThinkingDialectMap.VendorOptionKey}.");
-            }
+        var registry = probe as ProviderDescriptorRegistry ?? ProviderCommand.CreateDefaultRegistry();
+        if (!registry.TryGet(providerEntry.Type, out var descriptor))
+        {
+            writer.WriteLine($"Error: Provider '{providerName}' has unknown type '{providerEntry.Type}'.");
+            return 1;
         }
+
+        var detectedDialect = settingsChanged ? DetectedDialectToSave(descriptor, providerEntry, probeResult) : null;
+        if (detectedDialect is { } detected)
+        {
+            var vendorOptions = providerEntry.VendorOptions?.DeepClone() as JsonObject ?? new JsonObject();
+            vendorOptions[ThinkingDialectMap.VendorOptionKey] = detected.ToString();
+            providerEntry.SetVendorOptions(vendorOptions);
+        }
+
+        // One validator before persistence, on the whole written definition: a rejected value leaves
+        // netclaw.json unchanged. The capability needs the probe, so it is checked only for the field
+        // that this command changes.
+        var keyPath = $"Models:Definitions:{definitionName}";
+        var written = ModelEntryWriter.ReadDefinition(modelsSection, definitionName);
+        var settingsError = ModelSettingsValidator.Check(keyPath, providerName, providerEntry, descriptor, written)
+            ?? (maxOutputTokens.HasValue
+                ? ModelSettingsValidator.CheckModelMax(keyPath, written, discoveredModel?.MaxOutputTokens)
+                : null)
+            ?? (thinking.HasValue
+                ? ModelSettingsValidator.CheckOfferedLevel(
+                    providerName, providerEntry, descriptor, written, discoveredModel?.Thinking ?? ThinkingSupport.Unknown)
+                : null);
+        if (settingsError is not null)
+        {
+            writer.WriteLine($"Error: {settingsError}");
+            return 1;
+        }
+
+        if (detectedDialect is { } saved)
+        {
+            var providerSection = ConfigFileHelper.GetOrCreateSection(
+                ConfigFileHelper.GetOrCreateSection(config, "Providers"), providerName);
+            ConfigFileHelper.GetOrCreateSection(providerSection, "VendorOptions")[ThinkingDialectMap.VendorOptionKey] = saved.ToString();
+            writer.WriteLine($"Detected thinking dialect {saved}; saved Providers:{providerName}:VendorOptions:{ThinkingDialectMap.VendorOptionKey}.");
+        }
+
+        if (settingsChanged && ModelEntryWriter.OtherRolesOf(modelsSection, roleKey, definitionName) is { Count: > 0 } otherRoles)
+            writer.WriteLine($"Note: definition '{definitionName}' is also used by: {string.Join(", ", otherRoles)}. The change applies to each of them.");
 
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 

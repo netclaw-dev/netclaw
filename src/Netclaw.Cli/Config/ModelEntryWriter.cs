@@ -89,7 +89,10 @@ internal static class ModelEntryWriter
         ValueOverride<ModelModality> outputModalities)
     {
         var (definitions, roles) = EnsureNamedShape(modelsSection, roleKey);
-        var definitionName = FindDefinition(definitions, provider, modelId)
+        // Two definitions can name one model with other settings (sonnet-low, sonnet-high). A re-set of
+        // the model that the role already uses keeps the role's own definition.
+        var definitionName = CurrentDefinition(definitions, roles, roleKey, provider, modelId)
+                             ?? FindDefinition(definitions, provider, modelId)
                              ?? CreateDefinitionName(definitions, provider, modelId);
         var existing = ReadSameModelEntry(definitions, definitionName, provider, modelId);
 
@@ -277,6 +280,36 @@ internal static class ModelEntryWriter
 
         throw new ModelConfigurationException($"Models:{key} must be an object.");
     }
+
+    private static string? CurrentDefinition(
+        Dictionary<string, object> definitions, Dictionary<string, object> roles, string roleKey, string provider, string? modelId)
+    {
+        var name = RoleDefinitionName(roles, roleKey);
+        return name is not null && definitions.ContainsKey(name) && ReadSameModelEntry(definitions, name, provider, modelId) is not null
+            ? name
+            : null;
+    }
+
+    /// <summary>The roles other than <paramref name="roleKey"/> that select <paramref name="definitionName"/>.</summary>
+    internal static IReadOnlyList<string> OtherRolesOf(
+        Dictionary<string, object> modelsSection, string roleKey, string definitionName)
+    {
+        var roles = GetDictionary(modelsSection, "Roles");
+        return roles.Keys
+            .Where(role => !string.Equals(role, roleKey, StringComparison.OrdinalIgnoreCase)
+                           && string.Equals(RoleDefinitionName(roles, role), definitionName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private static string? RoleDefinitionName(Dictionary<string, object> roles, string roleKey)
+        => roles.TryGetValue(roleKey, out var raw)
+            ? raw switch
+            {
+                string text => text,
+                JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
+                _ => null,
+            }
+            : null;
 
     private static string? FindDefinition(
         Dictionary<string, object> definitions, string provider, string? modelId)
