@@ -529,32 +529,6 @@ static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices) Configure
     // no providers are configured we never reach a real plugin, the No-Op
     // client supersedes, and capabilities default to text-only below.
     var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
-    var mainProviderType = providers.TryGetValue(models.Main.Provider, out var mainProvider)
-        ? mainProvider.Type
-        : null;
-    var ollamaEndpoint = mainProviderType?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true
-        ? (string.IsNullOrWhiteSpace(mainProvider!.Endpoint)
-            ? OllamaDescriptor.DefaultEndpointValue
-            : mainProvider.Endpoint)
-        : null;
-    var openAiCompatibleEndpoint = mainProviderType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
-        ? (string.IsNullOrWhiteSpace(mainProvider!.Endpoint)
-            ? "http://localhost:11434"
-            : mainProvider.Endpoint)
-        : null;
-    var openAiCompatibleApiKey = mainProviderType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
-        ? mainProvider?.AuthMethod is AuthMethod.ApiKey
-            ? mainProvider.ApiKey?.Value
-            : null
-        : null;
-
-    var anthropicApiKey = mainProviderType?.Equals("anthropic", StringComparison.OrdinalIgnoreCase) == true
-        ? mainProvider!.ApiKey?.Value
-        : null;
-    var anthropicEndpoint = string.IsNullOrWhiteSpace(mainProvider?.Endpoint)
-        ? "https://api.anthropic.com"
-        : mainProvider!.Endpoint;
-
     services.AddSingleton<ModelCapabilities>(sp =>
     {
         var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Netclaw.Startup");
@@ -570,7 +544,7 @@ static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices) Configure
         }
 
         var resolver = sp.GetRequiredService<IModelCapabilityResolver>();
-        var detected = resolver.ResolveAsync(models.Main.ModelId, CancellationToken.None)
+        var detected = resolver.ResolveAsync(models.Main, CancellationToken.None)
             .GetAwaiter().GetResult();
         var resolved = ModelCapabilityResolution.ResolveModelCapabilities(models, detected, logger: logger);
 
@@ -965,67 +939,52 @@ static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices) Configure
     var promptProvider = new FileSystemPromptProvider(paths);
     services.AddSingleton<ISystemPromptProvider>(promptProvider);
 
-    // Model capability resolution chain:
-    // [Ollama →] [OpenAI-compat →] [Anthropic Models API →] OpenRouter oracle → HuggingFace → text-only default.
-    // When the main provider is Ollama, query it first — it knows the true context window
-    // for locally hosted models that may not be indexed by external oracles.
+    // Model capability resolution: one chain for each configured provider, so each definition
+    // resolves against its own endpoint. A chain is [native probe of that provider →]
+    // OpenRouter oracle → HuggingFace → text-only default. The native probe knows the true
+    // context window of a locally hosted model that the catalogs may not index.
     services.AddHttpClient<OpenRouterOracleResolver>().AddNetclawHeaders("capability-probe");
     services.AddHttpClient<HuggingFaceCapabilityResolver>().AddNetclawHeaders("capability-probe");
-    if (ollamaEndpoint is not null)
-    {
-        services.AddHttpClient(nameof(OllamaCapabilityResolver)).AddNetclawHeaders("capability-probe");
-        services.AddSingleton(sp =>
-            new OllamaCapabilityResolver(
-                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(OllamaCapabilityResolver)),
-                sp.GetRequiredService<ILogger<OllamaCapabilityResolver>>(),
-                ollamaEndpoint));
-    }
-    if (openAiCompatibleEndpoint is not null)
-    {
-        services.AddHttpClient(nameof(OpenAiCompatibleCapabilityResolver)).AddNetclawHeaders("capability-probe");
-        services.AddSingleton(sp =>
-            new OpenAiCompatibleCapabilityResolver(
-                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(OpenAiCompatibleCapabilityResolver)),
-                sp.GetRequiredService<ILogger<OpenAiCompatibleCapabilityResolver>>(),
-                openAiCompatibleEndpoint,
-                openAiCompatibleApiKey));
-    }
-    if (anthropicApiKey is not null)
-    {
-        services.AddHttpClient(nameof(AnthropicCapabilityResolver)).AddNetclawHeaders("capability-probe");
-        services.AddSingleton(sp =>
-            new AnthropicCapabilityResolver(
-                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(AnthropicCapabilityResolver)),
-                sp.GetRequiredService<ILogger<AnthropicCapabilityResolver>>(),
-                anthropicEndpoint,
-                anthropicApiKey));
-    }
-    // modelId → provider type lookup for CompositeCapabilityResolver scoping.
-    // Covers Main + optional Compaction independently so multi-provider
-    // deployments resolve each model's capabilities against the right backend.
-    var modelProviderLookup = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-    if (!string.IsNullOrWhiteSpace(models.Main.ModelId))
-        modelProviderLookup[models.Main.ModelId] = mainProviderType;
-    if (models.Compaction is { ModelId: { Length: > 0 } compactionId } &&
-        providers.TryGetValue(models.Compaction.Provider, out var compactionProvider))
-        modelProviderLookup[compactionId] = compactionProvider.Type;
-
+    services.AddHttpClient(nameof(OllamaCapabilityResolver)).AddNetclawHeaders("capability-probe");
+    services.AddHttpClient(nameof(OpenAiCompatibleCapabilityResolver)).AddNetclawHeaders("capability-probe");
+    services.AddHttpClient(nameof(AnthropicCapabilityResolver)).AddNetclawHeaders("capability-probe");
     services.AddSingleton<IModelCapabilityResolver>(sp =>
     {
-        var resolvers = new List<IModelCapabilityResolver>();
-        if (ollamaEndpoint is not null)
-            resolvers.Add(sp.GetRequiredService<OllamaCapabilityResolver>());
-        if (openAiCompatibleEndpoint is not null)
-            resolvers.Add(sp.GetRequiredService<OpenAiCompatibleCapabilityResolver>());
-        if (anthropicApiKey is not null)
-            resolvers.Add(sp.GetRequiredService<AnthropicCapabilityResolver>());
-        resolvers.Add(sp.GetRequiredService<OpenRouterOracleResolver>());
-        resolvers.Add(sp.GetRequiredService<HuggingFaceCapabilityResolver>());
+        var http = sp.GetRequiredService<IHttpClientFactory>();
+        var loggers = sp.GetRequiredService<ILoggerFactory>();
+        IModelCapabilityResolver[] catalogs =
+        [
+            sp.GetRequiredService<OpenRouterOracleResolver>(),
+            sp.GetRequiredService<HuggingFaceCapabilityResolver>(),
+        ];
 
-        return new CompositeCapabilityResolver(
-            resolvers,
-            sp.GetRequiredService<ILogger<CompositeCapabilityResolver>>(),
-            modelId => modelProviderLookup.TryGetValue(modelId, out var pt) ? pt : null);
+        IModelCapabilityResolver? Native(ProviderEntry entry) => entry.Type.ToLowerInvariant() switch
+        {
+            "ollama" => new OllamaCapabilityResolver(
+                http.CreateClient(nameof(OllamaCapabilityResolver)),
+                loggers.CreateLogger<OllamaCapabilityResolver>(),
+                string.IsNullOrWhiteSpace(entry.Endpoint) ? OllamaDescriptor.DefaultEndpointValue : entry.Endpoint),
+            "openai-compatible" => new OpenAiCompatibleCapabilityResolver(
+                http.CreateClient(nameof(OpenAiCompatibleCapabilityResolver)),
+                loggers.CreateLogger<OpenAiCompatibleCapabilityResolver>(),
+                string.IsNullOrWhiteSpace(entry.Endpoint) ? "http://localhost:11434" : entry.Endpoint,
+                entry.AuthMethod is AuthMethod.ApiKey ? entry.ApiKey?.Value : null),
+            "anthropic" when entry.ApiKey?.Value is { Length: > 0 } apiKey => new AnthropicCapabilityResolver(
+                http.CreateClient(nameof(AnthropicCapabilityResolver)),
+                loggers.CreateLogger<AnthropicCapabilityResolver>(),
+                string.IsNullOrWhiteSpace(entry.Endpoint) ? "https://api.anthropic.com" : entry.Endpoint,
+                apiKey),
+            _ => null,
+        };
+
+        var chains = providers.ToDictionary(
+            pair => pair.Key,
+            pair => (IModelCapabilityResolver)new CompositeCapabilityResolver(
+                Native(pair.Value) is { } native ? [native, .. catalogs] : catalogs,
+                sp.GetRequiredService<ILogger<CompositeCapabilityResolver>>(),
+                _ => pair.Value.Type),
+            StringComparer.OrdinalIgnoreCase);
+        return new ProviderCapabilityResolver(chains, models);
     });
 
     // Composite dependency records for LlmSessionActor DI resolution

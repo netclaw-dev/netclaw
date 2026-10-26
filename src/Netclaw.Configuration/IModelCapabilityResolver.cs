@@ -21,6 +21,13 @@ public sealed record ResolvedModelCapabilities(
 
     /// <summary>The model's maximum output in tokens, when a source reports it.</summary>
     public int? MaxOutputTokens { get; init; }
+
+    /// <summary>
+    /// True when <see cref="ContextWindowTokens"/> comes from a cross-provider catalog, not from the
+    /// endpoint that serves the model. A catalog window describes another host, so the default output
+    /// limit of a self-hosted endpoint does not clamp to it.
+    /// </summary>
+    public bool ContextWindowFromCatalog { get; init; }
 }
 
 /// <summary>
@@ -43,4 +50,14 @@ public interface IModelCapabilityResolver
     Task<ResolvedModelCapabilities?> ResolveAsync(
         string modelId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Resolves the capabilities of one model definition against its own provider. A resolver that
+    /// speaks for one endpoint ignores the provider name; the daemon resolver selects the chain of
+    /// <see cref="ModelReference.Provider"/>.
+    /// </summary>
+    Task<ResolvedModelCapabilities?> ResolveAsync(
+        ModelReference model,
+        CancellationToken ct = default)
+        => ResolveAsync(model.ModelId, ct);
 }

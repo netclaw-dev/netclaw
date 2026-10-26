@@ -44,6 +44,7 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
     }
 
     public string DisplayName => "OpenAI-compatible (llama.cpp / vLLM / DwarfStar ds4)";
+    public bool IsSelfHosted => true;
     public string DefaultEndpoint => "http://localhost:11434";
     public string ModelListingPath => "/v1/models";
     // Endpoint-only by default, but an operator may supply a Bearer key for

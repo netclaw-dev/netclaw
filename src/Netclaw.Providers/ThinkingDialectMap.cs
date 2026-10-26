@@ -45,7 +45,7 @@ public static class ThinkingDialectMap
     public static IReadOnlyList<ThinkingLevel> ExpressibleLevels(ThinkingDialect dialect) => dialect switch
     {
         ThinkingDialect.Native => AllLevels,
-        // DeepSeek maps medium to high on the server, so Netclaw does not offer medium.
+        // The DeepSeek API lists none, low, high, and max; it has no medium.
         ThinkingDialect.DeepSeek => [ThinkingLevel.Off, ThinkingLevel.Low, ThinkingLevel.High, ThinkingLevel.Max],
         ThinkingDialect.ReasoningEffort => [ThinkingLevel.Off, ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High],
         ThinkingDialect.ChatTemplateKwargs => [ThinkingLevel.Off],
@@ -70,7 +70,7 @@ public static class ThinkingDialectMap
                 ? UnresolvedReason
                 : !expressible.Contains(level)
                     ? $"the {dialect} dialect cannot send {Format(level)}"
-                    : CapabilityReason(capability, level);
+                    : CapabilityReason(dialect, capability, level);
             if (reason is null)
                 offered.Add(level);
             else
@@ -80,9 +80,13 @@ public static class ThinkingDialectMap
         return new OfferedThinkingLevels(offered, unavailable);
     }
 
-    private static string? CapabilityReason(ThinkingSupport capability, ThinkingLevel level) => capability.Kind switch
+    // Off is safe for an unknown model only when a body field sends it: a self-hosted server ignores
+    // a field that its template does not read. A Native Off fails on a hosted model that cannot turn
+    // thinking off, so an unknown Native model gets no level.
+    private static string? CapabilityReason(ThinkingDialect dialect, ThinkingSupport capability, ThinkingLevel level) => capability.Kind switch
     {
-        ThinkingSupportKind.Unknown => level == ThinkingLevel.Off ? null : UnknownCapabilityReason,
+        ThinkingSupportKind.Unknown =>
+            level == ThinkingLevel.Off && dialect != ThinkingDialect.Native ? null : UnknownCapabilityReason,
         ThinkingSupportKind.None => "this model does not think",
         ThinkingSupportKind.AlwaysOn => "this model always thinks; the endpoint reports no levels",
         ThinkingSupportKind.Controllable when capability.Levels.Contains(level) => null,

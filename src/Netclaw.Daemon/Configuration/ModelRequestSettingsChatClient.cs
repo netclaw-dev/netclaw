@@ -26,27 +26,35 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
     private readonly ModelReference _model;
     private readonly ThinkingDialect _dialect;
     private readonly IModelCapabilityResolver _capabilities;
+    private readonly bool _selfHosted;
     private readonly ILogger _logger;
-    private readonly Lazy<Task<ResolvedModelCapabilities?>> _capability;
+    private readonly Lock _lookupGate = new();
+    private Task<ResolvedModelCapabilities?>? _lookup;
 
+    /// <param name="selfHosted">
+    /// The default-limit rule of the provider (design D4). A hosted API gets min(32000, its known model
+    /// max) and no window clamp. A self-hosted server gets the window clamp only for a window that its
+    /// own probe or the operator states, and no limit field when the window is unknown.
+    /// </param>
     public ModelRequestSettingsChatClient(
         IChatClient innerClient,
         ModelReference model,
         ThinkingDialect dialect,
+        bool selfHosted,
         IModelCapabilityResolver capabilities,
         ILogger logger)
         : base(innerClient)
     {
         _model = model;
         _dialect = dialect;
+        _selfHosted = selfHosted;
         _capabilities = capabilities;
         _logger = logger;
-        _capability = new Lazy<Task<ResolvedModelCapabilities?>>(ResolveCapabilityAsync);
     }
 
-    /// <summary>The model capability when its first-use lookup has finished, else null.</summary>
+    /// <summary>The model capability when a lookup has finished with a result, else null.</summary>
     internal ResolvedModelCapabilities? ResolvedCapability
-        => _capability.IsValueCreated && _capability.Value.IsCompletedSuccessfully ? _capability.Value.Result : null;
+        => _lookup is { IsCompletedSuccessfully: true } lookup ? lookup.Result : null;
 
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -73,25 +81,42 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         IReadOnlyCollection<ChatMessage> messages, ChatOptions? callerOptions, CancellationToken cancellationToken)
     {
         var options = callerOptions?.Clone() ?? new ChatOptions();
-        var capability = await _capability.Value.WaitAsync(cancellationToken);
+        var capability = await LookupCapabilityAsync().WaitAsync(cancellationToken);
 
-        var window = _model.ContextWindow ?? (capability?.ContextWindowTokens is > 0 ? capability.ContextWindowTokens : null);
+        // A self-hosted server: only its own probe or the operator knows its window, and a catalog
+        // maximum describes another host. A hosted API: its known model max caps the default, and its
+        // window is large and enforced by the provider, so the default is not clamped to it.
+        var window = _selfHosted
+            ? _model.ContextWindow ?? (capability is { ContextWindowTokens: > 0, ContextWindowFromCatalog: false }
+                ? capability.ContextWindowTokens
+                : null)
+            : null;
+        var modelMax = _selfHosted ? null : capability?.MaxOutputTokens;
         var prompt = EstimatePromptTokens(messages, options);
-        var limit = OutputLimitResolver.Resolve(
-            options.MaxOutputTokens, _model.MaxOutputTokens, prompt, window, capability?.MaxOutputTokens);
-        options.MaxOutputTokens = limit.Value;
-        if (limit.FloorApplied)
+        string limitText;
+        if (_selfHosted && window is null && options.MaxOutputTokens is null && _model.MaxOutputTokens is null)
         {
-            _logger.LogWarning(
-                "Model {ModelId}: the estimated prompt ({PromptEstimate} tokens) leaves less than {Floor} output tokens in the context window ({Window}). The request sends the floor of {Floor}; the provider can reject it.",
-                _model.ModelId, prompt, OutputLimitResolver.FloorLimit, window, OutputLimitResolver.FloorLimit);
+            // A guess could exceed what the server has left for the reply, so the server decides.
+            limitText = "none (window unknown)";
+        }
+        else
+        {
+            var limit = OutputLimitResolver.Resolve(options.MaxOutputTokens, _model.MaxOutputTokens, prompt, window, modelMax);
+            options.MaxOutputTokens = limit.Value;
+            limitText = $"{limit.Value} ({FormatSource(limit.Source)})";
+            if (limit.FloorApplied)
+            {
+                _logger.LogWarning(
+                    "Model {ModelId}: the estimated prompt ({PromptEstimate} tokens) leaves less than {Floor} output tokens in the context window ({Window}). The request sends the floor of {Floor}; the provider can reject it.",
+                    _model.ModelId, prompt, OutputLimitResolver.FloorLimit, window, OutputLimitResolver.FloorLimit);
+            }
         }
 
         var (level, levelSource) = ApplyThinking(options);
 
         _logger.LogDebug(
-            "Model {ModelId} request: maxOutputTokens={MaxOutputTokens} ({LimitSource}) promptEstimate={PromptEstimate} window={Window} thinking={Thinking} ({ThinkingSource}) dialect={Dialect}",
-            _model.ModelId, limit.Value, FormatSource(limit.Source), prompt, window?.ToString() ?? "unknown",
+            "Model {ModelId} request: maxOutputTokens={MaxOutputTokens} promptEstimate={PromptEstimate} window={Window} thinking={Thinking} ({ThinkingSource}) dialect={Dialect}",
+            _model.ModelId, limitText, prompt, window?.ToString() ?? (_selfHosted ? "unknown" : "not clamped"),
             level, levelSource, _dialect);
         return options;
     }
@@ -129,11 +154,23 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         return ("unset", "unset");
     }
 
+    // A lookup that ended without a result is not cached: a network failure or a model that a source
+    // does not list yet is a normal runtime condition, so a later call looks the model up again.
+    private Task<ResolvedModelCapabilities?> LookupCapabilityAsync()
+    {
+        lock (_lookupGate)
+        {
+            if (_lookup is null || (_lookup.IsCompleted && _lookup.Result is null))
+                _lookup = ResolveCapabilityAsync();
+            return _lookup;
+        }
+    }
+
     private async Task<ResolvedModelCapabilities?> ResolveCapabilityAsync()
     {
         try
         {
-            var capability = await _capabilities.ResolveAsync(_model.ModelId, CancellationToken.None);
+            var capability = await _capabilities.ResolveAsync(_model, CancellationToken.None);
             _logger.LogInformation(
                 "Model {ModelId} capability resolved: thinking={Thinking} modelMaxOutputTokens={ModelMax} window={Window}",
                 _model.ModelId,
@@ -153,10 +190,17 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         }
     }
 
-    // The compaction rule (PromptTokenEstimate): characters / 4, with media at its base64 size.
+    // The compaction rule (PromptTokenEstimate): characters / 4, with media at its base64 size. The
+    // tool schemas travel in the same request, so they count too.
     private static int EstimatePromptTokens(IReadOnlyCollection<ChatMessage> messages, ChatOptions options)
     {
         var characters = (long)(options.Instructions?.Length ?? 0);
+        foreach (var tool in options.Tools ?? [])
+        {
+            characters += tool.Name.Length + tool.Description.Length
+                          + (tool is AIFunctionDeclaration function ? function.JsonSchema.GetRawText().Length : 0);
+        }
+
         foreach (var message in messages)
         {
             foreach (var content in message.Contents)

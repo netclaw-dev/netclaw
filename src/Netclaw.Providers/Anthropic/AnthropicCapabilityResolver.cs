@@ -78,8 +78,11 @@ public sealed class AnthropicCapabilityResolver : IModelCapabilityResolver
         if (!IsSupported(thinking))
             return ThinkingSupport.None;
 
+        // Netclaw sends a level in adaptive mode, so a model without adaptive thinking gets only Off.
         var levels = new List<ThinkingLevel> { ThinkingLevel.Off };
-        if (capabilities.TryGetProperty("effort", out var effort) && IsSupported(effort))
+        var adaptive = thinking.TryGetProperty("types", out var types) && types.ValueKind == JsonValueKind.Object
+                       && types.TryGetProperty("adaptive", out var adaptiveType) && IsSupported(adaptiveType);
+        if (adaptive && capabilities.TryGetProperty("effort", out var effort) && IsSupported(effort))
         {
             // "xhigh" has no Netclaw level: Netclaw Max sends "max" to Anthropic.
             foreach (var (name, level) in new[]

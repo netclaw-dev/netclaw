@@ -36,6 +36,8 @@ public abstract class ProviderPluginBase<TDescriptor> : ILlmProviderPlugin
 
     public ThinkingDialect ResolveThinkingDialect(ProviderEntry entry) => Descriptor.ResolveThinkingDialect(entry);
 
+    public bool IsSelfHosted => ((IProviderDescriptor)Descriptor).IsSelfHosted;
+
     // Test seam: when set, every HTTP request of the model client goes to this handler instead of
     // the network, so a test can capture the request body that the provider receives. Never set in
     // production wiring.

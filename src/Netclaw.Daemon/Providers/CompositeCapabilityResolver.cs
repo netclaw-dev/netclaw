@@ -47,6 +47,7 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
         ModelModality? outputModalities = null;
         int? contextWindowTokens = null;
         int? maxOutputTokens = null;
+        var windowFromCatalog = false;
         var thinking = ThinkingSupport.Unknown;
         var anyResultProduced = false;
 
@@ -91,7 +92,10 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
             // unknown sentinel, not a resolved value, and must not block a later
             // resolver from supplying the real limit.
             if (contextWindowTokens is null && result.ContextWindowTokens is > 0)
+            {
                 contextWindowTokens = result.ContextWindowTokens;
+                windowFromCatalog = resolver.ProviderType is null || result.ContextWindowFromCatalog;
+            }
             if (maxOutputTokens is null && result.MaxOutputTokens is > 0)
                 maxOutputTokens = result.MaxOutputTokens;
             // Unknown is "this source does not say", so a later source may still answer.
@@ -105,9 +109,10 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
                 result.OutputModalities?.ToString() ?? "null",
                 result.ContextWindowTokens?.ToString() ?? "null");
 
-            // Early-out optimization: every field filled, stop walking.
-            if (inputModalities is not null && outputModalities is not null && contextWindowTokens is not null
-                && maxOutputTokens is not null && thinking.Kind != ThinkingSupportKind.Unknown)
+            // Early-out optimization: the three original fields are filled, stop walking. The newer
+            // fields (thinking, model max) do not keep the chain going: a native probe that knows the
+            // window is the source of truth for that endpoint, and a catalog call would only add cost.
+            if (inputModalities is not null && outputModalities is not null && contextWindowTokens is not null)
                 break;
         }
 
@@ -119,6 +124,7 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
         {
             Thinking = thinking,
             MaxOutputTokens = maxOutputTokens,
+            ContextWindowFromCatalog = windowFromCatalog,
         };
     }
 
@@ -131,5 +137,39 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
         if (activeProvider is null)
             return true;
         return string.Equals(resolver.ProviderType, activeProvider, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+/// <summary>
+/// Selects the capability chain of a definition's own provider, so a Compaction model on another
+/// endpoint resolves against that endpoint, not against Main's. Each chain is a
+/// <see cref="CompositeCapabilityResolver"/>.
+/// </summary>
+public sealed class ProviderCapabilityResolver : IModelCapabilityResolver
+{
+    private readonly IReadOnlyDictionary<string, IModelCapabilityResolver> _chainsByProvider;
+    private readonly ModelSelection _models;
+
+    public ProviderCapabilityResolver(
+        IReadOnlyDictionary<string, IModelCapabilityResolver> chainsByProvider, ModelSelection models)
+    {
+        _chainsByProvider = chainsByProvider;
+        _models = models;
+    }
+
+    public Task<ResolvedModelCapabilities?> ResolveAsync(ModelReference model, CancellationToken ct = default)
+        => _chainsByProvider.TryGetValue(model.Provider, out var chain)
+            ? chain.ResolveAsync(model.ModelId, ct)
+            : Task.FromResult<ResolvedModelCapabilities?>(null);
+
+    /// <summary>
+    /// A caller with only a model ID gets the chain of the role definition that names the model, or
+    /// Main's chain when no role names it.
+    /// </summary>
+    public Task<ResolvedModelCapabilities?> ResolveAsync(string modelId, CancellationToken ct = default)
+    {
+        var model = new[] { _models.Main, _models.Fallback, _models.Compaction }
+            .FirstOrDefault(m => m is not null && string.Equals(m.ModelId, modelId, StringComparison.OrdinalIgnoreCase));
+        return ResolveAsync(new ModelReference { Provider = (model ?? _models.Main).Provider, ModelId = modelId }, ct);
     }
 }

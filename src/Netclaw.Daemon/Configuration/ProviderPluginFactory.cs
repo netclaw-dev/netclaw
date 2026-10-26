@@ -99,17 +99,20 @@ public sealed class ProviderPluginFactory
         // caller's options before any wrapper below changes them (#2681), applies the definition's
         // limit and level, and always removes the NetclawChatOptionKeys.SuppressReasoning intent key.
         var settings = new ModelRequestSettingsChatClient(
-            decorated, model, dialect, _capabilities, _loggerFactory.CreateLogger<ModelRequestSettingsChatClient>());
-        LogModelClient(model, dialect, settings.ResolvedCapability);
+            decorated, model, dialect, plugin.IsSelfHosted, _capabilities, _loggerFactory.CreateLogger<ModelRequestSettingsChatClient>());
+        LogModelClient(model, dialect, plugin.IsSelfHosted, settings.ResolvedCapability);
         return settings;
     }
 
-    private void LogModelClient(ModelReference model, ThinkingDialect dialect, ResolvedModelCapabilities? capability)
+    private void LogModelClient(
+        ModelReference model, ThinkingDialect dialect, bool selfHosted, ResolvedModelCapabilities? capability)
     {
         var window = model.ContextWindow?.ToString() ?? capability?.ContextWindowTokens?.ToString() ?? "unknown";
         var limit = model.MaxOutputTokens is { } configured
             ? $"{configured} (configured)"
-            : $"default {OutputLimitResolver.DefaultLimit} (clamped per call)";
+            : selfHosted
+                ? $"default {OutputLimitResolver.DefaultLimit} (clamped per call to the endpoint window; none while the window is unknown)"
+                : $"default {OutputLimitResolver.DefaultLimit} (capped to the model max)";
         var thinking = model.Thinking is { } level ? $"{level} (configured)" : "unset";
         _logger.LogInformation(
             "Model client: provider={Provider} model={ModelId} maxOutputTokens={MaxOutputTokens} window={Window} modelMax={ModelMax} thinking={Thinking} dialect={Dialect} capability={Capability}",

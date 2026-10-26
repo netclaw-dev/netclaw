@@ -90,8 +90,9 @@ public sealed class RoleBasedFailoverRouter : IChatClientRouter
     private readonly record struct PipelineKey(
         string Provider, string ModelId, int? ContextWindow, int? MaxOutputTokens, ThinkingLevel? Thinking)
     {
+        // Provider names are configuration keys, which the binder reads without case.
         public static PipelineKey Of(ModelReference model) =>
-            new(model.Provider, model.ModelId, model.ContextWindow, model.MaxOutputTokens, model.Thinking);
+            new(model.Provider.ToUpperInvariant(), model.ModelId, model.ContextWindow, model.MaxOutputTokens, model.Thinking);
     }
 
     public IReadOnlyList<IChatClient> Route(ChatRoutingContext context) => context.Role switch
