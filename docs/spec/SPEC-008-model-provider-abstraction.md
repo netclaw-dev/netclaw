@@ -50,18 +50,20 @@ A call-site value wins over the definition. Memory curation keeps its own
 
 ### Default output limit
 
-When no value is set, each call sends a default of 32000 tokens. The model
-client clamps the default for each call:
+When no value is set, the rule depends on who runs the endpoint:
 
 ```text
-value  = min(32000, model max output when known)
-margin = max(1024, window / 20)
-value  = min(value, max(1024, window - prompt estimate - margin))   // when the window is known
+hosted API:   value = min(32000, model max output when known)       // no window clamp
+self-hosted:  window = configured ContextWindow ?? window of the endpoint's own probe
+              no window -> no limit field
+              value = min(32000, max(1024, window - prompt estimate - margin))
+              margin = max(1024, window / 20)
 ```
 
-The prompt estimate is the compaction rule: characters / 4. The window is the
-configured `ContextWindow`, else the resolved window. The startup default of
-32768 does not count as a known window. An explicit value is sent as is.
+The prompt estimate is the compaction rule (characters / 4) and counts the tool
+schemas. A catalog window, a catalog model maximum, and the startup default of
+32768 do not count for a self-hosted endpoint. An explicit value is sent as is.
+Each definition resolves its capability against the chain of its own provider.
 
 ### Provider mapping
 
@@ -71,7 +73,7 @@ configured `ContextWindow`, else the resolved window. The startup default of
 | OpenAI, Codex, Copilot (Responses) | `max_output_tokens` | `reasoning.effort: none` | `reasoning.effort` | `xhigh` |
 | OpenRouter | `max_completion_tokens` | `reasoning.effort: none` | `reasoning.effort`, with `exclude` kept | `max` |
 | Venice | `max_completion_tokens` | `reasoning_effort: none` | `reasoning_effort` | `max` |
-| DeepSeek | `max_tokens` | `thinking.type: disabled` | `reasoning_effort` low / high (no medium) | `max` |
+| DeepSeek | `max_tokens` | `thinking.type: disabled` | `reasoning_effort` low / high (the API has no medium) | `max` |
 | Ollama | `num_predict` | `think: false` | `think: "low"` / `"medium"` / `"high"` | not offered |
 | OpenAI-compatible | `max_tokens` | per `ThinkingDialect` | per `ThinkingDialect` | per `ThinkingDialect` |
 
@@ -85,7 +87,8 @@ offered, and only the output limit works.
 
 Offered levels = (levels the dialect can send) ∩ (levels the model accepts).
 The model capability comes from the provider probe of `netclaw model set` and
-the TUI. An `Unknown` capability offers only `Off`. Netclaw rejects a level
+the TUI. An `Unknown` capability offers only `Off`, and only for a body-field
+dialect; the Native dialect offers no level for an unknown model. Netclaw rejects a level
 that is not offered, and it lists the offered levels. Startup and doctor check
 only the dialect. A provider that rejects a level returns a loud error.
 

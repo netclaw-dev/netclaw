@@ -81,7 +81,7 @@ failed=0
 # spans too.
 run_gate dialect-map Netclaw.Providers.csproj \
   "$repo_root/src/Netclaw.Providers/ThinkingDialectMap.cs" "ThinkingDialectMap.cs" \
-  45 \
+  47 \
   "public static OfferedThinkingLevels OfferedLevels" \
   "_ => throw new ArgumentOutOfRangeException(nameof(capability)" \
   "public static void ApplySuppression" \

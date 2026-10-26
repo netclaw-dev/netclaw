@@ -985,8 +985,9 @@ Add or switch model providers (including OAuth login) and configure search backe
 Each model definition has a provider-neutral output limit and thinking level:
 `netclaw model set <role> <provider> <model> --max-output-tokens <n>
 --thinking <off|low|medium|high|max>`, or `P` in `netclaw model`. Without a
-limit, each call sends 32000, clamped to the model maximum and the context
-window. Thinking tokens count inside the limit. Netclaw rejects a level that
+limit, a hosted API gets 32000 (or its lower model maximum); a self-hosted
+server gets 32000 clamped to its known window, or no limit when the window is
+unknown. Thinking tokens count inside the limit. Netclaw rejects a level that
 the provider or the model does not offer, and it lists the offered levels. An
 `openai-compatible` provider needs
 `Providers:<name>:VendorOptions:ThinkingDialect` (`ChatTemplateKwargs`,

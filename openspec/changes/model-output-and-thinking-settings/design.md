@@ -164,7 +164,7 @@ unverified fact.
 | GitHub Copilot (Responses or Chat) | `max_output_tokens` or `max_completion_tokens` (V: SDK) | effort `none` | `low` / `medium` / `high` | `xhigh` (U: Copilot accepts effort for every model) |
 | OpenRouter (Chat + policy) | `max_completion_tokens` (V: SDK writes it; OpenRouter docs accept it) | policy writes `reasoning.effort: none` (V: docs) | policy writes `reasoning.effort` and keeps `exclude` (V: docs allow both) | `reasoning.effort: max` (V: docs list `max`) |
 | Venice (Chat) | `max_completion_tokens` (V: docs; `max_tokens` is deprecated) | `reasoning_effort: none` (V: docs) | `reasoning_effort` low / medium / high (V: docs) | plugin sets `reasoning_effort: max` through the SDK JSON patch (V: docs list `max`) |
-| DeepSeek (self-hosted client) | `max_tokens` (U: field name in the API reference) | `thinking.type: disabled` (V: docs) | `reasoning_effort` low / rejected / high (V: docs map `medium` to `high` on the server, so Netclaw rejects `Medium`) | `reasoning_effort: max` (V) |
+| DeepSeek (self-hosted client) | `max_tokens` (V: API reference) | `thinking.type: disabled` (V: docs) | `reasoning_effort` low / high; `Medium` is rejected (V: the API docs list none, low, high, and max) | `reasoning_effort: max` (V) |
 | Ollama (OllamaSharp 5.4.30) | `num_predict` (V: SDK) | `think: false` (V) | `think: "low" / "medium" / "high"` through `ChatOptions.Reasoning` (V: SDK maps them; docs accept model-defined strings) | rejected: OllamaSharp maps `ExtraHigh` to `"high"` |
 | OpenAI-compatible (self-hosted client) | `max_tokens` (V: :251) | per backend rows | per backend rows | per backend rows |
 
@@ -212,21 +212,34 @@ state it.
 
 A flat 32,000 can fail a request. vLLM rejects a request when the prompt tokens
 plus `max_tokens` exceed `max_model_len` (U: the exact error text). Some models
-cap their output below 32,000. Thus the effective default is computed per call:
+cap their output below 32,000.
+
+Decision by Aaron (review of PR #2694): the rule depends on who runs the
+endpoint. The provider descriptor states it (`IProviderDescriptor.IsSelfHosted`:
+true for `ollama` and `openai-compatible`).
 
 ```
 DefaultLimit(messages):                              // schematic
-  cap      = 32000
-  modelMax = capability.MaxOutputTokens              // null when unknown
-  window   = model.ContextWindow ?? capability.ContextWindowTokens   // null when unknown
-  value    = min(cap, modelMax ?? cap)
-  if window is known:
-    prompt   = EstimateTokens(messages)              // characters / 4, the compaction rule
+  if call value or configured value: send it as is
+  if hosted API:
+    value = min(32000, capability.MaxOutputTokens ?? 32000)   // no window clamp
+  if self-hosted:
+    window = model.ContextWindow                     // configured: known
+             ?? probe window of this endpoint         // native probe: known
+             // a catalog window or the startup default 32768: unknown
+    if window is unknown: send NO limit field        // the server decides
+    prompt   = EstimateTokens(messages, tool schemas) // characters / 4
     margin   = max(1024, window / 20)
-    headroom = window - prompt - margin
-    value    = min(value, max(1024, headroom))       // 1024 is the floor
-  source = (value == cap) ? default : default-clamped
+    value    = min(32000, max(1024, window - prompt - margin))
+  source = (value == 32000) ? default : default-clamped
 ```
+
+- A hosted API enforces its own large window, so Netclaw does not clamp to it.
+- A catalog model maximum describes another host, so it does not cap a
+  self-hosted model.
+- The prompt estimate counts the tool schemas of the request.
+- The composite resolver marks a window from a cross-provider catalog
+  (`ResolvedModelCapabilities.ContextWindowFromCatalog`).
 
 An explicit value (`call` or `configured`) is sent as is. Validation rejects an
 explicit value that is not below the context window, or that is above a known
@@ -236,7 +249,7 @@ Inputs and their sources:
 
 | Input | Source | Status |
 |---|---|---|
-| Context window | `ModelReference.ContextWindow`, else the resolved `ContextWindowTokens`. The startup default of 32,768 counts as unknown. | existing code |
+| Context window (self-hosted only) | `ModelReference.ContextWindow` (provenance configured), else the window of the native probe of that endpoint. A catalog window and the startup default of 32,768 count as unknown. | existing code |
 | Prompt estimate | the `EstimateTokens` rule (characters / 4), applied to the call's messages | existing code; one shared helper |
 | Model max output | Anthropic Models API `max_tokens` (new native resolver) | V: SDK 12.50.0 `ModelInfo.max_tokens` |
 | Model max output | OpenRouter catalog `top_provider.max_completion_tokens` | V: live catalog |
@@ -252,19 +265,26 @@ Examples (margin = max(1024, window / 20)):
 
 | Case | Window | Prompt | Model max | Sent | Source |
 |---|---|---|---|---|---|
-| Short prompt | 131,072 | 5,000 | unknown | 32,000 | `default` |
-| Prompt near the window | 131,072 | 110,000 | unknown | 14,519 | `default-clamped` |
-| Prompt past the floor | 32,768 | 31,000 | unknown | 1,024 (floor); a warning is logged | `default-clamped` |
-| Unknown context window | unknown | 5,000 | unknown | 32,000 | `default` |
-| Known model max below 32,000 | 131,072 | 5,000 | 16,384 | 16,384 | `default-clamped` |
+| Self-hosted, short prompt | 131,072 | 5,000 | unknown | 32,000 | `default` |
+| Self-hosted, prompt near the window | 131,072 | 110,000 | unknown | 14,519 | `default-clamped` |
+| Self-hosted, prompt past the floor | 32,768 | 31,000 | unknown | 1,024 (floor); a warning is logged | `default-clamped` |
+| Self-hosted, unknown window | unknown | 5,000 | any | no limit field | none |
+| Hosted, window known | 131,072 | 110,000 | unknown | 32,000 (no window clamp) | `default` |
+| Hosted, known model max below 32,000 | any | 5,000 | 16,384 | 16,384 | `default-clamped` |
 | Explicit value | 131,072 | 110,000 | 64,000 | 64,000 | `configured` |
 | Memory curation | any | any | any | 4,096 | `call` |
 
-The capability inputs are resolved once for each model client on first use,
-through the existing `CompositeCapabilityResolver`. They are cached for the
-client's lifetime. A failed lookup makes the inputs unknown, and the startup
-line says so. A network failure here is a normal runtime condition, so an
-unknown input is not a silent fallback.
+The capability inputs are resolved for each model client on first use. Each
+definition resolves against the chain of its own provider: the daemon builds
+one `CompositeCapabilityResolver` for each configured provider (its native
+probe, then the catalogs), and `ProviderCapabilityResolver` selects the chain
+through `IModelCapabilityResolver.ResolveAsync(ModelReference, ...)`. A result
+is cached for the client's lifetime. A failed lookup, or a lookup without a
+result, is not cached: the call uses unknown inputs, and a later call looks the
+model up again. A network failure is a normal runtime condition, so an unknown
+input is not a silent fallback. The composite keeps its early stop: when the
+native probe knows the input, output, and window fields, it makes no catalog
+call.
 
 Alternative: a flat 32,000 with no clamp. Rejected, because long vLLM sessions
 would fail near the window. Alternative: compute the default in the session
@@ -310,9 +330,20 @@ Rules for each surface (`model set`, the TUI, doctor):
 
 - The output limit always works.
 - Offered levels = (levels the dialect expresses) ∩ (capability levels).
-- `Unknown`: offer `Off` only when the dialect expresses `Off`. Show
-  "thinking support unknown for this endpoint" with the dialect hint. Netclaw
-  never guesses a level.
+- `Unknown`: offer `Off` only when a body-field dialect sends it. A Native
+  `Off` fails on a hosted model that cannot turn thinking off, so the Native
+  dialect offers no level for an unknown model. Show "thinking support unknown
+  for this endpoint" with the dialect hint. Netclaw never guesses a level.
+- Anthropic: Netclaw sends a level in adaptive mode, so a model offers a level
+  other than `Off` only when `capabilities.thinking.types.adaptive.supported`
+  is true.
+- `model set` and the TUI run the whole validator on each definition that they
+  write (the configuration rules, the dialect, and the Ollama `DisableThinking`
+  conflict). They check the probed capability only for the field that they
+  change. A re-set of the model that the role already uses keeps the role's own
+  definition, and `model set` names the other roles of that definition.
+- Startup, hot reload, and doctor reject a level other than `Off` on an Ollama
+  provider with `DisableThinking: true`.
 - `None`: offer no level, with the reason "this model does not think".
 - `AlwaysOn`: offer no level, with the reason "this model always thinks; the
   endpoint reports no levels".
@@ -451,6 +482,12 @@ the file bytes do not change. Each save test reloads the file through
   exists today for memory curation.
 - [Compaction and titles inherit `High` or `Max` from a shared definition.] ->
   The operator can give Compaction its own definition.
+- [Nothing bounds a single long answer generation inside one model call except
+  the output limit. FirstTokenTimeout and NoProgressTimeout reset on each
+  token, and the thinking cap and the turn loop guard do not apply. With the
+  32,000 default, a model that loops can generate for many minutes (one eval
+  call: 32,000 tokens in about 16 minutes, 1 of about 810 calls).] -> Accepted
+  by Aaron; no new guard in this change.
 
 ## Migration Plan
 
@@ -492,15 +529,17 @@ one test row, not the approach. The implementation results follow each item.
    Result: not verified. The clamp margin covers the case; a provider error
    stays loud.
 7. DeepSeek: the output-limit field name in its API reference.
-   Result: not verified. The self-hosted client sends `max_tokens`.
+   Result: the field is `max_tokens`. The self-hosted client sends it.
 
 Implementation notes:
 
 - The startup line shows `capability=unresolved` unless the capability is
   already resolved. The client resolves it on first use (D4) and logs one
   Information line with the result.
-- "Context window unknown" uses provenance: only the startup default (32768)
-  is unknown. A configured `ContextWindow` and a resolved window are known.
+- "Context window known" uses provenance (D4): a configured `ContextWindow` and
+  the window of the endpoint's native probe are known. A catalog window and the
+  startup default (32768) are unknown. Only a self-hosted endpoint clamps to a
+  window.
 - Probe capability sources in this change: llama.cpp `/props` (only when the
   `/v1/models` listing shows llama.cpp markers), the Anthropic model listing,
   and the OpenRouter catalog. The Ollama probe lists `/api/tags` only, so
