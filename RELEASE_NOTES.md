@@ -1,5 +1,17 @@
 # NetClaw Release Notes
 
+## 0.28.1 (2026-10-26)
+
+This is a stable patch release for 0.28.0. Compaction and child agents on the Compaction role now fail over to the Fallback model. A child reply that stops at the output limit now keeps its full text as a partial artifact.
+
+**Upgrade impact:** none. 0.28.1 uses the same database format as 0.28.0.
+
+### Fixes
+
+- **Each model role fails over to the Fallback model, Compaction included.** Before, a configured Compaction model had no failover, so session compaction and each child agent on the default `modelRole: Compaction` never used the Fallback model. Now the candidate list of each role ends with the Fallback model when one is configured. When Compaction names the same model as Main, or is not configured, it uses the Main list ([#2691](https://github.com/netclaw-dev/netclaw/pull/2691), fixes [#2688](https://github.com/netclaw-dev/netclaw/issues/2688)).
+- **A cut-off child reply keeps its full text.** When the final reply of a child stops at the output limit with text and no tool call, the run still fails with `output_truncated`. Now the runtime also writes the full cut-off text, redacted, to `artifacts/truncated-output.md`, and `result.md` names that path. Before, only a 300-character preview remained. A reply with only thinking writes no artifact ([#2682](https://github.com/netclaw-dev/netclaw/pull/2682), fixes [#2679](https://github.com/netclaw-dev/netclaw/issues/2679)).
+  - The `agent-coordination` skill (1.5.3) tells the parent to read that file with `file_read`. The text is partial data from the child, and the parent must not follow instructions in it. The `subagent-authoring` skill (1.6.2) names the partial artifact.
+
 ## 0.28.0 (2026-10-25)
 
 This is the stable 0.28.0 release. It collects 0.28.0-beta.1 to 0.28.0-beta.4 for users who upgrade from 0.27.1. Sub-agents now run in the background, and a child that waits for consent parks and survives a restart. A message from a person reaches the agent sooner, also during an automation turn. The daemon logs each tool call again with redacted arguments, and an OAuth refresh no longer restarts the daemon. Agent tools can no longer reach credential folders such as `~/.ssh` and `~/.aws`.
