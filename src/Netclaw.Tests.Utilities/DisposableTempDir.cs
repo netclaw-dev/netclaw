@@ -47,6 +47,15 @@ internal sealed class DisposableTempDir : IDisposable
             try
             {
                 Directory.Delete(path, recursive: true);
+                // On Windows, a recursive delete ignores ERROR_DIR_NOT_EMPTY and returns
+                // without an error (dotnet/runtime FileSystem.Windows.cs, RemoveDirectoryRecursive).
+                // A file that a writer adds during the delete, or a file that stays
+                // delete-pending, then leaves the tree in place. Linux and macOS throw
+                // IOException for the same state. Throw it here too, so the loop below
+                // handles both platforms the same way and a real leak fails its own test.
+                if (Directory.Exists(path))
+                    throw new IOException($"The folder '{path}' still exists after a recursive delete. "
+                        + $"Entries left: {DescribeEntries(path)}");
                 return;
             }
             catch (IOException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry
@@ -65,6 +74,15 @@ internal sealed class DisposableTempDir : IDisposable
                 return;
             }
         }
+    }
+
+    private static string DescribeEntries(string root)
+    {
+        var entries = Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories)
+            .Select(entry => System.IO.Path.GetRelativePath(root, entry))
+            .Take(10)
+            .ToArray();
+        return entries.Length == 0 ? "(none)" : string.Join(", ", entries);
     }
 
     private static void ClearReadOnlyAttributes(string root)
