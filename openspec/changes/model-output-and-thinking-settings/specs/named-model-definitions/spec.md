@@ -7,7 +7,7 @@ output limit (`MaxOutputTokens`, a positive integer) and the thinking level
 (`Thinking`, one of `Off`, `Low`, `Medium`, `High`, `Max`). A role SHALL NOT
 hold these settings. The persisted thinking level SHALL use the canonical enum
 name. An absent setting SHALL mean "no model value". Use the
-[engineering glossary](../../../docs/spec/GLOSSARY.md) for "thinking
+[engineering glossary](../../../../../docs/spec/GLOSSARY.md) for "thinking
 level" and "thinking dialect".
 
 #### Scenario: Settings follow the definition across role switches

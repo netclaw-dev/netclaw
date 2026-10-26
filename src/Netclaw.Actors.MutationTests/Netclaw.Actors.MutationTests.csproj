@@ -21,6 +21,7 @@
     <ProjectReference Include="../Netclaw.Cli/Netclaw.Cli.csproj" />
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <ProjectReference Include="../Netclaw.Daemon/Netclaw.Daemon.csproj" />
+    <ProjectReference Include="../Netclaw.Providers/Netclaw.Providers.csproj" />
     <ProjectReference Include="../Netclaw.Security/Netclaw.Security.csproj" />
     <ProjectReference Include="../Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
   </ItemGroup>
@@ -84,6 +85,11 @@
     <Compile Include="../Netclaw.Tests.Utilities/StandInDaemon.cs" Link="Utilities/StandInDaemon.cs" />
     <Compile Include="../Netclaw.Tests.Utilities/SleepStandIn.cs" Link="Utilities/SleepStandIn.cs" />
     <Compile Include="../Netclaw.Tests.Utilities/DisposableTempDir.cs" Link="Utilities/DisposableTempDir.cs" />
+    <!-- thinking-settings gate: the pure dialect map, the offered levels, and the default output limit. -->
+    <Compile Include="../Netclaw.Daemon.Tests/Providers/ThinkingDialectMapTests.cs"
+             Link="Providers/ThinkingDialectMapTests.cs" />
+    <Compile Include="../Netclaw.Daemon.Tests/Configuration/DefaultOutputLimitTests.cs"
+             Link="Configuration/DefaultOutputLimitTests.cs" />
   </ItemGroup>
 
 </Project>

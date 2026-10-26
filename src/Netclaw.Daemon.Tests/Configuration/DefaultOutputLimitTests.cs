@@ -22,6 +22,8 @@ public sealed class DefaultOutputLimitTests
     [InlineData("prompt_past_floor_sends_1024_and_warns", null, null, 31_000, 32_768, null, 1_024, "DefaultClamped", true)]
     [InlineData("unknown_window_sends_32000_default", null, null, 5_000, null, null, 32_000, "Default", false)]
     [InlineData("model_max_16384_sends_16384_default_clamped", null, null, 5_000, 131_072, 16_384, 16_384, "DefaultClamped", false)]
+    // A model max of 0 is an unknown sentinel, not a limit.
+    [InlineData("zero_model_max_counts_as_unknown", null, null, 5_000, 131_072, 0, 32_000, "Default", false)]
     [InlineData("explicit_configured_value_is_not_clamped", null, 64_000, 110_000, 131_072, 64_000, 64_000, "Configured", false)]
     [InlineData("call_site_value_is_not_clamped", 4_096, 32_000, 31_000, 32_768, 2_048, 4_096, "Call", false)]
     public void Computes_default(

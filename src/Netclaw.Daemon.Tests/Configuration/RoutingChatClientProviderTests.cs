@@ -216,6 +216,49 @@ public sealed class RoleBasedFailoverRouterTests
         Assert.True(expectedCompaction == Ids(ModelRole.Compaction), $"{row}: Compaction was [{Ids(ModelRole.Compaction)}]");
     }
 
+    // A pipeline carries its definition's output limit and thinking level, so the router may reuse
+    // a pipeline only for the same Provider, ModelId, and settings.
+    [Theory]
+    [InlineData("compaction_with_other_thinking_gets_own_pipeline", "Low", null, "High", null, false)]
+    [InlineData("compaction_with_other_limit_gets_own_pipeline", null, 32_000, null, 4_096, false)]
+    [InlineData("compaction_with_identical_settings_reuses_pipeline", "Low", 32_000, "Low", 32_000, true)]
+    public void Settings_split_pipelines_per_role(
+        string row, string? mainThinking, int? mainLimit, string? compactionThinking, int? compactionLimit, bool reuses)
+    {
+        var main = Model("same", mainThinking, mainLimit);
+        var compaction = Model("same", compactionThinking, compactionLimit);
+        var built = new Dictionary<IChatClient, ModelReference>(ReferenceEqualityComparer.Instance);
+        var router = new RoleBasedFailoverRouter(r =>
+        {
+            var client = new FakeChatClient();
+            built[client] = r;
+            return client;
+        }, new ModelSelection { Main = main, Compaction = compaction });
+
+        var mainFirst = router.Route(new ChatRoutingContext { Role = ModelRole.Main })[0];
+        var compactionFirst = router.Route(new ChatRoutingContext { Role = ModelRole.Compaction })[0];
+
+        Assert.True(reuses == ReferenceEquals(mainFirst, compactionFirst), $"{row}: reuse was {!reuses}");
+        Assert.Equal(compaction.Thinking, built[compactionFirst].Thinking);
+        Assert.Equal(compaction.MaxOutputTokens, built[compactionFirst].MaxOutputTokens);
+    }
+
+    [Fact]
+    public void fallback_with_other_thinking_gets_own_pipeline()
+    {
+        var built = new Dictionary<IChatClient, ModelReference>(ReferenceEqualityComparer.Instance);
+        var router = new RoleBasedFailoverRouter(r =>
+        {
+            var client = new FakeChatClient();
+            built[client] = r;
+            return client;
+        }, new ModelSelection { Main = Model("same", "Low", null), Fallback = Model("same", "Off", null) });
+
+        var candidates = router.Route(new ChatRoutingContext { Role = ModelRole.Main });
+
+        Assert.Equal([ThinkingLevel.Low, ThinkingLevel.Off], candidates.Select(c => built[c].Thinking));
+    }
+
     [Fact]
     public async Task Compaction_role_call_fails_over_to_fallback_when_primary_refuses_connection()
     {
@@ -239,4 +282,12 @@ public sealed class RoleBasedFailoverRouterTests
     }
 
     private static ModelReference Model(string modelId) => new() { Provider = "p", ModelId = modelId };
+
+    private static ModelReference Model(string modelId, string? thinking, int? limit) => new()
+    {
+        Provider = "p",
+        ModelId = modelId,
+        Thinking = thinking is null ? null : Enum.Parse<ThinkingLevel>(thinking),
+        MaxOutputTokens = limit,
+    };
 }
