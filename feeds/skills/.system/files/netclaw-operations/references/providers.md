@@ -140,12 +140,15 @@ the switch of each provider: Netclaw maps them.
   Thinking tokens count inside the limit, so a low limit with a high level can
   truncate the reply. The value must be below the context window and not above
   the model maximum that the probe reports.
-- Without a limit, a hosted API gets 32000, or its known model maximum when
-  that is lower. Anthropic replies are therefore no longer cut at 1024 tokens.
-  A self-hosted server (Ollama, OpenAI-compatible) gets 32000 clamped to its
-  context window minus the estimated prompt and tool schemas, but only when
-  the window is known from `ContextWindow` or from the server's own probe.
-  Otherwise it gets no limit field, and the server decides.
+- Without a limit, a hosted API gets 32000, capped to its known model maximum
+  and clamped to its known context window minus the estimated prompt and tool
+  schemas. Anthropic replies are therefore no longer cut at 1024 tokens.
+  A self-hosted server gets the same clamp, but only when its window is known
+  from `ContextWindow` or from the server's own probe; a catalog value does not
+  count. Otherwise it gets no limit field, and the server decides.
+- A self-hosted server must use the `ollama` or `openai-compatible` provider
+  type. A hosted type (`deepseek`, `openrouter`, `veniceai`) that points at
+  your own server is treated as hosted: catalog values apply to it.
 - `--thinking <off|low|medium|high|max>` sets the thinking level. `max` is the
   highest level that the provider offers. A call site can set its own value:
   memory curation keeps 4096 tokens and no reasoning.

@@ -50,20 +50,23 @@ A call-site value wins over the definition. Memory curation keeps its own
 
 ### Default output limit
 
-When no value is set, the rule depends on who runs the endpoint:
+When no value is set, each call sends 32000, capped and clamped per call:
 
 ```text
-hosted API:   value = min(32000, model max output when known)       // no window clamp
-self-hosted:  window = configured ContextWindow ?? window of the endpoint's own probe
-              no window -> no limit field
-              value = min(32000, max(1024, window - prompt estimate - margin))
-              margin = max(1024, window / 20)
+value  = min(32000, model max output when known)
+window = hosted:      configured ContextWindow ?? resolved window (a catalog window counts)
+         self-hosted: configured ContextWindow ?? window of the endpoint's own probe
+                      no window -> no limit field
+margin = max(1024, window / 20)
+value  = min(value, max(1024, window - prompt estimate - margin))   // when the window is known
 ```
 
 The prompt estimate is the compaction rule (characters / 4) and counts the tool
-schemas. A catalog window, a catalog model maximum, and the startup default of
-32768 do not count for a self-hosted endpoint. An explicit value is sent as is.
-Each definition resolves its capability against the chain of its own provider.
+schemas. A self-hosted endpoint ignores a catalog model maximum. A self-hosted
+server must use the `ollama` or `openai-compatible` provider type; a hosted type
+(`deepseek`, `openrouter`, `veniceai`) that points at your own server is treated
+as hosted. An explicit value is sent as is. Each definition resolves its
+capability against the chain of its own provider.
 
 ### Provider mapping
 

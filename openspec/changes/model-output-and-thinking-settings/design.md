@@ -214,32 +214,41 @@ A flat 32,000 can fail a request. vLLM rejects a request when the prompt tokens
 plus `max_tokens` exceed `max_model_len` (U: the exact error text). Some models
 cap their output below 32,000.
 
-Decision by Aaron (review of PR #2694): the rule depends on who runs the
-endpoint. The provider descriptor states it (`IProviderDescriptor.IsSelfHosted`:
+Decision by Aaron (review of PR #2694): the window source depends on who runs
+the endpoint. The provider descriptor states it (`IProviderDescriptor.IsSelfHosted`:
 true for `ollama` and `openai-compatible`).
 
 ```
 DefaultLimit(messages):                              // schematic
   if call value or configured value: send it as is
-  if hosted API:
-    value = min(32000, capability.MaxOutputTokens ?? 32000)   // no window clamp
-  if self-hosted:
-    window = model.ContextWindow                     // configured: known
-             ?? probe window of this endpoint         // native probe: known
-             // a catalog window or the startup default 32768: unknown
-    if window is unknown: send NO limit field        // the server decides
+  modelMax = hosted ? capability.MaxOutputTokens : null   // a catalog max describes another host
+  window   = model.ContextWindow                     // configured: known
+             ?? hosted      ? resolved window         // a catalog window describes the same hosted model
+             :  self-hosted ? probe window of this endpoint   // a catalog window is unknown
+  if self-hosted and window is unknown: send NO limit field   // the server decides
+  value = min(32000, modelMax ?? 32000)
+  if window is known:
     prompt   = EstimateTokens(messages, tool schemas) // characters / 4
     margin   = max(1024, window / 20)
-    value    = min(32000, max(1024, window - prompt - margin))
+    value    = min(value, max(1024, window - prompt - margin))
   source = (value == 32000) ? default : default-clamped
 ```
 
-- A hosted API enforces its own large window, so Netclaw does not clamp to it.
-- A catalog model maximum describes another host, so it does not cap a
-  self-hosted model.
+- A hosted API can reject input + max_tokens above its window, so a hosted
+  default clamps to a known window too. An unknown window keeps
+  min(32000, model max).
+- The startup default of 32768 is never a known window.
 - The prompt estimate counts the tool schemas of the request.
 - The composite resolver marks a window from a cross-provider catalog
   (`ResolvedModelCapabilities.ContextWindowFromCatalog`).
+- A self-hosted server must use the `ollama` or `openai-compatible` provider
+  type. A hosted type (`deepseek`, `openrouter`, `veniceai`) that points at an
+  operator's own server is treated as hosted.
+- The hosted model max comes from the OpenRouter catalog, except for Anthropic,
+  whose Models API reports it. Copilot's own model limits are not read yet.
+- A lookup without a result stands for 10 minutes (the factory's
+  `TimeProvider`); then a call asks again. Only the first miss logs the
+  Information line.
 
 An explicit value (`call` or `configured`) is sent as is. Validation rejects an
 explicit value that is not below the context window, or that is above a known
@@ -249,7 +258,7 @@ Inputs and their sources:
 
 | Input | Source | Status |
 |---|---|---|
-| Context window (self-hosted only) | `ModelReference.ContextWindow` (provenance configured), else the window of the native probe of that endpoint. A catalog window and the startup default of 32,768 count as unknown. | existing code |
+| Context window | `ModelReference.ContextWindow` (provenance configured), else the resolved window. For a self-hosted endpoint, only the window of its native probe counts; a catalog window is unknown. The startup default of 32,768 is always unknown. | existing code |
 | Prompt estimate | the `EstimateTokens` rule (characters / 4), applied to the call's messages | existing code; one shared helper |
 | Model max output | Anthropic Models API `max_tokens` (new native resolver) | V: SDK 12.50.0 `ModelInfo.max_tokens` |
 | Model max output | OpenRouter catalog `top_provider.max_completion_tokens` | V: live catalog |
@@ -269,7 +278,8 @@ Examples (margin = max(1024, window / 20)):
 | Self-hosted, prompt near the window | 131,072 | 110,000 | unknown | 14,519 | `default-clamped` |
 | Self-hosted, prompt past the floor | 32,768 | 31,000 | unknown | 1,024 (floor); a warning is logged | `default-clamped` |
 | Self-hosted, unknown window | unknown | 5,000 | any | no limit field | none |
-| Hosted, window known | 131,072 | 110,000 | unknown | 32,000 (no window clamp) | `default` |
+| Hosted, window known | 200,000 | 170,000 | unknown | 20,000 | `default-clamped` |
+| Hosted, window unknown | unknown | 110,000 | unknown | 32,000 | `default` |
 | Hosted, known model max below 32,000 | any | 5,000 | 16,384 | 16,384 | `default-clamped` |
 | Explicit value | 131,072 | 110,000 | 64,000 | 64,000 | `configured` |
 | Memory curation | any | any | any | 4,096 | `call` |
@@ -280,8 +290,9 @@ one `CompositeCapabilityResolver` for each configured provider (its native
 probe, then the catalogs), and `ProviderCapabilityResolver` selects the chain
 through `IModelCapabilityResolver.ResolveAsync(ModelReference, ...)`. A result
 is cached for the client's lifetime. A failed lookup, or a lookup without a
-result, is not cached: the call uses unknown inputs, and a later call looks the
-model up again. A network failure is a normal runtime condition, so an unknown
+result, stands for 10 minutes: the calls use unknown inputs, and a call after
+that time looks the model up again. A model ID that no role names resolves to
+unknown; no other provider's chain answers for it. A network failure is a normal runtime condition, so an unknown
 input is not a silent fallback. The composite keeps its early stop: when the
 native probe knows the input, output, and window fields, it makes no catalog
 call.
@@ -538,8 +549,8 @@ Implementation notes:
   Information line with the result.
 - "Context window known" uses provenance (D4): a configured `ContextWindow` and
   the window of the endpoint's native probe are known. A catalog window and the
-  startup default (32768) are unknown. Only a self-hosted endpoint clamps to a
-  window.
+  startup default (32768) are unknown for a self-hosted endpoint. A hosted
+  endpoint also counts a catalog window.
 - Probe capability sources in this change: llama.cpp `/props` (only when the
   `/v1/models` listing shows llama.cpp markers), the Anthropic model listing,
   and the OpenRouter catalog. The Ollama probe lists `/api/tags` only, so
