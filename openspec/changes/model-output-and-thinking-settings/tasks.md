@@ -83,7 +83,7 @@ Write each test, run it, and verify that it fails for the expected reason before
 
 - [x] 5.1 Add the four `model set` flags, the two `model list` columns, and dialect detection through the existing probe. Verify with 2.10.
 - [x] 5.2 Add the TUI role-table columns and the `P` properties panel. Verify with 2.11.
-- [ ] 5.3 Extend `tests/smoke/tapes/model-manager.tape`: press `P`, set the output limit to 32000 and the level to `off`, save, and assert the persisted values. Then assert that an unoffered level shows its reason. Verify with `./scripts/smoke/run-smoke.sh model-manager` and `./scripts/smoke/run-smoke.sh light`.
+- [x] 5.3 Extend `tests/smoke/tapes/model-manager.tape`: press `P`, set the output limit to 32000 and the level to `off`, save, and assert the persisted values. Then assert that an unoffered level shows its reason. Verify with `./scripts/smoke/run-smoke.sh model-manager` and `./scripts/smoke/run-smoke.sh light`.
 
 ## 6. Docs, guidance, and checks
 
@@ -92,5 +92,5 @@ Write each test, run it, and verify that it fails for the expected reason before
 - [x] 6.3 Add a `RELEASE_NOTES.md` entry for the behavior change: every provider now receives a default output limit of up to 32000 tokens. Verify by reading the entry.
 - [ ] 6.4 Update `feeds/skills/.system/files/netclaw-operations/SKILL.md`: the flags, the default and its clamp, the dialect key, the offered-level rules, and that the limit includes thinking tokens. Bump `metadata.version`. Run `./evals/run-evals.sh` and verify that it passes.
 - [ ] 6.5 Review the focused mutation scope for the failover copy and the clamp (reliability boundaries). Add one narrow target if a deterministic test rejects a specific unsafe mutant, for example a removed `Clone()`. Verify with the Stryker procedure in `TOOLING.md`.
-- [ ] 6.6 Run `dotnet test` for the touched test projects, `dotnet slopwatch analyze`, and `./scripts/Add-FileHeaders.ps1 -Verify`. Verify 0 failures and 0 new violations.
+- [x] 6.6 Run `dotnet test` for the touched test projects, `dotnet slopwatch analyze`, and `./scripts/Add-FileHeaders.ps1 -Verify`. Verify 0 failures and 0 new violations.
 - [ ] 6.7 Close #2681 from the PR text. Run `/opsx-verify`, `/opsx-sync`, and `/opsx-archive` after the merge.
