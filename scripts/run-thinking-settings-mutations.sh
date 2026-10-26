@@ -74,17 +74,24 @@ run_gate() {
 }
 
 failed=0
-# ExpressibleLevels and Apply are outside the spans: Stryker turns their mutants into compile
-# errors (collection expressions, and Safe Mode for the `is not { } value` pattern in Apply), so
-# the table tests in ThinkingDialectMapTests guard them. The unreachable default arms that only
-# throw for an unknown enum value are outside the spans too.
+# ExpressibleLevels is outside the spans: Stryker turns its collection-expression mutants into
+# compile errors, so the table tests in ThinkingDialectMapTests guard it. The rejection message of
+# Apply is outside the spans, because the tests check only that it names the level and the offered
+# list. The unreachable default arms that only throw for an unknown enum value are outside the
+# spans too.
 run_gate dialect-map Netclaw.Providers.csproj \
   "$repo_root/src/Netclaw.Providers/ThinkingDialectMap.cs" "ThinkingDialectMap.cs" \
-  20 \
+  45 \
   "public static OfferedThinkingLevels OfferedLevels" \
   "_ => throw new ArgumentOutOfRangeException(nameof(capability)" \
   "public static void ApplySuppression" \
-  "/// <summary>True when the suppression intent writes" || failed=1
+  "/// <summary>True when the suppression intent writes" \
+  "public static void Apply(ThinkingDialect dialect" \
+  "throw new NotSupportedException(" \
+  "        switch (dialect)
+        {
+            case ThinkingDialect.Native:" \
+  "throw new ArgumentOutOfRangeException(nameof(dialect), dialect, \"Unknown thinking dialect.\");" || failed=1
 # The floor-warning flag (the `if (headroom < value)` block) is outside the spans: `<` and `<=` are
 # equivalent there, and the flag only selects a log level.
 run_gate output-limit Netclaw.Daemon.csproj \

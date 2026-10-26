@@ -98,8 +98,10 @@ public static class ThinkingDialectMap
     /// </summary>
     public static void Apply(ThinkingDialect dialect, ChatOptions options, ThinkingLevel? level)
     {
-        if (level is not { } value)
+        if (!level.HasValue)
             return;
+
+        var value = level.Value;
 
         var expressible = ExpressibleLevels(dialect);
         if (!expressible.Contains(value))
