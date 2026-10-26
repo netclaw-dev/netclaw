@@ -465,17 +465,48 @@ the file bytes do not change. Each save test reloads the file through
 ## Open Questions
 
 Each item is a check during implementation. A result changes one table row or
-one test row, not the approach.
+one test row, not the approach. The implementation results follow each item.
 
 1. The M.E.AI Responses adapter mapping of `ExtraHigh` (expected `xhigh`, as
    in the Chat adapter).
+   Result: verified by decompile of M.E.AI.OpenAI 10.8.3
+   (`OpenAIResponsesChatClient`): `ExtraHigh` -> `"xhigh"`.
 2. Copilot: the output-limit and effort fields in its model catalog, and
    whether it accepts an effort for non-OpenAI models.
+   Result: not verified. Copilot uses the Native dialect. The probe reports no
+   Copilot capability, so `model set` offers only `off` for Copilot.
 3. How the Anthropic Models API reports that a model rejects
    `thinking.type: disabled` (for example `types.enabled` false).
+   Result: not verified. Decision (Aaron): Netclaw offers `off` for each
+   Anthropic model that thinks. A model that rejects a disabled thinking
+   setting returns a loud provider error. Netclaw never retries with another
+   level.
 4. ds4: the request fields of `ds4-server`. Its serving guide is not read yet.
+   Result: not verified. ds4 is not detected; the operator sets the dialect.
 5. SGLang and Ollama `/v1`: `chat_template_kwargs` and `reasoning_effort`
    support.
+   Result: not verified. These servers are not detected; the operator sets the
+   dialect.
 6. vLLM: the exact error when the prompt plus `max_tokens` exceeds
    `max_model_len`, and the gpt-oss level support.
+   Result: not verified. The clamp margin covers the case; a provider error
+   stays loud.
 7. DeepSeek: the output-limit field name in its API reference.
+   Result: not verified. The self-hosted client sends `max_tokens`.
+
+Implementation notes:
+
+- The startup line shows `capability=unresolved` unless the capability is
+  already resolved. The client resolves it on first use (D4) and logs one
+  Information line with the result.
+- "Context window unknown" uses provenance: only the startup default (32768)
+  is unknown. A configured `ContextWindow` and a resolved window are known.
+- Probe capability sources in this change: llama.cpp `/props` (only when the
+  `/v1/models` listing shows llama.cpp markers), the Anthropic model listing,
+  and the OpenRouter catalog. The Ollama probe lists `/api/tags` only, so
+  `model set` offers only `off` for Ollama until a probe reads `/api/show`.
+  The daemon resolver reads `/api/show`.
+- No CLI command sets the provider dialect. `model set` detection or an edit of
+  `Providers:<name>:VendorOptions:ThinkingDialect` sets it. Doctor and the
+  error text name the key and the four values.
+- `doctor --fix` keeps an invalid limit or level and reports an error.

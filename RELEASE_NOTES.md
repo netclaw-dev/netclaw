@@ -1,5 +1,16 @@
 # NetClaw Release Notes
 
+## Unreleased
+
+### Models
+
+- **A model definition has a provider-neutral output limit and thinking level.** `netclaw model set` gets `--max-output-tokens`, `--clear-max-output-tokens`, `--thinking <off|low|medium|high|max>`, and `--clear-thinking`. `netclaw model list` and the TUI role table show "Max out" and "Thinking". `P` in `netclaw model` edits both values. Netclaw maps them to the switch of each provider.
+  - Netclaw rejects a level that the provider dialect or the model does not offer, and lists the offered levels. It never sends a nearby level.
+  - An `openai-compatible` provider needs `Providers:<name>:VendorOptions:ThinkingDialect` (`ChatTemplateKwargs`, `ReasoningEffort`, `DeepSeek`, or `None`) before it can send a level. `model set` saves `ReasoningEffort` when it detects llama.cpp.
+  - **Behavior change:** every provider now receives an output limit. Without a configured value, each call sends 32000 tokens, clamped to the known model maximum and to the context window minus the estimated prompt. Anthropic replies are no longer cut at 1024 tokens. The cost per call can increase.
+  - A hand-edited level that the provider dialect cannot send now fails startup and `netclaw doctor`.
+- **A fallback model no longer receives the request fields of a failed candidate.** Each failover candidate gets its own copy of the request options ([#2681](https://github.com/netclaw-dev/netclaw/issues/2681)).
+
 ## 0.28.1 (2026-10-26)
 
 This is a stable patch release for 0.28.0. Compaction and child agents on the Compaction role now fail over to the Fallback model. A child reply that stops at the output limit now keeps its full text as a partial artifact.

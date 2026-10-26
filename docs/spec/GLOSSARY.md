@@ -1004,3 +1004,56 @@ large result
 ```
 
 The model does not receive the internal spill path.
+
+## Model Request Terms
+
+### Thinking level
+
+A thinking level is the provider-neutral thinking depth of a model
+definition: `Off`, `Low`, `Medium`, `High`, or `Max`. `Max` is the highest
+level that the provider offers. An unset level means the model's default. A
+call site can set its own level, and that level wins.
+
+Code anchor: `ThinkingLevel` (`Netclaw.Configuration`).
+
+### Thinking dialect
+
+A thinking dialect is the wire form that a provider uses for a thinking level
+and for the reasoning suppression intent. It states the levels that the wire
+can send. Netclaw rejects a level that the dialect cannot send. It never sends
+a nearby level instead.
+
+```text
+Native             -> ChatOptions.Reasoning; the SDK writes the wire field
+DeepSeek           -> thinking.type + reasoning_effort (no medium)
+ReasoningEffort    -> reasoning_effort (no max)
+ChatTemplateKwargs -> chat_template_kwargs.enable_thinking (off only)
+OllamaThink        -> think (no max)
+None, Unresolved   -> no level
+```
+
+The provider descriptor owns the dialect. An OpenAI-compatible provider reads
+it from `Providers:<name>:VendorOptions:ThinkingDialect`.
+
+Code anchor: `ThinkingDialectMap` (`Netclaw.Providers`).
+
+### Thinking capability
+
+A thinking capability is what a model accepts: `Unknown`, `None`, `AlwaysOn`,
+or `Controllable` with a set of levels. A capability resolver or a provider
+probe reports it. Netclaw offers a level only when the dialect can send it and
+the capability includes it.
+
+Example:
+
+```text
+dialect DeepSeek, capability Controllable(all levels)
+  -> offered: off, low, high, max
+  -> medium: "the DeepSeek dialect cannot send medium"
+
+dialect ReasoningEffort, capability Unknown
+  -> offered: off
+  -> low: "thinking support unknown for this endpoint"
+```
+
+Code anchor: `ThinkingSupport` (`Netclaw.Configuration`).

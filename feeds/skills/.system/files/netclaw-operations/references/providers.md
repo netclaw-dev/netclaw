@@ -131,6 +131,49 @@ still read. `model list` reports an unparseable config instead of crashing.
 `netclaw doctor --fix` applies only repairs it can derive safely; it does not
 invent missing named definitions or role assignments.
 
+### Output limit and thinking level
+
+A model definition has two provider-neutral settings. You do not need to know
+the switch of each provider: Netclaw maps them.
+
+- `--max-output-tokens <n>` sets the output limit of every call of the model.
+  Thinking tokens count inside the limit, so a low limit with a high level can
+  truncate the reply. The value must be below the context window and not above
+  the model maximum that the probe reports.
+- Without a limit, Netclaw sends 32000 for each call. It clamps the value to
+  the known model maximum and to the context window minus the estimated prompt.
+  Anthropic replies are therefore no longer cut at 1024 tokens.
+- `--thinking <off|low|medium|high|max>` sets the thinking level. `max` is the
+  highest level that the provider offers. A call site can set its own value:
+  memory curation keeps 4096 tokens and no reasoning.
+- `--clear-max-output-tokens` and `--clear-thinking` remove a setting. A set
+  flag and its clear flag cannot be combined.
+
+`model set` probes the provider and offers a level only when the provider
+dialect can send it and the model accepts it. It never sends a nearby level.
+A rejected command prints the offered levels and leaves `netclaw.json`
+unchanged. When the probe does not report the capability, only `off` is
+offered ("thinking support unknown for this endpoint"). DeepSeek offers no
+`medium`. Ollama and `ReasoningEffort` offer no `max`.
+
+An `openai-compatible` provider needs a thinking dialect before it can send a
+level. `model set` saves `ReasoningEffort` when it detects llama.cpp. For
+vLLM, SGLang, ds4, or a proxy, set
+`Providers:<name>:VendorOptions:ThinkingDialect` in `netclaw.json` to
+`ChatTemplateKwargs`, `ReasoningEffort`, `DeepSeek`, or `None`. There is no
+CLI command for this key. Without it, only the output limit works.
+
+In the TUI (`netclaw model`), press `P` on a role to edit both settings of its
+definition. A greyed level shows the reason that it is not offered. The
+settings belong to the definition, so a definition that two roles share
+changes for both. For different settings per role, make a second definition of
+the same model.
+
+A hand-edited level that the dialect cannot send fails startup and
+`netclaw doctor`. `doctor --fix` does not change these values. The startup log
+has one `Model client:` line for each client with its limit, level, dialect,
+and capability.
+
 ### Session input compatibility errors
 
 A saved session can contain image, audio, or video input from an earlier model.

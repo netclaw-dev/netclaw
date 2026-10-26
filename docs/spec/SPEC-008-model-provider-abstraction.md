@@ -35,11 +35,75 @@ Session actors depend on provider-neutral chat client behavior.
 - provider-specific credential fields
 - default model configured per provider profile
 
+## Output Limit and Thinking Level
+
+A model definition can hold two provider-neutral settings. The operator sets
+them with `netclaw model set` or the `P` panel of the TUI model manager. See
+the [engineering glossary](GLOSSARY.md) for "thinking level", "thinking
+dialect", and "thinking capability".
+
+- `MaxOutputTokens`: a positive integer, below `ContextWindow` when that is set.
+- `Thinking`: `Off`, `Low`, `Medium`, `High`, or `Max`.
+
+A call-site value wins over the definition. Memory curation keeps its own
+4096-token limit and its reasoning suppression.
+
+### Default output limit
+
+When no value is set, each call sends a default of 32000 tokens. The model
+client clamps the default for each call:
+
+```text
+value  = min(32000, model max output when known)
+margin = max(1024, window / 20)
+value  = min(value, max(1024, window - prompt estimate - margin))   // when the window is known
+```
+
+The prompt estimate is the compaction rule: characters / 4. The window is the
+configured `ContextWindow`, else the resolved window. The startup default of
+32768 does not count as a known window. An explicit value is sent as is.
+
+### Provider mapping
+
+| Provider | Output limit | Off | Low / Medium / High | Max |
+|---|---|---|---|---|
+| Anthropic | `max_tokens` | `thinking.type: disabled` | adaptive + `output_config.effort` | `output_config.effort: max` |
+| OpenAI, Codex, Copilot (Responses) | `max_output_tokens` | `reasoning.effort: none` | `reasoning.effort` | `xhigh` |
+| OpenRouter | `max_completion_tokens` | `reasoning.effort: none` | `reasoning.effort`, with `exclude` kept | `max` |
+| Venice | `max_completion_tokens` | `reasoning_effort: none` | `reasoning_effort` | `max` |
+| DeepSeek | `max_tokens` | `thinking.type: disabled` | `reasoning_effort` low / high (no medium) | `max` |
+| Ollama | `num_predict` | `think: false` | `think: "low"` / `"medium"` / `"high"` | not offered |
+| OpenAI-compatible | `max_tokens` | per `ThinkingDialect` | per `ThinkingDialect` | per `ThinkingDialect` |
+
+An OpenAI-compatible provider reads its dialect from
+`Providers:<name>:VendorOptions:ThinkingDialect` (`ChatTemplateKwargs`,
+`ReasoningEffort`, `DeepSeek`, or `None`). `netclaw model set` saves
+`ReasoningEffort` when it detects llama.cpp. Without a value, no level is
+offered, and only the output limit works.
+
+### Offered levels
+
+Offered levels = (levels the dialect can send) ∩ (levels the model accepts).
+The model capability comes from the provider probe of `netclaw model set` and
+the TUI. An `Unknown` capability offers only `Off`. Netclaw rejects a level
+that is not offered, and it lists the offered levels. Startup and doctor check
+only the dialect. A provider that rejects a level returns a loud error.
+
+### Failover isolation
+
+Each model client copies the caller's options before any wrapper changes them.
+A fallback candidate never sees the request fields of a failed candidate.
+
 ## Validation and Diagnostics
 
 - CLI validates required fields for selected provider
 - diagnostics report selected provider + model + last error state
 - startup fails on missing required provider credentials
+- startup fails on a thinking level that the provider dialect cannot send, and
+  on an invalid `VendorOptions:ThinkingDialect` value
+- the startup log has one line for each model client with its limit, window,
+  level, dialect, and capability; each call logs one Debug line with the
+  effective limit and level and the source of each
 - local smoke profile supports endpoint-driven provider checks (for Ollama)
 
 ## Local Dev Defaults (Non-CI)

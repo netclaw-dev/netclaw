@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.139.0"
+  version: "2.140.0"
 ---
 
 # Netclaw Operations
@@ -981,6 +981,17 @@ another folder first. Full rotation guidance:
 Add or switch model providers (including OAuth login) and configure search backends
 (e.g. SearXNG) via provider config. Full setup:
 `skill_read_resource('netclaw-operations', 'references/providers.md')`.
+
+Each model definition has a provider-neutral output limit and thinking level:
+`netclaw model set <role> <provider> <model> --max-output-tokens <n>
+--thinking <off|low|medium|high|max>`, or `P` in `netclaw model`. Without a
+limit, each call sends 32000, clamped to the model maximum and the context
+window. Thinking tokens count inside the limit. Netclaw rejects a level that
+the provider or the model does not offer, and it lists the offered levels. An
+`openai-compatible` provider needs
+`Providers:<name>:VendorOptions:ThinkingDialect` (`ChatTemplateKwargs`,
+`ReasoningEffort`, `DeepSeek`, or `None`) before it can send a level; `model
+set` saves it for llama.cpp. Details are in `references/providers.md`.
 
 ## Tool Lists in Config
 
