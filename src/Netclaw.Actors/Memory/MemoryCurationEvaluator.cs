@@ -623,11 +623,11 @@ public sealed class MemoryCurationEvaluator
                 // provider varies per deployment and strict SDKs (official OpenAI,
                 // Anthropic) reject or ignore unknown top-level fields differently
                 // than self-hosted servers do. NetclawChatOptionKeys.SuppressReasoning
-                // is a provider-agnostic intent key; ReasoningSuppressionChatClient
+                // is a provider-agnostic intent key; ModelRequestSettingsChatClient
                 // (Netclaw.Daemon, wrapping every chat client the daemon constructs)
-                // reads it, removes it, and maps it to the dialect the active
-                // provider plugin declares (ILlmProviderPlugin.SuppressionDialect) —
-                // or strips it with no replacement for providers with no equivalent.
+                // reads it, removes it, and maps it through the provider's thinking
+                // dialect (IProviderDescriptor.ResolveThinkingDialect) — or strips it
+                // with no replacement for providers with no equivalent.
                 // StripThinkBlocks in ParseResponse remains the braces.
                 AdditionalProperties = new AdditionalPropertiesDictionary
                 {

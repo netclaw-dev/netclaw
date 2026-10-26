@@ -46,6 +46,8 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
         ModelModality? inputModalities = null;
         ModelModality? outputModalities = null;
         int? contextWindowTokens = null;
+        int? maxOutputTokens = null;
+        var thinking = ThinkingSupport.Unknown;
         var anyResultProduced = false;
 
         foreach (var resolver in _resolvers)
@@ -90,6 +92,11 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
             // resolver from supplying the real limit.
             if (contextWindowTokens is null && result.ContextWindowTokens is > 0)
                 contextWindowTokens = result.ContextWindowTokens;
+            if (maxOutputTokens is null && result.MaxOutputTokens is > 0)
+                maxOutputTokens = result.MaxOutputTokens;
+            // Unknown is "this source does not say", so a later source may still answer.
+            if (thinking.Kind == ThinkingSupportKind.Unknown)
+                thinking = result.Thinking;
 
             _logger.LogDebug(
                 "Resolved partial capabilities for {ModelId} via {Resolver}: input={Input}, output={Output}, ctx={Ctx}",
@@ -99,7 +106,8 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
                 result.ContextWindowTokens?.ToString() ?? "null");
 
             // Early-out optimization: every field filled, stop walking.
-            if (inputModalities is not null && outputModalities is not null && contextWindowTokens is not null)
+            if (inputModalities is not null && outputModalities is not null && contextWindowTokens is not null
+                && maxOutputTokens is not null && thinking.Kind != ThinkingSupportKind.Unknown)
                 break;
         }
 
@@ -107,7 +115,11 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
             return null;
 
         return new ResolvedModelCapabilities(
-            modelId, inputModalities, outputModalities, contextWindowTokens);
+            modelId, inputModalities, outputModalities, contextWindowTokens)
+        {
+            Thinking = thinking,
+            MaxOutputTokens = maxOutputTokens,
+        };
     }
 
     private static bool IsEligible(IModelCapabilityResolver resolver, string? activeProvider)

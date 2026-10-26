@@ -20,6 +20,9 @@ public sealed class ProviderPluginFactory
 {
     private readonly Dictionary<string, ProviderEntry> _providers;
     private readonly Dictionary<string, ILlmProviderPlugin> _plugins;
+    private readonly IModelCapabilityResolver _capabilities;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _logger;
 
     public ProviderPluginFactory(
         Dictionary<string, ProviderEntry> providers,
@@ -28,6 +31,9 @@ public sealed class ProviderPluginFactory
         ILoggerFactory loggerFactory)
     {
         _providers = providers;
+        _capabilities = capabilities;
+        _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<ProviderPluginFactory>();
         _plugins = new Dictionary<string, ILlmProviderPlugin>(StringComparer.OrdinalIgnoreCase);
         foreach (var plugin in plugins)
             _plugins[plugin.TypeKey] = plugin;
@@ -77,17 +83,38 @@ public sealed class ProviderPluginFactory
                 $"Unknown provider type '{provider.Type}'. "
                 + $"Supported: {string.Join(", ", _plugins.Keys)}");
 
+        // Startup checks only the dialect: the model capability is resolved at runtime (D5). A
+        // hand-edited level that the dialect cannot send fails here, never at the first call.
+        if (ModelSettingsValidator.CheckDialect(model.Provider, provider, plugin, model) is { } settingsError)
+            throw new InvalidOperationException(settingsError);
+        var dialect = plugin.ResolveThinkingDialect(provider);
+
         var client = plugin.CreateChatClient(provider, model);
         var vendorOptions = plugin.CreateVendorOptionsSource(provider);
         IChatClient decorated = vendorOptions is null
             ? client
             : new VendorOptionsChatClient(client, vendorOptions);
 
-        // Applied to every provider/role, not just curation's — any call site can carry the
-        // NetclawChatOptionKeys.SuppressReasoning intent key, and this is the one seam every
-        // chat client the daemon constructs passes through, so it is the only place that can
-        // guarantee the intent key never reaches a raw provider SDK unmapped.
-        return new ReasoningSuppressionChatClient(decorated, plugin.SuppressionDialect);
+        // The outermost wrapper of every client the daemon builds, for every role: it copies the
+        // caller's options before any wrapper below changes them (#2681), applies the definition's
+        // limit and level, and always removes the NetclawChatOptionKeys.SuppressReasoning intent key.
+        var settings = new ModelRequestSettingsChatClient(
+            decorated, model, dialect, _capabilities, _loggerFactory.CreateLogger<ModelRequestSettingsChatClient>());
+        LogModelClient(model, dialect, settings.ResolvedCapability);
+        return settings;
+    }
+
+    private void LogModelClient(ModelReference model, ThinkingDialect dialect, ResolvedModelCapabilities? capability)
+    {
+        var window = model.ContextWindow?.ToString() ?? capability?.ContextWindowTokens?.ToString() ?? "unknown";
+        var limit = model.MaxOutputTokens is { } configured
+            ? $"{configured} (configured)"
+            : $"default {OutputLimitResolver.DefaultLimit} (clamped per call)";
+        var thinking = model.Thinking is { } level ? $"{level} (configured)" : "unset";
+        _logger.LogInformation(
+            "Model client: provider={Provider} model={ModelId} maxOutputTokens={MaxOutputTokens} window={Window} modelMax={ModelMax} thinking={Thinking} dialect={Dialect} capability={Capability}",
+            model.Provider, model.ModelId, limit, window, capability?.MaxOutputTokens?.ToString() ?? "unknown",
+            thinking, dialect, capability?.Thinking.ToString() ?? "unresolved");
     }
 }
 
@@ -119,91 +146,5 @@ internal sealed class VendorOptionsChatClient : DelegatingChatClient
         options ??= new ChatOptions();
         _vendorOptionsSource.Apply(options);
         return base.GetStreamingResponseAsync(messages, options, cancellationToken);
-    }
-}
-
-/// <summary>
-/// Maps the <see cref="NetclawChatOptionKeys.SuppressReasoning"/> intent key to the wire
-/// dialect the wrapped provider plugin declares (<see cref="ILlmProviderPlugin.SuppressionDialect"/>),
-/// then always removes the intent key — regardless of dialect — so it never leaks onto the wire
-/// as an unrecognized field.
-///
-/// Verified adapter behavior (see PR body / decompiled Microsoft.Extensions.AI.OpenAI and
-/// Anthropic.SDK ChatOptions→wire mappings): neither the official OpenAI SDK adapter
-/// (<c>OpenAIChatClient</c>/<c>OpenAIResponsesChatClient</c>) nor Anthropic.SDK's
-/// <c>AsIChatClient()</c> adapter ever iterates <see cref="ChatOptions.AdditionalProperties"/>
-/// to copy arbitrary entries onto the request body — both only special-case a
-/// <c>"strict"</c> flag inside AdditionalProperties for JSON-schema response formats. So today,
-/// unmapped dialect keys sent to those providers are silently inert, not a source of live 400s.
-/// This decorator still strips unconditionally for every dialect (including <see cref="ReasoningSuppressionDialect.None"/>)
-/// so that behavior doesn't become load-bearing, and so a future provider plugin wrapping a
-/// different (possibly stricter, possibly RawRepresentationFactory-driven) adapter is safe by
-/// construction rather than by accident.
-///
-/// Mutates the incoming <see cref="ChatOptions"/> in place, matching
-/// <see cref="VendorOptionsChatClient"/>'s established pattern — call sites construct a fresh
-/// <see cref="ChatOptions"/> per call, so there is no shared-instance/retry hazard from
-/// in-place mutation.
-/// </summary>
-internal sealed class ReasoningSuppressionChatClient : DelegatingChatClient
-{
-    private readonly ReasoningSuppressionDialect _dialect;
-
-    public ReasoningSuppressionChatClient(IChatClient innerClient, ReasoningSuppressionDialect dialect)
-        : base(innerClient)
-    {
-        _dialect = dialect;
-    }
-
-    public override Task<ChatResponse> GetResponseAsync(
-        IEnumerable<ChatMessage> messages,
-        ChatOptions? options = null,
-        CancellationToken cancellationToken = default)
-    {
-        ApplyDialect(options);
-        return base.GetResponseAsync(messages, options, cancellationToken);
-    }
-
-    public override IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-        IEnumerable<ChatMessage> messages,
-        ChatOptions? options = null,
-        CancellationToken cancellationToken = default)
-    {
-        ApplyDialect(options);
-        return base.GetStreamingResponseAsync(messages, options, cancellationToken);
-    }
-
-    private void ApplyDialect(ChatOptions? options)
-    {
-        if (options?.AdditionalProperties is not { } properties)
-            return;
-        if (!properties.TryGetValue(NetclawChatOptionKeys.SuppressReasoning, out var intent))
-            return;
-
-        // Always remove the intent key itself — a call site's internal signal must never
-        // reach a provider SDK verbatim, regardless of whether the dialect below applies.
-        properties.Remove(NetclawChatOptionKeys.SuppressReasoning);
-
-        if (intent is not true)
-            return;
-
-        switch (_dialect)
-        {
-            case ReasoningSuppressionDialect.ChatTemplateKwargs:
-                properties["chat_template_kwargs"] = new Dictionary<string, object?> { ["enable_thinking"] = false };
-                break;
-
-            case ReasoningSuppressionDialect.OllamaThink:
-                properties["think"] = false;
-                break;
-
-            case ReasoningSuppressionDialect.DeepSeekThinking:
-                properties["thinking"] = new Dictionary<string, object?> { ["type"] = "disabled" };
-                break;
-
-            case ReasoningSuppressionDialect.None:
-            default:
-                break;
-        }
     }
 }
