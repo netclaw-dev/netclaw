@@ -1116,6 +1116,16 @@
           "type": "string",
           "description": "Manual override for output modalities. Comma-separated ModelModality flags (e.g. \"Text\"). Bypasses automated detection.",
           "pattern": "^(Text|Image|Audio|Video)(\\s*,\\s*(Text|Image|Audio|Video))*$"
+        },
+        "MaxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Output limit in tokens for every call of this model, unless the call site sets its own. Must be below ContextWindow when ContextWindow is set. When absent, Netclaw sends a default of 32000, clamped per call to the model maximum and to the context window minus the estimated prompt."
+        },
+        "Thinking": {
+          "type": "string",
+          "enum": ["Off", "Low", "Medium", "High", "Max"],
+          "description": "Provider-neutral thinking level for every call of this model, unless the call site sets its own. Max is the highest level that the provider offers. When absent, the model's default applies."
         }
       },
       "additionalProperties": false

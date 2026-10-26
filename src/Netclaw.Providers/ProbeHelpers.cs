@@ -26,6 +26,14 @@ internal static class ProbeHelpers
 
     internal static ProviderProbeResult ParseOpenAiStyleModels(
         string json, Func<JsonElement, int?> readContextWindow)
+        => ParseOpenAiStyleModels(json, (model, discovered) => discovered with { ContextWindowTokens = readContextWindow(model) });
+
+    /// <summary>
+    /// Same listing shape. <paramref name="enrich"/> adds what the listing entry reports about the
+    /// model, for example its thinking capability.
+    /// </summary>
+    internal static ProviderProbeResult ParseOpenAiStyleModels(
+        string json, Func<JsonElement, DiscoveredModel, DiscoveredModel> enrich)
     {
         using var doc = JsonDocument.Parse(json);
         var models = new List<DiscoveredModel>();
@@ -36,11 +44,7 @@ internal static class ProbeHelpers
             {
                 if (model.TryGetProperty("id", out var id))
                 {
-                    models.Add(new DiscoveredModel
-                    {
-                        ModelId = new(id.GetString()!),
-                        ContextWindowTokens = readContextWindow(model)
-                    });
+                    models.Add(enrich(model, new DiscoveredModel { ModelId = new(id.GetString()!) }));
                 }
             }
         }

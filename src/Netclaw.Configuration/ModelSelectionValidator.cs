@@ -29,12 +29,37 @@ public sealed class ModelSelectionValidator : IValidateOptions<ModelSelection>
     }
 
     private static void ValidateRole(string role, ModelReference model, List<string> errors)
+        => errors.AddRange(ValidateModel($"Models:{role}", model));
+
+    /// <summary>
+    /// The configuration-only rules of one model. <paramref name="keyPath"/> is the key of the model
+    /// entry, for example <c>Models:Definitions:fast</c>, and each message starts with it.
+    /// </summary>
+    public static IReadOnlyList<string> ValidateModel(string keyPath, ModelReference model)
     {
+        var errors = new List<string>();
         if (model.ContextWindow is int value && value < MinContextWindow)
         {
             errors.Add(
-                $"Models:{role}:ContextWindow ({value}) is below minimum ({MinContextWindow}). " +
+                $"{keyPath}:ContextWindow ({value}) is below minimum ({MinContextWindow}). " +
                 "A context window below 4096 tokens is too small for practical use.");
         }
+
+        if (model.MaxOutputTokens is int limit)
+        {
+            if (limit <= 0)
+            {
+                errors.Add($"{keyPath}:MaxOutputTokens ({limit}) must be a positive integer.");
+            }
+            else if (model.ContextWindow is int window && limit >= window)
+            {
+                // The prompt shares the window with the output, so a limit that fills the window
+                // leaves no room for the prompt and every call fails.
+                errors.Add(
+                    $"{keyPath}:MaxOutputTokens ({limit}) must be below the context window ({window}).");
+            }
+        }
+
+        return errors;
     }
 }

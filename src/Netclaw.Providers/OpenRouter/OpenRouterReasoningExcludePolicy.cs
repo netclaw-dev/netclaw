@@ -30,6 +30,24 @@ internal sealed class OpenRouterReasoningExcludePolicy : PipelinePolicy
         await ProcessNextAsync(message, pipeline, currentIndex);
     }
 
+    // Merge, do not replace: the thinking level writes the effort, and the exclude switch must keep
+    // it. The SDK writes the effort as the top-level reasoning_effort field; OpenRouter documents the
+    // reasoning object, so the effort moves into it.
     private static void InjectReasoningExclude(JsonObject body)
-        => body["reasoning"] = new JsonObject { ["exclude"] = true };
+    {
+        if (body["reasoning"] is not JsonObject reasoning)
+        {
+            reasoning = new JsonObject();
+            body["reasoning"] = reasoning;
+        }
+
+        if (body["reasoning_effort"] is { } effort)
+        {
+            body.Remove("reasoning_effort");
+            if (reasoning["effort"] is null)
+                reasoning["effort"] = effort;
+        }
+
+        reasoning["exclude"] = true;
+    }
 }

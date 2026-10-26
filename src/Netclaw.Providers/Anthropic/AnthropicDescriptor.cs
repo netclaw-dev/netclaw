@@ -48,7 +48,10 @@ public sealed class AnthropicDescriptor : IProviderDescriptor
                 request.Headers.Add("x-api-key", apiKey);
                 request.Headers.Add("anthropic-version", "2023-06-01");
             },
-            ProbeHelpers.ParseOpenAiStyleModels,
+            json => ProbeHelpers.ParseOpenAiStyleModels(json, (model, discovered) =>
+                AnthropicCapabilityResolver.ParseModel(model, discovered.ModelId.Value) is { } capability
+                    ? discovered with { Thinking = capability.Thinking, MaxOutputTokens = capability.MaxOutputTokens }
+                    : discovered),
             ct);
     }
 }

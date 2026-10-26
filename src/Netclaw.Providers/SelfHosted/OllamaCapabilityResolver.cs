@@ -97,6 +97,50 @@ public sealed class OllamaCapabilityResolver : IModelCapabilityResolver
         }
 
         // Ollama only serves text generators — output is always text
-        return new ResolvedModelCapabilities(modelId, inputModalities, ModelModality.Text, contextWindow);
+        return new ResolvedModelCapabilities(modelId, inputModalities, ModelModality.Text, contextWindow)
+        {
+            Thinking = ParseThinking(doc.RootElement),
+        };
+    }
+
+    /// <summary>
+    /// Maps <c>thinking.values</c> of <c>/api/show</c>: level strings are the accepted levels;
+    /// <c>[false]</c> means the model does not think; a <c>true</c> value means only on and off. No
+    /// thinking object means that the server does not report it.
+    /// </summary>
+    private static ThinkingSupport ParseThinking(JsonElement root)
+    {
+        if (!root.TryGetProperty("thinking", out var thinking)
+            || thinking.ValueKind != JsonValueKind.Object
+            || !thinking.TryGetProperty("values", out var values)
+            || values.ValueKind != JsonValueKind.Array)
+            return ThinkingSupport.Unknown;
+
+        var levels = new List<ThinkingLevel>();
+        var canThink = false;
+        foreach (var value in values.EnumerateArray())
+        {
+            switch (value.ValueKind)
+            {
+                case JsonValueKind.True:
+                    canThink = true;
+                    levels.Add(ThinkingLevel.Off);
+                    break;
+                case JsonValueKind.String:
+                    canThink = true;
+                    ThinkingLevel? level = value.GetString() switch
+                    {
+                        "low" => ThinkingLevel.Low,
+                        "medium" => ThinkingLevel.Medium,
+                        "high" => ThinkingLevel.High,
+                        _ => null,
+                    };
+                    if (level is { } known)
+                        levels.Add(known);
+                    break;
+            }
+        }
+
+        return canThink ? ThinkingSupport.Controllable([.. levels]) : ThinkingSupport.None;
     }
 }

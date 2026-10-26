@@ -10,6 +10,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
 using Netclaw.Providers;
 using OpenAI;
+using OpenAI.Chat;
 
 namespace Netclaw.Providers.OpenRouter;
 
@@ -37,7 +38,9 @@ public sealed class OpenRouterProviderPlugin : ProviderPluginBase<OpenRouterDesc
 
         var client = new OpenAIClient(new ApiKeyCredential(apiKey), options);
 
-        return client.GetChatClient(model.ModelId).AsIChatClient();
+        return new MaxEffortChatClient(
+            client.GetChatClient(model.ModelId).AsIChatClient(),
+            _ => new ChatCompletionOptions { ReasoningEffortLevel = new ChatReasoningEffortLevel("max") });
     }
 
     public override IVendorOptionsSource? CreateVendorOptionsSource(ProviderEntry entry)

@@ -218,6 +218,8 @@ public static class ModelConfigurationResolver
         Provenance = source.Provenance,
         InputModalities = source.InputModalities,
         OutputModalities = source.OutputModalities,
+        MaxOutputTokens = source.MaxOutputTokens,
+        Thinking = source.Thinking,
     };
 }
 

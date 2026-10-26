@@ -45,7 +45,13 @@ public sealed class OpenRouterDescriptor : IProviderDescriptor
             ModelListingPath,
             entry.Endpoint,
             request => request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey),
-            ProbeHelpers.ParseOpenAiStyleModels,
+            json => ProbeHelpers.ParseOpenAiStyleModels(json, (model, discovered) => discovered with
+            {
+                Thinking = OpenRouterOracleResolver.ParseThinking(model),
+                MaxOutputTokens = model.TryGetProperty("top_provider", out var topProvider)
+                    ? ProbeHelpers.TryReadPositiveInt32(topProvider, "max_completion_tokens")
+                    : null,
+            }),
             ct);
     }
 }

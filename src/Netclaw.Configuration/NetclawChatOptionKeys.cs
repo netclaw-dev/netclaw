@@ -10,10 +10,10 @@ namespace Netclaw.Configuration;
 ///
 /// Call sites (actors, pipelines) that need a provider-serving-stack behavior express the
 /// <em>intent</em> using one of these keys — never a raw wire field name. The provider layer
-/// (<c>ReasoningSuppressionChatClient</c> in Netclaw.Daemon, wrapping every
+/// (<c>ModelRequestSettingsChatClient</c> in Netclaw.Daemon, wrapping every
 /// <see cref="Microsoft.Extensions.AI.IChatClient"/> the daemon constructs) reads the intent key,
-/// removes it, and maps it to whichever dialect the active provider plugin declares understanding
-/// of (<c>ILlmProviderPlugin.SuppressionDialect</c>) — or strips it with no replacement for
+/// removes it, and maps it through the thinking dialect of the active provider
+/// (<c>IProviderDescriptor.ResolveThinkingDialect</c>) — or strips it with no replacement for
 /// providers with no equivalent. This keeps call sites free of knowledge about which serving
 /// stack (vLLM, llama.cpp, Ollama, official OpenAI/Anthropic SDKs, ...) sits on the other end of
 /// the wire for the model currently selected.

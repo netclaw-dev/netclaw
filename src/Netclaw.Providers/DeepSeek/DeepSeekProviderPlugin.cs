@@ -37,7 +37,4 @@ public sealed class DeepSeekProviderPlugin(
             OpenAiCompatibleWireProfile.DeepSeek,
             loggerFactory.CreateLogger<OpenAiCompatibleChatClient>());
     }
-
-    public override ReasoningSuppressionDialect SuppressionDialect =>
-        ReasoningSuppressionDialect.DeepSeekThinking;
 }

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Anthropic;
+using Anthropic.Models.Messages;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Providers;
@@ -26,6 +27,14 @@ public sealed class AnthropicProviderPlugin : ProviderPluginBase<AnthropicDescri
             ApiKey = apiKey,
             HttpClient = CreateLlmHttpClient()
         });
-        return client.AsIChatClient(model.ModelId);
+        return new MaxEffortChatClient(client.AsIChatClient(model.ModelId), options => new MessageCreateParams
+        {
+            // A raw request replaces the adapter's own max_tokens, so it carries the limit of the call.
+            MaxTokens = options.MaxOutputTokens
+                ?? throw new InvalidOperationException("An Anthropic call with thinking level 'max' needs an output limit."),
+            Messages = [],
+            Model = options.ModelId ?? model.ModelId,
+            OutputConfig = new OutputConfig { Effort = Effort.Max },
+        });
     }
 }

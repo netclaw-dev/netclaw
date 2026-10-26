@@ -134,11 +134,13 @@ internal sealed class LlamaCppBackendStrategy : IOpenAiBackendStrategy
         // model metadata or block later resolvers from detecting image support.
         ModelModality? inputModalities = null;
         ModelModality? outputModalities = null;
+        var thinking = ThinkingSupport.Unknown;
         if (probe.PropsRoot is JsonElement props)
         {
             if (!IsRouterProps(props))
             {
                 contextWindow = TryReadPropsContext(props) ?? contextWindow;
+                thinking = ReadThinking(props);
 
                 if (TryReadInputModalities(props) is { } detectedInputModalities)
                 {
@@ -149,8 +151,35 @@ internal sealed class LlamaCppBackendStrategy : IOpenAiBackendStrategy
         }
 
         return new ResolvedModelCapabilities(
-            probe.ModelId, inputModalities, outputModalities, contextWindow);
+            probe.ModelId, inputModalities, outputModalities, contextWindow)
+        {
+            Thinking = thinking,
+        };
     }
+
+    /// <summary>
+    /// llama.cpp reports <c>chat_template_caps.supports_reasoning_effort</c> when the template reads
+    /// <c>reasoning_effort</c>; it maps <c>none</c> to <c>enable_thinking</c> false. A template that
+    /// only reads <c>enable_thinking</c> or emits <c>&lt;think&gt;</c> can turn thinking off, and
+    /// nothing else is known. Router props never reach this method.
+    /// </summary>
+    internal static ThinkingSupport ReadThinking(JsonElement props)
+    {
+        if (props.TryGetProperty("chat_template_caps", out var caps)
+            && caps.ValueKind == JsonValueKind.Object
+            && caps.TryGetProperty("supports_reasoning_effort", out var effort)
+            && effort.ValueKind == JsonValueKind.True)
+            return ThinkingSupport.Controllable(ThinkingLevel.Off, ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High);
+
+        var template = props.TryGetProperty("chat_template", out var t) && t.ValueKind == JsonValueKind.String
+            ? t.GetString() ?? ""
+            : "";
+        return template.Contains("enable_thinking", StringComparison.Ordinal) || template.Contains("<think>", StringComparison.Ordinal)
+            ? ThinkingSupport.Controllable(ThinkingLevel.Off)
+            : ThinkingSupport.Unknown;
+    }
+
+    internal static bool IsRouter(JsonElement props) => IsRouterProps(props);
 
     private static int? TryReadModelMetaContext(JsonElement model)
     {

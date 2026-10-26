@@ -18,8 +18,8 @@ namespace Netclaw.Providers.SelfHosted;
 public enum OpenAiCompatibleWireProfile
 {
     Generic,
-    // DeepSeek requires a thinking field and reasoning_content replay rules.
-    // The generic OpenAI-compatible payload does not apply these rules.
+    // DeepSeek requires reasoning_content replay rules. The DeepSeek thinking dialect, not this
+    // profile, writes the thinking fields. The generic payload does not apply these rules.
     DeepSeek,
 }
 
@@ -255,9 +255,6 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         if (options?.Tools is { Count: > 0 } tools)
             body["tools"] = new JsonArray(tools.Select(ToTool).ToArray<JsonNode>());
 
-        if (_wireProfile == OpenAiCompatibleWireProfile.DeepSeek)
-            ApplyDeepSeekReasoning(body, options?.Reasoning?.Effort);
-
         // Pass through additional properties as top-level JSON fields.
         // Enables provider-specific options like chat_template_kwargs for llama.cpp.
         if (options?.AdditionalProperties is { Count: > 0 } additional)
@@ -273,28 +270,6 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         LogPrefixDiagnostic(body);
 
         return body;
-    }
-
-    private static void ApplyDeepSeekReasoning(JsonObject body, ReasoningEffort? effort)
-    {
-        switch (effort)
-        {
-            case ReasoningEffort.None:
-                body["thinking"] = new JsonObject { ["type"] = "disabled" };
-                break;
-
-            case ReasoningEffort.Low:
-            case ReasoningEffort.Medium:
-            case ReasoningEffort.High:
-                body["thinking"] = new JsonObject { ["type"] = "enabled" };
-                body["reasoning_effort"] = "high";
-                break;
-
-            case ReasoningEffort.ExtraHigh:
-                body["thinking"] = new JsonObject { ["type"] = "enabled" };
-                body["reasoning_effort"] = "max";
-                break;
-        }
     }
 
     /// <summary>

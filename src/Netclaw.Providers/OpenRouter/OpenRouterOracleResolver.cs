@@ -135,10 +135,65 @@ public sealed class OpenRouterOracleResolver : IModelCapabilityResolver
 
             contextWindow = ProbeHelpers.TryReadPositiveInt32(model, "context_length");
 
-            result[id] = new ResolvedModelCapabilities(id, input, output, contextWindow);
+            result[id] = new ResolvedModelCapabilities(id, input, output, contextWindow)
+            {
+                Thinking = ParseThinking(model),
+                MaxOutputTokens = model.TryGetProperty("top_provider", out var topProvider)
+                    ? ProbeHelpers.TryReadPositiveInt32(topProvider, "max_completion_tokens")
+                    : null,
+            };
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Maps the catalog reasoning fields: no <c>reasoning</c> parameter means the model does not think;
+    /// <c>reasoning.mandatory</c> means it cannot turn thinking off; <c>reasoning.supported_efforts</c>
+    /// lists its levels. Without that list, every level is offered. "minimal" and "xhigh" have no
+    /// Netclaw level; Netclaw Max sends "max" to OpenRouter.
+    /// </summary>
+    internal static ThinkingSupport ParseThinking(JsonElement model)
+    {
+        if (!model.TryGetProperty("supported_parameters", out var parameters) || parameters.ValueKind != JsonValueKind.Array)
+            return ThinkingSupport.Unknown;
+        if (!parameters.EnumerateArray().Any(p => p.ValueKind == JsonValueKind.String && p.GetString() == "reasoning"))
+            return ThinkingSupport.None;
+
+        var reasoning = model.TryGetProperty("reasoning", out var r) && r.ValueKind == JsonValueKind.Object ? r : default;
+        var mandatory = reasoning.ValueKind == JsonValueKind.Object
+                        && reasoning.TryGetProperty("mandatory", out var m) && m.ValueKind == JsonValueKind.True;
+        var levels = new List<ThinkingLevel>();
+        if (reasoning.ValueKind == JsonValueKind.Object
+            && reasoning.TryGetProperty("supported_efforts", out var efforts)
+            && efforts.ValueKind == JsonValueKind.Array
+            && efforts.GetArrayLength() > 0)
+        {
+            foreach (var effort in efforts.EnumerateArray())
+            {
+                ThinkingLevel? level = effort.GetString() switch
+                {
+                    "none" => ThinkingLevel.Off,
+                    "low" => ThinkingLevel.Low,
+                    "medium" => ThinkingLevel.Medium,
+                    "high" => ThinkingLevel.High,
+                    "max" => ThinkingLevel.Max,
+                    _ => null,
+                };
+                if (level is { } value)
+                    levels.Add(value);
+            }
+        }
+        else
+        {
+            levels.AddRange([ThinkingLevel.Low, ThinkingLevel.Medium, ThinkingLevel.High, ThinkingLevel.Max]);
+        }
+
+        if (mandatory)
+            levels.Remove(ThinkingLevel.Off);
+        else
+            levels.Add(ThinkingLevel.Off);
+        return ThinkingSupport.Controllable([.. levels]);
     }
 
     internal static ModelModality ParseModalityArray(JsonElement array)
