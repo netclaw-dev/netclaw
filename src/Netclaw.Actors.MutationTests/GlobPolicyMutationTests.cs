@@ -248,6 +248,23 @@ public sealed class GlobPolicyMutationTests
         Assert.Equal(complete, IsLinkContained(covering, "a*/x"));
     }
 
+    [Theory]
+    [InlineData(4096, true)]
+    [InlineData(4097, false)]
+    public void Glob_leaf_alias_hops_retain_both_sides_of_the_work_bound(int aliases, bool complete)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var target = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
+        for (var index = 0; index < aliases; index++)
+            Directory.CreateSymbolicLink(Path.Combine(covering, $"a{index}"), target);
+
+        Assert.Equal(complete, IsLinkContained(covering, "a*/"));
+    }
+
     [Fact]
     public void Glob_link_walk_accepts_a_missing_covering_directory()
     {
@@ -440,6 +457,8 @@ public sealed class GlobPolicyMutationTests
 
         Assert.True(IsLinkContained(covering, "a*/"));
         Assert.False(policy.CommandReferencesDeniedPath($"ls -d {covering}/a*/", tree.Root));
+        Assert.False(policy.CommandReferencesDeniedPath($"ls -d {covering}/a*/*/", tree.Root));
+        Assert.False(policy.CommandReferencesDeniedPath($"ls -d {covering}/a*/*", tree.Root));
         Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/a*", tree.Root));
     }
 

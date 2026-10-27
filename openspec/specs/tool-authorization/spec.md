@@ -458,17 +458,19 @@ the link check, then protection.
   parent of the config directory is not denied by this rule. Each other shell program SHALL keep
   `Write` protection for each path, so each write to a config file stays
   denied.
-- Owner decision D5 (option A): a shell glob word that can match a protected
-  shell path, the default credential store (`~/.netclaw/keys`,
+- Owner decision D5: a shell glob word that can match a protected shell
+  path, the default credential store (`~/.netclaw/keys`,
   `~/.netclaw/config/secrets.json`), or a directory that contains one, SHALL
-  get the literal-path denial (`shell_references_protected_path`). The match
-  SHALL be lexical and segment by segment. It SHALL cover dot entries,
-  bracket expressions, and case. Netclaw SHALL NOT list directories or follow
-  links for this check.
-- Accepted D5 gap: a link below the covering directory of a glob that leads
-  to a protected path is not seen by the lexical check. Only a person can make
-  such a link, because an agent call that links to the credential store
-  (`ln -s ~/.netclaw/keys x` or `ln -s ~/.netclaw/k* x`) is denied.
+  get the literal-path denial (`shell_references_protected_path`).
+  The authored pattern SHALL retain its lexical segment check, including dot
+  entries, bracket expressions, and case.
+- Bounded glob alias reach: Netclaw SHALL inspect directory aliases under the
+  TA-7 bounds. The protected-path screen SHALL check each known target and
+  the remaining pattern below that target before reusable approval.
+  A later incomplete branch SHALL NOT remove a known protected target.
+  A protected target SHALL retain its denial when another branch fails,
+  leaves the boundary, or exhausts a bound.
+  This rule SHALL NOT claim protection for arbitrary recursive program behavior.
 - A shell word that reads a proved variable value SHALL get the protected-path
   decision of the literal value.
 - Allow checks SHALL compare paths with ordinal case except on Windows. Deny
@@ -682,6 +684,20 @@ process-local. No state of these checks is durable.
 - **THEN** authorization returns `Denied`, and the shell redirect gets reason `shell_path_protected`
 - **AND** `file_read` on that file is not denied
 
+#### Scenario: A contained alias target remains protected
+
+- **GIVEN** a bounded glob with a matched directory alias inside its covering directory
+- **AND** the target or its remaining pattern reaches a protected path
+- **WHEN** Netclaw evaluates the call with a global grant
+- **THEN** the protected-path screen denies the call before grant coverage
+
+#### Scenario: An incomplete branch cannot erase known protected reach
+
+- **GIVEN** a bounded glob whose first alias reaches a protected path
+- **AND** another branch has a broken link or exceeds the walk bound
+- **WHEN** Netclaw evaluates the call
+- **THEN** the known protected target retains its terminal denial
+
 ### Requirement: TA-7 Shell analysis uses general syntax facts
 
 Netclaw SHALL analyze a shell call with ShellSyntaxTree for the native shell
@@ -716,12 +732,23 @@ have their glossary meaning.
   code, SHALL NOT make the call unresolved. Its scope SHALL be the deepest
   ancestor directory of its text before the first control character. The
   scope SHALL hold no control character, so the prompt can show it.
-- Glob path facts (Bash 5.2 host): the scope of a glob word SHALL be its
-  covering directory. Netclaw SHALL walk the directories that each segment
-  can match, to a bound of 4096 directories, and every match SHALL stay inside
-  the covering directory. A link that leaves the covering directory, or a walk
-  that fails, SHALL keep the candidate exact with `Once` and `Deny` only. A
-  glob with a wildcard in a directory segment (`*/notes.md`) can expand to an
+- Glob path facts (Bash 5.2 host): the scope of a glob word SHALL include
+  its covering directory and every known alias target scope.
+  Netclaw SHALL walk only the directory branches that each segment can match.
+  Reusable reach SHALL require a count of 4096 work units or less.
+  Each intermediate directory visit and each link hop SHALL consume one unit.
+  Ordinary directory-entry scans are outside this count.
+  Every target and residual match SHALL stay inside the original covering boundary.
+  A pattern with a trailing slash SHALL retain its directory-only restriction
+  when Netclaw computes known target reach.
+  A contained directory alias SHALL be reusable only after complete target,
+  protected-path, and grant-scope proof.
+  The walk SHALL retain the existing link-hop bound.
+  A cycle, broken link, unknown target, inspection failure, outside target, or
+  exhausted bound SHALL keep reusable scope unresolved.
+  An unresolved walk SHALL retain `Once` and `Deny` only unless a prior screen denies it.
+  A repeated physical directory SHALL NOT suppress a different remaining pattern.
+  A glob with a wildcard in a directory segment (`*/notes.md`) can expand to an
   option word, so decision D1 SHALL apply to it. A leaf glob (`*.cs`) SHALL
   keep its path rule.
 - Variable values: a word that reads a proved variable value SHALL get the
@@ -1063,6 +1090,22 @@ the command exact, so the call gets the rewrite correction.
 - **AND** the candidates are only the `find` and `grep` commands whose directory is not known
 - **AND** no `echo` command is a candidate
 
+#### Scenario: A contained directory alias supports the existing diagnostic policy
+
+- **GIVEN** the Bash 5.2 host with a proved HOME and existing read authority
+- **AND** `repositories/alias` names `repositories/owner/project` inside the covering directory
+- **AND** every reachable target passes protection and the applicable authority rules
+- **WHEN** Netclaw evaluates `ls -d ~/repositories/*/ ~/repositories/*/*/ 2>/dev/null | head -60`
+- **THEN** the existing reviewed diagnostic policy can permit the complete call
+
+#### Scenario: An outside alias stays unresolved under a global grant
+
+- **GIVEN** a bounded glob with a matched directory alias outside the original covering directory
+- **WHEN** Netclaw evaluates the call with a global grant
+- **THEN** the grant does not replace the missing bounded scope proof
+- **AND** an interactive call retains exact consent unless a prior screen denies it
+- **AND** an unattended call denies the unresolved call
+
 ### Requirement: TA-8 Every candidate needs coverage
 
 A call SHALL run without a prompt only when every candidate has
@@ -1150,6 +1193,15 @@ in the occurrence directory and the resolved link target is protected, the
 call SHALL be denied before grant lookup, also under a grant. The link check
 SHALL NOT change folder, repository, or global grant coverage, so a link to an
 ordinary file SHALL keep the decision of its grant.
+
+For a bounded glob that crosses a directory alias, each existing grant SHALL
+cover the authored covering scope and every target scope. A folder grant SHALL
+NOT cover an outside target. A repository grant SHALL prove each target's
+repository identity through the existing checkout and registered-worktree rules.
+The same rule SHALL apply to argument and redirect targets.
+Reviewed diagnostic policy SHALL check read authority for every known target scope.
+Only complete bounded reach SHALL support reusable scope or reviewed-safe coverage.
+The resolved path view SHALL retain those target scopes for later path checks.
 
 The store SHALL NOT save a grant that a stored grant already covers, and
 `netclaw doctor --fix` SHALL remove such a grant. A grant covers another grant
@@ -1321,6 +1373,20 @@ This composition SHALL NOT change any persistent grant or extend a repository's 
 - **GIVEN** a persistent Team grant for `git status`
 - **WHEN** a Personal session calls `shell_execute` with `git status`
 - **THEN** the Team grant does not cover the candidate
+
+#### Scenario: A folder grant does not transfer through an alias
+
+- **GIVEN** a folder grant for the authored project scope
+- **AND** a glob alias target does not belong to that grant's scope
+- **WHEN** Netclaw checks the bounded glob
+- **THEN** the folder grant does not cover the call
+
+#### Scenario: A repository grant proves the target identity
+
+- **GIVEN** a grant for repository A
+- **AND** a glob alias reaches repository B inside a shared covering directory
+- **WHEN** Netclaw checks the bounded glob
+- **THEN** repository A's grant does not cover repository B
 
 ### Requirement: TA-9 Agent correction precedes a prompt and grants no authority
 

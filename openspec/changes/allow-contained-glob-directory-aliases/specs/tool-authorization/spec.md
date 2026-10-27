@@ -348,9 +348,12 @@ have their glossary meaning.
 - Glob path facts (Bash 5.2 host): the scope of a glob word SHALL include
   its covering directory and every known alias target scope.
   Netclaw SHALL walk only the directory branches that each segment can match.
-  The walk SHALL retain a bound of 4096 work units.
+  Reusable reach SHALL require a count of 4096 work units or less.
   Each intermediate directory visit and each link hop SHALL consume one unit.
+  Ordinary directory-entry scans are outside this count.
   Every target and residual match SHALL stay inside the original covering boundary.
+  A pattern with a trailing slash SHALL retain its directory-only restriction
+  when Netclaw computes known target reach.
   A contained directory alias SHALL be reusable only after complete target,
   protected-path, and grant-scope proof.
   The walk SHALL retain the existing link-hop bound.

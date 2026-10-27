@@ -3332,6 +3332,16 @@ assert_approval_scratch_scope_guidance() {
         && stdout_json_response_contains 'cwd=preserve'
 }
 
+assert_approval_contained_alias_guidance() {
+    stdout_json_envelope_valid \
+        && daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
+        && ! stdout_json_tool_called 'shell_execute' \
+        && stdout_json_response_contains 'contained=proof-and-authority' \
+        && stdout_json_response_contains 'protected=deny' \
+        && stdout_json_response_contains 'outside=exact-consent-or-deny' \
+        && stdout_json_response_contains 'budget=4096'
+}
+
 # One command in another directory should use the typed shell argument.
 assert_approval_shell_working_directory_argument() {
     local shell_call
@@ -4497,6 +4507,9 @@ run_all() {
 
     run_case --json approval_scratch_scope_guidance "uses the skill to distinguish program grants and managed scratch authority" \
         "Load netclaw-operations and answer without executing commands. A saved grant names only uv. Does it cover uv run? For command output that needs a Bash redirect, choose shared or managed scratch. Choose whether to preserve or change the project directory. Answer with these fields: subcommands=covered|separate; scratch=shared|managed; cwd=preserve|change."
+
+    run_case --json approval_contained_alias_guidance "keeps bounded alias reach subject to existing authority and protection" \
+        "Load netclaw-operations and answer without executing commands. A bounded Bash glob crosses a directory alias whose target stays inside its covering directory. Explain the permission rule, the result for a protected target, and the result for an outside or unproved target. Choose exactly these fields: contained=automatic|proof-and-authority; protected=allow|deny; outside=reuse|exact-consent-or-deny; budget=4096|unbounded."
 
     run_case --json approval_shell_working_directory_argument "uses the typed WorkingDirectory argument instead of inline cd" \
         "Run pwd from /tmp with one shell_execute call. Do not change the session project directory."

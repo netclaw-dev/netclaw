@@ -116,7 +116,8 @@ A bounded Bash glob can cross a directory alias only when Netclaw proves its ful
 The alias and target need the existing path authority and grant scope.
 A protected target still denies the call.
 A broken, outside, cyclic, or uninspectable alias retains exact consent or denial.
-The walk allows at most 4096 work units. Each intermediate directory visit and each link hop uses one unit.
+Reusable scope requires 4096 counted units or less. Each intermediate directory visit and each link hop uses one unit.
+Ordinary directory-entry scans are outside this count.
 Do not rewrite a refused glob to hide its target or bypass that limit.
 
 Keep shell approval friction bounded:

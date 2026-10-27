@@ -859,8 +859,10 @@ Leaks today:
   Arguments, redirects, the resolved path view, and reviewed policy use the
   same scope facts. Each folder or repository grant covers the original scope
   and every target scope. `FileSystemAuthority` remains the link-target reader.
-  The walk uses at most 4096 work units. Each intermediate directory visit and
-  each link hop consumes one unit. The existing link-hop limit also applies.
+  Reusable scope requires a combined count of 4096 or less for intermediate
+  directory visits and link hops. Each event consumes one unit.
+  Ordinary directory-entry scans are outside this count, so wide directories
+  can increase inspection cost. The existing link-hop limit also applies.
   The checks do not remove the filesystem race after authorization.
 
 ### 3.5 Consent

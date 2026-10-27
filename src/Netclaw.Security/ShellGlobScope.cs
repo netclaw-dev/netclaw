@@ -74,7 +74,7 @@ internal static class ShellGlobScope
     internal static ShellGlobReach ResolveReach(CanonicalPath coveringDirectory, ShellValueDomain.PathPattern pattern)
     {
         var glob = pattern.Glob!;
-        var requiresDirectory = pattern.Pattern.EndsWith('/');
+        var hasTrailingSlash = pattern.Pattern.EndsWith('/');
         var scopes = new HashSet<CanonicalPath> { coveringDirectory };
         var targets = new HashSet<ShellGlobTargetReach>();
         var complete = coveringDirectory.IsHostStyle;
@@ -97,6 +97,7 @@ internal static class ShellGlobScope
             for (var index = 0; index < glob.SegmentDepth; index++)
             {
                 var segment = glob.Segments[index];
+                var requiresDirectory = index < glob.SegmentDepth - 1 || hasTrailingSlash;
                 var next = new List<WalkDirectory>();
                 foreach (var directory in current)
                 {
@@ -110,7 +111,7 @@ internal static class ShellGlobScope
                             var attributes = File.GetAttributes(entry);
                             var isDirectory = (attributes & FileAttributes.Directory) != 0;
                             var matches = SegmentMayMatch(segment, Path.GetFileName(entry))
-                                && (index != glob.SegmentDepth - 1 || !requiresDirectory || isDirectory);
+                                && (!requiresDirectory || isDirectory);
                             var path = entry;
                             if ((attributes & FileAttributes.ReparsePoint) != 0)
                             {

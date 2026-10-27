@@ -8,7 +8,8 @@ import unittest
 
 
 class ScratchScopeOracleTests(unittest.TestCase):
-    def accepts(self, response, tool_calls=None, skill_loaded=True, session_id="fixture"):
+    def accepts(self, response, tool_calls=None, skill_loaded=True, session_id="fixture",
+                assertion="assert_approval_scratch_scope_guidance"):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "stdout.json"
             output.write_text(json.dumps({
@@ -21,8 +22,8 @@ class ScratchScopeOracleTests(unittest.TestCase):
                 "bash", "-c",
                 'source "$1"; STDOUT_FILE="$2"; '
                 'daemon_log_skill_loaded_via_skill_tool() { [[ "$1" == netclaw-operations && "$fixture_skill_loaded" == yes ]]; }; '
-                'fixture_skill_loaded="$3"; assert_approval_scratch_scope_guidance',
-                "bash", str(script), str(output), "yes" if skill_loaded else "no",
+                'fixture_skill_loaded="$3"; "$4"',
+                "bash", str(script), str(output), "yes" if skill_loaded else "no", assertion,
             ], capture_output=True, text=True)
             return completed.returncode == 0
 
@@ -43,6 +44,24 @@ class ScratchScopeOracleTests(unittest.TestCase):
             "subcommands=separate scratch=managed cwd=preserve",
             [{"toolName": "shell_execute", "callId": "shell", "argumentsJson": "{}"}],
         ))
+
+    def test_contained_alias_guidance_requires_every_authority_choice(self):
+        response = "contained=proof-and-authority protected=deny outside=exact-consent-or-deny budget=4096"
+        assertion = "assert_approval_contained_alias_guidance"
+        self.assertTrue(self.accepts(response, assertion=assertion))
+        for actual, wrong in [
+            ("contained=proof-and-authority", "contained=automatic"),
+            ("protected=deny", "protected=allow"),
+            ("outside=exact-consent-or-deny", "outside=reuse"),
+            ("budget=4096", "budget=unbounded"),
+        ]:
+            with self.subTest(wrong=wrong):
+                self.assertFalse(self.accepts(response.replace(actual, wrong), assertion=assertion))
+        self.assertFalse(self.accepts(response, skill_loaded=False, assertion=assertion))
+        self.assertFalse(self.accepts(response, session_id="", assertion=assertion))
+        self.assertFalse(self.accepts(response, [{
+            "toolName": "shell_execute", "callId": "shell", "argumentsJson": "{}",
+        }], assertion=assertion))
 
     def test_requires_the_skill_and_a_valid_envelope(self):
         response = "subcommands=separate scratch=managed cwd=preserve"

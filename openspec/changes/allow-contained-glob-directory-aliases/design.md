@@ -28,7 +28,8 @@ Only a complete result can support reusable authority.
 `FileSystemAuthority` remains the only reader of link-target text.
 The walk reuses its chain, parent-after-link, inspection, and membership rules.
 Each target stays inside the original covering boundary.
-The walk counts each intermediate directory visit and link hop against the 4096-unit limit.
+Reusable scope requires a combined directory-visit and link-hop count of 4096 or less.
+Ordinary directory-entry scans are outside this count and can increase inspection cost.
 Its visited key includes the effective directory and remaining segment index.
 It retains authored alias identity separately for grant checks.
 
