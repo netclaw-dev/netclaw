@@ -115,6 +115,8 @@ public static class ToolArgumentHelper
             map[NormalizeKey(canonical)] = canonical;
 
         map["timeout"] = "_timeout_seconds";
+        map["rational"] = "_rationale";
+        map["rationalle"] = "_rationale";
         return map;
     }
 
