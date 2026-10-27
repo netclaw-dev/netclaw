@@ -18,13 +18,13 @@ namespace Netclaw.Security;
 /// are proved (globstar, dotglob, nullglob, failglob, and extglob off;
 /// globskipdots on). Each match of the word is a path below the covering
 /// directory with exactly <see cref="ShellGlobExpansion.SegmentDepth"/> segments.
-/// Netclaw does not expand the glob. The protected-path check is lexical, and the
-/// link check walks only the directories that a segment can match.
+/// Netclaw does not expand the glob. The walk retains target scopes and the
+/// remaining parser segments for protection and grant checks.
 /// </remarks>
 internal static class ShellGlobScope
 {
-    // The plan bound for the link walk. A larger tree keeps the word unresolved.
-    private const int MaximumWalkedDirectories = 4096;
+    // Each intermediate directory visit and each link hop consumes one unit.
+    private const int MaximumWalkWork = 4096;
 
     /// <summary>Gets the glob fact of a parser argument, or null when the parser gives none.</summary>
     internal static ShellValueDomain.PathPattern? FindGlobPattern(CommandOccurrence occurrence, Arg arg)
@@ -70,59 +70,141 @@ internal static class ShellGlobScope
             ignoreCase: true);
     }
 
-    /// <summary>
-    /// Returns true when a link cannot take a match of the word out of the covering
-    /// directory. Each walked directory must keep its link entries inside itself.
-    /// </summary>
-    /// <remarks>
-    /// The walk visits only the directories that each segment can match, to one
-    /// level above the segment depth. A link on the way to the last segment keeps
-    /// the word unresolved, and so does a tree with more than 4096 directories. A
-    /// covering directory that does not exist has no match, so Bash keeps the word
-    /// as literal text inside that directory.
-    /// </remarks>
-    internal static bool IsLinkContained(CanonicalPath coveringDirectory, ShellGlobExpansion glob)
+    /// <summary>Retains known target reach even when another branch cannot be proved.</summary>
+    internal static ShellGlobReach ResolveReach(CanonicalPath coveringDirectory, ShellValueDomain.PathPattern pattern)
     {
-        if (!Directory.Exists(coveringDirectory.Value))
-            return true;
+        var glob = pattern.Glob!;
+        var requiresDirectory = pattern.Pattern.EndsWith('/');
+        var scopes = new HashSet<CanonicalPath> { coveringDirectory };
+        var targets = new HashSet<ShellGlobTargetReach>();
+        var complete = coveringDirectory.IsHostStyle;
+        var walked = 0;
+        var visited = new HashSet<(CanonicalPath Directory, int Segment)>();
+        var current = new List<WalkDirectory> { new(coveringDirectory, [coveringDirectory]) };
+        var held = new PathBoundary[] { new PathBoundary.Folder(coveringDirectory, LinkRule.BelowRoot) };
+
+        if (!coveringDirectory.IsHostStyle)
+            return Result();
 
         try
         {
-            var current = new List<string> { coveringDirectory.Value };
-            var walked = 0;
-            foreach (var segment in glob.Segments.SkipLast(1))
+            if (!Directory.Exists(coveringDirectory.Value))
             {
-                var next = new List<string>();
-                foreach (var directory in current)
-                {
-                    if (!HasOnlyContainedLinkEntries(directory))
-                        return false;
-
-                    foreach (var child in Directory.EnumerateDirectories(directory))
-                    {
-                        if (!SegmentMayMatch(segment, Path.GetFileName(child)))
-                            continue;
-
-                        if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0
-                            || ++walked > MaximumWalkedDirectories)
-                        {
-                            return false;
-                        }
-
-                        next.Add(child);
-                    }
-                }
-
-                current = next;
+                complete &= FileSystemAuthority.FollowLinkChain(coveringDirectory.Value, out _) is LinkChainEnd.NotALink;
+                return Result();
             }
 
-            return current.All(HasOnlyContainedLinkEntries);
+            for (var index = 0; index < glob.SegmentDepth; index++)
+            {
+                var segment = glob.Segments[index];
+                var next = new List<WalkDirectory>();
+                foreach (var directory in current)
+                {
+                    if (!visited.Add((directory.Path, index)))
+                        continue;
+
+                    try
+                    {
+                        foreach (var entry in Directory.EnumerateFileSystemEntries(directory.Path.Value))
+                        {
+                            var attributes = File.GetAttributes(entry);
+                            var isDirectory = (attributes & FileAttributes.Directory) != 0;
+                            var matches = SegmentMayMatch(segment, Path.GetFileName(entry))
+                                && (index != glob.SegmentDepth - 1 || !requiresDirectory || isDirectory);
+                            var path = entry;
+                            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                            {
+                                var end = FileSystemAuthority.FollowLinkChain(entry, out path, out var knownTargets);
+                                walked += Math.Max(1, knownTargets.Count);
+                                foreach (var known in knownTargets)
+                                {
+                                    var knownPath = default(CanonicalPath);
+                                    if (!CanonicalPath.TryCreateHost(known, null, out knownPath))
+                                    {
+                                        complete = false;
+                                        continue;
+                                    }
+
+                                    if (matches)
+                                        targets.Add(new ShellGlobTargetReach(knownPath, index + 1));
+                                    if (!coveringDirectory.Contains(knownPath))
+                                        complete = false;
+                                }
+
+                                if (walked > MaximumWalkWork)
+                                {
+                                    complete = false;
+                                    return Result();
+                                }
+
+                                var target = default(CanonicalPath);
+                                if (end is not LinkChainEnd.Target
+                                    || !Path.Exists(path)
+                                    || !CanonicalPath.TryCreateHost(path, null, out target)
+                                    || FileSystemAuthority.EvaluateMembership(target, held) is not PathDecision.Allowed)
+                                {
+                                    complete = false;
+                                    continue;
+                                }
+
+                                if (!matches)
+                                    continue;
+
+                                scopes.Add(directory.Path);
+                                var parent = default(CanonicalPath);
+                                scopes.Add(Directory.Exists(path)
+                                    ? target
+                                    : CanonicalPath.TryCreateHost(Path.GetDirectoryName(path), null, out parent) ? parent : target);
+                                if (directory.Ancestors.Contains(target) || target.Contains(directory.Path))
+                                {
+                                    complete = false;
+                                    continue;
+                                }
+                            }
+
+                            if (!matches || !isDirectory || index == glob.SegmentDepth - 1)
+                                continue;
+                            if (++walked > MaximumWalkWork)
+                            {
+                                complete = false;
+                                return Result();
+                            }
+
+                            var child = default(CanonicalPath);
+                            if (!CanonicalPath.TryCreateHost(path, null, out child))
+                            {
+                                complete = false;
+                                continue;
+                            }
+                            next.Add(new WalkDirectory(child, [.. directory.Ancestors, child]));
+                        }
+                    }
+                    catch (Exception ex) when (FileSystemAuthority.IsInspectionFailure(ex))
+                    {
+                        complete = false;
+                    }
+                }
+                current = next;
+            }
         }
         catch (Exception ex) when (FileSystemAuthority.IsInspectionFailure(ex))
         {
-            return false;
+            complete = false;
+        }
+
+        return Result();
+
+        ShellGlobReach Result()
+        {
+            var scopePaths = scopes.ToArray();
+            var targetReach = targets.ToArray();
+            return complete
+                ? new ShellGlobReach.Complete(scopePaths, targetReach)
+                : new ShellGlobReach.Unresolved(scopePaths, targetReach);
         }
     }
+
+    private sealed record WalkDirectory(CanonicalPath Path, IReadOnlyList<CanonicalPath> Ancestors);
 
     /// <summary>
     /// Returns each path that the word can reach as a match or as a directory on the
@@ -135,14 +217,25 @@ internal static class ShellGlobScope
     /// caller judges that path as a literal operand.
     /// </remarks>
     internal static string? MatchPathToward(ShellValueDomain.PathPattern pattern, string target)
+        => MatchPathToward(pattern.CoveringDirectory, pattern.Glob!.Segments, 0, target);
+
+    /// <summary>Gets the lexical reach below a known alias target for the remaining parser segments.</summary>
+    internal static string? MatchPathToward(
+        ShellValueDomain.PathPattern pattern,
+        ShellGlobTargetReach reach,
+        string target)
+        => MatchPathToward(reach.Target.Value, pattern.Glob!.Segments, reach.NextSegmentIndex, target);
+
+    private static string? MatchPathToward(
+        string coveringDirectory,
+        IReadOnlyList<ShellGlobSegment> segments,
+        int nextSegmentIndex,
+        string target)
     {
-        // The parser gives glob facts only for the no-startup Bash host, so the
-        // paths use POSIX separators.
         const char separator = '/';
-        var glob = pattern.Glob!;
-        var prefix = pattern.CoveringDirectory.EndsWith(separator)
-            ? pattern.CoveringDirectory
-            : pattern.CoveringDirectory + separator;
+        var prefix = coveringDirectory.EndsWith(separator)
+            ? coveringDirectory
+            : coveringDirectory + separator;
         if (!target.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             return null;
 
@@ -150,22 +243,28 @@ internal static class ShellGlobScope
         if (relative.Length == 0)
             return null;
 
-        var reach = Math.Min(relative.Length, glob.SegmentDepth);
+        var reach = Math.Min(relative.Length, segments.Count - nextSegmentIndex);
         for (var index = 0; index < reach; index++)
         {
-            if (!SegmentMayMatch(glob.Segments[index], relative[index]))
+            if (!SegmentMayMatch(segments[nextSegmentIndex + index], relative[index]))
                 return null;
         }
 
-        return prefix + string.Join(separator, relative[..reach]);
+        return reach == 0 ? null : prefix + string.Join(separator, relative[..reach]);
     }
-
-    // A bracket expression has its own syntax ("[!a-z]", "[]x]"). The check does
-    // not read it: a segment with "[" can match any name. The result is a superset.
-    private static bool HasOnlyContainedLinkEntries(string directory)
-        => CanonicalPath.TryCreateHost(directory, null, out var canonical)
-           && FileSystemAuthority.HasOnlyContainedLinkEntries(canonical);
 
     private static string ToSimpleExpression(string text)
         => text.Contains('[', StringComparison.Ordinal) ? "*" : text;
+}
+
+internal readonly record struct ShellGlobTargetReach(CanonicalPath Target, int NextSegmentIndex);
+
+/// <summary>Known paths remain visible to protection when reusable scope is unresolved.</summary>
+internal abstract record ShellGlobReach(IReadOnlyList<CanonicalPath> Scopes, IReadOnlyList<ShellGlobTargetReach> Targets)
+{
+    internal sealed record Complete(IReadOnlyList<CanonicalPath> Paths, IReadOnlyList<ShellGlobTargetReach> KnownTargets)
+        : ShellGlobReach(Paths, KnownTargets);
+
+    internal sealed record Unresolved(IReadOnlyList<CanonicalPath> Paths, IReadOnlyList<ShellGlobTargetReach> KnownTargets)
+        : ShellGlobReach(Paths, KnownTargets);
 }

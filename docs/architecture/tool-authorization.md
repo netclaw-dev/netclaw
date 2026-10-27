@@ -849,11 +849,19 @@ Leaks today:
   - An option word with an expansion and no proved value (`-o"$n"`,
     `--$n=x`, `--$(cmd)=x`) has an `Unknown` value, so it is an unknown
     operand (decision D1).
-- Owner decision D5 (option A): a glob word gets the decision of each literal
-  protected path that its segments can match, or of a directory that contains
-  one (`ToolPathPolicy.GlobMayReachDeniedPath`). The match is lexical: Netclaw
-  does not list directories or follow links for this check. A link below the
-  covering directory that leads to a protected path is an accepted gap.
+- Owner decision D5: a glob word gets the decision of each literal protected
+  path that its segments can match, or of a directory that contains one.
+  `ToolPathPolicy.GlobMayReachDeniedPath` keeps the lexical match and checks
+  every known alias target with its remaining parser segments.
+  `ShellGlobScope.ResolveReach` supplies call-local complete or unresolved reach.
+  An unresolved result retains known targets for protection.
+  Only complete reach supports reusable scope or reviewed-safe coverage.
+  Arguments, redirects, the resolved path view, and reviewed policy use the
+  same scope facts. Each folder or repository grant covers the original scope
+  and every target scope. `FileSystemAuthority` remains the link-target reader.
+  The walk uses at most 4096 work units. Each intermediate directory visit and
+  each link hop consumes one unit. The existing link-hop limit also applies.
+  The checks do not remove the filesystem race after authorization.
 
 ### 3.5 Consent
 

@@ -415,6 +415,20 @@ internal sealed class ShellPolicyOccurrencePathFacts
         string? resolutionBase,
         ShellPathStyle pathStyle)
     {
+        if (ShellGlobScope.AsGlobPattern(fact.Domain) is { } globPattern
+            && CanonicalPath.TryCreate(globPattern.CoveringDirectory, resolutionBase, pathStyle, out var covering))
+        {
+            var reach = ShellGlobScope.ResolveReach(covering, globPattern);
+            return new ShellPolicyResolvedPathFact(
+                fact,
+                reach is ShellGlobReach.Complete
+                    ? ShellPolicyPathResolutionState.Known
+                    : ShellPolicyPathResolutionState.InvalidKnownValue,
+                reach is ShellGlobReach.Complete
+                    ? reach.Scopes
+                    : reach.Scopes.Concat(reach.Targets.Select(static target => target.Target)).Distinct().ToArray());
+        }
+
         IReadOnlyList<string>? values = fact.Domain switch
         {
             ShellValueDomain.Exact exact => [exact.Value],

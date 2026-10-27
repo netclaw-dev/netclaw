@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.141.0"
+  version: "2.142.0"
 ---
 
 # Netclaw Operations
@@ -111,6 +111,13 @@ For disposable text that you write, use `file_write` in `temp_dir`, then use `fi
 Standard temporary APIs use `temp_dir` in each shell process. Do not set `TMPDIR`, `TMP`, or `TEMP` in a shell command.
 Use `load_tool` directly for a known exact tool name.
 Use `search_tools` when the capability is known but its exact tool name is not.
+
+A bounded Bash glob can cross a directory alias only when Netclaw proves its full reach.
+The alias and target need the existing path authority and grant scope.
+A protected target still denies the call.
+A broken, outside, cyclic, or uninspectable alias retains exact consent or denial.
+The walk allows at most 4096 work units. Each intermediate directory visit and each link hop uses one unit.
+Do not rewrite a refused glob to hide its target or bypass that limit.
 
 Keep shell approval friction bounded:
 

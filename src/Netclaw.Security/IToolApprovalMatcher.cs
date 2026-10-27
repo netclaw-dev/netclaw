@@ -1310,15 +1310,15 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         if (arg.Kind == ArgKind.Glob)
         {
-            var coveringDirectory = ResolveGlobCoveringDirectory(
+            var globDirectories = ResolveGlobDirectories(
                 occurrence,
                 arg,
                 workingDirectory,
                 pathStyle);
-            if (coveringDirectory is null)
+            if (globDirectories is null)
                 return false;
 
-            directories.Add(coveringDirectory);
+            directories.AddRange(globDirectories);
             return true;
         }
 
@@ -1541,7 +1541,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             : token[..lastSeparator];
     }
 
-    private static string? ResolveGlobCoveringDirectory(
+    private static IReadOnlyList<string>? ResolveGlobDirectories(
         ShellSyntaxTree.CommandOccurrence occurrence,
         ShellSyntaxTree.Arg arg,
         string? workingDirectory,
@@ -1556,8 +1556,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                        relativeBase: null,
                        pathStyle,
                        out var covering)
-                   && ShellGlobScope.IsLinkContained(covering, pattern.Glob!)
-                ? covering.Value
+                   && ShellGlobScope.ResolveReach(covering, pattern) is ShellGlobReach.Complete reach
+                ? reach.Scopes.Select(static path => path.Value).ToArray()
                 : null;
         }
 
@@ -1604,7 +1604,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return null;
         }
 
-        return coveringDirectory.Value;
+        return [coveringDirectory.Value];
     }
 
     private static string CoveringPath(
@@ -1811,12 +1811,17 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         if (file.Target is ShellSyntaxTree.ShellValueDomain.PathPattern pattern)
         {
-            var coveringDirectory = pattern.CoveringDirectory;
-            var contained = CanonicalPath.TryCreate(coveringDirectory, relativeBase: null, pathStyle, out var covering)
-                && (ShellGlobScope.AsGlobPattern(pattern) is { } glob
-                    ? ShellGlobScope.IsLinkContained(covering, glob.Glob!)
-                    : FileSystemAuthority.HasOnlyContainedLinkEntries(covering));
-            return contained ? [coveringDirectory] : null;
+            if (!CanonicalPath.TryCreate(pattern.CoveringDirectory, relativeBase: null, pathStyle, out var covering))
+                return null;
+
+            if (ShellGlobScope.AsGlobPattern(pattern) is { } glob)
+            {
+                return ShellGlobScope.ResolveReach(covering, glob) is ShellGlobReach.Complete reach
+                    ? reach.Scopes.Select(static path => path.Value).ToArray()
+                    : null;
+            }
+
+            return FileSystemAuthority.HasOnlyContainedLinkEntries(covering) ? [covering.Value] : null;
         }
 
         IReadOnlyList<string> targets = file.Target switch
@@ -2227,7 +2232,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         if (analysis.Commands.Any(command => command.Clause.Args
                 .Where(static arg => arg.IsPath && arg.Kind == ShellSyntaxTree.ArgKind.Glob)
-                .Any(arg => ResolveGlobCoveringDirectory(
+                .Any(arg => ResolveGlobDirectories(
                     command,
                     arg,
                     workingDirectory,
