@@ -36,7 +36,7 @@
     <PackageVersion Include="Aaron.Akka.Reminders" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Akka.TestKit" Version="$(AkkaHostingVersion)" />
-    <PackageVersion Include="Anthropic" Version="12.50.0" />
+    <PackageVersion Include="Anthropic" Version="13.3.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.13.0" />
     <PackageVersion Include="Microsoft.Accordant" Version="0.1.6" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
