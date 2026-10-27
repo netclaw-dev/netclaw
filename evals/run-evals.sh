@@ -52,7 +52,7 @@
 # Exit codes:
 #   0  every case passed
 #   1  at least one case failed
-#   2  the harness stopped (bad setting, eval container died, broken evidence step)
+#   2  the harness stopped (prompt failure, unconfirmed containment, or infrastructure fault)
 #   3  no case failed, and at least one case is inconclusive
 set -euo pipefail
 
@@ -68,6 +68,9 @@ PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-60}"
 MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
 EVAL_PORT="${NETCLAW_EVAL_PORT:-5299}"
 EVAL_CONTAINER_NAME="netclaw-eval-$$"
+EVAL_CONTAINER_ID=""
+# A failed containment attempt must not repeat during EXIT cleanup.
+EVAL_CONTAINMENT_STATUS=""
 # True after seed_eval_memories seeded the store. reset_memory_store acts only then.
 # A failed seed stops the run, so a run never goes on with the reset off.
 EVAL_MEMORY_SEEDED=false
@@ -270,14 +273,44 @@ resolve_eval_target() {
     EVAL_COMPACTION_MODEL_ID="${EVAL_COMPACTION_MODEL_ID:-$EVAL_MODEL_ID}"
 }
 
-cleanup_eval_env() {
-    # Archive logs and results to a persistent location before teardown.
-    archive_eval_run
+contain_eval_container() {
+    case "$EVAL_CONTAINMENT_STATUS" in
+        confirmed) return 0 ;;
+        unconfirmed) return 1 ;;
+    esac
+    # No launch means that this harness owns no container.
+    [[ -n "$EVAL_CONTAINER_ID" ]] || return 0
 
-    # Container is launched with --rm, so `docker stop` also removes it.
-    if [[ -n "${EVAL_CONTAINER_NAME:-}" ]]; then
-        docker stop "$EVAL_CONTAINER_NAME" >/dev/null 2>&1 || true
+    EVAL_CONTAINMENT_STATUS=unconfirmed
+    if ! docker stop "$EVAL_CONTAINER_ID" >/dev/null; then
+        echo "ERROR: containment unconfirmed: the owned container stop failed." >&2
+        return 1
     fi
+
+    local running remaining_ids
+    if running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_ID"); then
+        if [[ "$running" == false ]]; then
+            EVAL_CONTAINMENT_STATUS=confirmed
+            return 0
+        fi
+    else
+        # --rm can remove the container before inspect. An inspect error proves nothing.
+        if remaining_ids=$(docker ps --all --no-trunc --quiet --filter "id=$EVAL_CONTAINER_ID") \
+            && [[ -z "$remaining_ids" ]]; then
+            EVAL_CONTAINMENT_STATUS=confirmed
+            return 0
+        fi
+    fi
+    echo "ERROR: containment unconfirmed: Docker did not verify container stop or removal." >&2
+    return 1
+}
+
+cleanup_eval_env() {
+    local exit_code=$? containment_failed=false
+    if ! contain_eval_container; then
+        containment_failed=true
+    fi
+    # Fixture processes belong to this harness, even when container containment fails.
     if [[ -n "${CYCLE_FIXTURE_PID_SAVED:-}" ]]; then
         kill "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
         wait "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
@@ -286,6 +319,14 @@ cleanup_eval_env() {
         kill "$SPILL_FIXTURE_PID_SAVED" 2>/dev/null || true
         wait "$SPILL_FIXTURE_PID_SAVED" 2>/dev/null || true
     fi
+    if [[ "$containment_failed" == true ]]; then
+        echo "ERROR: containment unconfirmed; retain the eval home and captures. Do not reuse or restart this home." >&2
+        exit 2
+    fi
+
+    # Container finalizers must finish before the archive copies their logs.
+    archive_eval_run
+
     # TMPDIR_EVAL only holds host-owned per-prompt stdout/stderr captures, so a
     # plain rm always succeeds — no force_rmrf fallback needed.
     if [[ -n "${TMPDIR_EVAL:-}" && -d "$TMPDIR_EVAL" ]]; then
@@ -296,6 +337,7 @@ cleanup_eval_env() {
     if [[ -n "${EVAL_HOME:-}" && -d "$EVAL_HOME" ]]; then
         force_rmrf "$EVAL_HOME"
     fi
+    exit "$exit_code"
 }
 
 # Archive daemon logs, results DB, and stdout captures to evals/runs/<run-id>/
@@ -770,12 +812,18 @@ start_eval_daemon() {
 
     docker_args+=("$NETCLAW_IMAGE")
 
-    local docker_err
-    if ! docker_err=$(docker "${docker_args[@]}" 2>&1 >/dev/null); then
-        echo "ERROR: failed to start eval container" >&2
-        [[ -n "$docker_err" ]] && echo "$docker_err" >&2
+    local container_id
+    EVAL_CONTAINMENT_STATUS=unconfirmed
+    if ! container_id=$(docker "${docker_args[@]}"); then
+        echo "ERROR: failed to start eval container; containment unconfirmed." >&2
         exit 2
     fi
+    if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "ERROR: Docker returned no valid container ID; containment unconfirmed." >&2
+        exit 2
+    fi
+    readonly EVAL_CONTAINER_ID="$container_id"
+    EVAL_CONTAINMENT_STATUS=""
 
     # Poll /api/health/ready up to 60s.
     local deadline=$((SECONDS + 60))
@@ -796,7 +844,7 @@ start_eval_daemon() {
         fi
 
         local running
-        running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_NAME" 2>/dev/null || echo "false")
+        running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_ID" 2>/dev/null || echo "false")
         if [[ "$running" != "true" ]]; then
             echo "ERROR: eval container exited during startup" >&2
             docker logs "$EVAL_CONTAINER_NAME" >&2 2>&1 || true
@@ -1401,6 +1449,13 @@ check_prompt_exit_status() {
         else
             echo "ERROR: $prompt_kind exited with status $exit_code; the eval run stops before another prompt." >&2
         fi
+        if ! contain_eval_container; then
+            exit 2
+        fi
+        # Warm-up has no trial. Preserve trial session evidence before EXIT deletes the home.
+        if [[ -n "$TRIAL_RAW" ]]; then
+            finish_trial
+        fi
         exit 2
     fi
 }
@@ -1409,7 +1464,7 @@ check_prompt_exit_status() {
 
 check_daemon_alive() {
     local running
-    running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_NAME" 2>/dev/null || echo "false")
+    running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_ID" 2>/dev/null || echo "false")
     if [[ "$running" != "true" ]]; then
         echo ""
         echo "ERROR: Eval container died mid-run. Aborting eval." >&2
@@ -1469,6 +1524,7 @@ run_prompt() {
     ended_at=$(iso_now)
     record_cli_call "$TRIAL_RAW" "$prompt" "$output_format" "$exit_code" \
         "$started_at" "$ended_at" "$STDOUT_FILE" "$STDERR_FILE"
+    check_prompt_exit_status "$ts" "$exit_code" "Trial prompt"
 
     # Brief pause for daemon log flush
     sleep 2
@@ -1497,6 +1553,7 @@ run_coordination_observer_prompt() {
     ended_at=$(iso_now)
     record_cli_call "$TRIAL_RAW" "$prompt" json "$exit_code" \
         "$started_at" "$ended_at" "$STDOUT_FILE" "$STDERR_FILE"
+    check_prompt_exit_status "$ts" "$exit_code" "Coordination observer prompt"
 }
 
 ## Runs a prompt against an existing (or new) named session via `chat -p --resume`.
@@ -1555,6 +1612,7 @@ run_prompt_resume() {
     ended_at=$(iso_now)
     record_cli_call "$TRIAL_RAW/turn-$(printf '%02d' "$turn_number")" "$prompt" "$output_format" \
         "$exit_code" "$started_at" "$ended_at" "$turn_file" "$turn_stderr_file"
+    check_prompt_exit_status "$ts" "$exit_code" "Resumed trial prompt"
 
     # Append this turn's output to the shared files so assertions see all turns.
     cat "$turn_file" >> "$STDOUT_FILE"
