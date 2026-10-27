@@ -1,77 +1,264 @@
-"""Exercise timeout failure and cleanup through the eval shell runner."""
+"""Prove prompt containment with independent request finalizers and fake Docker."""
 
+from collections import Counter
 import json
 import os
 from pathlib import Path
+import signal
+import socket
 import subprocess
 import tempfile
+import threading
 import unittest
 
 
 RUNNER = Path(__file__).with_name("run-evals.sh")
+OWNED_ID = "a" * 64
+FOREIGN_ID = "b" * 64
+
+
+def exchange(path, message):
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(20)
+        client.connect(str(path))
+        client.sendall((json.dumps(message) + "\n").encode())
+        with client.makefile("r") as response:
+            return json.loads(response.readline())
+
+
+class RequestFinalizers:
+    """The request handlers outlive CLI exit. Only their finalizers reduce counts."""
+
+    def __init__(self, path, fault):
+        self.path = path
+        self.fault = fault
+        self.condition = threading.Condition()
+        self.cancel = threading.Event()
+        self.release = threading.Event()
+        self.foreign_release = threading.Event()
+        self.active = Counter()
+        self.events = []
+        self.errors = []
+        self.workers = []
+        self.listener = socket.socket(socket.AF_UNIX)
+        self.listener.bind(str(path))
+        self.listener.listen()
+        self.thread = threading.Thread(target=self.serve)
+        self.thread.start()
+
+    def event(self, name, **data):
+        with self.condition:
+            self.events.append({"name": name, "active": dict(self.active), **data})
+            self.condition.notify_all()
+
+    def serve(self):
+        while True:
+            connection, _ = self.listener.accept()
+            reader = connection.makefile("r")
+            message = json.loads(reader.readline())
+            if message[0] == "close":
+                reader.close()
+                connection.close()
+                return
+            worker = threading.Thread(target=self.handle, args=(connection, reader, message))
+            self.workers.append(worker)
+            worker.start()
+
+    def handle(self, connection, reader, message):
+        def reply(status=0, stdout="", stderr=""):
+            connection.sendall((json.dumps([status, stdout, stderr]) + "\n").encode())
+
+        try:
+            action, *args = message
+            if action == "request":
+                owner, role, success = args
+                with self.condition:
+                    self.active[owner] += 1
+                    self.event("request-entered", owner=owner, role=role)
+                try:
+                    if not success:
+                        reply()
+                        if owner == FOREIGN_ID:
+                            self.foreign_release.wait()
+                        else:
+                            self.cancel.wait()
+                            self.event("cancellation-observed", role=role)
+                            self.release.wait()
+                finally:
+                    with self.condition:
+                        if owner == OWNED_ID:
+                            log = self.path.parent / "home/logs/backend-finalized.log"
+                            with log.open("a") as output:
+                                output.write(role + "\n")
+                        self.active[owner] -= 1
+                        self.event("request-finalized", owner=owner, role=role)
+                if success:
+                    reply()
+            elif action == "docker":
+                command, *options = args
+                self.event("docker", command=command, args=options)
+                if command == "run":
+                    reply(stdout=OWNED_ID + "\n")
+                elif command == "stop":
+                    target = options[-1]
+                    self.event("stop-requested", target=target)
+                    if self.fault == "stop" or target not in (OWNED_ID, "netclaw-eval-owned"):
+                        reply(1, stderr="synthetic stop failure\n")
+                    else:
+                        self.cancel.set()
+                        with self.condition:
+                            self.condition.wait_for(lambda: self.active[OWNED_ID] == 0)
+                            self.event("container-exited")
+                        reply(stdout=target + "\n")
+                elif command in ("inspect", "wait", "ps", "container"):
+                    if self.fault == "verify":
+                        reply(1, stderr="synthetic Docker service failure\n")
+                    else:
+                        # --rm removed the owned container. A failed inspect alone is not proof.
+                        if command == "inspect" or options[:1] == ["inspect"]:
+                            reply(1, stderr="Error: No such container\n")
+                        elif command == "wait":
+                            self.event("exit-verified")
+                            reply(stdout="0\n")
+                        else:
+                            self.event("exit-verified")
+                            reply(stdout=FOREIGN_ID + "\n" if not any(OWNED_ID in x for x in options) else "")
+                elif command == "exec":
+                    reply(1 if "test" in options else 0)
+                elif command == "image":
+                    reply(stdout="sha256:fixture-image\n")
+                else:
+                    reply(1, stderr="unsupported fake Docker command\n")
+            else:
+                self.event(action, args=args)
+                reply()
+        except Exception as error:
+            with self.condition:
+                self.errors.append(repr(error))
+                self.condition.notify_all()
+        finally:
+            reader.close()
+            connection.close()
+
+    def close(self):
+        self.cancel.set()
+        self.release.set()
+        self.foreign_release.set()
+        with socket.socket(socket.AF_UNIX) as client:
+            client.connect(str(self.path))
+            client.sendall(b'["close"]\n')
+        self.thread.join(20)
+        for worker in self.workers:
+            worker.join(20)
+        self.listener.close()
+        if self.thread.is_alive() or any(worker.is_alive() for worker in self.workers):
+            raise AssertionError("The fixture did not terminate its threads")
+
+
+# Keep the existing CLI, timeout, Docker, and observer seams in one executable.
+FAKE_TOOL = r'''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+
+
+def call(*message):
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(20)
+        client.connect(os.environ["BACKEND_SOCKET"])
+        client.sendall((json.dumps(message) + "\n").encode())
+        with client.makefile("r") as response:
+            return json.loads(response.readline())
+
+
+kind = Path(sys.argv[0]).name
+args = sys.argv[1:]
+if kind == "docker":
+    status, stdout, stderr = call("docker", *args)
+    print(stdout, end="")
+    print(stderr, end="", file=sys.stderr)
+    sys.exit(status)
+if kind == "timeout":
+    with open(os.environ["TIMEOUT_LOG"], "a") as log:
+        log.write(" ".join(args) + "\n")
+    read_fd, write_fd = os.pipe()
+    child = subprocess.Popen(args[1:], pass_fds=(write_fd,),
+                             env={**os.environ, "READY_FD": str(write_fd)})
+    os.close(write_fd)
+    try:
+        if os.read(read_fd, 1) != b"1":
+            raise RuntimeError("The fake CLI did not acknowledge admission")
+        if os.environ["OUTER_TIMEOUT"] == "1":
+            child.terminate()
+        status = child.wait(timeout=20)
+    finally:
+        os.close(read_fd)
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+    call("cli-exited", status)
+    sys.exit(124 if os.environ["OUTER_TIMEOUT"] == "1" else status)
+
+call("dispatch", kind, args)
+success = os.environ["PROMPT_STATUS"] == "0"
+for role in ("parent", "child"):
+    call("request", os.environ["OWNED_ID"], role, success)
+print(os.environ["PROMPT_STDOUT"], end="", flush=True)
+print("synthetic prompt diagnostic", file=sys.stderr, flush=True)
+os.write(int(os.environ["READY_FD"]), b"1")
+os.close(int(os.environ["READY_FD"]))
+if os.environ["OUTER_TIMEOUT"] == "1":
+    signal.pause()
+sys.exit(int(os.environ["PROMPT_STATUS"]))
+'''
 
 
 class RunEvalsTimeoutTests(unittest.TestCase):
     def prepare(self, root):
         root = Path(root)
-        tools = root / "tools"
-        tools.mkdir()
-        repo = root / "repo"
-        (repo / "evals/runs").mkdir(parents=True)
-        assets = root / "assets"
-        home = root / "home"
-        (home / "logs").mkdir(parents=True)
-        (home / "logs/daemon-2026-10-14.log").write_text("fixture daemon log\n")
-        captures = root / "captures"
-        captures.mkdir()
-        logs = root / "logs"
-        logs.mkdir()
-
-        (tools / "timeout").write_text("""#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$TIMEOUT_LOG"
-shift
-"$@"
-command_status=$?
-exit "${FAKE_TIMEOUT_STATUS:-$command_status}"
-""")
-        (tools / "docker").write_text("""#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$DOCKER_LOG"
-if [[ "$1" == image && "$2" == inspect ]]; then
-    printf '%s\\n' 'sha256:fixture-image'
-    exit 0
-fi
-if [[ "$1" == exec ]]; then exit 1; fi
-exit 0
-""")
-        (tools / "stdbuf").write_text("""#!/usr/bin/env bash
-shift 2
-exec "$@"
-""")
-        (tools / "dotnet").write_text("""#!/usr/bin/env bash
-printf '%s\\n' "observer $*" >> "$CLI_LOG"
-printf '%s' "$FAKE_PROMPT_STDOUT"
-printf '%s' "$FAKE_PROMPT_STDERR" >&2
-""")
-        cli = root / "netclaw"
-        cli.write_text("""#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$CLI_LOG"
-printf '%s' "$FAKE_PROMPT_STDOUT"
-printf '%s' "$FAKE_PROMPT_STDERR" >&2
-""")
-        for path in [tools / "timeout", tools / "docker", tools / "stdbuf", tools / "dotnet", cli]:
+        paths = {name: root / name for name in ("tools", "repo", "assets", "home", "captures", "logs")}
+        for path in paths.values():
+            path.mkdir()
+        paths["root"] = root
+        paths["cli"] = root / "netclaw"
+        (paths["repo"] / "evals/runs").mkdir(parents=True)
+        (paths["home"] / "logs").mkdir()
+        (paths["home"] / "logs/daemon-2026-10-14.log").write_text("synthetic daemon log\n")
+        (paths["home"] / "skills").mkdir()
+        templates = paths["assets"] / "src/Netclaw.Cli/Resources/identity"
+        templates.mkdir(parents=True)
+        for name in ("SOUL", "TOOLING"):
+            (templates / f"{name}.template.md").write_text("Synthetic identity fixture.\n")
+        fixtures = paths["assets"] / "evals/fixtures"
+        (fixtures / "identity").mkdir(parents=True)
+        (fixtures / "identity/AGENTS.md").write_text("Synthetic fixture.\n")
+        (fixtures / "config").mkdir()
+        for name in ("netclaw", "tool-approvals"):
+            (fixtures / "config" / f"{name}.json").write_text("{}")
+        (fixtures / "eval-memories.json").write_text('{"seedDocuments": []}')
+        (paths["repo"] / "evals/seed-memories.py").write_text("pass\n")
+        for path in [paths["cli"], *(paths["tools"] / name for name in ("timeout", "docker", "dotnet"))]:
+            path.write_text(FAKE_TOOL)
             path.chmod(0o755)
+        for name, body in {
+            "stdbuf": 'shift 2\nexec "$@"',
+            "curl": "exit 0",
+            # Startup creates fixture repos. No Git command reaches a real repository.
+            "git": "exit 0",
+        }.items():
+            path = paths["tools"] / name
+            path.write_text("#!/usr/bin/env bash\n" + body + "\n")
+            path.chmod(0o755)
+        return paths
 
-        return {
-            "root": root, "tools": tools, "repo": repo, "assets": assets, "home": home,
-            "captures": captures, "logs": logs, "cli": cli,
-        }
-
-    def invoke_prompt(self, directory, kind, status=124, run_count=3, run_id="timeout-proof"):
-        paths = self.prepare(directory)
-        marker = paths["root"] / "runner-events.txt"
-        prompt_stdout = json.dumps({"sessionId": "eval/timeout", "response": "partial success"})
+    def invoke_prompt(self, paths, row, backend):
         script = r'''source "$1"
 PATH="$TOOLS:$PATH"
+sleep() { :; }
 REPO_ROOT="$REPO"
 EVAL_ASSET_ROOT="$ASSETS"
 EVAL_CONTAINER_NAME=netclaw-eval-owned
@@ -79,134 +266,173 @@ NETCLAW_IMAGE=fixture-image
 NETCLAW_BIN="$CLI"
 EVAL_HOME="$HOME_DIR"
 TMPDIR_EVAL="$CAPTURES"
-RUN_ID="$TEST_RUN_ID"
+RUN_ID=containment-proof
 STARTED_AT=now
 RESULTS_DB=
-DAEMON_LOG="$HOME_DIR/logs/daemon.log"
-RUNS="$RUN_COUNT"
+DAEMON_LOG="$HOME_DIR/logs/daemon-2026-10-14.log"
+RUNS=2
 THRESHOLD=1
 PROMPT_TIMEOUT=1
 MAX_PROMPT_TIMEOUT=1
 FILTER_CASE=
 FILTER_CATEGORY=
 CATEGORY_SKIPPED=false
-CATEGORY_CASES=0
-CATEGORY_PASSED=0
-TOTAL_CASES=0
-PASSED_CASES=0
-NETCLAW_EVAL_CASE=
-TIMEOUT_LOG="$LOG_DIR/timeout.log"
-DOCKER_LOG="$LOG_DIR/docker.log"
-CLI_LOG="$LOG_DIR/cli.log"
-FAKE_PROMPT_STDOUT="$PROMPT_STDOUT"
-FAKE_PROMPT_STDERR='forced timeout diagnostic'
-FAKE_TIMEOUT_STATUS="$PROMPT_STATUS"
-export TIMEOUT_LOG DOCKER_LOG CLI_LOG FAKE_PROMPT_STDOUT FAKE_PROMPT_STDERR FAKE_TIMEOUT_STATUS
 trap cleanup_eval_env EXIT
 check_daemon_alive() { :; }
 setup_timeout_case() { printf 'setup:%s\n' "$1" >> "$EVENTS"; }
 assert_timeout_case() { printf 'assert\n' >> "$EVENTS"; return 0; }
-assert_resume_case() { printf 'assert-resume\n' >> "$EVENTS"; return 0; }
-assert_observer_case() { printf 'assert-observer\n' >> "$EVENTS"; return 0; }
 store_result() { printf 'score\n' >> "$EVENTS"; }
-store_metrics() { printf 'metrics\n' >> "$EVENTS"; }
+store_metrics() { :; }
+start_eval_daemon
+if [[ "$FOREIGN_CONTROL" == 1 ]]; then EVAL_CONTAINER_NAME=foreign-container; fi
 case "$KIND" in
-  prompt) run_case --json timeout_case 'timeout control' 'first prompt' 'second prompt';;
-  resume) run_multi_turn_case resume_case 'timeout control' 'first prompt' 'second prompt';;
-  observer) run_case --json --coordination-observer observer_case 'timeout control' 'first prompt' 'second prompt';;
-  warmup) seed_eval_memories; printf 'later-case\\n' >> "$EVENTS";;
+  text) run_case timeout_case 'timeout control' 'first prompt' 'second prompt';;
+  json) run_case --json timeout_case 'timeout control' 'first prompt' 'second prompt';;
+  resume) run_multi_turn_case timeout_case 'timeout control' 'first prompt' 'second prompt';;
+  observer) run_case --json --coordination-observer timeout_case 'timeout control' 'first prompt' 'second prompt';;
+  warmup) seed_eval_memories;;
 esac
 printf 'suite-continued\n' >> "$EVENTS"
 '''
         env = {
+            "PATH": os.environ["PATH"], "HOME": str(paths["root"]),
+            "TMPDIR": str(paths["root"]), "PYTHONDONTWRITEBYTECODE": "1",
             "TOOLS": str(paths["tools"]), "REPO": str(paths["repo"]),
             "ASSETS": str(paths["assets"]), "CLI": str(paths["cli"]),
             "HOME_DIR": str(paths["home"]), "CAPTURES": str(paths["captures"]),
-            "LOG_DIR": str(paths["logs"]), "EVENTS": str(marker), "KIND": kind,
-            "PROMPT_STATUS": str(status), "PROMPT_STDOUT": prompt_stdout,
-            "RUN_COUNT": str(run_count), "TEST_RUN_ID": run_id,
+            "EVENTS": str(paths["logs"] / "runner-events.txt"), "KIND": row["kind"],
+            "TIMEOUT_LOG": str(paths["logs"] / "timeout.log"),
+            "PROMPT_STATUS": str(row.get("status", 124)), "PROMPT_STDOUT": row.get("stdout", "partial success"),
+            "OUTER_TIMEOUT": str(int(row.get("outer", False))), "BACKEND_SOCKET": str(backend.path),
+            "OWNED_ID": OWNED_ID, "FOREIGN_CONTROL": str(int(row.get("foreign", False))),
+            "NETCLAW_EVAL_SEED": "7",
         }
-        if kind == "warmup":
-            fixtures = paths["assets"] / "evals/fixtures"
-            fixtures.mkdir(parents=True)
-            (fixtures / "eval-memories.json").write_text(json.dumps({"seedDocuments": []}))
-            (paths["repo"] / "evals/seed-memories.py").write_text("pass\n")
+        output = paths["logs"] / "runner-stdout.txt"
+        error = paths["logs"] / "runner-stderr.txt"
+        with output.open("w") as stdout, error.open("w") as stderr:
+            process = subprocess.Popen(["bash", "-c", script, "timeout-test", str(RUNNER)],
+                                       env=env, stdout=stdout, stderr=stderr, start_new_session=True)
+        def reap():
+            process.wait()
+            backend.event("harness-exited", status=process.returncode)
+        waiter = threading.Thread(target=reap)
+        waiter.start()
+        return process, waiter
 
-        completed = subprocess.run(
-            ["bash", "-c", script, "timeout-test", str(RUNNER)],
-            env={**os.environ, **env}, capture_output=True, text=True, timeout=30,
-        )
-        return paths, marker, completed
+    def test_prompt_failure_contains_owned_requests_before_abort(self):
+        rows = [
+            {"name": "text_timeout_with_delayed_backend_finalization", "kind": "text", "outer": True},
+            {"name": "json_timeout_empty_output", "kind": "json", "stdout": "", "outer": True},
+            {"name": "resume_first_turn_timeout", "kind": "resume", "outer": True},
+            {"name": "observer_internal_timeout", "kind": "observer"},
+            {"name": "observer_outer_timeout", "kind": "observer", "outer": True},
+            {"name": "nonzero_status7", "kind": "text", "status": 7},
+            {"name": "warmup_timeout", "kind": "warmup", "outer": True},
+            {"name": "stop_failure", "kind": "json", "fault": "stop"},
+            {"name": "exit_verification_failure", "kind": "text", "fault": "verify"},
+            {"name": "foreign_container_control", "kind": "text", "foreign": True},
+            {"name": "success_multiturn", "kind": "resume", "status": 0},
+        ]
+        for row in rows:
+            with self.subTest(row=row["name"]), tempfile.TemporaryDirectory() as directory:
+                paths = self.prepare(directory)
+                backend = RequestFinalizers(paths["root"] / "backend.sock", row.get("fault"))
+                process = waiter = None
+                try:
+                    exchange(backend.path, ["request", FOREIGN_ID, "foreign", False])
+                    process, waiter = self.invoke_prompt(paths, row, backend)
+                    success = row.get("status", 124) == 0
+                    archive = paths["repo"] / "evals/runs/containment-proof"
+                    with backend.condition:
+                        reached = backend.condition.wait_for(
+                            lambda: any(e["name"] == "harness-exited" for e in backend.events)
+                            or sum(e["name"] == "cancellation-observed" for e in backend.events) >= 2
+                            or row.get("fault") == "stop" and any(e["name"] == "stop-requested" for e in backend.events),
+                            timeout=20)
+                        held_events = list(backend.events)
+                        held_active = dict(backend.active)
+                        held_status = process.poll()
+                        archived_before_release = (archive / "run-info.txt").exists()
+                    # Release only after the snapshot. All failure assertions use that snapshot.
+                    backend.release.set()
+                    waiter.join(20)
+                    self.assertTrue(reached, (row, backend.errors))
+                    self.assertFalse(waiter.is_alive(), "The harness did not exit after finalization")
+                    self.assertEqual([], backend.errors)
+                    events = backend.events
+                    dispatches = [e for e in events if e["name"] == "dispatch"]
+                    docker = [e for e in events if e["name"] == "docker"]
+                    stops = [e for e in docker if e["command"] == "stop"]
+                    diagnostic = (paths["logs"] / "runner-stderr.txt").read_text()
+                    self.assertEqual(0 if success else 2, process.returncode, diagnostic)
+                    self.assertEqual(4 if success else 1, len(dispatches), events)
+                    self.assertEqual([OWNED_ID], [e["args"][-1] for e in stops], stops)
+                    self.assertEqual(1, sum(e["command"] == "run" for e in docker))
+                    self.assertEqual(1, backend.active[FOREIGN_ID])
+                    self.assertFalse(any(e["name"] == "request-finalized" and e["owner"] == FOREIGN_ID for e in events))
+                    if not success:
+                        exits = [e for e in held_events if e["name"] == "cli-exited"]
+                        self.assertEqual(1, len(exits))
+                        self.assertEqual(2, exits[0]["active"][OWNED_ID])
+                        self.assertEqual(2, held_active[OWNED_ID])
+                        self.assertEqual(1, sum(e["name"] == "dispatch" for e in held_events))
+                        self.assertFalse(archived_before_release, "The archive preceded containment")
+                        if row.get("fault") != "stop":
+                            self.assertIsNone(held_status, "The harness exited before request finalization")
+                            self.assertEqual(2, sum(e["name"] == "cancellation-observed" for e in held_events))
+                        marker = paths["logs"] / "runner-events.txt"
+                        marker_text = marker.read_text() if marker.exists() else ""
+                        self.assertNotIn("suite-continued", marker_text)
+                        self.assertNotIn("setup:2", marker_text)
+                    if row.get("fault"):
+                        self.assertRegex(diagnostic.lower(), r"(?s)(contain|cleanup|stop).*(fail|unconfirm|cannot)")
+                        self.assertTrue(paths["home"].is_dir(), "Cleanup uncertainty must retain the home")
+                        self.assertTrue(paths["captures"].is_dir(), "Cleanup uncertainty must retain captures")
+                        self.assertEqual(2 if row["fault"] == "stop" else 0, backend.active[OWNED_ID])
+                    else:
+                        self.assertEqual(0, backend.active[OWNED_ID])
+                        names = [e["name"] for e in events]
+                        self.assertLess(names.index("container-exited"), names.index("harness-exited"))
+                        self.assertIn("exit-verified", names)
+                        finalizers = archive / "container-logs/backend-finalized.log"
+                        self.assertEqual(8 if success else 2, len(finalizers.read_text().splitlines()))
+                        self.assertFalse(paths["home"].exists())
+                        self.assertFalse(paths["captures"].exists())
+                    self.assert_prompt_evidence(paths, row, archive)
+                    if success:
+                        calls = [e["args"][1] for e in dispatches]
+                        sessions = [args[args.index("--resume") + 1] for args in calls]
+                        self.assertEqual(sessions[0], sessions[1])
+                        self.assertEqual(sessions[2], sessions[3])
+                        self.assertNotEqual(sessions[0], sessions[2])
+                        self.assertTrue(all(e["active"].get(OWNED_ID, 0) == 0 for e in dispatches))
+                finally:
+                    backend.release.set()
+                    if process is not None and process.poll() is None:
+                        # The fixture owns this process group and all its fake commands.
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait()
+                    if waiter is not None:
+                        waiter.join(20)
+                    backend.close()
 
-    # A trial prompt that exits with a nonzero status does not stop the suite. The trial
-    # records the exit code, and the trial verdict gives the trial its state (see
-    # test_trial_states_harness.py). Only the memory warm-up prompt stops the suite.
-    CASES = {"prompt": "timeout_case", "resume": "resume_case", "observer": "observer_case"}
-
-    def exit_files(self, paths, kind, run_id="timeout-proof"):
-        case = self.CASES[kind]
-        trials = paths["repo"] / "evals/runs" / run_id / "trials" / case
-        if kind == "resume":
-            return sorted(trials.glob("*/raw/turn-*/cli-exit.json"))
-        return sorted(trials.glob("*/raw/cli-exit.json"))
-
-    def assert_failed_prompt_is_recorded_and_the_suite_continues(self, kind, status):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        paths, marker, completed = self.invoke_prompt(directory.name, kind, status, run_count=2)
-        self.assertEqual(0, completed.returncode, completed.stderr)
-        events = marker.read_text()
-        self.assertIn("suite-continued", events)
-        self.assertEqual(2, events.count("assert"), events)
-        exit_files = self.exit_files(paths, kind)
-        calls_per_trial = 2 if kind == "resume" else 1
-        self.assertEqual(2 * calls_per_trial, len(exit_files))
-        self.assertEqual({status}, {json.loads(path.read_text())["exit_code"] for path in exit_files})
-        timeout_calls = (paths["logs"] / "timeout.log").read_text().splitlines()
-        self.assertEqual(2 * calls_per_trial, len(timeout_calls))
-        stdout_files = [path for exit_file in exit_files for path in exit_file.parent.glob("cli-stdout.*")]
-        self.assertEqual(len(exit_files), len(stdout_files))
-        self.assertTrue(all("partial success" in path.read_text() for path in stdout_files))
-        return paths
-
-    def test_trial_prompt_timeout_is_recorded_and_the_suite_continues(self):
-        self.assert_failed_prompt_is_recorded_and_the_suite_continues("prompt", 124)
-
-    def test_other_nonzero_trial_prompt_status_is_recorded_and_the_suite_continues(self):
-        self.assert_failed_prompt_is_recorded_and_the_suite_continues("prompt", 7)
-
-    def test_resume_and_observer_failures_are_recorded_like_a_plain_prompt(self):
-        for kind in ("resume", "observer"):
-            with self.subTest(kind=kind):
-                self.assert_failed_prompt_is_recorded_and_the_suite_continues(kind, 124)
-
-    def test_memory_warmup_timeout_uses_the_same_failure_and_cleanup_path(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        paths, marker, completed = self.invoke_prompt(directory.name, "warmup", 124)
-        self.assertEqual(2, completed.returncode, completed.stderr)
-        self.assertFalse(marker.exists())
-        archive = paths["repo"] / "evals/runs/timeout-proof/stdout"
-        status_files = list(archive.glob("prompt_status_*.txt"))
-        self.assertEqual(1, len(status_files))
-        self.assertEqual("124", status_files[0].read_text().strip())
-        self.assertTrue(list(archive.glob("stdout_*_warmup.txt")))
-        self.assertTrue(list(archive.glob("stderr_*_warmup.txt")))
-        docker_calls = (paths["logs"] / "docker.log").read_text().splitlines()
-        self.assertEqual(1, len([call for call in docker_calls if call.startswith("stop ")]))
-        self.assertIn("stop netclaw-eval-owned", docker_calls)
-
-    def test_successful_multi_turn_case_keeps_both_prompts(self):
-        with tempfile.TemporaryDirectory() as directory:
-            paths, _, completed = self.invoke_prompt(
-                directory, "resume", status=0, run_count=1, run_id="success-proof"
-            )
-
-            self.assertEqual(0, completed.returncode, completed.stderr)
-            self.assertEqual(2, len((paths["logs"] / "cli.log").read_text().splitlines()))
-            exit_files = self.exit_files(paths, "resume", run_id="success-proof")
-            self.assertEqual(["turn-01", "turn-02"], [path.parent.name for path in exit_files])
-            self.assertEqual({0}, {json.loads(path.read_text())["exit_code"] for path in exit_files})
+    def assert_prompt_evidence(self, paths, row, archive):
+        status = row.get("status", 124)
+        if row["kind"] == "warmup":
+            raw = archive / "stdout"
+            self.assertEqual(["124"], [p.read_text().strip() for p in raw.glob("prompt_status_*.txt")])
+            stdout = list(raw.glob("stdout_*_warmup.txt"))
+            stderr = list(raw.glob("stderr_*_warmup.txt"))
+        else:
+            exit_files = sorted((archive / "trials").rglob("cli-exit.json"))
+            self.assertEqual(4 if status == 0 else 1, len(exit_files))
+            self.assertEqual({status}, {json.loads(p.read_text())["exit_code"] for p in exit_files})
+            stdout = [p for item in exit_files for p in item.parent.glob("cli-stdout.*")]
+            stderr = [item.parent / "cli-stderr.txt" for item in exit_files]
+        self.assertEqual(4 if status == 0 else 1, len(stdout))
+        self.assertTrue(all(p.read_text() == row.get("stdout", "partial success") for p in stdout))
+        self.assertTrue(all(p.read_text() == "synthetic prompt diagnostic\n" for p in stderr))
+        self.assertEqual(4 if status == 0 else 1, len((paths["logs"] / "timeout.log").read_text().splitlines()))
 
 
 if __name__ == "__main__":

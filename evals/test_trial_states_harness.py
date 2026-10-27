@@ -4,7 +4,10 @@
 `run-evals.sh` (`run_case`, `run_multi_turn_case`, `main`) with a fake CLI and
 check what the operator and the stored results see. They use no model, no
 network, no daemon, and no sleep. The fake CLI exits 124 at once when it plays
-a cut-off. One test uses a real `timeout` kill (1 s). Each test deletes its
+a cut-off. Failed CLI calls abort the suite with exit 2. Score tests use
+exit-zero calls with incomplete evidence. Abort tests read preserved evidence
+offline through the real collector and verdict helpers. One test uses a real
+`timeout` kill (1 s). Each test deletes its
 temp folders.
 
 Contracts that these tests fix, besides the ones in `test_trial_verdict.py`:
@@ -35,10 +38,11 @@ Contracts that these tests fix, besides the ones in `test_trial_verdict.py`:
 The fake CLI plays a plan, one entry for each CLI call: `<cli>:<assertion>`.
   cli        ok (a finished turn), cut (exit 124 at once, no turn end), fail (an
              ERROR record, a turn end, exit 1), crash (a crash log, exit 134),
-             nolog (exit 0, no session log), slow (sleeps, so `timeout` cuts it)
+             incomplete (exit 0, no turn-end evidence), nolog (exit 0, no session log),
+             slow (blocks on a signal, so `timeout` cuts it)
   assertion  pass (exit 0), fail (exit 1), or an exit code, such as 141
 The assertion function reads the entry of the last CLI call. So a harness that
-skips the assertion for a cut trial does not shift the plan.
+skips the assertion for an incomplete trial does not shift the plan.
 """
 
 import json
@@ -103,7 +107,8 @@ case "$mode" in
     ok)     finish_turn; reply; exit 0 ;;
     nolog)  reply; exit 0 ;;
     cut)    exit 124 ;;
-    slow)   exec sleep 30 ;;
+    incomplete) reply; exit 0 ;;
+    slow)   exec python3 -c 'import signal; signal.pause()' ;;
     fail)   { stamp 4; echo "ERROR: ${FAKE_ERROR:-provider unavailable}"; } >> "$log"; finish_turn; exit 1 ;;
     crash)  printf 'No space left on device\n' > "$NETCLAW_HOME/logs/crash-20261015-131615.log"; exit 134 ;;
     *)      echo "unknown fake mode: $mode" >&2; exit 99 ;;
@@ -120,7 +125,17 @@ build_coordination_observer() { :; }
 start_eval_daemon() { :; }
 seed_eval_memories() { :; }
 if [[ "${DRIVER_REAL_DAEMON_CHECK:-0}" != 1 ]]; then check_daemon_alive() { :; }; fi
-docker() { cat "$FAKE_STATE/docker_running" 2>/dev/null || echo true; }
+docker() {
+    case "$1" in
+        inspect) cat "$FAKE_STATE/docker_running" 2>/dev/null || echo true ;;
+        stop) echo false > "$FAKE_STATE/docker_running"; printf '%s\n' "${@: -1}" ;;
+        wait) echo 0 ;;
+        ps|container) : ;;
+        image) echo sha256:fixture-image ;;
+        exec|logs) : ;;
+        *) return 1 ;;
+    esac
+}
 fake_assertion() {
     local entry verdict
     entry=$(cat "$FAKE_STATE/last_entry")
@@ -138,6 +153,7 @@ EVAL_HOME="$DRIVER_HOME"
 TMPDIR_EVAL="$DRIVER_TMP"
 EVAL_PORT=1
 EVAL_CONTAINER_NAME=eval-fake
+EVAL_CONTAINER_ID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 EVAL_MODEL_ID=fake-model
 NETCLAW_VER=fake
 STARTED_AT=2026-10-15T10:00:00+00:00
@@ -209,6 +225,8 @@ class StatesCase(unittest.TestCase):
             "FAKE_TAG": str(self.invocations),
             "PATH": os.environ["PATH"],
             "HOME": str(self.root),
+            "TMPDIR": str(self.root),
+            "PYTHONDONTWRITEBYTECODE": "1",
             "HARNESS_SCRIPT": str(self.script),
             "NETCLAW_BIN": str(self.cli),
             "NETCLAW_EVAL_RUNS": str(runs),
@@ -229,6 +247,35 @@ class StatesCase(unittest.TestCase):
                           f"exit={completed.returncode} stdout tail={completed.stdout[-400:]!r} "
                           f"stderr tail={completed.stderr[-600:]!r}")
         return completed
+
+    def collect_aborted_trial(self, number, expected_codes):
+        """Read preserved evidence after abort. This step does not dispatch a prompt."""
+        raw = self.trial_dir(number) / "raw"
+        exit_files = sorted(raw.rglob("cli-exit.json"))
+        self.assertEqual(expected_codes, [json.loads(p.read_text())["exit_code"] for p in exit_files])
+        if (raw.parent / "verdict.json").exists():
+            return
+        # The abort gate precedes score calculation. Reuse the real evidence and database readers offline.
+        known = sorted(self.tmp_eval.glob("known_logs_*.txt"))[-1]
+        script = r'''source "$HARNESS_SCRIPT"
+EVAL_HOME="$DRIVER_HOME"
+TRIAL_RAW="$POSTMORTEM_RAW"
+TRIAL_KNOWN_LOGS_FILE="$POSTMORTEM_KNOWN"
+RESULTS_DB="$POSTMORTEM_DB"
+RUN_ID=run-under-test
+CURRENT_CATEGORY=demo-category
+finish_trial
+record_trial demo "$POSTMORTEM_NUMBER" p fail
+'''
+        completed = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, timeout=20,
+            env={"PATH": os.environ["PATH"], "HOME": str(self.root), "TMPDIR": str(self.root),
+                 "PYTHONDONTWRITEBYTECODE": "1", "HARNESS_SCRIPT": str(self.script),
+                 "DRIVER_HOME": str(self.home), "POSTMORTEM_RAW": str(raw),
+                 "POSTMORTEM_KNOWN": str(known), "POSTMORTEM_DB": str(self.results_db),
+                 "POSTMORTEM_NUMBER": str(number)})
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual(expected_codes, [json.loads(p.read_text())["exit_code"] for p in exit_files])
 
     @property
     def results_db(self):
@@ -277,37 +324,34 @@ class TrialVerdictFileTests(StatesCase):
     def test_each_trial_folder_holds_a_verdict_for_pass_fail_and_inconclusive(self):
         # Planted bug: the harness never calls trial_verdict, or calls it
         # before the assertion ran, so the verdict is missing or stale.
-        self.drive("text", ["p"], "ok:pass,ok:fail,cut:pass", runs=3)
+        self.drive("text", ["p"], "ok:pass,ok:fail,incomplete:pass", runs=3)
 
         self.assertEqual("pass", self.verdict(1)["status"])
         self.assertEqual("fail", self.verdict(2)["status"])
         self.assertEqual({"status": "inconclusive", "reason": "timeout", "error": None}, self.verdict(3))
 
-    def test_cut_trial_is_inconclusive_whether_the_assertion_passed_or_failed(self):
-        # Planted bug: the assertion result wins over exit 124 (the D4 false
-        # pass), or a failing assertion makes the cut trial a fail.
-        self.drive("text", ["p"], "cut:pass,cut:fail", runs=2)
+    def test_cut_trial_aborts_and_keeps_timeout_evidence(self):
+        completed = self.drive("text", ["p"], "cut:pass,ok:pass", runs=2, expect_done=False)
 
-        for number in (1, 2):
-            self.assertEqual({"status": "inconclusive", "reason": "timeout", "error": None},
-                             self.verdict(number), f"trial {number}")
-        self.assertEqual([(1, "inconclusive", "timeout"), (2, "inconclusive", "timeout")],
-                         [row[:3] for row in self.result_rows()])
-
-    def test_real_timeout_kill_gives_an_inconclusive_trial(self):
-        # The fake CLI sleeps and `timeout` kills it after 1 s. This is the
-        # D4 path from end to end: exit 124 recorded by PR 1, then judged.
-        # Planted bug: `|| true` hides the 124, so the trial is judged by the
-        # assertion (a pass here).
-        self.drive("text", ["p"], "slow:pass", timeout=1)
-
+        self.assertEqual(2, completed.returncode, completed.stderr)
+        self.assertEqual("1", (self.state / "count").read_text().strip())
+        self.assertFalse(self.trial_dir(2).exists())
+        self.collect_aborted_trial(1, [124])
         self.assertEqual({"status": "inconclusive", "reason": "timeout", "error": None}, self.verdict(1))
 
-    def test_cli_crash_with_a_crash_log_is_inconclusive_infra(self):
-        # Planted bug: exit 134 or the crash log is ignored, so the assertion
-        # decides (D4 row 59: the harness scored a pass on a cut output).
-        self.drive("text", ["p"], "crash:pass")
+    def test_real_timeout_kill_keeps_its_original_status(self):
+        # The fake CLI blocks on a signal. GNU timeout terminates that process.
+        completed = self.drive("text", ["p"], "slow:pass", timeout=1, expect_done=False)
 
+        self.assertEqual(2, completed.returncode, completed.stderr)
+        self.collect_aborted_trial(1, [124])
+        self.assertEqual({"status": "inconclusive", "reason": "timeout", "error": None}, self.verdict(1))
+
+    def test_cli_crash_aborts_and_keeps_the_crash_evidence(self):
+        completed = self.drive("text", ["p"], "crash:pass", expect_done=False)
+
+        self.assertEqual(2, completed.returncode, completed.stderr)
+        self.collect_aborted_trial(1, [134])
         verdict = self.verdict(1)
         self.assertEqual("inconclusive", verdict["status"])
         self.assertTrue(verdict["reason"].startswith("infra"), verdict)
@@ -334,7 +378,10 @@ class TrialVerdictFileTests(StatesCase):
         # quote ends the statement; or the harness stores the failed turn as a
         # fail; or it drops the error text (decision 6).
         error = 'Provider returned 500: it\'s "down"); DROP TABLE eval_results; --\nsecond line'
-        self.drive("text", ["p"], "fail:pass", FAKE_ERROR=error)
+        completed = self.drive("text", ["p"], "fail:pass", FAKE_ERROR=error, expect_done=False)
+
+        self.assertEqual(2, completed.returncode, completed.stderr)
+        self.collect_aborted_trial(1, [1])
 
         self.assertEqual({"status": "inconclusive", "reason": "turn_failed", "error": error}, self.verdict(1))
         ((number, status, reason, details),) = self.result_rows()
@@ -353,17 +400,19 @@ class TrialVerdictFileTests(StatesCase):
         self.assertEqual(prompt, stored)
         self.assertEqual("pass", status)
 
-    def test_multi_turn_trial_with_a_cut_turn_is_inconclusive(self):
-        # The cut turn is last in trial 2 and first in trial 3. Planted bug:
-        # judge only the last turn, or only the first.
-        self.drive("multi", ["turn one", "turn two"], "ok:pass,ok:pass,ok:pass,cut:pass,cut:pass,ok:pass", runs=3)
+    def test_multi_turn_trial_aborts_at_the_first_cut_turn(self):
+        completed = self.drive(
+            "multi", ["turn one", "turn two"], "ok:pass,ok:pass,ok:pass,cut:pass,ok:pass",
+            runs=3, expect_done=False)
 
+        self.assertEqual(2, completed.returncode, completed.stderr)
+        self.assertEqual("4", (self.state / "count").read_text().strip())
+        self.assertFalse(self.trial_dir(3).exists())
         self.assertEqual("pass", self.verdict(1)["status"])
+        self.collect_aborted_trial(2, [0, 124])
         self.assertEqual("timeout", self.verdict(2)["reason"])
         self.assertEqual("inconclusive", self.verdict(2)["status"])
-        self.assertEqual("inconclusive", self.verdict(3)["status"])
-        self.assertEqual("timeout", self.verdict(3)["reason"])
-        self.assertEqual(["pass", "inconclusive", "inconclusive"], [row[1] for row in self.result_rows()])
+        self.assertEqual(["pass", "inconclusive"], [row[1] for row in self.result_rows()])
 
 
 class CaseLineTests(StatesCase):
@@ -384,63 +433,63 @@ class CaseLineTests(StatesCase):
             self.assertEqual(statuses, [row[1] for row in self.result_rows()])
         return completed
 
-    def test_four_passes_and_one_cut_trial_is_a_pass_scored_4_of_4(self):
+    def test_four_passes_and_one_incomplete_trial_is_a_pass_scored_4_of_4(self):
         # Planted bug: a pass needs every trial (the old rule scores 4/5 = 0.80
         # and passes only by luck of the threshold), the score divides by all
         # trials (shows 4/5), or the inconclusive count is missing from the
         # line. The design example: `4/4 (1 inconclusive: timeout)`.
         completed = self.check_case(
-            "ok:pass,ok:pass,ok:pass,ok:pass,cut:pass", 5, "PASS", (4, 4), 1, ["timeout"],
+            "ok:pass,ok:pass,ok:pass,ok:pass,incomplete:pass", 5, "PASS", (4, 4), 1, ["timeout"],
             ["pass", "pass", "pass", "pass", "inconclusive"])
 
         self.assertEqual({"total": 1, "passed": 1, "inconclusive": 0}, self.run_row())
         self.assertRegex(completed.stdout, r"\b1 inconclusive: timeout\b")
 
-    def test_three_passes_one_fail_and_one_cut_trial_is_inconclusive(self):
-        # Planted bug: count the cut trial as a pass (PASS), or as a fail
+    def test_three_passes_one_fail_and_one_incomplete_trial_is_inconclusive(self):
+        # Planted bug: count the incomplete trial as a pass (PASS), or as a fail
         # (FAIL, the old rule).
-        self.check_case("ok:pass,ok:pass,ok:pass,ok:fail,cut:pass", 5, "INCONCLUSIVE", (3, 4), 1, ["timeout"],
+        self.check_case("ok:pass,ok:pass,ok:pass,ok:fail,incomplete:pass", 5, "INCONCLUSIVE", (3, 4), 1, ["timeout"],
                         ["pass", "pass", "pass", "fail", "inconclusive"])
 
         self.assertEqual({"total": 1, "passed": 0, "inconclusive": 1}, self.run_row())
 
-    def test_a_case_that_cannot_reach_the_threshold_is_a_fail_even_with_a_cut_trial(self):
-        # 1P 2F 2I at 0.8: even if both cut trials passed, 3/5 is below it.
+    def test_a_case_that_cannot_reach_the_threshold_is_a_fail_even_with_an_incomplete_trial(self):
+        # 1P 2F 2I at 0.8: even if both incomplete trials passed, 3/5 is below it.
         # Planted bug: any inconclusive trial makes the case inconclusive.
-        self.check_case("ok:pass,ok:fail,ok:fail,cut:pass,cut:pass", 5, "FAIL", (1, 3), 2, ["timeout"],
+        self.check_case("ok:pass,ok:fail,ok:fail,incomplete:pass,incomplete:pass", 5, "FAIL", (1, 3), 2, ["timeout"],
                         ["pass", "fail", "fail", "inconclusive", "inconclusive"])
 
         self.assertEqual({"total": 1, "passed": 0, "inconclusive": 0}, self.run_row())
 
-    def test_one_conclusive_pass_among_four_cut_trials_shows_1_of_1_and_inconclusive(self):
+    def test_one_conclusive_pass_among_four_incomplete_trials_shows_1_of_1_and_inconclusive(self):
         # Planted bug: a lone pass makes the case a PASS, or the score is 1/5.
-        self.check_case("cut:pass,cut:pass,ok:pass,cut:fail,cut:pass", 5, "INCONCLUSIVE", (1, 1), 4, ["timeout"])
+        self.check_case("incomplete:pass,incomplete:pass,ok:pass,incomplete:fail,incomplete:pass", 5, "INCONCLUSIVE", (1, 1), 4, ["timeout"])
 
         self.assertEqual({"total": 1, "passed": 0, "inconclusive": 1}, self.run_row())
 
     def test_a_case_with_no_conclusive_trial_does_not_divide_by_zero(self):
-        # D4: 15 of 33 cases had only cut trials. Planted bug: awk divides by
+        # D4: 15 of 33 cases had only incomplete trials. Planted bug: awk divides by
         # the number of conclusive trials, which is zero.
-        completed = self.check_case("cut:pass,cut:pass", 2, "INCONCLUSIVE", (0, 0), 2, ["timeout"])
+        completed = self.check_case("incomplete:pass,incomplete:pass", 2, "INCONCLUSIVE", (0, 0), 2, ["timeout"])
 
         self.assertNotRegex(completed.stdout + completed.stderr, r"(?i)division by zero|\binf\b|\bnan\b")
 
     def test_reasons_of_mixed_inconclusive_trials_are_listed(self):
         # Planted bug: only the first reason is shown, or the reasons are lost.
-        completed = self.drive("text", ["p"], "ok:pass,cut:pass,fail:pass,ok:pass,ok:pass", runs=5)
+        completed = self.drive("text", ["p"], "ok:pass,incomplete:pass,ok:141,ok:pass,ok:pass", runs=5)
 
         line = self.case_lines(completed)[0]
         self.assertEqual("INCONCLUSIVE", line.group(1), line.group(0))
         self.assertEqual((3, 3), (int(line.group(3)), int(line.group(4))), line.group(0))
         self.assertRegex(line.group(5), r"\b2 inconclusive\b")
         self.assertIn("timeout", line.group(5))
-        self.assertIn("turn_failed", line.group(5))
+        self.assertIn("assertion_exit_141", line.group(5))
 
     def test_each_case_is_scored_from_its_own_trials(self):
         # Planted bug: the trial tally is not reset between cases, so the second
         # case inherits the passes of the first and shows 2/2 instead of 0/0.
         completed = self.drive(
-            "scenario", ["unused"], "ok:pass,ok:pass,cut:pass,cut:pass", runs=2,
+            "scenario", ["unused"], "ok:pass,ok:pass,incomplete:pass,incomplete:pass", runs=2,
             SCENARIO='run_case demo "first" "p1"; run_case other "second" "p2"', expect_done=False)
 
         first, second = self.case_lines(completed)
@@ -453,7 +502,7 @@ class CaseLineTests(StatesCase):
         # Planted bug: run_multi_turn_case keeps its own copy of the old score.
         completed = self.drive(
             "multi", ["turn one", "turn two"],
-            "ok:pass,ok:pass,ok:pass,ok:pass,ok:pass,ok:pass,ok:pass,ok:pass,cut:pass,cut:pass", runs=5)
+            "ok:pass,ok:pass,ok:pass,ok:pass,ok:pass,ok:pass,ok:pass,ok:pass,incomplete:pass,incomplete:pass", runs=5)
 
         line = self.case_lines(completed)[0]
         self.assertEqual("PASS", line.group(1), line.group(0))
@@ -471,17 +520,17 @@ class ExitCodeTests(StatesCase):
     def test_exit_3_when_no_case_fails_and_a_case_is_inconclusive(self):
         # Planted bug: the exit code stays 0 (an inconclusive case is not a
         # fail, so nothing is wrong), or becomes 1 (CI cannot tell it apart).
-        for scenario, plan in (('run_case demo "only" "p"', "cut:pass"),
-                               (self.TWO_CASES, "ok:pass,cut:pass"),
-                               (self.TWO_CASES, "cut:fail,cut:pass")):
+        for scenario, plan in (('run_case demo "only" "p"', "incomplete:pass"),
+                               (self.TWO_CASES, "ok:pass,incomplete:pass"),
+                               (self.TWO_CASES, "incomplete:fail,incomplete:pass")):
             with self.subTest(plan=plan):
                 completed = self.run_main(scenario, plan)
                 self.assertEqual(3, completed.returncode, completed.stdout[-500:] + completed.stderr[-500:])
 
     def test_exit_1_when_a_case_fails_even_if_another_case_is_inconclusive(self):
         # Planted bug: inconclusive outranks fail, so a real regression hides
-        # behind a cut trial.
-        for plan in ("ok:fail,cut:pass", "cut:pass,ok:fail"):
+        # behind an incomplete trial.
+        for plan in ("ok:fail,incomplete:pass", "incomplete:pass,ok:fail"):
             with self.subTest(plan=plan):
                 completed = self.run_main(self.TWO_CASES, plan)
                 self.assertEqual(1, completed.returncode, completed.stdout[-500:] + completed.stderr[-500:])
@@ -500,7 +549,7 @@ class ExitCodeTests(StatesCase):
         # before it was inconclusive or failed.
         scenario = ('run_case demo "first" "p1"; echo false > "$FAKE_STATE/docker_running"; '
                     'run_case other "second" "p2"')
-        for plan in ("cut:pass,ok:pass", "ok:fail,ok:pass", "ok:pass,ok:pass"):
+        for plan in ("incomplete:pass,ok:pass", "ok:fail,ok:pass", "ok:pass,ok:pass"):
             with self.subTest(plan=plan):
                 completed = self.run_main(scenario, plan, DRIVER_REAL_DAEMON_CHECK=1)
                 self.assertEqual(2, completed.returncode, completed.stdout[-500:] + completed.stderr[-500:])
@@ -508,7 +557,7 @@ class ExitCodeTests(StatesCase):
     def test_summary_shows_the_number_of_inconclusive_cases(self):
         # Planted bug: the summary counts an inconclusive case as passed, or
         # says nothing about it.
-        completed = self.run_main(self.TWO_CASES, "ok:pass,cut:pass")
+        completed = self.run_main(self.TWO_CASES, "ok:pass,incomplete:pass")
 
         summary = completed.stdout[completed.stdout.index("Overall:"):]
         self.assertRegex(summary, r"\b1/2 cases passed\b")
@@ -539,13 +588,13 @@ class CategoryLabelTests(StatesCase):
         # P1. Planted bug: the label is INCONCLUSIVE when any case is
         # inconclusive, not only when no case failed. The category line then
         # hides a real FAIL.
-        for plan in ("ok:fail,cut:pass", "cut:pass,ok:fail"):
+        for plan in ("ok:fail,incomplete:pass", "incomplete:pass,ok:fail"):
             with self.subTest(plan=plan):
                 self.assertEqual((0, 2, "RED"), self.category_line(self.TWO_CASES, plan))
 
     def test_a_category_without_a_fail_and_with_an_inconclusive_case_is_labeled_inconclusive(self):
         # P1 guard. Planted bug: the inconclusive case gets a colour that means "bad".
-        self.assertEqual((1, 2, "INCONCLUSIVE"), self.category_line(self.TWO_CASES, "ok:pass,cut:pass"))
+        self.assertEqual((1, 2, "INCONCLUSIVE"), self.category_line(self.TWO_CASES, "ok:pass,incomplete:pass"))
 
     def test_a_category_of_passing_cases_is_green(self):
         # P1 guard. Planted bug: the label looks at inconclusive trials before it looks at the pass count.
