@@ -16,6 +16,11 @@ When something seems wrong with Netclaw itself:
 3. Check daemon logs at `<NETCLAW_HOME>/logs/daemon-{yyyy-MM-dd}*.log` (`NETCLAW_HOME` defaults to `~/.netclaw`)
 4. Check session logs at `<NETCLAW_HOME>/logs/sessions/{sanitized-session-id}/session.log`
 
+Use `netclaw doctor --fix --yes --format json` for a repair with JSON output.
+When stdout is present, parse it as one JSON document. Backup notices use stderr.
+A file access failure during the repair returns exit code 1 with stderr only.
+Text output keeps backup notices on stdout. A dry run creates no backup.
+
 If a local config source cannot be read, `netclaw daemon status` reports an unknown address and skips its readiness probe.
 `netclaw daemon stop` also skips its shutdown notice. It still requires proof that the process serves this home.
 Repair or restore the file that the command names, then retry.

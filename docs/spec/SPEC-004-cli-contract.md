@@ -105,6 +105,11 @@ Behavior:
   trust-policy checks, unsafe audience-profile combinations, and sandbox-shell
   readiness when applicable
 
+`netclaw doctor --fix --yes --format json` writes one JSON document after the diagnostic checks complete.
+A file access failure during the repair returns exit code 1 with stderr only.
+The command writes backup notices to stderr. Text output keeps backup notices on stdout.
+A dry run creates no backup and writes no backup notice.
+
 ### 5) Session Operations
 
 - `netclaw session inspect --session <channel/threadTs>`

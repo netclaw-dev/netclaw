@@ -275,8 +275,9 @@ static async Task RunAsync(string[] args)
                     {
                         try
                         {
+                            var backupOutput = doctorOptions.Format is DoctorOutputFormat.Json ? Console.Error : Console.Out;
                             foreach (var backup in await fixService.ApplyAsync(fixPlan))
-                                Console.WriteLine($"Backed up the original to {backup}");
+                                backupOutput.WriteLine($"Backed up the original to {backup}");
                         }
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                         {
