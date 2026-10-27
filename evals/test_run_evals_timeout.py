@@ -7,12 +7,13 @@ from pathlib import Path
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
 
 
-RUNNER = Path(__file__).with_name("run-evals.sh")
+RUNNER = Path(__file__).resolve().with_name("run-evals.sh")
 OWNED_ID = "a" * 64
 FOREIGN_ID = "b" * 64
 
@@ -205,6 +206,16 @@ if kind == "timeout":
 
 call("dispatch", kind, args)
 success = os.environ["PROMPT_STATUS"] == "0"
+session = args[args.index("--resume") + 1] if "--resume" in args else f"eval/fixture-{os.getpid()}"
+log = (Path(args[-1]) if kind == "dotnet" else
+       Path(os.environ["HOME_DIR"]) / "logs" / (session.replace("/", "-") + ".log"))
+with log.open("a") as output:
+    output.write(f"[2026-10-15T10:00:00+00:00] Headless session started: {session}\n")
+    output.write("[2026-10-15T10:00:01+00:00] PROMPT: synthetic prompt\n")
+    if os.environ["PROMPT_STATUS"] == "1":
+        output.write("[2026-10-15T10:00:02+00:00] ERROR: synthetic provider failure\n")
+    if success or os.environ["PROMPT_STATUS"] == "1":
+        output.write("[2026-10-15T10:00:03+00:00] TURN_COMPLETED: turn=1\n")
 for role in ("parent", "child"):
     call("request", os.environ["OWNED_ID"], role, success)
 print(os.environ["PROMPT_STDOUT"], end="", flush=True)
@@ -327,6 +338,7 @@ printf 'suite-continued\n' >> "$EVENTS"
             {"name": "observer_internal_timeout", "kind": "observer"},
             {"name": "observer_outer_timeout", "kind": "observer", "outer": True},
             {"name": "nonzero_status7", "kind": "text", "status": 7},
+            {"name": "failed_turn_status1", "kind": "text", "status": 1},
             {"name": "warmup_timeout", "kind": "warmup", "outer": True},
             {"name": "stop_failure", "kind": "json", "fault": "stop"},
             {"name": "exit_verification_failure", "kind": "text", "fault": "verify"},
@@ -399,6 +411,8 @@ printf 'suite-continued\n' >> "$EVENTS"
                         self.assertFalse(paths["home"].exists())
                         self.assertFalse(paths["captures"].exists())
                     self.assert_prompt_evidence(paths, row, archive)
+                    if not success and not row.get("fault") and row["kind"] != "warmup":
+                        self.assert_archived_verdict(paths, row, archive)
                     if success:
                         calls = [e["args"][1] for e in dispatches]
                         sessions = [args[args.index("--resume") + 1] for args in calls]
@@ -415,6 +429,30 @@ printf 'suite-continued\n' >> "$EVENTS"
                     if waiter is not None:
                         waiter.join(20)
                     backend.close()
+
+    def assert_archived_verdict(self, paths, row, archive):
+        """Classify the final archive without access to the deleted scratch evidence."""
+        self.assertFalse(paths["home"].exists())
+        self.assertFalse(paths["captures"].exists())
+        trial = archive / "trials/timeout_case/01"
+        raw = trial / "raw"
+        before = {p.relative_to(raw): p.read_bytes() for p in raw.rglob("*") if p.is_file()}
+        completed = subprocess.run(
+            [sys.executable, str(RUNNER.with_name("trial_verdict.py")),
+             "trial-status", "--trial-dir", str(trial)],
+            cwd=archive, capture_output=True, text=True, timeout=20,
+            env={"PATH": os.environ["PATH"], "HOME": str(paths["root"]),
+                 "TMPDIR": str(paths["root"]), "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        expected = {
+            124: {"status": "inconclusive", "reason": "timeout", "error": None},
+            1: {"status": "inconclusive", "reason": "turn_failed", "error": "synthetic provider failure"},
+            7: {"status": "inconclusive", "reason": "infra:cli_exit_7", "error": None},
+        }[row.get("status", 124)]
+        self.assertEqual(expected, json.loads(completed.stdout))
+        self.assertEqual("ok", json.loads((raw / "session.json").read_text())["status"])
+        self.assertIn("Headless session started:", (raw / "cli-session.log").read_text())
+        self.assertEqual(before, {p.relative_to(raw): p.read_bytes() for p in raw.rglob("*") if p.is_file()})
 
     def assert_prompt_evidence(self, paths, row, archive):
         status = row.get("status", 124)

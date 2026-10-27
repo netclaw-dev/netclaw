@@ -6,7 +6,8 @@ check what the operator and the stored results see. They use no model, no
 network, no daemon, and no sleep. The fake CLI exits 124 at once when it plays
 a cut-off. Failed CLI calls abort the suite with exit 2. Score tests use
 exit-zero calls with incomplete evidence. Abort tests read preserved evidence
-offline through the real collector and verdict helpers. One test uses a real
+offline through the real verdict and database helpers. The harness must emit
+the session evidence before abort. One test uses a real
 `timeout` kill (1 s). Each test deletes its
 temp folders.
 
@@ -248,31 +249,28 @@ class StatesCase(unittest.TestCase):
                           f"stderr tail={completed.stderr[-600:]!r}")
         return completed
 
-    def collect_aborted_trial(self, number, expected_codes):
-        """Read preserved evidence after abort. This step does not dispatch a prompt."""
+    def record_aborted_trial(self, number, expected_codes):
+        """Score only the evidence that the harness emitted before abort."""
         raw = self.trial_dir(number) / "raw"
         exit_files = sorted(raw.rglob("cli-exit.json"))
         self.assertEqual(expected_codes, [json.loads(p.read_text())["exit_code"] for p in exit_files])
+        self.assertEqual("ok", json.loads((raw / "session.json").read_text())["status"])
+        self.assertTrue((raw / "cli-session.log").is_file())
         if (raw.parent / "verdict.json").exists():
             return
-        # The abort gate precedes score calculation. Reuse the real evidence and database readers offline.
-        known = sorted(self.tmp_eval.glob("known_logs_*.txt"))[-1]
+        # Offline score calculation must not collect missing session evidence from scratch files.
         script = r'''source "$HARNESS_SCRIPT"
-EVAL_HOME="$DRIVER_HOME"
 TRIAL_RAW="$POSTMORTEM_RAW"
-TRIAL_KNOWN_LOGS_FILE="$POSTMORTEM_KNOWN"
 RESULTS_DB="$POSTMORTEM_DB"
 RUN_ID=run-under-test
 CURRENT_CATEGORY=demo-category
-finish_trial
 record_trial demo "$POSTMORTEM_NUMBER" p fail
 '''
         completed = subprocess.run(
             ["bash", "-c", script], capture_output=True, text=True, timeout=20,
             env={"PATH": os.environ["PATH"], "HOME": str(self.root), "TMPDIR": str(self.root),
                  "PYTHONDONTWRITEBYTECODE": "1", "HARNESS_SCRIPT": str(self.script),
-                 "DRIVER_HOME": str(self.home), "POSTMORTEM_RAW": str(raw),
-                 "POSTMORTEM_KNOWN": str(known), "POSTMORTEM_DB": str(self.results_db),
+                 "POSTMORTEM_RAW": str(raw), "POSTMORTEM_DB": str(self.results_db),
                  "POSTMORTEM_NUMBER": str(number)})
         self.assertEqual(0, completed.returncode, completed.stderr)
         self.assertEqual(expected_codes, [json.loads(p.read_text())["exit_code"] for p in exit_files])
@@ -336,7 +334,7 @@ class TrialVerdictFileTests(StatesCase):
         self.assertEqual(2, completed.returncode, completed.stderr)
         self.assertEqual("1", (self.state / "count").read_text().strip())
         self.assertFalse(self.trial_dir(2).exists())
-        self.collect_aborted_trial(1, [124])
+        self.record_aborted_trial(1, [124])
         self.assertEqual({"status": "inconclusive", "reason": "timeout", "error": None}, self.verdict(1))
 
     def test_real_timeout_kill_keeps_its_original_status(self):
@@ -344,14 +342,14 @@ class TrialVerdictFileTests(StatesCase):
         completed = self.drive("text", ["p"], "slow:pass", timeout=1, expect_done=False)
 
         self.assertEqual(2, completed.returncode, completed.stderr)
-        self.collect_aborted_trial(1, [124])
+        self.record_aborted_trial(1, [124])
         self.assertEqual({"status": "inconclusive", "reason": "timeout", "error": None}, self.verdict(1))
 
     def test_cli_crash_aborts_and_keeps_the_crash_evidence(self):
         completed = self.drive("text", ["p"], "crash:pass", expect_done=False)
 
         self.assertEqual(2, completed.returncode, completed.stderr)
-        self.collect_aborted_trial(1, [134])
+        self.record_aborted_trial(1, [134])
         verdict = self.verdict(1)
         self.assertEqual("inconclusive", verdict["status"])
         self.assertTrue(verdict["reason"].startswith("infra"), verdict)
@@ -381,7 +379,7 @@ class TrialVerdictFileTests(StatesCase):
         completed = self.drive("text", ["p"], "fail:pass", FAKE_ERROR=error, expect_done=False)
 
         self.assertEqual(2, completed.returncode, completed.stderr)
-        self.collect_aborted_trial(1, [1])
+        self.record_aborted_trial(1, [1])
 
         self.assertEqual({"status": "inconclusive", "reason": "turn_failed", "error": error}, self.verdict(1))
         ((number, status, reason, details),) = self.result_rows()
@@ -409,7 +407,7 @@ class TrialVerdictFileTests(StatesCase):
         self.assertEqual("4", (self.state / "count").read_text().strip())
         self.assertFalse(self.trial_dir(3).exists())
         self.assertEqual("pass", self.verdict(1)["status"])
-        self.collect_aborted_trial(2, [0, 124])
+        self.record_aborted_trial(2, [0, 124])
         self.assertEqual("timeout", self.verdict(2)["reason"])
         self.assertEqual("inconclusive", self.verdict(2)["status"])
         self.assertEqual(["pass", "inconclusive"], [row[1] for row in self.result_rows()])
