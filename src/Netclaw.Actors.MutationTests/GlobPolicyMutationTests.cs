@@ -384,6 +384,46 @@ public sealed class GlobPolicyMutationTests
     }
 
     [Fact]
+    public void An_alias_cannot_return_to_a_physical_ancestor_that_the_first_alias_skipped()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var parent = Directory.CreateDirectory(Path.Combine(covering, "parent")).FullName;
+        var child = Directory.CreateDirectory(Path.Combine(parent, "child")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), child);
+        Directory.CreateSymbolicLink(Path.Combine(child, "back"), parent);
+
+        Assert.False(IsLinkContained(covering, "a*/b*/x"));
+    }
+
+    [Fact]
+    public void A_final_file_alias_has_the_scope_of_its_target_directory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var targetDirectory = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
+        var targetFile = Path.Combine(targetDirectory, "file.txt");
+        File.WriteAllText(targetFile, "test");
+        File.CreateSymbolicLink(Path.Combine(covering, "alias"), targetFile);
+        var analysis = new ShellCommandAnalyzer(Bash52).Analyze($"cat {covering}/a*", tree.Root);
+        var occurrence = Assert.Single(analysis.Commands);
+        var pattern = Assert.IsType<ShellValueDomain.PathPattern>(
+            ShellGlobScope.FindGlobPattern(occurrence, occurrence.Clause.Args.Last()));
+        Assert.True(Netclaw.Security.Authorization.Filesystem.CanonicalPath.TryCreateHost(covering, null, out var canonical));
+
+        var reach = Assert.IsType<ShellGlobReach.Complete>(ShellGlobScope.ResolveReach(canonical, pattern));
+
+        Assert.Contains(reach.Scopes, path => path.Value == targetDirectory);
+        Assert.DoesNotContain(reach.Scopes, path => path.Value == targetFile);
+    }
+
+    [Fact]
     public void Directory_only_glob_excludes_a_final_file_alias_from_protected_reach()
     {
         if (OperatingSystem.IsWindows())
