@@ -7,6 +7,7 @@ using System.Runtime.Versioning;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Configuration;
@@ -15,7 +16,8 @@ public sealed class DaemonLogRetentionTests : IDisposable
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-05-20T12:00:00Z");
 
-    private readonly string _root = Path.Join(Path.GetTempPath(), $"netclaw-log-retention-tests-{Guid.NewGuid():N}");
+    private readonly DisposableTempDir _directory = new();
+    private string _root => _directory.Path;
     private string LogsDir => Path.Join(_root, "logs");
 
     public DaemonLogRetentionTests() => Directory.CreateDirectory(LogsDir);
@@ -104,7 +106,7 @@ public sealed class DaemonLogRetentionTests : IDisposable
     {
         "daemon-2020-01-01-notes.log",
         "daemon-2020-01-01 my analysis.log",
-        "daemon-2020-01-01.1.log",
+        "daemon-2020-01-01.notes.log",
         "daemon-2020-01-01.log.bak",
         "daemon-0001-01-01.log",
         "my-daemon-2020-01-01.log",
@@ -130,18 +132,41 @@ public sealed class DaemonLogRetentionTests : IDisposable
         Assert.True(File.Exists(Path.Join(LogsDir, name)), name);
     }
 
+    [Theory]
+    [InlineData("daemon-2026-05-05.1.log", true)]
+    [InlineData("daemon-2026-05-05.2.log", true)]
+    [InlineData("daemon-2026-05-06.1.log", false)]
+    [InlineData("daemon-2026-05-20.1.log", false)]
+    [InlineData("daemon-2026-05-20.2.log", false)]
+    [InlineData("daemon-2026-05-05.notes.log", false)]
+    [InlineData("daemon-2026-05-05.1.extra.log", false)]
+    [InlineData("daemon-2026-05-05.1.log.bak", false)]
+    public void Retention_recognizes_dated_size_segments_and_preserves_decoys(string name, bool delete)
+    {
+        // Recent logs exclude the candidate from the newest-three safeguard.
+        Touch("daemon-2026-05-17.log", "daemon-2026-05-18.log", "daemon-2026-05-19.log", "daemon-2026-05-20.log", name);
+
+        var result = DaemonLogRetention.Prune(LogsDir, Now, 14);
+
+        Assert.Equal((delete ? 1 : 0, 0), result);
+        Assert.Equal(!delete, File.Exists(Path.Join(LogsDir, name)));
+    }
+
     [Fact]
     public void A_matching_name_in_a_subdirectory_is_never_deleted()
     {
         Directory.CreateDirectory(Path.Join(LogsDir, "sessions"));
         Touch("daemon-2026-05-17.log", "daemon-2026-05-18.log", "daemon-2026-05-19.log", "daemon-2026-05-20.log");
-        Touch(Path.Join("sessions", "daemon-2020-01-01.log"), Path.Join("sessions", "crash-20200101-000000.log"));
+        Touch(Path.Join("sessions", "daemon-2020-01-01.log"), Path.Join("sessions", "crash-20200101-000000.log"),
+            Path.Join("sessions", "daemon-2020-01-01.1.log"), Path.Join("sessions", "daemon-2020-01-01.2.log"));
 
         var (deleted, _) = DaemonLogRetention.Prune(LogsDir, Now, 14);
 
         Assert.Equal(0, deleted);
         Assert.True(File.Exists(Path.Join(LogsDir, "sessions", "daemon-2020-01-01.log")));
         Assert.True(File.Exists(Path.Join(LogsDir, "sessions", "crash-20200101-000000.log")));
+        Assert.True(File.Exists(Path.Join(LogsDir, "sessions", "daemon-2020-01-01.1.log")));
+        Assert.True(File.Exists(Path.Join(LogsDir, "sessions", "daemon-2020-01-01.2.log")));
     }
 
     [Fact]
@@ -270,16 +295,5 @@ public sealed class DaemonLogRetentionTests : IDisposable
             File.WriteAllText(Path.Join(LogsDir, name), "x");
     }
 
-    public void Dispose()
-    {
-        try
-        {
-            if (Directory.Exists(_root))
-                Directory.Delete(_root, recursive: true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Console.Error.WriteLine($"[DaemonLogRetentionTests] cleanup failed: {ex.Message}");
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 }
