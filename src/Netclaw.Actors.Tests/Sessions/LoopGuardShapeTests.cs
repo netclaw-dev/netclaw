@@ -17,8 +17,9 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <list type="bullet">
 /// <item><see cref="Caught_failure_shapes_intervene"/> — the turn is stuck and
 /// the guard catches it today. These are the controls.</item>
-/// <item><see cref="Missed_failure_shapes_do_not_intervene_today"/> — the turn is
-/// stuck and the guard misses it. This is the gap inventory for #2706.</item>
+/// <item><see cref="Missed_failure_shapes_must_intervene"/> — the turn is stuck
+/// and the guard misses it. This theory FAILS until #2706 lands. The red run is
+/// the deliverable: the gap stated as an executable spec.</item>
 /// <item><see cref="Success_shapes_must_not_intervene"/> — the turn is making
 /// progress. A failure here is a false positive, which is worse than a gap.</item>
 /// </list>
@@ -83,12 +84,12 @@ public sealed class LoopGuardShapeTests
     };
 
     /// <summary>
-    /// Shapes the guard misses today. Each case asserts the CURRENT behavior, so
-    /// the suite stays green while the gap is documented in executable form.
+    /// Shapes the guard misses today. Each case asserts the behavior the guard
+    /// MUST have, so every case fails until the progress guard lands (#2706).
     /// <para>
-    /// When the progress guard lands (#2706), move each shape to
-    /// <see cref="CaughtFailureShapes"/> and delete this theory. A shape that
-    /// still passes here after the fix is a shape the fix does not cover.
+    /// This is a failing spec, not a regression suite. A red run here is the
+    /// point: it states the gap in executable form. When the fix lands, these
+    /// cases turn green and the theory becomes ordinary regression coverage.
     /// </para>
     /// </summary>
     public static TheoryData<Shape> MissedFailureShapes => new()
@@ -209,14 +210,14 @@ public sealed class LoopGuardShapeTests
         => Assert.True(Run(shape), $"The guard did not intervene for '{shape.Name}'.");
 
     /// <summary>
-    /// Asserts the CURRENT behavior: the guard does not intervene. This is the
-    /// gap inventory. It fails the day the guard starts catching the shape, which
-    /// is the signal to move the shape to <see cref="CaughtFailureShapes"/>.
+    /// The gap inventory. Every case here MUST intervene and does not yet, so
+    /// this theory fails until #2706 lands. That failure is the deliverable: it
+    /// is the gap stated as an executable spec.
     /// </summary>
     [Theory]
     [MemberData(nameof(MissedFailureShapes))]
-    public void Missed_failure_shapes_do_not_intervene_today(Shape shape)
-        => Assert.False(Run(shape), $"The guard now intervenes for '{shape.Name}'. Move it to CaughtFailureShapes.");
+    public void Missed_failure_shapes_must_intervene(Shape shape)
+        => Assert.True(Run(shape), $"The guard did not intervene for '{shape.Name}'.");
 
     [Theory]
     [MemberData(nameof(SuccessShapes))]
