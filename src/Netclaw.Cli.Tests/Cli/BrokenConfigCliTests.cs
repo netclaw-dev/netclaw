@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Runtime.Versioning;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -267,6 +268,95 @@ public sealed class BrokenConfigCliTests : IDisposable
     }
 
     [Theory]
+    [InlineData("JSON repair", "json", false)]
+    [InlineData("text repair", "text", false)]
+    [InlineData("JSON dry-run", "json", true)]
+    public async Task Doctor_fix_preserves_the_output_contract_and_original_config(string _, string format, bool dryRun)
+    {
+        var result = await RunDoctorFixAndAssertFilesAsync(format, dryRun);
+        var backupNotice = $"Backed up the original to {ConfigPath}.removed-keys.bak";
+
+        if (format == "json")
+        {
+            // Parse all stdout so any prose or a second document fails the contract.
+            using var document = JsonDocument.Parse(result.Stdout);
+            var root = document.RootElement;
+            Assert.Equal(result.ExitCode, root.GetProperty("exitCode").GetInt32());
+            var fix = root.GetProperty("fix");
+            Assert.True(fix.GetProperty("requested").GetBoolean());
+            Assert.Equal(dryRun, fix.GetProperty("dryRun").GetBoolean());
+            Assert.Equal(1, fix.GetProperty("changedFiles").GetInt32());
+            Assert.Equal(ConfigPath, Assert.Single(fix.GetProperty("files").EnumerateArray()).GetProperty("path").GetString());
+            var schema = Assert.Single(root.GetProperty("checks").EnumerateArray(),
+                check => check.GetProperty("name").GetString() == "Config Schema");
+            Assert.Equal(dryRun ? "error" : "pass", schema.GetProperty("severity").GetString());
+
+            if (dryRun)
+                Assert.DoesNotContain("Backed up the original", result.Stderr);
+            else
+                Assert.Contains(backupNotice, result.Stderr);
+        }
+        else
+        {
+            Assert.Contains(backupNotice, result.Stdout);
+            Assert.Contains("[PASS] Config Schema", result.Stdout);
+        }
+    }
+
+    private async Task<(int ExitCode, string Stdout, string Stderr)> RunDoctorFixAndAssertFilesAsync(string format, bool dryRun)
+    {
+        const string original = """
+            {"configVersion":1,"Daemon":{"Port":1,"ObsoleteDoctorTestKey":true},"Memory":{"Embeddings":{"Enabled":false}}}
+            """;
+        File.WriteAllText(ConfigPath, original);
+        Assert.Empty(Directory.GetFiles(_home, "*.bak", SearchOption.AllDirectories));
+
+        var args = new List<string> { "doctor", "--fix", "--yes", "--format", format };
+        if (dryRun)
+            args.Add("--dry-run");
+
+        // The update check always uses HTTP. A closed local proxy prevents external requests.
+        var environment = new Dictionary<string, string>
+        {
+            ["USERPROFILE"] = _dir.Path,
+            ["XDG_CONFIG_HOME"] = Path.Combine(_dir.Path, ".config"),
+            ["HTTP_PROXY"] = NoDaemonEndpoint,
+            ["http_proxy"] = NoDaemonEndpoint,
+            ["HTTPS_PROXY"] = NoDaemonEndpoint,
+            ["https_proxy"] = NoDaemonEndpoint,
+            ["ALL_PROXY"] = NoDaemonEndpoint,
+            ["all_proxy"] = NoDaemonEndpoint,
+            ["NO_PROXY"] = "",
+            ["no_proxy"] = "",
+        };
+        var result = await RunWithStreamsAsync(args.ToArray(), environment, NoDaemonEndpoint);
+
+        Assert.InRange(result.ExitCode, 0, 2);
+        var backups = Directory.GetFiles(_home, "*.bak", SearchOption.AllDirectories);
+        if (dryRun)
+        {
+            Assert.Equal(original, File.ReadAllText(ConfigPath));
+            Assert.Empty(backups);
+        }
+        else
+        {
+            var backup = Assert.Single(backups);
+            Assert.Equal(ConfigPath + ".removed-keys.bak", backup);
+            Assert.Equal(original, File.ReadAllText(backup));
+            using var repaired = JsonDocument.Parse(File.ReadAllText(ConfigPath));
+            var root = repaired.RootElement;
+            Assert.Equal(1, root.GetProperty("configVersion").GetInt32());
+            var daemon = root.GetProperty("Daemon");
+            Assert.Equal(1, daemon.GetProperty("Port").GetInt32());
+            Assert.False(daemon.TryGetProperty("ObsoleteDoctorTestKey", out _));
+            Assert.False(root.GetProperty("Memory").GetProperty("Embeddings").GetProperty("Enabled").GetBoolean());
+        }
+
+        AssertNoCrashLog();
+        return result;
+    }
+
+    [Theory]
     [InlineData("config")]
     [InlineData("mcp")]
     [InlineData("model")]
@@ -345,6 +435,13 @@ public sealed class BrokenConfigCliTests : IDisposable
 
     private async Task<(int ExitCode, string Output)> RunAsync(string[] args, Dictionary<string, string>? environment, string? daemonEndpoint)
     {
+        var (exitCode, stdout, stderr) = await RunWithStreamsAsync(args, environment, daemonEndpoint);
+        return (exitCode, stdout + stderr);
+    }
+
+    private async Task<(int ExitCode, string Stdout, string Stderr)> RunWithStreamsAsync(
+        string[] args, Dictionary<string, string>? environment, string? daemonEndpoint)
+    {
         var psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
             RedirectStandardOutput = true,
@@ -381,6 +478,6 @@ public sealed class BrokenConfigCliTests : IDisposable
         var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-        return (process.ExitCode, (await stdout + await stderr).Replace("\r\n", "\n"));
+        return (process.ExitCode, (await stdout).Replace("\r\n", "\n"), (await stderr).Replace("\r\n", "\n"));
     }
 }
