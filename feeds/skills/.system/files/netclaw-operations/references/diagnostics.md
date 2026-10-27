@@ -6,6 +6,8 @@
 
 When something seems wrong with Netclaw itself:
 
+`netclaw daemon --help` prints command help and exits with code 0. It does not control the daemon or change service files.
+
 1. Run `netclaw doctor` via `shell_execute` — validates config, providers,
    MCP connections, memory health, and recent daemon crash logs
 2. If doctor reports fixable issues, run `netclaw doctor --fix --dry-run` to
