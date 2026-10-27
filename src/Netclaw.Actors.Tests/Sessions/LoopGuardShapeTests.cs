@@ -12,13 +12,15 @@ using Xunit;
 namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
-/// A catalog of agreed tool-loop shapes. Two theories split the catalog by the
-/// answer the guard must give:
+/// A catalog of agreed tool-loop shapes. Three theories split the catalog by the
+/// answer the guard gives:
 /// <list type="bullet">
-/// <item><see cref="Failure_shapes_must_intervene"/> — the turn is stuck. A
-/// failing case is a documented gap in the guard.</item>
+/// <item><see cref="Caught_failure_shapes_intervene"/> — the turn is stuck and
+/// the guard catches it today. These are the controls.</item>
+/// <item><see cref="Missed_failure_shapes_do_not_intervene_today"/> — the turn is
+/// stuck and the guard misses it. This is the gap inventory for #2706.</item>
 /// <item><see cref="Success_shapes_must_not_intervene"/> — the turn is making
-/// progress. A failing case is a false positive, which is worse than a gap.</item>
+/// progress. A failure here is a false positive, which is worse than a gap.</item>
 /// </list>
 /// The guard is action-identity centric: it compares a repeated action against
 /// its own earlier result. It never compares one action's failure against a
@@ -59,7 +61,37 @@ public sealed class LoopGuardShapeTests
 
     // ── Failure shapes: the turn is stuck and the guard must intervene ──
 
-    public static TheoryData<Shape> FailureShapes => new()
+    /// <summary>
+    /// Shapes the guard catches today. These are the controls: they prove the
+    /// catalog measures the guard rather than the harness.
+    /// </summary>
+    public static TheoryData<Shape> CaughtFailureShapes => new()
+    {
+        // Same call, same result, twice. The recurrence episode reaches two
+        // equal rounds, so the third call is refused.
+        new Shape("same call, same result, twice", [
+            Fail("search_tools", "same"), Fail("search_tools", "same"), Fail("search_tools", "same")
+        ]),
+
+        // A two-step cycle, A B A B A. Two equal adjacent copies of the period-2
+        // action match, so the fifth call is refused.
+        new Shape("alternating two-step cycle", [
+            Fail("search_tools", "a"), Fail("load_tool", "b"),
+            Fail("search_tools", "a"), Fail("load_tool", "b"),
+            Fail("search_tools", "a")
+        ])
+    };
+
+    /// <summary>
+    /// Shapes the guard misses today. Each case asserts the CURRENT behavior, so
+    /// the suite stays green while the gap is documented in executable form.
+    /// <para>
+    /// When the progress guard lands (#2706), move each shape to
+    /// <see cref="CaughtFailureShapes"/> and delete this theory. A shape that
+    /// still passes here after the fix is a shape the fix does not cover.
+    /// </para>
+    /// </summary>
+    public static TheoryData<Shape> MissedFailureShapes => new()
     {
         // The reported incident. Six calls, six different tools, one identical
         // error. Every recurrence key differs, so no episode reaches two rounds.
@@ -109,18 +141,6 @@ public sealed class LoopGuardShapeTests
             Transient("web_fetch", "https://a"), Transient("web_fetch", "https://b"),
             Transient("web_fetch", "https://c"), Transient("web_fetch", "https://d"),
             Transient("web_fetch", "https://e")
-        ]),
-
-        // Control: the guard catches this today. Same call, same result, twice.
-        new Shape("same call, same result, twice", [
-            Fail("search_tools", "same"), Fail("search_tools", "same"), Fail("search_tools", "same")
-        ]),
-
-        // Control: the guard catches this today. A two-step cycle, A B A B A.
-        new Shape("alternating two-step cycle", [
-            Fail("search_tools", "a"), Fail("load_tool", "b"),
-            Fail("search_tools", "a"), Fail("load_tool", "b"),
-            Fail("search_tools", "a")
         ])
     };
 
@@ -184,9 +204,19 @@ public sealed class LoopGuardShapeTests
     };
 
     [Theory]
-    [MemberData(nameof(FailureShapes))]
-    public void Failure_shapes_must_intervene(Shape shape)
+    [MemberData(nameof(CaughtFailureShapes))]
+    public void Caught_failure_shapes_intervene(Shape shape)
         => Assert.True(Run(shape), $"The guard did not intervene for '{shape.Name}'.");
+
+    /// <summary>
+    /// Asserts the CURRENT behavior: the guard does not intervene. This is the
+    /// gap inventory. It fails the day the guard starts catching the shape, which
+    /// is the signal to move the shape to <see cref="CaughtFailureShapes"/>.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MissedFailureShapes))]
+    public void Missed_failure_shapes_do_not_intervene_today(Shape shape)
+        => Assert.False(Run(shape), $"The guard now intervenes for '{shape.Name}'. Move it to CaughtFailureShapes.");
 
     [Theory]
     [MemberData(nameof(SuccessShapes))]
