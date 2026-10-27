@@ -112,10 +112,10 @@ Standard temporary APIs use `temp_dir` in each shell process. Do not set `TMPDIR
 Use `load_tool` directly for a known exact tool name.
 Use `search_tools` when the capability is known but its exact tool name is not.
 
-A bounded Bash glob can cross a directory alias only when Netclaw proves its full reach.
+For Personal Approval mode, a bounded Bash glob can reuse coverage across a directory alias only after Netclaw proves its full reach.
 The alias and target need the existing path authority and grant scope.
-A protected target still denies the call.
-A broken, outside, cyclic, or uninspectable alias retains exact consent or denial.
+A protected target still denies the call, also under Auto consent.
+In Approval mode, a broken, outside, cyclic, or uninspectable alias retains exact consent or denial.
 Reusable scope requires 4096 counted units or less. Each intermediate directory visit and each link hop uses one unit.
 Ordinary directory-entry scans are outside this count.
 Do not rewrite a refused glob to hide its target or bypass that limit.
@@ -661,7 +661,7 @@ An option word with an expansion and no proved value (`-o"$n"`, `--$n=x`) is
 an unknown operand.
 
 On Linux, a glob word (`ls -d ~/repositories/*/akka*`) reaches the paths below
-its covering directory, and that directory is its scope. A glob that can match
+its covering directory. Its scopes include that directory and each proved alias target. A glob that can match
 a protected path or the credential store (`~/.netclaw/keys`,
 `~/.netclaw/config/secrets.json`) is denied, as the literal path is. A glob
 whose first segment is a wildcard (`*/notes.md`) can expand to an option, so

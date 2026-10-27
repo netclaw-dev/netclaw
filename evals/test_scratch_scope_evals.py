@@ -46,7 +46,7 @@ class ScratchScopeOracleTests(unittest.TestCase):
         ))
 
     def test_contained_alias_guidance_requires_every_authority_choice(self):
-        response = "contained=proof-and-authority protected=deny outside=exact-consent-or-deny budget=4096"
+        response = "contained=proof-and-authority protected=deny outside=exact-consent-or-deny budget=4096 auto-protected=deny"
         assertion = "assert_approval_contained_alias_guidance"
         self.assertTrue(self.accepts(response, assertion=assertion))
         for actual, wrong in [
@@ -54,9 +54,20 @@ class ScratchScopeOracleTests(unittest.TestCase):
             ("protected=deny", "protected=allow"),
             ("outside=exact-consent-or-deny", "outside=reuse"),
             ("budget=4096", "budget=unbounded"),
+            ("auto-protected=deny", "auto-protected=allow"),
         ]:
             with self.subTest(wrong=wrong):
                 self.assertFalse(self.accepts(response.replace(actual, wrong), assertion=assertion))
+        for extra in [
+            "contained=automatic protected=allow outside=reuse budget=unbounded auto-protected=allow",
+            "contained=proof-and-authority",
+            "protected=deny",
+            "outside=exact-consent-or-deny",
+            "budget=4096",
+            "auto-protected=deny",
+        ]:
+            with self.subTest(extra=extra):
+                self.assertFalse(self.accepts(response + " " + extra, assertion=assertion))
         self.assertFalse(self.accepts(response, skill_loaded=False, assertion=assertion))
         self.assertFalse(self.accepts(response, session_id="", assertion=assertion))
         self.assertFalse(self.accepts(response, [{
