@@ -9,3 +9,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Netclaw.Daemon.IntegrationTests")]
 [assembly: InternalsVisibleTo("Netclaw.Daemon.Tests")]
 [assembly: InternalsVisibleTo("Netclaw.Cli.Tests")]
+[assembly: InternalsVisibleTo("Netclaw.Actors.MutationTests")]

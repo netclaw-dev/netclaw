@@ -141,6 +141,10 @@ public sealed class DaemonLogRetentionTests : IDisposable
     [InlineData("daemon-2026-05-05.notes.log", false)]
     [InlineData("daemon-2026-05-05.1.extra.log", false)]
     [InlineData("daemon-2026-05-05.1.log.bak", false)]
+    [InlineData("daemon-2026-05-05.0.log", false)]
+    [InlineData("daemon-2026-05-05.01.log", false)]
+    [InlineData("daemon-2026-05-05.-1.log", false)]
+    [InlineData("daemon-2026-05-05.2147483648.log", false)]
     public void Retention_recognizes_dated_size_segments_and_preserves_decoys(string name, bool delete)
     {
         // Recent logs exclude the candidate from the newest-three safeguard.
@@ -169,16 +173,25 @@ public sealed class DaemonLogRetentionTests : IDisposable
         Assert.True(File.Exists(Path.Join(LogsDir, "sessions", "daemon-2020-01-01.2.log")));
     }
 
-    [Fact]
-    public void A_clock_far_in_the_future_still_leaves_the_newest_three_daemon_logs()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_clock_far_in_the_future_still_leaves_the_newest_three_daemon_logs(bool sameDate)
     {
-        var recent = Enumerable.Range(11, 10).Select(d => $"daemon-2026-05-{d}.log").ToArray();
+        var recent = sameDate
+            ? new[] { "daemon-2026-05-20.2.log", "daemon-2026-05-20.9.log", "daemon-2026-05-20.10.log", "daemon-2026-05-20.11.log" }
+            : Enumerable.Range(11, 10).Select(d => $"daemon-2026-05-{d}.log").ToArray();
+        var untouched = new[] { "provider-probe.log", "notes.txt", "daemon-2026-05-20.notes.log" };
         Touch(recent);
+        Touch(untouched);
 
-        var (deleted, _) = DaemonLogRetention.Prune(LogsDir, DateTimeOffset.Parse("2099-01-01T00:00:00Z"), 14);
+        var (deleted, failed) = DaemonLogRetention.Prune(LogsDir, DateTimeOffset.Parse("2099-01-01T00:00:00Z"), 14);
 
-        Assert.Equal(7, deleted);
-        Assert.Equal(["daemon-2026-05-18.log", "daemon-2026-05-19.log", "daemon-2026-05-20.log"],
+        var kept = sameDate
+            ? new[] { "daemon-2026-05-20.9.log", "daemon-2026-05-20.10.log", "daemon-2026-05-20.11.log" }
+            : new[] { "daemon-2026-05-18.log", "daemon-2026-05-19.log", "daemon-2026-05-20.log" };
+        Assert.Equal((recent.Length - 3, 0), (deleted, failed));
+        Assert.Equal(kept.Concat(untouched).Order().ToArray(),
             Directory.GetFiles(LogsDir).Select(Path.GetFileName).Order().ToArray());
     }
 

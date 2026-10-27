@@ -154,6 +154,21 @@ coverage. They do not replace positive and negative behavior tests.
 | `ChildParkRules.AcceptPark`, `ResumeGate`, `RecoveryAction`, `ParkFits`, `CountsAsUnreported`, `RejectedEventEnds`, `IgnoredBySnapshot`, `LoopGuardDamage`, `RequesterCanAnswer`, and `ResumeStart` (`// <child-resume-gate>`), and `SessionExecutionLifetime.WaitsForChildren` (`// <child-drain-wait>`) | durable-child-consent-wait: only the owned child of an `Accepted` run opens prompts, a cancelling run ends cancelled, and any other sender gets the stop signal; a parked run resumes only when every request has an answer and no restart drain is pending. durable-child-park-recovery: recovery records a running child as lost and keeps or resumes a park; a park above 4 MiB is refused; a park with an open request does not keep the session in memory; a rejected record ends only the lifecycle that it expected; a child request does not block a snapshot and a parent request does; a damaged loop guard is found by each episode and named. running-child-drain-park: a drain park (no request) needs no requester who can answer, and a consent park still needs one; a resumed child starts with a model call only for a drain park, runs its parked calls only when each request has an answer, and otherwise ends; the drain acknowledgement waits only while a drain is requested, a live child exists, and the child wait has not ended | 55 killed | `./scripts/run-child-resume-gate-mutations.sh` |
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
 | The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
+| `DaemonLogRetention.Prune` (`// daemon-log-retention-cutoff:begin` to `end`) | Issue #2484: only daemon segments before the UTC retention cutoff can be deleted. A segment on the cutoff remains. | 2 killed | `./scripts/run-daemon-log-retention-mutations.sh` |
+
+### Daemon Log Retention Cutoff
+
+The gate selects only the daemon age predicate in `DaemonLogRetention.Prune`.
+Stryker changes `<` to `>` and `<=`.
+`DaemonLogRetentionMutationTests` rejects both changes through dated files and the real prune operation.
+The gate requires both replacements, exactly two mutants, and a `Killed` status for each.
+A missing target, survivor, untested mutant, or target compilation error fails the gate.
+Stryker records unrelated compilation artifacts outside the selected span; the verifier excludes only those artifacts.
+
+The manual `<=` mutation failed the cutoff row before this gate was added.
+The first local Stryker run killed both expected mutants in 161 seconds.
+The `daemon-log-retention` matrix group keeps this cost separate from existing groups.
+The gate does not measure general code coverage or replace the writer and retention tests.
 
 Run the path-access check locally:
 

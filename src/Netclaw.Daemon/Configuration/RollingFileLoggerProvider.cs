@@ -56,6 +56,7 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
     private int _attached;
     private StreamWriter? _writer;
     private string _currentDate = "";
+    private int _currentSegment;
 
     public RollingFileLoggerProvider(string basePath, TimeProvider? timeProvider = null)
     {
@@ -245,6 +246,7 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
             {
                 _writer.Dispose();
                 _writer = null;
+                _currentSegment = checked(_currentSegment + 1);
             }
             else
             {
@@ -253,14 +255,31 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
         }
 
         _writer?.Dispose();
-        _currentDate = today;
+        _writer = null;
+        if (_currentDate != today)
+        {
+            _currentDate = today;
+            _currentSegment = 0;
+        }
 
         var dir = Path.GetDirectoryName(_basePath)!;
         var name = Path.GetFileNameWithoutExtension(_basePath);
         var ext = Path.GetExtension(_basePath);
-        var path = Path.Combine(dir, $"{name}-{today}{ext}");
+        // A restart must skip full segments without truncation or a directory scan.
+        while (true)
+        {
+            var suffix = _currentSegment == 0 ? "" : "." + _currentSegment.ToString(CultureInfo.InvariantCulture);
+            var path = Path.Combine(dir, $"{name}-{today}{suffix}{ext}");
+            var writer = new StreamWriter(path, append: true) { AutoFlush = false };
+            if (writer.BaseStream.Length < MaxFileSizeBytes)
+            {
+                _writer = writer;
+                return;
+            }
 
-        _writer = new StreamWriter(path, append: true) { AutoFlush = false };
+            writer.Dispose();
+            _currentSegment = checked(_currentSegment + 1);
+        }
     }
 
     internal string GetTimestamp()
