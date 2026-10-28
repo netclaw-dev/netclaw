@@ -406,6 +406,14 @@ if [ "$SKIP_SHELL" = false ]; then
         # when the next line is neither the comment nor the source line.
         local tmp_file
         tmp_file="$(mktemp)" || return 1
+        # mktemp creates the file 0600; carry the profile's original mode over
+        # so an uninstall does not silently tighten the user's ~/.bashrc.
+        # stat flags differ between GNU (Linux) and BSD (macOS): try both.
+        local rc_mode
+        rc_mode="$(stat -c '%a' "$rc_file" 2>/dev/null || stat -f '%Lp' "$rc_file" 2>/dev/null)"
+        if [ -n "$rc_mode" ]; then
+            chmod "$rc_mode" "$tmp_file" 2>/dev/null || true
+        fi
         local pending_comment=false
         local removed_any=false
         while IFS= read -r line || [ -n "$line" ]; do
