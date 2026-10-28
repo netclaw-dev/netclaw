@@ -78,6 +78,8 @@ sha256_of() {
   fi
 }
 size_of() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1"; }
+# Octal permission bits. GNU stat (Linux) and BSD stat (macOS) disagree on flags.
+file_mode() { stat -c%a "$1" 2>/dev/null || stat -f%Lp "$1"; }
 indent() { while IFS= read -r line || [ -n "$line" ]; do printf '    %s\n' "$line"; done; }
 
 # ── 1. Stand-in binaries ─────────────────────────────────────────────────────
@@ -994,6 +996,25 @@ if [ -f "$REFUSE_HOME/.netclaw/config/netclaw.json" ]; then
   pass "roundtrip: refused purge preserved the data directory"
 else
   fail "roundtrip: refused purge deleted the data directory"
+fi
+
+# 10f-2. Uninstall preserves the shell profile's file mode. The uninstaller
+# rewrites the rc file through a mktemp temp file, which is created 0600; without
+# an explicit chmod the user's ~/.bashrc silently becomes 0600. The tree
+# snapshot compares content only, so this needs its own assertion.
+MODE_HOME="$WORK/uninstall-mode"
+MODE_INSTALL="$MODE_HOME/netclaw/bin"
+mkdir -p "$MODE_HOME"
+printf '# pre-existing bash rc\n' > "$MODE_HOME/.bashrc"
+chmod 644 "$MODE_HOME/.bashrc"
+MODE_BEFORE="$(file_mode "$MODE_HOME/.bashrc")"
+run_unix_installer "$(command -v bash)" "$MODE_HOME" "$MODE_INSTALL" >/dev/null 2>&1
+run_uninstaller "$MODE_HOME" "$MODE_INSTALL" >/dev/null 2>&1
+MODE_AFTER="$(file_mode "$MODE_HOME/.bashrc")"
+if [ -n "$MODE_BEFORE" ] && [ "$MODE_BEFORE" = "$MODE_AFTER" ]; then
+  pass "roundtrip: uninstall preserves the shell profile mode ($MODE_AFTER)"
+else
+  fail "roundtrip: uninstall changed the shell profile mode ($MODE_BEFORE -> $MODE_AFTER)"
 fi
 
 # 10g. --skip-shell leaves the shell profile untouched.
