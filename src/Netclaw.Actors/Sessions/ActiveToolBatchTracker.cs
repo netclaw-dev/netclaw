@@ -93,7 +93,13 @@ internal sealed class ActiveToolBatchTracker
         _cycleResults[id.Value] = new ToolCycleResult((ToolInvocationOutcomeCategory)category, result.Content)
         {
             PendingJob = result.ToolResultIsPendingJob,
-            Synthetic = result.ToolResultIsSynthetic
+            Synthetic = result.ToolResultIsSynthetic,
+            // A record from before the failure fields has no code, so the cause stays unknown. The category
+            // alone is never a cause: rebuilding a key from it would report a recurrence that never happened.
+            // A code without a source is a corrupt record, so it also stays unknown rather than inventing one.
+            FailureKey = result is { ToolFailureSource: { } source, ToolFailureCode: { } code }
+                ? new ToolFailureKey(source, code, result.ToolFailureScope)
+                : null
         };
     }
 
@@ -127,10 +133,18 @@ internal sealed class ActiveToolBatchTracker
             message.Content ?? string.Empty)
         {
             PendingJob = result.Receipt is ToolInvocationReceipt.PendingBackgroundJob,
-            Synthetic = result.Receipt is ToolInvocationReceipt.Correction { RemediationCode: ToolRemediationCode.BreakToolCycle }
+            Synthetic = result.Receipt is ToolInvocationReceipt.Correction { RemediationCode: ToolRemediationCode.BreakToolCycle },
+            FailureKey = ToolCycleSignatureFactory.FailureKeyFor(result.FailureCode)
         };
         return callId;
     }
+
+    /// <summary>
+    /// The recorded cycle result of a call, or null when the batch holds none. A reader of the batch state
+    /// uses this to compare the live path with the restored path.
+    /// </summary>
+    public ToolCycleResult? CycleResult(ToolCallId callId)
+        => _cycleResults.TryGetValue(callId.Value, out var result) ? result : null;
 
     public BatchCompletion CompleteIfReady(
         SessionState current,

@@ -591,7 +591,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 {
                     PendingJob = result.Receipt is ToolInvocationReceipt.PendingBackgroundJob,
                     Synthetic = result.Receipt is ToolInvocationReceipt.Correction
-                        { RemediationCode: ToolRemediationCode.BreakToolCycle }
+                        { RemediationCode: ToolRemediationCode.BreakToolCycle },
+                    // Reuse the shared code→cause mapper so the child observes the same identity the parent does.
+                    FailureKey = ToolCycleSignatureFactory.FailureKeyFor(result.FailureCode)
                 },
                 StringComparer.Ordinal);
             // A park omits cycle history. Its finished calls and each resumed call still affect progress once.
@@ -1669,7 +1671,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         ? new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle)
                         : new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
                     var message = refused ? $"{rejection.Message}\n{ToolCycleMessages.Correction}" : rejection.Message;
-                    return BuildToolResult(tc, message, toolContext, modelInputBudget);
+                    return BuildToolResult(tc, message, toolContext, modelInputBudget, failureCode: rejection.DenyReason);
                 }
 
                 if (refusedCallIds.Contains(tc.CallId))
@@ -1843,7 +1845,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ToolExecutionContext toolContext,
         ModelInputBatchBudget modelInputBudget,
         ManagedTemporaryCorrectionChange? managedTemporaryCorrectionUpdate = null,
-        ToolExposureRequest? exposureRequest = null)
+        ToolExposureRequest? exposureRequest = null,
+        string? failureCode = null)
     {
         var materialization = MaterializeModelInputFiles(toolContext, modelInputBudget);
         if (materialization.RequestedCount > materialization.MediaReferences.Count)
@@ -1867,7 +1870,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             managedTemporaryCorrectionUpdate,
             receipt,
             exposureRequest,
-            toolContext.Approval.AuthorizationAttemptId);
+            toolContext.Approval.AuthorizationAttemptId,
+            failureCode);
     }
 
     private static ModelInputMaterializationResult MaterializeModelInputFiles(
@@ -1893,7 +1897,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ManagedTemporaryCorrectionChange? ManagedTemporaryCorrectionUpdate,
         ToolInvocationReceipt? Receipt,
         ToolExposureRequest? ExposureRequest,
-        AuthorizationAttemptId AuthorizationAttemptId)
+        AuthorizationAttemptId AuthorizationAttemptId,
+        string? FailureCode = null)
     {
         /// <summary>The consent request of a parked call. A parked call has no result yet.</summary>
         public ParentApprovalRequest? Parked { get; init; }

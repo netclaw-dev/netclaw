@@ -127,6 +127,12 @@ internal static partial class NetclawProtoMapper
             proto.ToolOutcomeCategory = category;
         proto.ToolResultIsPendingJob = msg.ToolResultIsPendingJob;
         proto.ToolResultIsSynthetic = msg.ToolResultIsSynthetic;
+        if (msg.ToolFailureSource is not null)
+            proto.ToolFailureSource = msg.ToolFailureSource;
+        if (msg.ToolFailureCode is not null)
+            proto.ToolFailureCode = msg.ToolFailureCode;
+        if (msg.ToolFailureScope is not null)
+            proto.ToolFailureScope = msg.ToolFailureScope;
         proto.ToolCalls.AddRange(msg.ToolCalls.Select(ToProto));
         proto.MediaReferences.AddRange(msg.MediaReferences.Select(ToProto));
         return proto;
@@ -142,7 +148,10 @@ internal static partial class NetclawProtoMapper
         MediaReferences = proto.MediaReferences.Select(FromProto).ToArray(),
         ToolOutcomeCategory = proto.HasToolOutcomeCategory ? proto.ToolOutcomeCategory : null,
         ToolResultIsPendingJob = proto.ToolResultIsPendingJob,
-        ToolResultIsSynthetic = proto.ToolResultIsSynthetic
+        ToolResultIsSynthetic = proto.ToolResultIsSynthetic,
+        ToolFailureSource = proto.HasToolFailureSource ? proto.ToolFailureSource : null,
+        ToolFailureCode = proto.HasToolFailureCode ? proto.ToolFailureCode : null,
+        ToolFailureScope = proto.HasToolFailureScope ? proto.ToolFailureScope : null
     };
 
     // ── SendUserMessage ──

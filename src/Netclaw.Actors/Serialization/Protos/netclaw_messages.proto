@@ -78,6 +78,10 @@ message SerializableChatMessageProto {
   optional int32 tool_outcome_category = 7;
   bool tool_result_is_pending_job = 8;
   bool tool_result_is_synthetic = 9;
+  // The structured failure cause. A record from before these fields has no value, which means no known cause.
+  optional string tool_failure_source = 10;
+  optional string tool_failure_code = 11;
+  optional string tool_failure_scope = 12;
 }
 
 // ── Commands ──

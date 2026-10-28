@@ -792,6 +792,27 @@ internal static class ToolCycleSignatureFactory
     // Two complete copies of the longest supported cycle require six entries.
     internal const int MaximumHistory = MaximumPeriod * 2;
 
+    /// <summary>The source of a failure that Netclaw produced itself, not a tool or a remote service.</summary>
+    internal const string NetclawFailureSource = "netclaw";
+
+    /// <summary>
+    /// The structured failure cause of a raw <c>FailureCode</c>, or null when the code has no stable identity.
+    /// The live dispatch path derives a key from this method. The restore path does not re-derive it: it
+    /// rebuilds the already-mapped key that the journal carried, so a future source or code survives a replay.
+    /// </summary>
+    /// <remarks>
+    /// The four front-door validation codes name a cause that recurs across every tool, so the key carries no
+    /// scope. <c>access_denied</c> is a permission wall that several different paths reach, so it is not one
+    /// cause and stays budget territory. Any other code is unknown to this version, so it must not claim a
+    /// cause: a guessed key would report a recurrence that does not exist.
+    /// </remarks>
+    public static ToolFailureKey? FailureKeyFor(string? failureCode) => failureCode switch
+    {
+        "invalid_rationale" or "unrecognized_argument" or "args_parse_error" or "invalid_meta_value"
+            => new ToolFailureKey(NetclawFailureSource, failureCode),
+        _ => null
+    };
+
     public static PreparedToolCycleBatch Prepare(
         IReadOnlyList<FunctionCallContent> calls,
         IToolExecutor executor)

@@ -268,6 +268,111 @@ public sealed class ActiveToolBatchTrackerTests
                 NetclawProtoMapper.ToProto(message).ToByteArray()));
     }
 
+    [Theory]
+    [InlineData("invalid_rationale")]
+    [InlineData("unrecognized_argument")]
+    [InlineData("args_parse_error")]
+    [InlineData("invalid_meta_value")]
+    public void Front_door_rejection_flows_its_failure_key_into_the_cycle_result(string code)
+    {
+        // Arrange
+        var batch = new ActiveToolBatchTracker();
+        batch.Start([new FunctionCallContent("call-A", "file_read")], preparedCycleBatch: null);
+        var result = new ToolCallResult(Result("call-A"), [], [], [], AuthorizationAttemptId.New(),
+            FailureCode: code,
+            Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
+
+        // Act
+        var callId = batch.RecordOutcome(result);
+
+        // Assert
+        Assert.Equal(new ToolFailureKey("netclaw", code), batch.CycleResult(callId)?.FailureKey);
+    }
+
+    [Fact]
+    public void Access_denied_flows_no_failure_key()
+    {
+        // Arrange
+        var batch = new ActiveToolBatchTracker();
+        batch.Start([new FunctionCallContent("call-A", "file_read")], preparedCycleBatch: null);
+        var result = new ToolCallResult(Result("call-A"), [], [], [], AuthorizationAttemptId.New(),
+            FailureCode: SessionProtocol.ToolResultOutput.AccessDeniedFailureCode,
+            Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied));
+
+        // Act
+        var callId = batch.RecordOutcome(result);
+
+        // Assert
+        Assert.Null(batch.CycleResult(callId)?.FailureKey);
+    }
+
+    [Fact]
+    public void A_null_failure_code_flows_no_failure_key()
+    {
+        // Arrange
+        var batch = new ActiveToolBatchTracker();
+        batch.Start([new FunctionCallContent("call-A", "file_read")], preparedCycleBatch: null);
+        var result = new ToolCallResult(Result("call-A"), [], [], [], AuthorizationAttemptId.New(),
+            Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.TransientFailure));
+
+        // Act
+        var callId = batch.RecordOutcome(result);
+
+        // Assert
+        Assert.Null(batch.CycleResult(callId)?.FailureKey);
+    }
+
+    [Fact]
+    public void Failure_key_survives_the_journal_round_trip_and_restore()
+    {
+        // Arrange
+        var live = new ActiveToolBatchTracker();
+        live.Start([new FunctionCallContent("call-A", "file_read")], preparedCycleBatch: null);
+        var result = new ToolCallResult(Result("call-A"), [], [], [], AuthorizationAttemptId.New(),
+            FailureCode: "invalid_rationale",
+            Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
+        var callId = live.RecordOutcome(result);
+        var journaled = Wire(result.MessageWithProgress);
+
+        // Act
+        var restored = new ActiveToolBatchTracker();
+        restored.Start(AssistantMessage("call-A"), [journaled]);
+
+        // Assert
+        Assert.Equal("netclaw", journaled.ToolFailureSource);
+        Assert.Equal("invalid_rationale", journaled.ToolFailureCode);
+        Assert.Null(journaled.ToolFailureScope);
+        Assert.Equal(live.CycleResult(callId)?.FailureKey, restored.CycleResult(callId)?.FailureKey);
+        Assert.Equal(new ToolFailureKey("netclaw", "invalid_rationale"), restored.CycleResult(callId)?.FailureKey);
+    }
+
+    [Fact]
+    public void A_record_without_failure_fields_restores_no_failure_key()
+    {
+        // Arrange
+        var legacy = Result("call-A") with
+        {
+            ToolOutcomeCategory = (int)ToolInvocationOutcomeCategory.InvalidInput
+        };
+        var batch = new ActiveToolBatchTracker();
+
+        // Act
+        batch.Start(AssistantMessage("call-A"), [legacy]);
+
+        // Assert
+        Assert.Null(batch.CycleResult(new ToolCallId("call-A"))?.FailureKey);
+    }
+
+    private static SerializableChatMessage AssistantMessage(string callId) => new()
+    {
+        Role = ChatRole.Assistant,
+        ToolCalls = [new SerializableToolCall { CallId = new ToolCallId(callId), Name = new ToolName("file_read") }]
+    };
+
+    private static SerializableChatMessage Wire(SerializableChatMessage message)
+        => NetclawProtoMapper.FromProto(ChatMessageProto.Parser.ParseFrom(
+            NetclawProtoMapper.ToProto(message).ToByteArray()));
+
     private static FunctionCallContent[] Calls() =>
     [
         new FunctionCallContent("call-A", "file_read"),
