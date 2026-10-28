@@ -302,9 +302,26 @@ internal sealed class TurnStateTracker
     private void ObserveProgress(bool anySuccess, int failureCount, bool batchComplete)
     {
         _callsSinceProgress = anySuccess || _incompleteBatchHadSuccess ? 0
-            : (int)Math.Min(int.MaxValue, (long)_callsSinceProgress + failureCount);
+            : CapAtNextProgressRung(_callsSinceProgress, (long)_callsSinceProgress + failureCount);
         // One feedback batch can span several consent parks. Any actual success wins across those dispatches.
         _incompleteBatchHadSuccess = !batchComplete && (anySuccess || _incompleteBatchHadSuccess);
+    }
+
+    /// <summary>
+    /// Caps one batch's advance at the next rung of the nudge ladder. A batch of eight parallel failures
+    /// would otherwise jump from zero straight to <see cref="ProgressEndTurnAt"/>, so the model would never
+    /// see the nudge or the escalation and the turn would end with no advice.
+    /// </summary>
+    private static int CapAtNextProgressRung(int current, long advanced)
+    {
+        if (current >= ProgressEndTurnAt)
+            return (int)Math.Min(int.MaxValue, advanced);
+
+        var nextRung = current < ProgressNudgeAt ? ProgressNudgeAt
+            : current < ProgressEscalateAt ? ProgressEscalateAt
+            : ProgressEndTurnAt;
+
+        return Math.Min((int)Math.Min(int.MaxValue, advanced), nextRung);
     }
 
     /// <summary>
@@ -317,6 +334,14 @@ internal sealed class TurnStateTracker
     /// A success resets the count, so a productive turn never trips it. Synthetic results and pending
     /// background jobs do not count: a synthetic correction is the guard's own output, and a pending job is
     /// the behavior the repeat nudge recommends.
+    /// <para>
+    /// Known asymmetry: only <c>BreakToolCycle</c> marks a correction synthetic. The pre-execution refusals in
+    /// <c>ManagedTemporaryCorrection</c> (<c>use_native_tool</c>, <c>rewrite_shell_command_words</c>, and their
+    /// siblings) and the <c>MissingBase</c> advice are <c>RecoverableCorrection</c>, so they do count. A model
+    /// that keeps tripping one rule therefore reaches the ladder. That is deliberate: their argument hashes
+    /// differ, so the repeat axis is blind to them and this axis is the only catcher. Recorded here because it
+    /// is the one place where the "guard output does not count" rule does not apply.
+    /// </para>
     /// </remarks>
     public RefusedRepeatAction EvaluateProgress()
         => _callsSinceProgress >= ProgressEndTurnAt ? RefusedRepeatAction.EndTurn
@@ -574,13 +599,13 @@ internal static class ToolCycleMessages
     internal const string ProgressNudgeStart = "Netclaw observed no tool progress. ";
 
     public static bool IsLoopNudge(string text)
-        => text.StartsWith($"[system: {RepeatNudgeStart}", StringComparison.Ordinal)
-            || text.StartsWith($"[system: {ProgressNudgeStart}", StringComparison.Ordinal);
+        => text.StartsWith($"{SessionState.SystemNudgePrefix} {RepeatNudgeStart}", StringComparison.Ordinal)
+            || text.StartsWith($"{SessionState.SystemNudgePrefix} {ProgressNudgeStart}", StringComparison.Ordinal);
 
     // Results already explain each refusal. An escalation takes priority over advice to try another action.
     public static string? AfterResults(string? repeatNudge, RefusedRepeatAction progress, int failedCalls, bool childRun)
         => progress is RefusedRepeatAction.EscalatedNudge or RefusedRepeatAction.EndTurn
-            ? EscalatedProgressNudge(failedCalls, childRun)
+            ? EscalatedProgressNudge(failedCalls, childRun, endingTurn: progress == RefusedRepeatAction.EndTurn)
             : repeatNudge ?? ForProgress(progress, failedCalls, childRun);
 
     public const string Correction =
@@ -639,12 +664,16 @@ internal static class ToolCycleMessages
             + "- Ask the person how to continue.";
 
     // Model-facing. The turn still made no progress after the first nudge. The model must stop and report.
-    public static string EscalatedProgressNudge(int failedCalls, bool childRun)
+    // The last sentence states the limit only while the turn can still reach it; once the guard is ending the
+    // turn the limit is already reached, and a conditional would read as a rule the model could still avoid.
+    public static string EscalatedProgressNudge(int failedCalls, bool childRun, bool endingTurn)
         => $"{ProgressNudgeStart}{failedCalls} tool calls failed without a successful result. "
             + "Stop. End your turn now. "
             + (childRun ? "Give your result to the parent. Name the action that did not finish. "
                 : "Tell the person what blocked you. Name the action that did not finish. ")
-            + $"If {TurnStateTracker.ProgressEndTurnAt} calls fail with no success, Netclaw ends the turn.";
+            + (endingTurn
+                ? $"That reached the limit of {TurnStateTracker.ProgressEndTurnAt} failed calls. Netclaw ends the turn."
+                : $"If {TurnStateTracker.ProgressEndTurnAt} calls fail with no success, Netclaw ends the turn.");
 
     /// <summary>
     /// The nudge for the progress decision of <paramref name="action"/>, or null when the turn needs none.
@@ -654,7 +683,7 @@ internal static class ToolCycleMessages
         => action switch
         {
             RefusedRepeatAction.Nudge => ProgressNudge(failedCalls),
-            RefusedRepeatAction.EscalatedNudge => EscalatedProgressNudge(failedCalls, childRun),
+            RefusedRepeatAction.EscalatedNudge => EscalatedProgressNudge(failedCalls, childRun, endingTurn: false),
             _ => null
         };
 

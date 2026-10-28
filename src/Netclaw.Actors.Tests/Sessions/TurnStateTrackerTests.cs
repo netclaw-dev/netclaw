@@ -813,11 +813,33 @@ public sealed class TurnStateTrackerTests
                 ($"call-{i}", ToolInvocationOutcomeCategory.InvalidInput, "Error: no.")));
         }
 
+        // The indices are literals on purpose. Indexing with the constants would move the assertion
+        // together with the value, so a changed threshold would still pass and no mutant would die.
         Assert.Equal(RefusedRepeatAction.None, seen[0]);
-        Assert.Equal(RefusedRepeatAction.None, seen[TurnStateTracker.ProgressNudgeAt - 1]);
+        Assert.Equal(RefusedRepeatAction.None, seen[3]);
         Assert.Equal(RefusedRepeatAction.Nudge, seen[TurnStateTracker.ProgressNudgeAt]);
-        Assert.Equal(RefusedRepeatAction.EscalatedNudge, seen[TurnStateTracker.ProgressEscalateAt]);
-        Assert.Equal(RefusedRepeatAction.EndTurn, seen[TurnStateTracker.ProgressEndTurnAt]);
+        Assert.Equal(RefusedRepeatAction.Nudge, seen[5]);
+        Assert.Equal(RefusedRepeatAction.EscalatedNudge, seen[6]);
+        Assert.Equal(RefusedRepeatAction.EscalatedNudge, seen[7]);
+        Assert.Equal(RefusedRepeatAction.EndTurn, seen[8]);
+    }
+
+    [Fact]
+    public void One_wide_batch_cannot_skip_a_rung_of_the_progress_ladder()
+    {
+        // Eight parallel failures would reach the end-turn threshold in one step. The model would then never
+        // see the nudge or the escalation, and the turn would end with no advice.
+        var tracker = new TurnStateTracker();
+        var calls = Enumerable.Range(0, TurnStateTracker.ProgressEndTurnAt)
+            .Select(i => Call($"call-{i}", "sample/a", ("arg", (object?)$"path-{i}")))
+            .ToArray();
+        var batch = Prepare(calls);
+
+        tracker.ObserveCompleted(Complete(batch,
+            calls.Select(call => (call.CallId, ToolInvocationOutcomeCategory.NotFound, "Error: no.")).ToArray()));
+
+        Assert.Equal(TurnStateTracker.ProgressNudgeAt, tracker.CallsSinceProgress);
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateProgress());
     }
 
     [Fact]
