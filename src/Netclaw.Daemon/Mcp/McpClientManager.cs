@@ -574,25 +574,30 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpServerName serverName,
         CancellationToken requestCancellation)
     {
+        // The name comes from the route. Every exception this method throws embeds it, and
+        // an exception message reaches a log sink unflattened. Sanitize it for the message
+        // only; the dictionary lookups still need the exact configured key.
+        var displayName = LogSafe.Text(serverName.Value);
+
         if (!_serverEntries.TryGetValue(serverName.Value, out var entry))
-            throw new KeyNotFoundException($"MCP server '{serverName.Value}' not found.");
+            throw new KeyNotFoundException($"MCP server '{displayName}' not found.");
         if (!entry.Enabled)
         {
             throw new McpOAuthOperationException(new McpErrorResponse(
-                $"MCP server '{serverName.Value}' is disabled. Enable it before starting OAuth.",
+                $"MCP server '{displayName}' is disabled. Enable it before starting OAuth.",
                 "authorization start"));
         }
         if (entry.Transport is "stdio" || string.IsNullOrWhiteSpace(entry.Url))
             throw new InvalidOperationException(
-                $"MCP server '{serverName.Value}' has no URL (OAuth requires HTTP transport).");
+                $"MCP server '{displayName}' has no URL (OAuth requires HTTP transport).");
         if (HasConfiguredAuthorizationHeader(entry))
         {
             throw new McpOAuthOperationException(new McpErrorResponse(
-                $"MCP server '{serverName.Value}' uses an operator-configured Authorization header. Remove it before starting OAuth.",
+                $"MCP server '{displayName}' uses an operator-configured Authorization header. Remove it before starting OAuth.",
                 "authorization start"));
         }
         if (!_servers.TryGetValue(serverName, out var lifecycle))
-            throw new InvalidOperationException($"MCP server '{serverName.Value}' is not tracked by the daemon.");
+            throw new InvalidOperationException($"MCP server '{displayName}' is not tracked by the daemon.");
 
         var started = _flowBroker.StartOrJoin(serverName);
         if (started.Created)
@@ -1035,9 +1040,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 LogOAuthRefreshFailureDiagnostics(current.Name.Value, entry.Url);
             if (current.IsConnected)
             {
-                _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex),
+                _logger.LogWarning(SecretOutputRedactor.RedactForLoggingOnOneLine(ex),
                     "MCP server '{Name}' replacement failed; generation {Generation} remains connected",
-                    current.Name.Value,
+                    LogSafe.Text(current.Name.Value),
                     current.Generation);
             }
             else
@@ -1053,9 +1058,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     _credentialStore.ForgetClientIdentity(current.Name, entry.Url!, CancellationToken.None);
 
                 var error = CreateSafeOAuthError(ex, "connection initialization");
-                _logger.LogError(SecretOutputRedactor.RedactForLogging(ex),
+                // The candidate failure returns instead of throwing, so the handler further
+                // up never sees this exception. Sanitize here or the remote body reaches the
+                // log unflattened. (cs/log-forging)
+                _logger.LogError(SecretOutputRedactor.RedactForLoggingOnOneLine(ex),
                     "Explicit MCP OAuth candidate failed for server '{Name}' during {Operation} (provider status {ProviderStatus})",
-                    current.Name.Value,
+                    LogSafe.Text(current.Name.Value),
                     error.Operation,
                     error.Status);
                 _flowBroker.Fail(authorizationFlow, error);

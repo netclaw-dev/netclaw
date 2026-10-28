@@ -50,7 +50,8 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
     private async Task<WebApplication> CreateAppAsync(
         bool spoofLoopback,
         Dictionary<string, McpServerEntry>? mcpServers = null,
-        McpOAuthFlowBroker? flowBroker = null)
+        McpOAuthFlowBroker? flowBroker = null,
+        ILogger<McpClientManager>? endpointLogger = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -97,7 +98,8 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         builder.Services.AddSingleton(mcpManager);
         builder.Services.AddSingleton<McpClientManager>(mcpManager);
         builder.Services.AddSingleton(servers);
-        builder.Services.AddSingleton<ILogger<McpClientManager>>(NullLogger<McpClientManager>.Instance);
+        builder.Services.AddSingleton<ILogger<McpClientManager>>(
+            endpointLogger ?? NullLogger<McpClientManager>.Instance);
 
         var app = builder.Build();
 
@@ -207,6 +209,42 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
         Assert.Contains("no URL", body.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task OauthStart_does_not_log_a_line_break_from_a_disabled_server_name()
+    {
+        // A configured but disabled server needs no network call: the manager rejects it
+        // before any request. The name still reaches both the log template and the
+        // exception message, so a newline in it is a log-forging path.
+        var ct = TestContext.Current.CancellationToken;
+        var injected = "srv\n2026-01-01 00:00:00 INFO shutdown authorized";
+        var servers = new Dictionary<string, McpServerEntry>
+        {
+            [injected] = new McpServerEntry
+            {
+                Enabled = false,
+                Transport = "http",
+                Url = "https://example.invalid/mcp",
+            },
+        };
+        var logger = new RecordingLogger<McpClientManager>();
+
+        await using var app = await CreateAppAsync(
+            spoofLoopback: true, mcpServers: servers, endpointLogger: logger);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync(
+            "/api/mcp/oauth/start/" + Uri.EscapeDataString(injected), null, ct);
+
+        // The response is the 5xx failure path, and the log capture is the assertion target.
+        Assert.NotEqual(HttpStatusCode.OK, response.StatusCode);
+        var entry = Assert.Single(logger.Entries);
+        Assert.DoesNotContain('\n', entry);
+        // The default formatter puts only the message in the entry, so the exception text
+        // needs its own check. This is the vector: the route name lands in the message.
+        var logged = Assert.Single(logger.Exceptions);
+        Assert.DoesNotContain('\n', logged.Message);
     }
 
     [Fact]

@@ -408,8 +408,12 @@ public static partial class SecretOutputRedactor
     public static Exception RedactForLoggingOnOneLine(Exception ex, int maxChars = 2000)
     {
         var redacted = RedactForLogging(ex);
-        var typeName = ex.GetType().FullName ?? ex.GetType().Name;
-        return new RedactedLoggingException($"{typeName}: {LogSafe.Text(redacted.Message, maxChars)}");
+        // RedactForLogging already prefixes the real type name when it rewrites the message.
+        // Wrap an already-redacted message as-is, so the type name appears once.
+        var message = redacted is RedactedLoggingException
+            ? redacted.Message
+            : $"{ex.GetType().FullName ?? ex.GetType().Name}: {redacted.Message}";
+        return new RedactedLoggingException(LogSafe.Text(message, maxChars));
     }
 
     // The secret-bearing words shared by the JSON and env-style name rules.

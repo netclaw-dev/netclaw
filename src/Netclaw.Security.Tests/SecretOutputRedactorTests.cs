@@ -608,4 +608,23 @@ public sealed class SecretOutputRedactorTests
         Assert.Contains("HttpRequestException", message, StringComparison.Ordinal);
         Assert.Contains("Connection refused", message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void RedactForLoggingOnOneLine_does_not_repeat_the_redaction_prefix()
+    {
+        // RedactForLogging already prefixes its rewrite with the real type name. Wrapping
+        // that message again would name the type twice, which reads as two failures.
+        var exception = new HttpRequestException(
+            HttpRequestError.Unknown,
+            "invalid_client: client_secret=secret-value",
+            null,
+            HttpStatusCode.BadRequest);
+
+        var message = SecretOutputRedactor.RedactForLoggingOnOneLine(exception).Message;
+
+        Assert.Equal(1, message.Split("(message redacted").Length - 1);
+        Assert.StartsWith("System.Net.Http.HttpRequestException", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("RedactedLoggingException", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-value", message, StringComparison.Ordinal);
+    }
 }
