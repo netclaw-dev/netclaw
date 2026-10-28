@@ -196,6 +196,8 @@ internal static class ChildParkRules
             ? "a count is negative"
             : loopGuard.RefusedRepeatCount > TurnStateTracker.EscalatedRefusedRepeat + 1
                 ? "the refused-repeat count is above the escalation"
+                : !TurnStateTracker.HasValidCauseEvidence(loopGuard)
+                    ? "the cause evidence is invalid"
                 : loopGuard.Episodes.Values.Any(static episode => episode.EqualRounds is < 0 or > 2)
                     ? "an equal-round count is outside 0 to 2"
                     : null;

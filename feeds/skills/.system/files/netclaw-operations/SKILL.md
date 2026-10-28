@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.141.0"
+  version: "2.142.0"
 ---
 
 # Netclaw Operations
@@ -316,6 +316,11 @@ Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
+A cause nudge identifies a repeated validation failure across different calls.
+Repair that cause before the next call. A successful repair clears active cause advice.
+Netclaw keeps recent cause evidence for six complete feedback batches.
+A consent pause preserves the unfinished batch. It does not count as another feedback opportunity.
+A nonzero shell exit status counts as a failed tool result, even when the process returns output.
 Repeated empty replies get the `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
 A text reply that ends with the finish reason `length` and has no tool call is also `ModelBehavior`. Netclaw does not post the cut-off text.
 One model call that streams only thinking for three times `Session.NoProgressTimeoutSeconds` is also `ModelBehavior`.

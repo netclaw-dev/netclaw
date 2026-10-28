@@ -48,22 +48,7 @@ internal sealed record ToolCallResult(
     ToolExposureRequest? ExposureRequest = null)
 {
     public SerializableChatMessage MessageWithProgress
-    {
-        get
-        {
-            var failureKey = ToolCycleSignatureFactory.FailureKeyFor(FailureCode);
-            return Message with
-            {
-                ToolOutcomeCategory = (int)(Receipt?.Category ?? ToolInvocationOutcomeCategory.Success),
-                ToolResultIsPendingJob = Receipt is ToolInvocationReceipt.PendingBackgroundJob,
-                ToolResultIsSynthetic = Receipt is ToolInvocationReceipt.Correction { RemediationCode: ToolRemediationCode.BreakToolCycle },
-                // The journal keeps the cause, so a restored batch reports the same identity as the live one.
-                ToolFailureSource = failureKey?.Source,
-                ToolFailureCode = failureKey?.Code,
-                ToolFailureScope = failureKey?.Scope
-            };
-        }
-    }
+        => ToolCycleResult.FromInvocation(Message, Receipt, FailureCode).WithMessageFacts(Message);
 }
 
 internal sealed record ModelInputMaterializationResult(

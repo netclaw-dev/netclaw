@@ -20,7 +20,7 @@ internal sealed class ActiveToolBatchTracker
     private PreparedToolCycleBatch? _preparedCycleBatch;
     // No journal event holds the nudge, the same as the other system nudges. A snapshot of the history keeps
     // the latest one. Journal replay without that snapshot drops it.
-    private string? _repeatNudge;
+    private (RefusedRepeatAction Stage, string Text)? _repeatNudge;
 
     private int CompletedCount => _completedCallIds.Count;
 
@@ -86,21 +86,8 @@ internal sealed class ActiveToolBatchTracker
 
     private void RestoreOutcome(SerializableChatMessage result)
     {
-        if (result.ToolOutcomeCategory is not { } category || result.ToolCallId is not { } id)
-            return;
-        if (!Enum.IsDefined((ToolInvocationOutcomeCategory)category))
-            throw new InvalidOperationException("A tool result has an unknown outcome category.");
-        _cycleResults[id.Value] = new ToolCycleResult((ToolInvocationOutcomeCategory)category, result.Content)
-        {
-            PendingJob = result.ToolResultIsPendingJob,
-            Synthetic = result.ToolResultIsSynthetic,
-            // A record from before the failure fields has no code, so the cause stays unknown. The category
-            // alone is never a cause: rebuilding a key from it would report a recurrence that never happened.
-            // A code without a source is a corrupt record, so it also stays unknown rather than inventing one.
-            FailureKey = result is { ToolFailureSource: { } source, ToolFailureCode: { } code }
-                ? new ToolFailureKey(source, code, result.ToolFailureScope)
-                : null
-        };
+        if (result.ToolCallId is { } id && ToolCycleResult.FromMessage(result) is { } outcome)
+            _cycleResults[id.Value] = outcome;
     }
 
     public SessionState ApplyRecordedResult(SessionState current, SerializableChatMessage result)
@@ -128,14 +115,7 @@ internal sealed class ActiveToolBatchTracker
         var callId = message.ToolCallId
             ?? throw new InvalidOperationException(
                 $"Tool-result message for tool '{message.Name ?? "unknown"}' has no ToolCallId.");
-        _cycleResults[callId.Value] = new ToolCycleResult(
-            result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-            message.Content ?? string.Empty)
-        {
-            PendingJob = result.Receipt is ToolInvocationReceipt.PendingBackgroundJob,
-            Synthetic = result.Receipt is ToolInvocationReceipt.Correction { RemediationCode: ToolRemediationCode.BreakToolCycle },
-            FailureKey = ToolCycleSignatureFactory.FailureKeyFor(result.FailureCode)
-        };
+        _cycleResults[callId.Value] = ToolCycleResult.FromInvocation(message, result.Receipt, result.FailureCode);
         return callId;
     }
 
@@ -160,21 +140,17 @@ internal sealed class ActiveToolBatchTracker
             turn.ObserveProgress(_cycleResults.Values, batchComplete: true);
 
         // Use the completed outcomes, so a success cannot receive a stale progress nudge.
-        var nudge = ToolCycleMessages.AfterResults(_repeatNudge, turn.EvaluateProgressDecision(),
-            turn.CallsSinceProgress, childRun: false);
-        // A new nudge replaces the earlier one: equal nudges in a stack give the model no new information.
-        // With nothing new to say, keep what history already holds. Removing it unconditionally dropped the
-        // advice given on the previous batch, and the model lost its correction on the following request.
+        var nudge = turn.CreateNudgeAfterResults(_repeatNudge, childRun: false);
+        // Keep repeat advice until another nudge replaces it. A batch without a cause retires its cause advice.
         if (nudge is not null)
         {
             updated = RemoveLoopNudges(updated, ToolCycleMessages.IsLoopNudge);
             updated = updated.AddSystemNudge(nudge);
         }
-        else if (turn.CallsSinceProgress == 0)
+        else
         {
-            // The turn is making progress again, so no-progress advice is stale. Repeat advice still names an
-            // action to avoid, so it stays until a new nudge replaces it.
-            updated = RemoveLoopNudges(updated, ToolCycleMessages.IsProgressNudge);
+            updated = RemoveLoopNudges(updated, turn.CallsSinceProgress == 0
+                ? ToolCycleMessages.IsProgressOrCauseNudge : ToolCycleMessages.IsCauseNudge);
         }
         _repeatNudge = null;
 
@@ -193,7 +169,7 @@ internal sealed class ActiveToolBatchTracker
     }
 
     // Start clears this value, so a nudge belongs only to the batch that started before it.
-    public void AddNudgeAfterResults(string nudge) => _repeatNudge = nudge;
+    public void AddNudgeAfterResults((RefusedRepeatAction Stage, string Text) nudge) => _repeatNudge = nudge;
 
     private IReadOnlyList<SerializableMediaReference> DrainPendingMedia()
     {

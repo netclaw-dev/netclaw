@@ -77,3 +77,14 @@
 - [x] 9.5 Clarify task status and separate runtime, post-handoff safety, and model checks; preserve strict failures and explicit incomplete evidence.
 - [x] 9.6 Review raw trial outputs independently; separate parser defects, task ambiguity, model failures, and infrastructure failures.
 - [x] 9.7 Correct the text-only violation diagnostic; verify a cycle stop below the static cap does not claim budget exhaustion.
+
+## 10. PR 2710 Feedback Repairs
+
+- [x] 10.1 Add xUnit theories for successful corrections, evidence expiry, consent splits, and advice priority; record the failures before the repair.
+- [x] 10.2 Share canonical result facts across live, journal, and child paths; preserve complete logical batches across consent.
+- [x] 10.3 Bound cause evidence and escalate only delivered advice; preserve consent state through protobuf.
+- [x] 10.4 Strengthen the shape catalog with real batches and exact reason and stage assertions.
+- [x] 10.5 Classify shell exit failures with typed receipts; prove success and failure behavior in both execution paths.
+- [x] 10.6 Run focused tests, mutation gates, coverage analysis, Slopwatch, and header verification; report each limit.
+
+The owner waived behavioral model evals for this repair. Deterministic tests and mutation gates remain required.

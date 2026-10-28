@@ -156,6 +156,17 @@ read -r redrive_span_start redrive_span_end redrive_line redrive_column redrive_
   ' "$redrive_source_file"
 )
 
+read -r cause_span_start cause_span_end cause_line < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $marker = "delivered.Cause == key";
+    $start = index($_, $marker);
+    die "The delivered cause guard is missing or duplicated.\n"
+      if $start < 0 || index($_, $marker, $start + 1) >= 0;
+    $line = 1 + (substr($_, 0, $start) =~ tr/\n//);
+    print "$start ", $start + length($marker), " $line\n";
+  ' "$refused_source_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
@@ -171,6 +182,7 @@ read -r redrive_span_start redrive_span_end redrive_line redrive_column redrive_
     --mutate "Sessions/Handlers/TurnStateTracker.cs{$refused_span_start..$refused_span_end}" \
     --mutate "Sessions/Handlers/TurnStateTracker.cs{$progress_span_start..$progress_span_end}" \
     --mutate "Sessions/SessionToolWorkflow.cs{$redrive_span_start..$redrive_span_end}" \
+    --mutate "Sessions/Handlers/TurnStateTracker.cs{$cause_span_start..$cause_span_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -324,7 +336,17 @@ jq -e --arg source "$redrive_source_file" \
   exit 1
 }
 
-total_count=$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count + expected_refused_count + expected_progress_count + expected_redrive_count))
+expected_cause_count=1
+jq -e --arg source "$refused_source_file" --argjson line "$cause_line" '
+  [(.files[$source].mutants // [])[]
+    | select(.status != "Ignored" and .location.start.line == $line)] as $mutants
+  | ($mutants | length) == 1 and all($mutants[]; .status == "Killed")
+' "$report" > /dev/null || {
+  echo "Expected one killed delivered-cause mutant." >&2
+  exit 1
+}
+
+total_count=$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count + expected_refused_count + expected_progress_count + expected_redrive_count + expected_cause_count))
 jq -e --argjson count "$total_count" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count

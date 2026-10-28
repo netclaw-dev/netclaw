@@ -739,4 +739,16 @@ message ChildLoopGuardProto {
   optional int32 progress_failure_units = 9;
   optional int32 progress_stage = 10;
   bool incomplete_batch_had_failure = 11;
+  message FailureKey {
+    string source = 1;
+    string code = 2;
+    optional string scope = 3;
+  }
+  message CauseBatch {
+    repeated FailureKey keys = 1;
+    int32 advice_stage = 2;
+    FailureKey advice_cause = 3;
+  }
+  repeated CauseBatch cause_batches = 12;
+  repeated FailureKey incomplete_failure_keys = 13;
 }

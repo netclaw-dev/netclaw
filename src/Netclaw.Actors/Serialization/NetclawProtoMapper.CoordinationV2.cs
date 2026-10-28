@@ -464,6 +464,15 @@ internal static partial class NetclawProtoMapper
             ToolName = pair.Key.ToolName.Value, ArgumentsHash = pair.Key.ArgumentsHash, Outcome = pair.Value.Outcome,
             EqualRounds = pair.Value.EqualRounds, Corrected = pair.Value.Corrected, PendingJob = pair.Value.PendingJob
         }));
+        proto.CauseBatches.AddRange(loopGuard.CauseBatches.Select(static batch =>
+        {
+            var value = new Proto.ChildLoopGuardProto.Types.CauseBatch { AdviceStage = (int)batch.Advice.Stage };
+            value.Keys.AddRange(batch.Keys.Select(ToProto));
+            if (batch.Advice.Cause is { } cause)
+                value.AdviceCause = ToProto(cause);
+            return value;
+        }));
+        proto.IncompleteFailureKeys.AddRange(loopGuard.IncompleteFailureKeys.Select(ToProto));
         return proto;
     }
 
@@ -487,8 +496,31 @@ internal static partial class NetclawProtoMapper
             : proto.CallsSinceProgress >= TurnStateTracker.ProgressEscalateAt ? RefusedRepeatAction.EscalatedNudge
             : proto.CallsSinceProgress >= TurnStateTracker.ProgressNudgeAt ? RefusedRepeatAction.Nudge
             : RefusedRepeatAction.None,
-        IncompleteBatchHadFailure = proto.IncompleteBatchHadFailure
+        IncompleteBatchHadFailure = proto.IncompleteBatchHadFailure,
+        CauseBatches = proto.CauseBatches.Select(FromProto).ToArray(),
+        IncompleteFailureKeys = proto.IncompleteFailureKeys.Select(FromProto).ToArray()
     };
+
+    private static CauseFeedbackBatch FromProto(Proto.ChildLoopGuardProto.Types.CauseBatch batch)
+    {
+        if (batch.AdviceCause is null && batch.AdviceStage != 0)
+            throw new InvalidDataException("A cause advice stage has no cause.");
+        return new CauseFeedbackBatch(batch.Keys.Select(FromProto).ToArray(),
+            batch.AdviceCause is { } cause
+                ? new ProgressDecision((RefusedRepeatAction)batch.AdviceStage,
+                    LoopInterventionReason.FailureCauseRecurrence, FromProto(cause)) : default);
+    }
+
+    private static Proto.ChildLoopGuardProto.Types.FailureKey ToProto(ToolFailureKey key)
+    {
+        var value = new Proto.ChildLoopGuardProto.Types.FailureKey { Source = key.Source, Code = key.Code };
+        if (key.Scope is { } scope)
+            value.Scope = scope;
+        return value;
+    }
+
+    private static ToolFailureKey FromProto(Proto.ChildLoopGuardProto.Types.FailureKey key)
+        => new(key.Source, key.Code, key.HasScope ? key.Scope : null);
 
     private static Proto.BackgroundChildRunV2Proto ToProto(BackgroundChildRun run)
     {

@@ -941,6 +941,8 @@ Parked child prompts (PR 1 of durable-child-consent-wait, design D1 to D4):
   `ChildParkReached` with its park (transcript, loop guard, directories of the batch, file activity, skill overlay,
   requests), and stops after `ChildTerminalCommitted`. The child bridge only says that consent is available. No child
   asks a bridge.
+- The park keeps complete-batch cause evidence and unfinished sibling facts for the loop guard.
+  These facts grant no authority. The resumed calls still pass the normal authorization checks.
 - Owner of the park decision: `LlmSessionActor.AcceptChildPark` through `ChildParkRules.AcceptPark`. Only the owned
   child of an `Accepted` run opens prompts. A park of a cancelling run ends the run as cancelled. Any other sender gets
   the stop signal, and the session records nothing. The park is durable in the run record (`ChildRunEvent.Parked`).

@@ -123,6 +123,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         }
         catch (ShellProcessStartException ex)
         {
+            context.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.TransientFailure));
             return ex.Message;
         }
 
@@ -194,6 +195,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     Debug.WriteLine($"shell_execute: pipe drain aborted — {ex.Message}");
                 }
 
+                context.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.TransientFailure));
                 return timeoutCts.IsCancellationRequested
                     ? $"Error: Command timed out after {effectiveTimeout.TotalSeconds:F0} seconds."
                     : "Error: Command cancelled.";
@@ -227,6 +229,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             if (stdoutGraceCut || stderrGraceCut)
                 captured += GraceCutMarker;
 
+            RecordExitOutcome(context, process.ExitCode);
             return FormatCompletedOutput(captured, process.ExitCode);
         }
     }
@@ -308,6 +311,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             }
             catch (ShellProcessStartException ex)
             {
+                context.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.TransientFailure));
                 output.TryWrite(new ToolCompletedUpdate(ex.Message));
                 return;
             }
@@ -377,6 +381,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     {
                         await KillAndDrainAsync(process, drainStdout, drainStderr);
                         await relayActivities;
+                        context.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.TransientFailure));
                         output.TryWrite(new ToolCompletedUpdate(
                             $"Error: Command timed out after {effectiveTimeout.TotalSeconds:F0} seconds."));
                         return;
@@ -413,6 +418,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 if (graceCut)
                     captured += GraceCutMarker;
 
+                RecordExitOutcome(context, process.ExitCode);
                 output.TryWrite(new ToolCompletedUpdate(FormatCompletedOutput(captured, process.ExitCode)));
             }
         }
@@ -426,6 +432,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             // StringBuilder) surfaces as a tool-result error rather than
             // silently faulting the fire-and-forget task and leaving the
             // stream without a completion item.
+            context.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.TransientFailure));
             output.TryWrite(new ToolCompletedUpdate($"Error: {ex.Message}"));
         }
         finally
@@ -559,6 +566,14 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         {
             Debug.WriteLine($"shell_execute: pipe drain aborted — {ex.Message}");
         }
+    }
+
+    private static void RecordExitOutcome(ToolInvocationContext context, int exitCode)
+    {
+        if (exitCode != 0)
+            context.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.TransientFailure));
+        else
+            context.TryComplete(new ToolInvocationReceipt.Succeeded([], null));
     }
 
     private string FormatCompletedOutput(string captured, int exitCode)

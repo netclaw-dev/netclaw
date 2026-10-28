@@ -1,104 +1,93 @@
 # Tool-Loop Detection Contract
 
-Status: design for PR #2710 (issue #2706). Replaces the single "progress axis" with three distinct detectors.
+PRD references: PRD-001 and PRD-006.
+See [the engineering glossary](GLOSSARY.md) for shared terms.
 
-## The problem
+## Decisions and owners
 
-A run of failures is not a loop. The current progress axis collapses three different things into one weighted number, so it cannot tell "stuck repeating the same ineffective cause" from "many distinct misses during legitimate exploration." It is a failure budget wearing a loop-detector's name.
+`TurnStateTracker` owns actor-local detector state. Both actors use its decisions.
+The existing action detector compares exact action and outcome identities.
+The cause detector compares structured source, code, and optional scope values.
+The failure budget counts failed calls since the latest batch with a success.
+A failure budget limits repeated failure. It does not prove a loop.
 
-## Three detectors, one owner
+| Detector | Evidence | Response |
+|---|---|---|
+| Action recurrence | Equal action and outcome identities | Refuse matching calls and advise the model |
+| Failure-cause recurrence | Three occurrences in six complete feedback batches | Give cause advice, escalate, then end the next attempted dispatch |
+| Failure budget | Weighted failure score | Give advice at 4, escalate at 6, and end at 8 full units |
 
-`TurnStateTracker` owns all decision state and returns one consolidated intervention per evaluation. No second actor, no LLM judge.
+The advice selector compares severity first.
+At equal severity, action advice wins over cause advice. Cause advice wins over budget advice.
+The actor appends one selected nudge after the results.
+The tracker records only the cause advice that the actor selects for the next model request.
+A cause cannot escalate because another cause qualified for advice.
+Repeated evaluations do not advance the stage.
+A final text response remains available at the final stage.
 
-| Detector | Question it answers | Evidence | Confidence |
-|---|---|---|---|
-| **Action recurrence** | Is the model repeating the same action? | `(ToolName, ArgumentsHash)` and adjacent-cycle outcome hashes | High |
-| **Failure-cause recurrence** | Is the model repeating the same root failure across different tools/arguments? | stable `ToolFailureKey(Source, Code, Scope)` | High (when the key is structured) |
-| **Failure budget** | Has the turn failed too many times to keep going, with no recognized recurrence? | weighted failure count since last success | Low — conservative backstop only |
+## Cause evidence
 
-Priority when more than one fires: action recurrence > failure-cause recurrence > failure budget.
+`ToolFailureKey(Source, Code, Scope)` carries a stable cause identity.
+The key contains no raw error text or argument hash.
+The shared mapper recognizes `invalid_rationale`, `unrecognized_argument`, `args_parse_error`, and `invalid_meta_value`.
+These front-door validation codes use `Source=netclaw` and no scope.
+Other codes have no known cause identity. They affect the failure budget through their receipt category.
+The detector never guesses a cause from an outcome category.
 
-## Result shape
+The tracker retains the latest six complete feedback batches.
+Each batch retains at most three occurrences per cause.
+A new user turn clears the history.
+A batch without a cause retires that cause's active advice.
+Recent occurrence evidence remains available until it leaves the six-batch window.
+Thus an unrelated success does not erase evidence, but a successful correction removes stale stop advice.
+A later recurrence starts at the first nudge.
 
-```csharp
-internal enum LoopInterventionReason
-{
-    None,
-    ActionRecurrence,
-    FailureCauseRecurrence,
-    FailureBudget
-}
+Positive example: three distinct tool calls lack `_rationale`.
+Netclaw gives the rationale nudge after their results.
+If the next batch repeats that cause, Netclaw escalates the advice.
+
+Negative example: the model corrects `_rationale` and the next call succeeds.
+Netclaw removes the cause advice. One later mistake cannot inherit the old escalation.
+
+## Canonical result facts
+
+`ToolCycleResult` converts live receipts to category, pending-job, synthetic, and cause facts.
+The parent journal and the child transcript preserve the same representation.
+The protobuf mapper preserves source, code, and optional scope without reinterpretation.
+A legacy result without category facts cannot support safe parent batch reconstruction.
+The parent abandons that recovered batch explicitly.
+
+Synthetic cycle corrections and pending-job receipts neither add failures nor reset the failure budget.
+A successful receipt resets the budget for the whole logical batch.
+`NotFound` adds one half-unit. Each other failure adds two half-units.
+The model sees the actual failed-call count, not the weighted score.
+A batch advances the budget at most one stage.
+Shell exit status zero produces a success receipt. A nonzero status produces a failure receipt.
+The shell does not parse executable-specific exit semantics.
+
+## Consent and recovery
+
+A consent pause divides execution, not model feedback.
+The tracker preserves unfinished cause facts until the logical batch completes.
+The child park preserves the bounded cause history and the advice selected for each batch.
+The park also preserves the existing budget and incomplete success or failure facts.
+The protobuf fields are additive. Older records restore empty cause history.
+A cold parent recovery starts fresh turn-local history and observes the reconstructed in-flight batch once.
+
+```text
+collect canonical result facts
+  -> preserve unfinished facts at consent
+  -> complete the logical batch once
+  -> select severity, then detector priority
+  -> append one nudge
+  -> record the selected cause advice for the next feedback batch
 ```
 
-The action is the existing `RefusedRepeatAction` ladder: `None`, `Nudge`, `EscalatedNudge`, `EndTurn`. `TurnStateTracker` returns `(reason, action, cause?)` so tests and telemetry can see *which* detector fired and *why*, not just that something intervened.
+## Verification
 
-## Failure-cause identity
-
-A failure cause is a stable key, not a category:
-
-```csharp
-internal readonly record struct ToolFailureKey(
-    string Source,
-    string Code,
-    string? Scope = null);
-```
-
-- The key never contains tool name or argument hash.
-- `invalid_rationale` (front-door validation) recurs across every tool: `Source=netclaw`, `Code=invalid_rationale`, no scope.
-- Resource- or tool-specific failures include a stable scope. Two unrelated `NotFound` paths are two causes, not one.
-- `Category` alone is never a recurrence key. Unknown/unstructured failures fall to the budget.
-
-The key must survive persistence (journal recovery, park/restore) or be explicitly unavailable — never guessed. Absence of a key in an old record means "no known cause," not "a known identical cause."
-
-## Feedback-aware escalation
-
-A model cannot ignore a correction it never saw. Escalation advances only across real model-feedback boundaries.
-
-- Multiple same-cause failures in one parallel batch establish the problem but consume exactly one feedback opportunity.
-- After the model receives a cause nudge and repeats the cause → escalate.
-- After it repeats an escalated correction → end the next attempted dispatch (existing quiet-stop semantics). A final text response stays allowed.
-- Re-readiness checks and repeated dispatch evaluations must not advance a stage twice.
-
-## Failure budget
-
-Retained as a conservative backstop, not loop detection. Weighted `NotFound` (half) vs other failures (full). The 4/6/8 full-unit thresholds stay. It reports the true failure count and must never claim a repeated cause. An unrelated success does not automatically prove task progress, but it does reset the budget.
-
-## What does not count as a failure
-
-- Synthetic guard corrections (the detector's own output).
-- Pending background-job receipts.
-
-## Test matrix (LoopGuardShapeTests)
-
-Three groups, each asserting the **reason** and **stage** independently:
-
-1. **ActionRecurrenceShapes** — the existing controls (same call twice, `A B A B A`). Assert reason = `ActionRecurrence`.
-2. **FailureCauseRecurrenceShapes** — red until Prompt 3. Assert reason = `FailureCauseRecurrence`:
-   - rotating tools, same structured `invalid_rationale` → nudge at 3 occurrences;
-   - same tool, varying args, same code → recur;
-   - different codes, same `InvalidInput` category → must NOT conflate;
-   - distinct `NotFound` paths → must NOT conflate;
-   - cause with unrelated successes interleaved → still tracked (bounded window);
-   - one parallel batch of identical failures → one feedback opportunity;
-   - nudge → repeat → escalate → repeat → end turn (final text still allowed);
-   - a corrected call / changed cause → stops escalating.
-3. **FailureBudgetShapes** — the existing weighted-budget cases. Assert reason = `FailureBudget`, and that a streak of distinct failures stays conservative.
-
-## Out of scope
-
-- Fixing the `_rationale` gate itself — #2707 owns that.
-- Task-level progress judgment — belongs to the model, not this guard.
-
-## Persistence
-
-Loop-detection state is ephemeral runtime information, not persistent state. A session that resumes after a
-restart comes back from compacted context, possibly on a different code path. Stale "you are stuck" counters
-from the prior run would leak into a fresh situation and punish a model for history it no longer has.
-
-The cause-recurrence history is therefore deliberately **not persisted**: it is turn-local, resets on a new
-turn or a resume, and re-establishes after three fresh occurrences. The failure budget is the one cheap,
-durable safety floor, and it is already carried only where a consent park needs it to keep the same in-flight
-turn honest. Nothing else in the detector is part of the persisted record.
-
-When a session resumes, treat the detector as starting fresh. Never reconstruct loop state from journaled
-history; if a park record happens to carry it, it is advisory for the same live turn, not a durable fact.
+`LoopGuardShapeTests` represents complete batches, including real parallel bursts.
+Positive catalog cases assert the full stage sequence and the detector reason.
+`LoopFeedbackTests` covers repairs, expiry, consent splits, competing causes, and repeated evaluations.
+Parent and child tests prove that useful calls still execute after successful repairs.
+Serialization theories preserve cause advice and unfinished facts through the real park codec.
+These deterministic checks do not establish model-task completion rates or optimal thresholds.

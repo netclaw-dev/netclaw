@@ -848,7 +848,7 @@ public sealed class TurnStateTrackerTests
             Assert.Equal((i + 1) * 8, tracker.CallsSinceProgress);
             Assert.Equal(stages[i], tracker.EvaluateProgress());
             Assert.Contains($"{(i + 1) * 8} tool calls failed", ToolCycleMessages.AfterResults(null,
-                tracker.EvaluateProgressDecision(), tracker.CallsSinceProgress, childRun: false), StringComparison.Ordinal);
+                tracker.EvaluateProgressDecision(), tracker.CallsSinceProgress, childRun: false).Text, StringComparison.Ordinal);
             var restored = new TurnStateTracker();
             restored.RestoreLoopGuard(tracker.ExportLoopGuard());
             tracker = restored;
@@ -1004,8 +1004,6 @@ public sealed class TurnStateTrackerTests
                 ["synthetic"] = new(ToolInvocationOutcomeCategory.Success, "synthetic") { Synthetic = true }
             });
 
-        Assert.False(completed.AnySuccess);
-        Assert.Equal(1, completed.FailureCount);
         Assert.False(completed.RecordAdjacent);
         for (var i = 0; i < TurnStateTracker.ProgressNudgeAt; i++)
             tracker.ObserveCompleted(completed);
@@ -1028,8 +1026,6 @@ public sealed class TurnStateTrackerTests
                 ("ok", ToolInvocationOutcomeCategory.Success, "Done."),
                 ("failed-again", ToolInvocationOutcomeCategory.NotFound, "Missing."));
 
-            Assert.True(completed.AnySuccess);
-            Assert.Equal(2, completed.FailureCount);
             tracker.ObserveCompleted(completed);
             Assert.Equal(0, tracker.CallsSinceProgress);
         }
@@ -1060,11 +1056,11 @@ public sealed class TurnStateTrackerTests
         var repeat = childRun ? ToolCycleMessages.ChildRepeatNudge(["sample/a"])
             : ToolCycleMessages.RepeatNudge(["sample/a"]);
         var escalate = new ProgressDecision(RefusedRepeatAction.EscalatedNudge, LoopInterventionReason.FailureBudget, null);
-        var nudge = ToolCycleMessages.AfterResults(repeat, escalate, 6, childRun);
+        var nudge = ToolCycleMessages.AfterResults((RefusedRepeatAction.Nudge, repeat), escalate, 6, childRun).Text;
         Assert.Contains("End your turn now", nudge, StringComparison.Ordinal);
         Assert.DoesNotContain("Select a different action", nudge, StringComparison.Ordinal);
         var plain = new ProgressDecision(RefusedRepeatAction.Nudge, LoopInterventionReason.FailureBudget, null);
-        Assert.Equal(repeat, ToolCycleMessages.AfterResults(repeat, plain, 4, childRun));
+        Assert.Equal(repeat, ToolCycleMessages.AfterResults((RefusedRepeatAction.Nudge, repeat), plain, 4, childRun).Text);
         if (childRun)
             Assert.Contains("Give your result to the parent", nudge, StringComparison.Ordinal);
     }
@@ -1108,9 +1104,11 @@ public sealed class TurnStateTrackerTests
         ], batchComplete: true);
         Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateProgress());
 
+        tracker.CreateNudgeAfterResults(null, false);
         tracker.ObserveProgress([CauseFailure("invalid_rationale")], batchComplete: true);
         Assert.Equal(RefusedRepeatAction.EscalatedNudge, tracker.EvaluateProgress());
 
+        tracker.CreateNudgeAfterResults(null, false);
         tracker.ObserveProgress([CauseFailure("invalid_rationale")], batchComplete: true);
         Assert.Equal(RefusedRepeatAction.EndTurn, tracker.EvaluateProgress());
     }

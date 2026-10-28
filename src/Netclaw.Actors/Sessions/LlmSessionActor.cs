@@ -1593,7 +1593,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         RecordIntermediateUsage(usage);
 
         var repeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: false);
-        DispatchToolBatch(toolCalls, cycleDecision.RefusedCallIds, repeatNudge,
+        DispatchToolBatch(toolCalls, cycleDecision.RefusedCallIds,
+            repeatNudge is null ? null : (cycleDecision.RefusedRepeat, repeatNudge),
             preparedCycleBatch: preparedCycleBatch);
     }
 
@@ -1697,14 +1698,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
         IReadOnlySet<string> refusedCallIds,
-        string? repeatNudge,
+        (RefusedRepeatAction Stage, string Text)? repeatNudge,
         ApprovalRedrivePlan? approvalPlan = null,
         PreparedToolCycleBatch? preparedCycleBatch = null,
         bool recordCompletedCycle = true)
     {
         _toolWorkflow.StartDispatch(toolCalls, preparedCycleBatch, _toolExecutor, recordCompletedCycle);
         if (repeatNudge is not null)
-            _toolWorkflow.AddRepeatNudgeAfterBatch(repeatNudge);
+            _toolWorkflow.AddRepeatNudgeAfterBatch(repeatNudge.Value);
 
         // The pipeline sends each result before it signals batch completion.
         TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",

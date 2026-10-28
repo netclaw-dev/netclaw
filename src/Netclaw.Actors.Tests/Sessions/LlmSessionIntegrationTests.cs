@@ -989,6 +989,34 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     private static FunctionCallContent SearchCall(string callId, string query)
         => new(callId, "search_tools", new Dictionary<string, object?> { ["query"] = query });
 
+    [Theory]
+    [InlineData(3)] [InlineData(4)] [InlineData(5)]
+    public async Task A_parent_can_finish_after_successes_between_cause_failures(int failures)
+    {
+        _fakeToolExecutor.InvalidRationaleTools.Add("search_tools");
+        for (var i = 0; i < failures; i++)
+        {
+            _fakeChatClient.PlannedResponses.Enqueue([SearchCall($"bad-{i}", $"query-{i}")]);
+            _fakeChatClient.PlannedResponses.Enqueue([new FunctionCallContent($"good-{i}", "file_read",
+                new Dictionary<string, object?> { ["path"] = $"file-{i}" })]);
+        }
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("Done.")]);
+        var sessionId = new SessionId($"cause-repair/{failures}");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe();
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+            { SessionId = sessionId, Filter = OutputFilter.Full }, TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await manager.Ask<CommandAck>(new SendUserMessage { SessionId = sessionId, Content = "Do the work." },
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await subscriber.FishForMessageAsync<object>(message => message is TurnCompleted,
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(completed).Outcome);
+        Assert.Equal(failures, _fakeToolExecutor.CallCount);
+        Assert.DoesNotContain(_fakeChatClient.ReceivedMessages[^1], IsCauseNudge);
+    }
+
     [Fact]
     public async Task Repeated_cause_across_different_arguments_receives_a_cause_nudge_naming_the_fix()
     {

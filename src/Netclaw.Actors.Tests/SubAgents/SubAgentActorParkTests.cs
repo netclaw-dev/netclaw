@@ -217,6 +217,51 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
         Assert.Contains("_rationale", nudge.Text, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(3)] [InlineData(4)] [InlineData(5)]
+    public async Task Successful_repairs_allow_the_child_to_finish_useful_work(int failures)
+    {
+        var tool = new CountingTool("looper");
+        var rounds = Enumerable.Range(1, failures).SelectMany(index => new[]
+        {
+            new[] { CauseCall($"bad-{index}", "looper", $"bad-{index}") },
+            new[] { Loop($"good-{index}", $"good-{index}") }
+        }).ToArray();
+        var client = new ScriptedToolCallChatClient(rounds, "Done.");
+        var owner = CreateTestProbe();
+        Launch(owner, Definition(tool), client, Scope(), null);
+        var terminal = Assert.IsType<ChildTerminalReturned>(await NextOwnerMessageAsync(owner, []));
+        Assert.Equal("Done.", terminal.Result.Output);
+        Assert.Equal(failures, tool.CallCount);
+        Assert.DoesNotContain(client.ReceivedMessagesByCall[^1], message => ToolCycleMessages.IsCauseNudge(message.Text));
+    }
+
+    [Theory]
+    [InlineData(true)] [InlineData(false)]
+    public async Task A_child_keeps_sibling_cause_failures_across_consent(bool approve)
+    {
+        var consent = new CountingTool(ConsentToolName);
+        var first = new ScriptedToolCallChatClient([
+            [CauseCall("bad-1", "looper", "a"), CauseCall("bad-2", "looper", "b"),
+             CauseCall("bad-3", "looper", "c"), Call("parked", ConsentToolName)]
+        ], "unused");
+        var owner = CreateTestProbe();
+        Launch(owner, Definition(new CountingTool("looper"), consent), first, Scope(), null);
+        var (_, park, requests) = await ExpectParkAsync(owner, []);
+        var request = Assert.Single(requests);
+        var answer = approve
+            ? new ApprovalRedriveEntry(request.AuthorizationAttemptId, OneTimeApprovalKeys.Create(request.Approval), null, null)
+            : new ApprovalRedriveEntry(request.AuthorizationAttemptId, null, RefusalKind.Denied, null);
+        var resumed = new ScriptedToolCallChatClient([], "Done.");
+        var resumedOwner = CreateTestProbe();
+        Launch(resumedOwner, Definition(new CountingTool("looper"), consent), resumed, Scope(),
+            new ChildRunResume(park, new Dictionary<string, ApprovalRedriveEntry> { ["parked"] = answer }));
+        Assert.IsType<ChildTerminalReturned>(await NextOwnerMessageAsync(resumedOwner, []));
+        var nudge = Assert.Single(resumed.ReceivedMessagesByCall[0], message => ToolCycleMessages.IsCauseNudge(message.Text));
+        Assert.Contains("invalid_rationale", nudge.Text, StringComparison.Ordinal);
+        Assert.Equal(approve ? 1 : 0, consent.CallCount);
+    }
+
     private IActorRef Launch(TestProbe owner, SubAgentDefinition definition, IChatClient client, ChildRunScope scope,
         ChildRunResume? resume)
     {

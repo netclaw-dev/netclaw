@@ -92,7 +92,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly TurnStateTracker _turnState = new();
     private PreparedToolCycleBatch? _activeCycleBatch;
     // The repeat nudge for the active batch. The child adds it after the batch results.
-    private string? _activeRepeatNudge;
+    private (RefusedRepeatAction Stage, string Text)? _activeRepeatNudge;
 
     // Stopwatch tracking the total wall-clock duration of the sub-agent run.
     // Used for the summary log on completion (ProcessingWatchdog is only a
@@ -585,16 +585,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 result => result.Message.ToolCallId is { } callId
                     ? callId.Value
                     : throw new InvalidOperationException("A tool cycle result requires a call identity."),
-                result => new ToolCycleResult(
-                    result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-                    result.Message.Content ?? string.Empty)
-                {
-                    PendingJob = result.Receipt is ToolInvocationReceipt.PendingBackgroundJob,
-                    Synthetic = result.Receipt is ToolInvocationReceipt.Correction
-                        { RemediationCode: ToolRemediationCode.BreakToolCycle },
-                    // Reuse the shared code→cause mapper so the child observes the same identity the parent does.
-                    FailureKey = ToolCycleSignatureFactory.FailureKeyFor(result.FailureCode)
-                },
+                result => ToolCycleResult.FromInvocation(result.Message, result.Receipt, result.FailureCode),
                 StringComparer.Ordinal);
             // A park omits cycle history. Its finished calls and each resumed call still affect progress once.
             if (_activeCycleBatch is { } cycleBatch && parked.Length == 0)
@@ -607,7 +598,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             foreach (var result in msg.Results.Where(static result => result.Parked is null))
             {
                 var message = result.Message;
-                AddMessage(message);
+                AddMessage(cycleResults[message.ToolCallId!.Value.Value].WithMessageFacts(message));
                 if (message.ToolCallId is { } callId)
                 {
                     var receipt = result.Receipt;
@@ -646,17 +637,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             AddModelInputMediaNudge(msg.Results
                 .SelectMany(result => result.ModelInputMediaReferences)
                 .ToArray());
-            var nudge = ToolCycleMessages.AfterResults(_activeRepeatNudge, _turnState.EvaluateProgressDecision(),
-                _turnState.CallsSinceProgress, childRun: true);
-            // A new nudge replaces the earlier one. With nothing new to say, keep what the transcript holds; a
-            // progress reset clears only the no-progress advice, because repeat advice still names an action.
+            var nudge = _turnState.CreateNudgeAfterResults(_activeRepeatNudge, childRun: true);
+            // Keep repeat advice until another nudge replaces it. Retire cause advice when its cause leaves the batch.
             if (nudge is not null)
             {
                 RemoveLoopNudges(ToolCycleMessages.IsLoopNudge);
                 AddSystemNudge(nudge);
             }
-            else if (_turnState.CallsSinceProgress == 0)
-                RemoveLoopNudges(ToolCycleMessages.IsProgressNudge);
+            else
+                RemoveLoopNudges(_turnState.CallsSinceProgress == 0
+                    ? ToolCycleMessages.IsProgressOrCauseNudge : ToolCycleMessages.IsCauseNudge);
             _activeRepeatNudge = null;
 
             _turnState.RecordToolCompletion(msg.Results.Length);
@@ -837,7 +827,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         // A repeat of a refused call does not stop the child at once. The call is refused again, and the child
         // nudge follows the batch results. The child nudge offers no background job: a child has none.
-        _activeRepeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: true);
+        var repeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: true);
+        _activeRepeatNudge = repeatNudge is null ? null : (cycleDecision.RefusedRepeat, repeatNudge);
 
         // Add assistant message (with tool calls) to history
         _history.Add(assistantMessage);

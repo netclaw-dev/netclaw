@@ -16,12 +16,12 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// <list type="bullet">
 /// <item><see cref="ActionRecurrenceShapes"/> — the same action repeats. Reason: <c>ActionRecurrence</c>.</item>
 /// <item><see cref="FailureCauseRecurrenceShapes"/> — the same root failure repeats across different tools or
-/// arguments. Reason: <c>FailureCauseRecurrence</c>. Red until the cause detector lands.</item>
+/// arguments. Reason: <c>FailureCauseRecurrence</c>. The cause detector owns this decision.</item>
 /// <item><see cref="FailureBudgetShapes"/> — distinct failures with no recognized recurrence. Reason:
 /// <c>FailureBudget</c>, the conservative backstop.</item>
 /// <item><see cref="SuccessShapes"/> — the turn is progressing. Reason: <c>None</c>.</item>
 /// </list>
-/// Every theory asserts the <see cref="ToolCycleBatchDecision.Reason"/> and the stage, so one detector cannot
+/// Each positive theory asserts the <see cref="ToolCycleBatchDecision.Reason"/> and the stage, so one detector cannot
 /// accidentally make a broken test green.
 /// </summary>
 public sealed class LoopGuardShapeTests
@@ -46,7 +46,11 @@ public sealed class LoopGuardShapeTests
     }
 
     /// <summary>A named scripted turn.</summary>
-    public sealed record Shape(string Name, Step[] Steps);
+    public sealed record Shape(string Name, Step[] Steps)
+    {
+        public int BatchWidth { get; init; } = 1;
+        public string[] ExpectedStages { get; init; } = [];
+    }
 
     // A failure with no structured cause. Only the generic budget can react to it.
     private static Step Fail(string tool, string args, string text = RationaleError)
@@ -103,14 +107,14 @@ public sealed class LoopGuardShapeTests
             FailCause("spawn_agent", "a", "invalid_rationale"),
             FailCause("search_tools", "b", "invalid_rationale"),
             FailCause("load_tool", "c", "invalid_rationale")
-        ]),
+        ]) { ExpectedStages = ["None", "None", "Nudge"] },
 
         // Same tool, different arguments, identical cause. The arguments hash differs, so action identity is blind.
         new Shape("same tool, varying arguments, identical cause", [
             FailCause("search_tools", "q1", "invalid_rationale"),
             FailCause("search_tools", "q2", "invalid_rationale"),
             FailCause("search_tools", "q3", "invalid_rationale")
-        ]),
+        ]) { ExpectedStages = ["None", "None", "Nudge"] },
 
         // A cause that returns after unrelated successes. Success must not erase the evidence that the same
         // unresolved cause keeps coming back; a bounded window keeps it in view.
@@ -120,7 +124,7 @@ public sealed class LoopGuardShapeTests
             Ok("file_read", "/other"),
             FailCause("load_tool", "c", "invalid_rationale"),
             FailCause("web_fetch", "d", "invalid_rationale")
-        ]),
+        ]) { ExpectedStages = ["None", "None", "None", "Nudge", "EscalatedNudge"] },
 
         // Three identical causes in one parallel batch establish the problem but consume exactly one feedback
         // opportunity. The next model round gets one nudge, not three.
@@ -128,7 +132,7 @@ public sealed class LoopGuardShapeTests
             FailCause("spawn_agent", "a", "invalid_rationale"),
             FailCause("search_tools", "b", "invalid_rationale"),
             FailCause("load_tool", "c", "invalid_rationale")
-        ])
+        ]) { ExpectedStages = ["Nudge"], BatchWidth = 3 }
     };
 
     // ── Failure budget: distinct failures, no recognized recurrence ──
@@ -144,7 +148,7 @@ public sealed class LoopGuardShapeTests
             Fail("file_read", "d", "Error: path is required."),
             Fail("shell_execute", "e", "Error: command is required."),
             Fail("web_fetch", "f", "Error: url is required.")
-        ]),
+        ]) { ExpectedStages = ["None", "None", "None", "Nudge", "Nudge", "EscalatedNudge"] },
 
         // Distinct codes in the same broad category are distinct causes. invalid_rationale is not
         // unrecognized_argument is not args_parse_error. The cause detector must not conflate them.
@@ -153,7 +157,7 @@ public sealed class LoopGuardShapeTests
             FailCause("search_tools", "b", "unrecognized_argument"),
             FailCause("load_tool", "c", "args_parse_error"),
             FailCause("file_read", "d", "invalid_meta_value")
-        ]),
+        ]) { ExpectedStages = ["None", "None", "None", "Nudge"] },
 
         // A permission wall across different paths. Each denial is its own authorization decision; no single
         // cause repeats, so the budget is the backstop.
@@ -161,7 +165,7 @@ public sealed class LoopGuardShapeTests
             Denied("file_read", "/etc/a"), Denied("file_read", "/etc/b"),
             Denied("file_write", "/etc/c"), Denied("file_read", "/root/d"),
             Denied("file_write", "/root/e"), Denied("file_read", "/root/f")
-        ]),
+        ]) { ExpectedStages = ["None", "None", "None", "Nudge", "Nudge", "EscalatedNudge"] },
 
         // Distinct missing paths are distinct causes, not one repeated cause. Exploration, not a loop.
         new Shape("not found streak across different paths", [
@@ -169,14 +173,14 @@ public sealed class LoopGuardShapeTests
             Missing("file_read", "/c"), Missing("file_read", "/d"),
             Missing("file_read", "/e"), Missing("file_read", "/f"),
             Missing("file_read", "/g"), Missing("file_read", "/h")
-        ]),
+        ]) { ExpectedStages = ["None", "None", "None", "None", "None", "None", "None", "Nudge"] },
 
         // A backend that keeps dropping the connection across different endpoints. No stable cause, budget only.
         new Shape("transient failure streak across different endpoints", [
             Transient("web_fetch", "https://a"), Transient("web_fetch", "https://b"),
             Transient("web_fetch", "https://c"), Transient("web_fetch", "https://d"),
             Transient("web_fetch", "https://e"), Transient("web_fetch", "https://f")
-        ])
+        ]) { ExpectedStages = ["None", "None", "None", "Nudge", "Nudge", "EscalatedNudge"] }
     };
 
     // ── Success shapes: the turn is making progress and every detector must stay quiet ──
@@ -253,7 +257,9 @@ public sealed class LoopGuardShapeTests
     public void Failure_cause_recurrence_shapes_intervene(Shape shape)
     {
         var observations = Run(shape);
-        Assert.Contains(observations, observation => observation.ResultsReason == LoopInterventionReason.FailureCauseRecurrence);
+        Assert.Equal(shape.ExpectedStages, observations.Select(static observation => observation.ProgressAfterResults.ToString()));
+        Assert.All(observations.Where(static observation => observation.ProgressAfterResults != RefusedRepeatAction.None),
+            static observation => Assert.Equal(LoopInterventionReason.FailureCauseRecurrence, observation.ResultsReason));
     }
 
     [Theory]
@@ -261,7 +267,9 @@ public sealed class LoopGuardShapeTests
     public void Failure_budget_shapes_stay_conservative(Shape shape)
     {
         var observations = Run(shape);
-        Assert.Contains(observations, observation => observation.ResultsReason == LoopInterventionReason.FailureBudget);
+        Assert.Equal(shape.ExpectedStages, observations.Select(static observation => observation.ProgressAfterResults.ToString()));
+        Assert.All(observations.Where(static observation => observation.ProgressAfterResults != RefusedRepeatAction.None),
+            static observation => Assert.Equal(LoopInterventionReason.FailureBudget, observation.ResultsReason));
         Assert.DoesNotContain(observations, observation => observation.ResultsReason == LoopInterventionReason.FailureCauseRecurrence);
     }
 
@@ -290,9 +298,9 @@ public sealed class LoopGuardShapeTests
     {
         var tracker = new TurnStateTracker();
         var observations = new List<Observation>();
-        foreach (var step in shape.Steps)
+        foreach (var steps in shape.Steps.Chunk(shape.BatchWidth))
         {
-            var batch = Prepare(step);
+            var batch = Prepare(steps);
             // The adjacent check changes state. A copy exposes its decision without a second check on the live tracker.
             var adjacentTracker = new TurnStateTracker();
             adjacentTracker.RestoreLoopGuard(tracker.ExportLoopGuard());
@@ -304,33 +312,27 @@ public sealed class LoopGuardShapeTests
                 break;
             }
             if (decision.Kind == ToolCycleDecisionKind.Execute)
-                tracker.ObserveCompleted(Complete(batch, step));
+                tracker.ObserveCompleted(Complete(batch, steps));
             observations.Add(new Observation(adjacent, decision, tracker.EvaluateProgress(), tracker.EvaluateProgressReason()));
+            tracker.CreateNudgeAfterResults(null, false);
         }
         return observations;
     }
 
-    private static PreparedToolCycleBatch Prepare(Step step)
+    private static PreparedToolCycleBatch Prepare(Step[] steps)
         => ToolCycleSignatureFactory.Prepare(
-            [Call("call-" + Guid.NewGuid().ToString("N"), step.Tool, step.Args)],
+            steps.Select(step => Call("call-" + Guid.NewGuid().ToString("N"), step.Tool, step.Args)).ToArray(),
             new FakeToolExecutor());
 
-    private static CompletedToolCycleIteration Complete(PreparedToolCycleBatch batch, Step step)
-    {
-        var category = Enum.Parse<ToolInvocationOutcomeCategory>(step.Category);
-        return ToolCycleSignatureFactory.Complete(
-            batch,
-            batch.Calls.ToDictionary(
-                static call => call.CallId.Value,
-                _ => new ToolCycleResult(category, step.Text)
+    private static CompletedToolCycleIteration Complete(PreparedToolCycleBatch batch, Step[] steps)
+        => ToolCycleSignatureFactory.Complete(batch, batch.Calls.Select((call, index) => (call, step: steps[index]))
+            .ToDictionary(static pair => pair.call.CallId.Value, static pair =>
+                new ToolCycleResult(Enum.Parse<ToolInvocationOutcomeCategory>(pair.step.Category), pair.step.Text)
                 {
-                    PendingJob = step.PendingJob,
-                    FailureKey = step.FailureCode is null
-                        ? null
-                        : new ToolFailureKey(step.FailureSource!, step.FailureCode, step.FailureScope)
-                },
-                StringComparer.Ordinal));
-    }
+                    PendingJob = pair.step.PendingJob,
+                    FailureKey = pair.step.FailureCode is null ? null
+                        : new ToolFailureKey(pair.step.FailureSource!, pair.step.FailureCode, pair.step.FailureScope)
+                }, StringComparer.Ordinal));
 
     private static FunctionCallContent Call(string callId, string toolName, string args)
         => new(callId, toolName, new Dictionary<string, object?> { ["arg"] = args });

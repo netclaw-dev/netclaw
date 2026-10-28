@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tests.Utilities;
@@ -178,6 +179,32 @@ public class ShellToolTests : IDisposable
         Assert.Contains(missingExecutable, result);
         Assert.DoesNotContain("powershell.exe", result, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("cmd.exe", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(0, false)] [InlineData(1, false)] [InlineData(7, false)]
+    [InlineData(0, true)] [InlineData(1, true)] [InlineData(7, true)]
+    public async Task Exit_status_controls_the_receipt_and_the_failure_budget(int exitCode, bool stream)
+    {
+        var context = CreateExecutionContext();
+        var arguments = ToolInput.Create("Command", $"exit {exitCode}");
+        string? result = null;
+        if (stream)
+        {
+            await foreach (var update in _tool.ExecuteStreamAsync(arguments, context, TestContext.Current.CancellationToken))
+                if (update is ToolCompletedUpdate completed)
+                    result = completed.Result;
+        }
+        else
+            result = await _tool.ExecuteAsync(arguments, context, TestContext.Current.CancellationToken);
+        Assert.Contains($"Exit code: {exitCode}", result, StringComparison.Ordinal);
+        Assert.NotNull(context.Receipt);
+        Assert.Equal(exitCode == 0 ? ToolInvocationOutcomeCategory.Success : ToolInvocationOutcomeCategory.TransientFailure,
+            context.Receipt.Category);
+        var tracker = new TurnStateTracker();
+        tracker.ObserveProgress([new(ToolInvocationOutcomeCategory.InvalidInput, "earlier failure")], true);
+        tracker.ObserveProgress([new(context.Receipt.Category, result!)], true);
+        Assert.Equal(exitCode == 0 ? 0 : 2, tracker.CallsSinceProgress);
     }
 
     [Fact]

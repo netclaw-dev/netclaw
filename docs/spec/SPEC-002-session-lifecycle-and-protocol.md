@@ -100,10 +100,12 @@ The next response with tool calls ends the turn at the final stage.
 The model can still give a final text response.
 This rule adds no iteration limit or per-call refusal.
 
-An escalation takes priority over advice from either guard axis. A repeat
-nudge takes priority over ordinary progress advice because it names refused
-calls. Each completed batch removes earlier guard nudges before it adds the
-current nudge.
+The advice selector compares severity before detector priority.
+At equal severity, action advice wins over cause advice, and cause advice wins over budget advice.
+The cause detector retains six completed feedback batches and escalates only advice that the model receives.
+A batch without that cause retires its active advice. Recent evidence can still trigger a later first nudge.
+A consent park preserves the history, delivered advice, and unfinished cause facts through protobuf.
+See [the loop contract](tool-loop-detection.md) for examples and the complete decision flow.
 
 For example, four failures across four tools produce a progress nudge.
 Three failed edit attempts followed by a success produce no progress nudge.

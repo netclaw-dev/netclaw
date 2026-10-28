@@ -375,3 +375,27 @@ Rollback after slice five restores the old property and its schema entry.
 
 The removed property needs no durable migration. An older binary uses its
 built-in default when a corrected configuration omits the property.
+
+## PR 2710: Feedback and cause evidence
+
+`TurnStateTracker` owns the cause history and the last delivered cause advice.
+The history retains six complete feedback batches. Each batch stores at most three occurrences per cause.
+The next decision reads only causes in the latest complete batch.
+A cause without delivered advice starts at `Nudge`, even when another cause receives advice first.
+A batch without a cause retires its active advice but retains recent occurrence evidence.
+Consent parks preserve the history, the delivered advice, and unfinished cause facts.
+The protobuf mapper uses the same source, code, and optional scope as live observation.
+
+```text
+collect canonical result facts
+  -> preserve unfinished facts across consent
+  -> complete one logical feedback batch
+  -> select the greatest severity, then detector priority
+  -> append one nudge
+  -> record only the cause advice that the model receives
+```
+
+For example, three rationale failures produce one nudge.
+A successful corrected call removes that nudge. It does not erase recent evidence.
+A different cause cannot inherit the first cause's escalation.
+This contract changes no execution authority or approval decision.

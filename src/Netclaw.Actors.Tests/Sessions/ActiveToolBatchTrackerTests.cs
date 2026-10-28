@@ -363,6 +363,34 @@ public sealed class ActiveToolBatchTrackerTests
         Assert.Null(batch.CycleResult(new ToolCallId("call-A"))?.FailureKey);
     }
 
+    [Theory]
+    [InlineData("success")] [InlineData("different-failure")] [InlineData("pending")]
+    public void A_batch_without_the_cause_removes_its_old_advice(string outcome)
+    {
+        var turn = new TurnStateTracker();
+        var failure = new ToolCycleResult(ToolInvocationOutcomeCategory.InvalidInput, "rejected")
+            { FailureKey = new ToolFailureKey("netclaw", "invalid_rationale") };
+        turn.ObserveProgress([failure, failure, failure, new(ToolInvocationOutcomeCategory.Success, "sibling")], true);
+        var state = SessionState.Empty.AddSystemNudge(turn.CreateNudgeAfterResults(null, false)!);
+        Assert.Contains(state.History, message => ToolCycleMessages.IsCauseNudge(message.Content));
+        ToolInvocationReceipt receipt = outcome switch
+        {
+            "success" => new ToolInvocationReceipt.Succeeded([], null),
+            "different-failure" => new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.TransientFailure),
+            "pending" => new ToolInvocationReceipt.PendingBackgroundJob(),
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome))
+        };
+        var batch = new ActiveToolBatchTracker();
+        batch.Start([new FunctionCallContent("next", "file_read")], null);
+        var result = new ToolCallResult(Result("next"), [], [], [], AuthorizationAttemptId.New(), Receipt: receipt);
+        batch.RecordOutcome(result);
+        state = batch.ApplyRecordedResult(state, result.MessageWithProgress);
+        batch.MarkExecutionTaskCompleted();
+        var ready = Assert.IsType<BatchCompletion.Ready>(batch.CompleteIfReady(state, turn));
+        Assert.DoesNotContain(ready.State.History, message => ToolCycleMessages.IsCauseNudge(message.Content));
+        Assert.Equal(RefusedRepeatAction.None, turn.EvaluateProgress());
+    }
+
     private static SerializableChatMessage AssistantMessage(string callId) => new()
     {
         Role = ChatRole.Assistant,

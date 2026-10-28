@@ -154,7 +154,7 @@ internal sealed partial class SessionToolWorkflow
     }
 
     /// <summary>Add the repeat nudge after the results of the batch that <see cref="StartDispatch"/> started.</summary>
-    public void AddRepeatNudgeAfterBatch(string nudge) => _activeBatch.AddNudgeAfterResults(nudge);
+    public void AddRepeatNudgeAfterBatch((RefusedRepeatAction Stage, string Text) nudge) => _activeBatch.AddNudgeAfterResults(nudge);
 
     public SessionToolBatch CreateBatch(
         TurnContext turnContext,
