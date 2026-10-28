@@ -7,6 +7,8 @@ a trial. The commands:
   discover-session  Find the CLI session log that a trial created.
   actor-log         Copy the actor log of a session, and its sub-agent logs.
   daemon-session    Print the daemon lines that carry a session id token.
+  daemon-snapshot   Save the line offset of each canonical daemon segment.
+  daemon-window     Print new daemon lines after a snapshot, in segment order.
   memory-ids        Write the memory snapshot (status and the ids of unseeded memories).
   derive-seed       Derive the seed of one (case, trial) from the run seed.
   child-results     Print the child results that the parent read, from the CLI session log.
@@ -14,6 +16,7 @@ a trial. The commands:
 """
 
 import argparse
+from datetime import date
 import hashlib
 import json
 from pathlib import Path
@@ -31,6 +34,69 @@ CLI_SESSION_HEADER = re.compile(r"^\[[^\]]+\] Headless session started: (\S.*)$"
 # The daemon sees the session store at this path. The harness sees it below
 # EVAL_HOME/data.
 CONTAINER_HOME = "/home/netclaw/.netclaw/"
+
+
+DAEMON_FILE_NAME = re.compile(r"daemon-([0-9]{4}-[0-9]{2}-[0-9]{2})(?:\.([1-9][0-9]{0,9}))?\.log")
+
+
+def daemon_segment_key(name):
+    """Match the exact date and Int32 segment contract of DaemonLogFileName."""
+    match = DAEMON_FILE_NAME.fullmatch(name)
+    if match is None:
+        return None
+    segment = int(match[2] or "0")
+    if segment > 2147483647:
+        return None
+    try:
+        return date.fromisoformat(match[1]), segment
+    except ValueError:
+        return None
+
+
+def daemon_segments(logs_dir):
+    files = [(daemon_segment_key(path.name), path) for path in logs_dir.iterdir() if path.is_file()]
+    files = sorted((key, path) for key, path in files if key is not None)
+    if not files:
+        raise ValueError(f"no daemon log with a canonical file name in {logs_dir}")
+    return [path for _, path in files]
+
+
+def snapshot_daemon_logs(logs_dir, destination):
+    offsets = {}
+    for path in daemon_segments(logs_dir):
+        with path.open("rb") as handle:
+            offsets[path.name] = sum(1 for _ in handle)
+    destination.write_text(json.dumps(offsets, indent=2) + "\n", encoding="utf-8")
+    return logs_dir / next(reversed(offsets))
+
+
+def daemon_window(logs_dir, baseline_path):
+    """Read each segment once. A lost baseline file or a shorter file is an error."""
+    offsets = json.loads(baseline_path.read_text(encoding="utf-8"))
+    if not isinstance(offsets, dict) or not offsets or any(
+            daemon_segment_key(name) is None or type(count) is not int or count < 0
+            for name, count in offsets.items()):
+        raise ValueError(f"invalid daemon baseline: {baseline_path}")
+    paths = daemon_segments(logs_dir)
+    if set(offsets) - {path.name for path in paths}:
+        raise ValueError("a daemon baseline segment is absent")
+    lines = []
+    segments = []
+    for path in paths:
+        before = offsets.get(path.name, 0)
+        with path.open("rb") as handle:
+            current = handle.readlines()
+        if len(current) < before:
+            raise ValueError(f"daemon segment is shorter than its baseline: {path.name}")
+        lines.extend(current[before:])
+        segments.append({"name": path.name, "before": before, "after": len(current)})
+    # Keep the original report fields for consumers of assert.json.
+    initial = max(offsets, key=daemon_segment_key)
+    report = {"daemon_log": initial, "window_lines_before": offsets[initial],
+              "window_lines_after": next(item["after"] for item in segments if item["name"] == initial),
+              "extra_daemon_logs": [path.name for path in paths if path.name not in offsets],
+              "daemon_segments": segments}
+    return lines, report
 
 
 def read_first_line(path):
@@ -443,6 +509,16 @@ def main(argv=None):
     daemon.add_argument("--log", type=Path, required=True)
     daemon.add_argument("--session", required=True)
 
+    snapshot = commands.add_parser("daemon-snapshot", help="save per-segment line offsets and print the newest path")
+    snapshot.add_argument("--logs-dir", type=Path, required=True)
+    snapshot.add_argument("--dest", type=Path, required=True)
+
+    window = commands.add_parser("daemon-window", help="print daemon lines after per-segment offsets")
+    window.add_argument("--logs-dir", type=Path, required=True)
+    window.add_argument("--baseline", type=Path, required=True)
+    window.add_argument("--assert-report", type=Path, help="write assert.json for trial evidence")
+    window.add_argument("--exit-code", type=int, help="assertion status for the optional report")
+
     memory = commands.add_parser("memory-ids", help="write the memory snapshot of the database")
     memory.add_argument("--home", type=Path, required=True, help="EVAL_HOME")
     memory.add_argument("--dest", type=Path, required=True)
@@ -463,6 +539,23 @@ def main(argv=None):
     parent.add_argument("--cli-log", type=Path, required=True)
 
     args = parser.parse_args(argv)
+
+    if args.command in ("daemon-snapshot", "daemon-window"):
+        try:
+            if args.command == "daemon-snapshot":
+                print(snapshot_daemon_logs(args.logs_dir, args.dest))
+            else:
+                if (args.assert_report is None) != (args.exit_code is None):
+                    parser.error("--assert-report and --exit-code are required together")
+                lines, report = daemon_window(args.logs_dir, args.baseline)
+                if args.assert_report is not None:
+                    args.assert_report.write_text(json.dumps({"exit_code": args.exit_code, **report}, indent=2) + "\n",
+                                                  encoding="utf-8")
+                sys.stdout.buffer.writelines(lines)
+        except (OSError, ValueError) as error:
+            print(f"ERROR: {args.command}: {error}", file=sys.stderr)
+            return 2
+        return 0
 
     if args.command == "discover-session":
         known = {line.rstrip("\n") for line in args.known.read_text().splitlines() if line.strip()}

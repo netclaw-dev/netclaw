@@ -542,6 +542,8 @@ are not size-rotated today (tracked separately).
 | `LogLevel:Default` | string | `Warning` | Minimum log level (`Debug`, `Information`, `Warning`, `Error`, etc.) shared by MEL and Akka.NET. Standard `Logging:LogLevel:{Category}` overrides also apply. |
 | `Console:Enabled` | bool | `false` | Enables console logger provider output for daemon debugging. |
 
+The doctor includes valid numbered daemon segments in its diagnostic date window.
+
 ### Retention
 
 A daemon actor (`DataRetentionActor`) deletes expired data shortly after the daemon starts and then every

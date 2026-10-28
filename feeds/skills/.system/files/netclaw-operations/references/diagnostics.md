@@ -48,7 +48,7 @@ Log split — one stream, partitioned locally by session:
   the daemon log. Each UTC date starts a new file series. At 10 MiB,
   the writer adds `.1.log`, then `.2.log`, to the dated base name.
   One complete entry can exceed the threshold. A restart preserves previous entries.
-  The retention policy also covers numbered segments.
+  The retention policy also covers numbered segments. The doctor reads all valid segments in its date window.
 - The **full** stream (daemon and session lines alike) is also exported to OTEL/Seq
   with the session id as an attribute; do the global slicing/distilling on the OTEL
   receiver side.

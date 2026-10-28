@@ -3,8 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Globalization;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
@@ -30,10 +28,6 @@ internal static class DaemonLogRetention
 
     // No Netclaw build predates this; it keeps a decoy like daemon-0001-01-01.log out of reach.
     private const int EarliestPlausibleYear = 2000;
-
-    private static readonly Regex DaemonFileNamePattern = new(
-        "\\Adaemon-([0-9]{4}-[0-9]{2}-[0-9]{2})(?:\\.([1-9][0-9]{0,9}))?\\.log\\z",
-        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     /// <summary>The retention job for the daemon and crash logs in <paramref name="paths"/>.</summary>
     public static RetentionJob CreateJob(IConfiguration configuration, NetclawPaths paths, out string? warning)
@@ -73,7 +67,7 @@ internal static class DaemonLogRetention
         foreach (var file in files)
         {
             var name = Path.GetFileName(file);
-            if (TryGetDaemonLogDate(name, out var daemonDate, out var segment))
+            if (DaemonLogFileName.TryParse(name, out var daemonDate, out var segment) && daemonDate.Year >= EarliestPlausibleYear)
                 daemonLogs.Add((file, daemonDate, segment));
             else if (CrashLogWriter.TryParseFileName(name, out var crashTime) && crashTime.Year >= EarliestPlausibleYear)
                 crashLogs.Add((file, crashTime));
@@ -111,17 +105,5 @@ internal static class DaemonLogRetention
         }
 
         return (deleted, failed);
-    }
-
-    private static bool TryGetDaemonLogDate(string fileName, out DateOnly date, out int segment)
-    {
-        date = default;
-        segment = 0;
-        var match = DaemonFileNamePattern.Match(fileName);
-        return match.Success
-            && (!match.Groups[2].Success
-                || int.TryParse(match.Groups[2].Value, NumberStyles.None, CultureInfo.InvariantCulture, out segment))
-            && DateOnly.TryParseExact(match.Groups[1].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date)
-            && date.Year >= EarliestPlausibleYear;
     }
 }

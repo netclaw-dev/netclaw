@@ -120,13 +120,10 @@ public sealed class MemoryCurationLlmDoctorCheck(NetclawPaths paths, TimeProvide
     private static bool TryParseLogDate(string path, out DateTimeOffset day)
     {
         day = default;
-        var name = Path.GetFileNameWithoutExtension(path);
-        return name.Length > "daemon-".Length &&
-               DateTimeOffset.TryParseExact(
-                   name["daemon-".Length..],
-                   "yyyy-MM-dd",
-                   System.Globalization.CultureInfo.InvariantCulture,
-                   System.Globalization.DateTimeStyles.AssumeUniversal,
-                   out day);
+        if (!DaemonLogFileName.TryParse(Path.GetFileName(path), out var date, out _))
+            return false;
+
+        day = new DateTimeOffset(date.Year, date.Month, date.Day, 0, 0, 0, TimeSpan.Zero);
+        return true;
     }
 }
