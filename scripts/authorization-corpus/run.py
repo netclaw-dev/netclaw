@@ -107,7 +107,8 @@ def build_corpus(repository: Path, revision: str) -> list[str]:
 
 def probe_digest(adapter: str, corpus_path: Path) -> str:
     digest = hashlib.sha256()
-    for path in (PROBE_DIR / "AuthorizationCorpusProbe.cs", PROBE_DIR / f"{adapter.capitalize()}Adapter.cs", corpus_path):
+    for path in (Path(__file__), PROBE_DIR / "AuthorizationCorpusProbe.cs",
+                 PROBE_DIR / f"{adapter.capitalize()}Adapter.cs", corpus_path):
         digest.update(path.read_bytes())
     return digest.hexdigest()[:12]
 
@@ -133,9 +134,9 @@ def run_revision(
     fresh: bool = False,
 ) -> Path:
     sha = resolve(repository, revision)
-    # The probe reads only src/. Two revisions with the same src/ tree give the
-    # same decisions, so they share one output.
-    tree = str(git(repository, "rev-parse", f"{sha}:src")).strip()
+    # Root package, SDK, and build files can change the code that the probe loads.
+    # Use the full committed tree rather than maintain a partial build-input list.
+    tree = str(git(repository, "rev-parse", f"{sha}^{{tree}}")).strip()
     worktree = out / "worktrees" / sha[:12]
     if worktree.exists():
         subprocess.run(["git", "worktree", "unlock", str(worktree)], cwd=repository, capture_output=True)
@@ -146,7 +147,7 @@ def run_revision(
     partial: Path | None = None
     try:
         adapter = detect_adapter(worktree, adapter_request)
-        key = f"src-{tree[:12]}-{adapter}-{probe_digest(adapter, corpus_path)}{'-' + hashlib.sha256(states.encode()).hexdigest()[:8] if states else ''}"
+        key = f"tree-{tree}-{adapter}-{probe_digest(adapter, corpus_path)}{'-' + hashlib.sha256(states.encode()).hexdigest()[:8] if states else ''}"
         # A fresh probe writes its own file, so that two probes of one revision stay apart.
         result = out / f"{key}{'-fresh' if fresh else ''}.tsv"
         if result.exists() and not fresh:
@@ -155,7 +156,7 @@ def run_revision(
             timing[f"probe {label}"] = None
             return result
 
-        print(f"[{revision}] {sha[:12]} src tree {tree[:12]}")
+        print(f"[{revision}] {sha[:12]} committed tree {tree[:12]}")
         tests = worktree / PROBE_TEST_DIRECTORY
         shutil.copy(PROBE_DIR / "AuthorizationCorpusProbe.cs", tests / "AuthorizationCorpusProbe.cs")
         shutil.copy(PROBE_DIR / f"{adapter.capitalize()}Adapter.cs", tests / "AuthorizationCorpusProbeAdapter.cs")
@@ -411,6 +412,11 @@ def directory_size(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file()) if path.is_dir() else 0
 
 
+def cache_outputs(out: Path) -> list[Path]:
+    # Legacy outputs remain evidence. Only an explicit prune removes them.
+    return sorted(path for pattern in ("tree-*.tsv", "src-*.tsv") for path in out.glob(pattern))
+
+
 def clean_up(out: Path, base: Path, head: Path, keep: bool, prune_cache: bool) -> None:
     """Makes the report the durable output.
 
@@ -430,12 +436,12 @@ def clean_up(out: Path, base: Path, head: Path, keep: bool, prune_cache: bool) -
             head.unlink(missing_ok=True)
             print(f"deleted: {head.name}")
         if prune_cache:
-            for other in out.glob("src-*.tsv"):
+            for other in cache_outputs(out):
                 if other != base:
                     size = other.stat().st_size
                     other.unlink()
                     print(f"deleted: {other.name} ({size / 1e6:.0f} MB)")
-    cache = sorted(out.glob("src-*.tsv"))
+    cache = cache_outputs(out)
     print(f"cache: {out} holds {len(cache)} output(s), {sum(item.stat().st_size for item in cache) / 1e6:.0f} MB; base output {base.name}")
 
 

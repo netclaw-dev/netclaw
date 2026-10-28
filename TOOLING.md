@@ -1507,6 +1507,20 @@ lines:
 Two revisions with the same behavior therefore give the same lines. The
 report shows the tokens, never a revision hash.
 
+The cache key includes the complete committed Git tree, the active runner,
+the probe, the adapter, the corpus, and the selected states. Root package, SDK, and build files can
+change the loaded code even when `src/` stays equal. Any tracked tree change
+therefore creates a separate `tree-*` output. An identical committed tree can
+reuse its completed output. The script does not reuse or rename legacy
+`src-*` outputs. The cache summary still counts them, and `--prune-cache`
+can remove them explicitly.
+
+The key does not identify the installed toolchain, host environment, external
+imports, or package bytes from a mutable feed. Use a new `--out` directory
+after those inputs change. `--fresh-head` reruns the candidate, but it does
+not refresh the baseline. Record the resolved package and loaded DLL identity
+when a comparison changes dependencies.
+
 Bash 5.2 states:
 
 - The `bash` states use a Bash host with no proved version, so the parser
