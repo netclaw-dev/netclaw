@@ -43,6 +43,7 @@ This is a stable patch release for 0.28.0. A model definition now carries a prov
 - **Anthropic 13.3.0.** The provider SDK moves from 12.50.0 to 13.3.0 ([#2697](https://github.com/netclaw-dev/netclaw/pull/2697)).
 - **Termina 0.17.1.** The terminal library moves from 0.17.0 ([#2708](https://github.com/netclaw-dev/netclaw/pull/2708)).
 - **ShellSyntaxTree 0.5.0-beta.2.** The parser that proves a launch-variable glob moves from 0.5.0-beta.1, and its bounded handle-glob rules back the alias walk above ([#2718](https://github.com/netclaw-dev/netclaw/pull/2718)).
+- **Discord.Net 3.20.2.** The Discord client library moves from 3.20.1 ([#2723](https://github.com/netclaw-dev/netclaw/pull/2723)).
 
 ## 0.28.1 (2026-10-26)
 
