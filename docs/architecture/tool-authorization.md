@@ -858,7 +858,8 @@ Leaks today:
   The existing R13 rule can deny failed link resolution without a configured protected entry.
   This rule does not identify a credential path.
   Only matched intermediate directory aliases use the original covering boundary.
-  Other links retain their immediate directory containment rule.
+  Other final targets retain their immediate directory containment rule.
+  Known hops retain the original covering boundary, so a contained leaf chain can return to its source directory.
   Only complete reach supports reusable scope or reviewed-safe coverage.
   Arguments, redirects, the resolved path view, and reviewed policy use the
   same scope facts. Approval requires existing grant coverage for the original

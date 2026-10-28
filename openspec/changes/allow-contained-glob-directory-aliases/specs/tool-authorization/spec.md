@@ -353,7 +353,7 @@ have their glossary meaning.
   Ordinary directory-entry scans are outside this count.
   Every target and residual match SHALL stay inside the original covering boundary.
   Only a matched intermediate directory alias MAY use that original boundary.
-  Every other link SHALL also retain its immediate directory containment rule.
+  The final target of every other link SHALL retain its immediate directory containment rule.
   A pattern with a trailing slash SHALL retain its directory-only restriction
   when Netclaw computes known target reach.
   A contained directory alias SHALL be reusable only after complete target,
@@ -726,6 +726,14 @@ the command exact, so the call gets the rewrite correction.
 - **WHEN** the user calls `touch '<P>'/*/*.txt`
 - **THEN** the call requires exact consent because the leaf target leaves its immediate directory
 - **AND** the same-directory leaf alias retains its existing grant behavior
+
+#### Scenario: A leaf chain can return within the original covering boundary
+
+- **GIVEN** a Personal Approval-mode folder grant for `touch` covers `<P>`
+- **AND** `<P>/a/alias.txt` links through `<P>/.bridge/hop.txt` to `<P>/a/item.txt`
+- **WHEN** the user calls `touch '<P>'/a*/*.txt`
+- **THEN** the existing grant covers the call because every hop stays inside `<P>`
+- **AND** the final leaf target stays inside its immediate directory `<P>/a`
 
 #### Scenario: A cycle retains the literal failed-resolution denial
 

@@ -137,7 +137,7 @@ internal static class ShellGlobScope
 
                                     if (matches)
                                         targets.Add(new ShellGlobTargetReach(knownPath, index + 1));
-                                    if (!coveringDirectory.Contains(knownPath) || !linkBoundary.Contains(knownPath))
+                                    if (!coveringDirectory.Contains(knownPath))
                                         complete = false;
                                 }
 

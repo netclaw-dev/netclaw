@@ -481,6 +481,50 @@ public sealed class GlobPolicyMutationTests
     }
 
     [Fact]
+    public void A_leaf_chain_can_return_to_its_immediate_directory_within_the_original_cover()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var source = Directory.CreateDirectory(Path.Combine(covering, "a")).FullName;
+        var sibling = Directory.CreateDirectory(Path.Combine(covering, ".hop-directory")).FullName;
+        var target = Path.Combine(source, "item.txt");
+        File.WriteAllText(target, "test");
+        var hop = Path.Combine(sibling, "hop");
+        File.CreateSymbolicLink(hop, target);
+        File.CreateSymbolicLink(Path.Combine(source, "alias.txt"), hop);
+
+        Assert.True(IsLinkContained(covering, "a*/*.txt"));
+        var policy = new ToolPathPolicy(Bash52, [target]);
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/a*/*.txt", tree.Root));
+    }
+
+    [Fact]
+    public void A_nonmatching_alias_does_not_add_an_unrelated_target_scope()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var source = Directory.CreateDirectory(Path.Combine(covering, "a")).FullName;
+        var target = Directory.CreateDirectory(Path.Combine(source, "private")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(source, "other"), target);
+        var analysis = new ShellCommandAnalyzer(Bash52).Analyze($"touch {covering}/*/wanted*.txt", tree.Root);
+        var occurrence = Assert.Single(analysis.Commands);
+        var pattern = Assert.IsType<ShellValueDomain.PathPattern>(
+            ShellGlobScope.FindGlobPattern(occurrence, occurrence.Clause.Args.Last()));
+        Assert.True(Netclaw.Security.Authorization.Filesystem.CanonicalPath.TryCreateHost(covering, null, out var canonical));
+
+        var reach = Assert.IsType<ShellGlobReach.Complete>(ShellGlobScope.ResolveReach(canonical, pattern));
+
+        Assert.Equal(canonical, Assert.Single(reach.Scopes));
+        Assert.Empty(reach.Targets);
+    }
+
+    [Fact]
     public void A_final_file_alias_has_the_scope_of_its_target_directory()
     {
         if (OperatingSystem.IsWindows())

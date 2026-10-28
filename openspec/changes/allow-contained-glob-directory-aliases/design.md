@@ -32,7 +32,9 @@ Explicit Auto consent retains its existing authority and protected-path screens.
 The walk reuses its chain, parent-after-link, inspection, and membership rules.
 Each target stays inside the original covering boundary.
 Only a matched intermediate directory alias uses that wider boundary.
-All other links retain their immediate directory containment rule.
+All other final targets retain their immediate directory containment rule.
+Known hops retain the original covering boundary.
+A leaf chain can cross a sibling and return if its final target retains local containment.
 Reusable scope requires a combined directory-visit and link-hop count of 4096 or less.
 Ordinary directory-entry scans are outside this count and can increase inspection cost.
 Its visited key includes the effective directory and remaining segment index.

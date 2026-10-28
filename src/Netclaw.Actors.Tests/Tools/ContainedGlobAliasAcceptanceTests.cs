@@ -19,6 +19,7 @@ public sealed class ContainedGlobAliasAcceptanceTests(ShellApprovalMatrixFixture
     [SlopwatchSuppress("SW001", "The fixture requires native POSIX file aliases.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The fixture requires POSIX file aliases.")]
     [InlineData("local", true)]
+    [InlineData("roundtrip", true)]
     [InlineData("sibling", false)]
     [InlineData("outside", false)]
     [InlineData("sibling-directory", false)]
@@ -32,7 +33,7 @@ public sealed class ContainedGlobAliasAcceptanceTests(ShellApprovalMatrixFixture
         var sibling = Directory.CreateDirectory(Path.Combine(harness.ProjectDirectory, "b")).FullName;
         var targetDirectory = shape switch
         {
-            "local" => source,
+            "local" or "roundtrip" => source,
             "sibling" or "sibling-directory" or "nonmatching-leaf" or "nonmatching-intermediate" => sibling,
             "outside" => harness.SessionDirectory,
             _ => throw new ArgumentOutOfRangeException(nameof(shape))
@@ -42,11 +43,19 @@ public sealed class ContainedGlobAliasAcceptanceTests(ShellApprovalMatrixFixture
         var pattern = shape switch
         {
             "sibling-directory" => "*/*/",
+            "roundtrip" => "a*/*.txt",
             "nonmatching-leaf" => "*/wanted*.txt",
             "nonmatching-intermediate" => "*/x*/*.txt",
             _ => "*/*.txt"
         };
-        if (shape is "sibling-directory" or "nonmatching-intermediate")
+        if (shape == "roundtrip")
+        {
+            var bridge = Directory.CreateDirectory(Path.Combine(harness.ProjectDirectory, ".bridge")).FullName;
+            var hop = Path.Combine(bridge, "hop.txt");
+            File.CreateSymbolicLink(hop, target);
+            File.CreateSymbolicLink(Path.Combine(source, "alias.txt"), hop);
+        }
+        else if (shape is "sibling-directory" or "nonmatching-intermediate")
             Directory.CreateSymbolicLink(Path.Combine(source, "alias"), targetDirectory);
         else
             File.CreateSymbolicLink(Path.Combine(source, "alias.txt"), target);
