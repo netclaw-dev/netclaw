@@ -214,26 +214,24 @@ public sealed class GlobPolicyMutationTests
         Assert.Equal(contained, IsLinkContained(Path.Combine(tree.Root, "cover"), pattern));
     }
 
-    [Theory]
-    [InlineData(4096, true)]
-    [InlineData(4097, false)]
-    public void Glob_link_walk_has_a_directory_bound(int directories, bool contained)
+    [Fact]
+    public void Glob_link_walk_has_a_directory_bound()
     {
-        // The glob and binding facts belong to the POSIX Bash 5.2 host.
         if (OperatingSystem.IsWindows())
             return;
 
         using var tree = new TemporaryTree();
-        for (var index = 0; index < directories; index++)
-            Directory.CreateDirectory(Path.Combine(tree.Root, "cover", $"d{index}"));
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        for (var index = 0; index < 4096; index++)
+            Directory.CreateDirectory(Path.Combine(covering, $"d{index}"));
 
-        Assert.Equal(contained, IsLinkContained(Path.Combine(tree.Root, "cover"), "*/x"));
+        Assert.True(IsLinkContained(covering, "*/x"));
+        Directory.CreateDirectory(Path.Combine(covering, "d4096"));
+        Assert.False(IsLinkContained(covering, "*/x"));
     }
 
-    [Theory]
-    [InlineData(4094, true)]
-    [InlineData(4095, false)]
-    public void Glob_work_bound_counts_alias_hops_and_directory_visits(int ordinaryDirectories, bool complete)
+    [Fact]
+    public void Glob_work_bound_counts_alias_hops_and_directory_visits()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -241,17 +239,17 @@ public sealed class GlobPolicyMutationTests
         using var tree = new TemporaryTree();
         var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
         var target = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
-        for (var index = 0; index < ordinaryDirectories; index++)
+        for (var index = 0; index < 4094; index++)
             Directory.CreateDirectory(Path.Combine(covering, $"a{index}"));
         Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), target);
 
-        Assert.Equal(complete, IsLinkContained(covering, "a*/x"));
+        Assert.True(IsLinkContained(covering, "a*/x"));
+        Directory.CreateDirectory(Path.Combine(covering, "a4094"));
+        Assert.False(IsLinkContained(covering, "a*/x"));
     }
 
-    [Theory]
-    [InlineData(4096, true)]
-    [InlineData(4097, false)]
-    public void Glob_leaf_alias_hops_retain_both_sides_of_the_work_bound(int aliases, bool complete)
+    [Fact]
+    public void Glob_leaf_alias_hops_retain_both_sides_of_the_work_bound()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -259,10 +257,12 @@ public sealed class GlobPolicyMutationTests
         using var tree = new TemporaryTree();
         var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
         var target = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
-        for (var index = 0; index < aliases; index++)
+        for (var index = 0; index < 4096; index++)
             Directory.CreateSymbolicLink(Path.Combine(covering, $"a{index}"), target);
 
-        Assert.Equal(complete, IsLinkContained(covering, "a*/"));
+        Assert.True(IsLinkContained(covering, "a*/"));
+        Directory.CreateSymbolicLink(Path.Combine(covering, "a4096"), target);
+        Assert.False(IsLinkContained(covering, "a*/"));
     }
 
     [Fact]
@@ -522,6 +522,34 @@ public sealed class GlobPolicyMutationTests
 
         Assert.Equal(canonical, Assert.Single(reach.Scopes));
         Assert.Empty(reach.Targets);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Alias_child_reach_requires_a_remaining_pattern_segment(bool hasRemainingSegment)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var target = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
+        var child = Path.Combine(target, "child.txt");
+        File.WriteAllText(child, "test");
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), target);
+        var suffix = hasRemainingSegment ? "a*/*" : "a*/";
+        var analysis = new ShellCommandAnalyzer(Bash52).Analyze($"ls {covering}/{suffix}", tree.Root);
+        var occurrence = Assert.Single(analysis.Commands);
+        var pattern = Assert.IsType<ShellValueDomain.PathPattern>(
+            ShellGlobScope.FindGlobPattern(occurrence, occurrence.Clause.Args.Last()));
+        Assert.True(Netclaw.Security.Authorization.Filesystem.CanonicalPath.TryCreateHost(covering, null, out var canonical));
+        var reach = Assert.IsType<ShellGlobReach.Complete>(ShellGlobScope.ResolveReach(canonical, pattern));
+        var alias = Assert.Single(reach.Targets);
+
+        var match = ShellGlobScope.MatchPathToward(pattern, alias, child);
+
+        Assert.Equal(hasRemainingSegment ? child : null, match);
     }
 
     [Fact]
