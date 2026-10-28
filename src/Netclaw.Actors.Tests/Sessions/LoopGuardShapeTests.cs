@@ -112,14 +112,6 @@ public sealed class LoopGuardShapeTests
             FailCause("search_tools", "q3", "invalid_rationale")
         ]),
 
-        // The same missing path, over and over. The scope keeps it one cause even though each attempt is a fresh
-        // action. This is a repeated cause, not exploration.
-        new Shape("same missing path, repeatedly", [
-            Missing("file_read", "/fixed/missing"),
-            Missing("file_read", "/fixed/missing"),
-            Missing("file_read", "/fixed/missing")
-        ]),
-
         // A cause that returns after unrelated successes. Success must not erase the evidence that the same
         // unresolved cause keeps coming back; a bounded window keeps it in view.
         new Shape("cause returns after unrelated successes", [

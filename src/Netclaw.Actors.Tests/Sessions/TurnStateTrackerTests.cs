@@ -848,7 +848,7 @@ public sealed class TurnStateTrackerTests
             Assert.Equal((i + 1) * 8, tracker.CallsSinceProgress);
             Assert.Equal(stages[i], tracker.EvaluateProgress());
             Assert.Contains($"{(i + 1) * 8} tool calls failed", ToolCycleMessages.AfterResults(null,
-                tracker.EvaluateProgress(), tracker.CallsSinceProgress, childRun: false), StringComparison.Ordinal);
+                tracker.EvaluateProgressDecision(), tracker.CallsSinceProgress, childRun: false), StringComparison.Ordinal);
             var restored = new TurnStateTracker();
             restored.RestoreLoopGuard(tracker.ExportLoopGuard());
             tracker = restored;
@@ -1059,10 +1059,12 @@ public sealed class TurnStateTrackerTests
     {
         var repeat = childRun ? ToolCycleMessages.ChildRepeatNudge(["sample/a"])
             : ToolCycleMessages.RepeatNudge(["sample/a"]);
-        var nudge = ToolCycleMessages.AfterResults(repeat, RefusedRepeatAction.EscalatedNudge, 6, childRun);
+        var escalate = new ProgressDecision(RefusedRepeatAction.EscalatedNudge, LoopInterventionReason.FailureBudget, null);
+        var nudge = ToolCycleMessages.AfterResults(repeat, escalate, 6, childRun);
         Assert.Contains("End your turn now", nudge, StringComparison.Ordinal);
         Assert.DoesNotContain("Select a different action", nudge, StringComparison.Ordinal);
-        Assert.Equal(repeat, ToolCycleMessages.AfterResults(repeat, RefusedRepeatAction.Nudge, 4, childRun));
+        var plain = new ProgressDecision(RefusedRepeatAction.Nudge, LoopInterventionReason.FailureBudget, null);
+        Assert.Equal(repeat, ToolCycleMessages.AfterResults(repeat, plain, 4, childRun));
         if (childRun)
             Assert.Contains("Give your result to the parent", nudge, StringComparison.Ordinal);
     }
@@ -1081,6 +1083,102 @@ public sealed class TurnStateTrackerTests
         restored.ObserveProgress([new(ToolInvocationOutcomeCategory.NotFound, "Missing.")], batchComplete: true);
         Assert.Equal(1, restored.CallsSinceProgress);
     }
+
+    [Fact]
+    public void Same_cause_across_different_tools_triggers_a_cause_nudge_before_the_budget()
+    {
+        var tracker = new TurnStateTracker();
+        for (var i = 0; i < TurnStateTracker.CauseNudgeAt; i++)
+            tracker.ObserveProgress([CauseFailure("invalid_rationale")], batchComplete: true);
+
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateProgress());
+        Assert.Equal(LoopInterventionReason.FailureCauseRecurrence, tracker.EvaluateProgressReason());
+        Assert.Equal(new ToolFailureKey("netclaw", "invalid_rationale"), tracker.EvaluateActiveCause());
+    }
+
+    [Fact]
+    public void One_parallel_burst_advances_one_rung_per_feedback_batch()
+    {
+        var tracker = new TurnStateTracker();
+        // Three occurrences in one batch establish the nudge, but do not skip to escalation or end.
+        tracker.ObserveProgress([
+            CauseFailure("invalid_rationale"),
+            CauseFailure("invalid_rationale"),
+            CauseFailure("invalid_rationale")
+        ], batchComplete: true);
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateProgress());
+
+        tracker.ObserveProgress([CauseFailure("invalid_rationale")], batchComplete: true);
+        Assert.Equal(RefusedRepeatAction.EscalatedNudge, tracker.EvaluateProgress());
+
+        tracker.ObserveProgress([CauseFailure("invalid_rationale")], batchComplete: true);
+        Assert.Equal(RefusedRepeatAction.EndTurn, tracker.EvaluateProgress());
+    }
+
+    [Fact]
+    public void Distinct_causes_do_not_conflate_into_one_cause()
+    {
+        var tracker = new TurnStateTracker();
+        tracker.ObserveProgress([
+            CauseFailure("invalid_rationale"),
+            CauseFailure("unrecognized_argument"),
+            CauseFailure("args_parse_error"),
+            CauseFailure("invalid_meta_value")
+        ], batchComplete: true);
+
+        Assert.Null(tracker.EvaluateActiveCause());
+        Assert.Equal(LoopInterventionReason.FailureBudget, tracker.EvaluateProgressReason());
+    }
+
+    [Fact]
+    public void Same_scope_repeats_a_cause_but_distinct_scopes_do_not()
+    {
+        var recurring = new TurnStateTracker();
+        for (var i = 0; i < TurnStateTracker.CauseNudgeAt; i++)
+            recurring.ObserveProgress([CauseFailure("not_found", "/fixed")], batchComplete: true);
+        Assert.Equal(new ToolFailureKey("netclaw", "not_found", "/fixed"), recurring.EvaluateActiveCause());
+        Assert.Equal(LoopInterventionReason.FailureCauseRecurrence, recurring.EvaluateProgressReason());
+
+        var distinct = new TurnStateTracker();
+        distinct.ObserveProgress([
+            CauseFailure("not_found", "/a"),
+            CauseFailure("not_found", "/b"),
+            CauseFailure("not_found", "/c")
+        ], batchComplete: true);
+        Assert.Null(distinct.EvaluateActiveCause());
+    }
+
+    [Fact]
+    public void An_unrelated_success_does_not_erase_cause_evidence()
+    {
+        var tracker = new TurnStateTracker();
+        tracker.ObserveProgress([CauseFailure("invalid_rationale")], batchComplete: true);
+        tracker.ObserveProgress([CauseFailure("invalid_rationale")], batchComplete: true);
+        tracker.ObserveProgress([new ToolCycleResult(ToolInvocationOutcomeCategory.Success, "ok")], batchComplete: true);
+        tracker.ObserveProgress([CauseFailure("invalid_rationale")], batchComplete: true);
+
+        Assert.Equal(LoopInterventionReason.FailureCauseRecurrence, tracker.EvaluateProgressReason());
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateProgress());
+    }
+
+    [Fact]
+    public void New_turn_clears_cause_history()
+    {
+        var tracker = new TurnStateTracker();
+        for (var i = 0; i < TurnStateTracker.CauseNudgeAt; i++)
+            tracker.ObserveProgress([CauseFailure("invalid_rationale")], batchComplete: true);
+        Assert.Equal(LoopInterventionReason.FailureCauseRecurrence, tracker.EvaluateProgressReason());
+
+        tracker.ResetForNewTurn();
+        Assert.Equal(LoopInterventionReason.None, tracker.EvaluateProgressReason());
+        Assert.Null(tracker.EvaluateActiveCause());
+    }
+
+    private static ToolCycleResult CauseFailure(string code, string? scope = null)
+        => new(ToolInvocationOutcomeCategory.InvalidInput, "Error.")
+        {
+            FailureKey = new ToolFailureKey("netclaw", code, scope)
+        };
 
     private static DecisionShape Shape(ToolCycleBatchDecision decision)
         => new(decision.Kind,

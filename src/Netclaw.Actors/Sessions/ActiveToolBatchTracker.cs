@@ -160,7 +160,7 @@ internal sealed class ActiveToolBatchTracker
             turn.ObserveProgress(_cycleResults.Values, batchComplete: true);
 
         // Use the completed outcomes, so a success cannot receive a stale progress nudge.
-        var nudge = ToolCycleMessages.AfterResults(_repeatNudge, turn.EvaluateProgress(),
+        var nudge = ToolCycleMessages.AfterResults(_repeatNudge, turn.EvaluateProgressDecision(),
             turn.CallsSinceProgress, childRun: false);
         // A new nudge replaces the earlier one: equal nudges in a stack give the model no new information.
         // With nothing new to say, keep what history already holds. Removing it unconditionally dropped the

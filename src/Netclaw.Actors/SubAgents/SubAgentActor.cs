@@ -646,7 +646,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             AddModelInputMediaNudge(msg.Results
                 .SelectMany(result => result.ModelInputMediaReferences)
                 .ToArray());
-            var nudge = ToolCycleMessages.AfterResults(_activeRepeatNudge, _turnState.EvaluateProgress(),
+            var nudge = ToolCycleMessages.AfterResults(_activeRepeatNudge, _turnState.EvaluateProgressDecision(),
                 _turnState.CallsSinceProgress, childRun: true);
             // A new nudge replaces the earlier one. With nothing new to say, keep what the transcript holds; a
             // progress reset clears only the no-progress advice, because repeat advice still names an action.
