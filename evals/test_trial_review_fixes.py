@@ -279,15 +279,20 @@ class MultiTurnEvidenceTests(ReviewHarnessCase):
         self.assertTrue(all(f"session={session['session_id']} " in line for line in kept))
 
     def test_cli_crash_is_recorded_with_its_exit_code_and_crash_log(self):
-        # Guard. Planted bug: drop other_new_files, or stop the run at exit 134.
-        # The crash log (D4 row 59: disk full) is the only trace of an abort.
-        self.run_harness("text", ["CRASH now"], FAKE_SESSION="signalr/crash")
+        # The abort must retain the crash log reference and the original exit code.
+        self.run_harness("text", ["CRASH now"], runs=2,
+                         expect_abort=True, FAKE_SESSION="signalr/crash")
 
         self.assertEqual(134, self.read_json(self.raw("cli-exit.json"))["exit_code"])
         session = self.read_json(self.raw("session.json"))
         self.assertEqual("ok", session["status"])
         self.assertEqual(["crash-20261015-131615.log"], session["other_new_files"])
-        self.assertIn("demo|1|", self.results.read_text(), "the run must store a result")
+        self.assertEqual("No space left on device\n",
+                         (self.home / "logs/crash-20261015-131615.log").read_text())
+        self.assertEqual(["CRASH now"], (self.state / "prompts.txt").read_text().splitlines())
+        self.assertFalse(self.trial_dir(2).exists())
+        self.assertFalse(self.results.exists() and self.results.read_text(),
+                         "The abort must precede score calculation")
 
 
 class DiscoverCrashTests(ReviewHarnessCase):
