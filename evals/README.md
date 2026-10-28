@@ -47,14 +47,36 @@ default provider.
    `NETCLAW_DAEMON_ENDPOINT=http://127.0.0.1:$EVAL_PORT` and its own path
    resolution is sandboxed via `NETCLAW_HOME=$EVAL_HOME`. The host's
    `~/.netclaw/` is never touched by the CLI during the run.
-6. On exit (success, failure, or SIGINT) the container is stopped and
-   `$EVAL_HOME` is deleted. A throwaway root-in-container cleanup step
-   handles files the daemon wrote as UID 1654.
+6. On exit, the harness stops its container and verifies stop or removal.
+   It then archives the logs and captures before it deletes `$EVAL_HOME`.
+   A throwaway root-in-container cleanup step handles files that the daemon wrote as UID 1654.
 
-A memory warm-up prompt that exits with a nonzero status stops the suite. The
-harness archives its output and status, then stops its private container. A
-trial prompt that exits with a nonzero status does not stop the suite. The
-trial gets an inconclusive state.
+### Prompt failure containment
+
+Any nonzero prompt result aborts the suite with exit code `2`.
+This rule covers ordinary text, JSON, resumed, coordination observer, and memory warm-up prompts.
+The harness preserves the original CLI exit status and separate stdout and stderr captures.
+It then stops and verifies its container before another prompt, setup step, assertion, score calculation, or state reset.
+A failed first turn prohibits the second turn.
+
+The harness captures the immutable 64-hex container ID from a successful `docker run` response.
+One helper uses that ID for both prompt failure and EXIT cleanup.
+The helper waits for `docker stop` to complete, then requires a successful Docker response that proves stop or removal.
+An inspect error alone does not prove removal.
+The harness never stops a container through its mutable name.
+
+After confirmed containment, the harness collects the failed trial's session evidence through the existing collector.
+A warm-up prompt has no trial, so it skips this step.
+The collector reports a missing session through its existing result; it does not invent session evidence.
+The harness then archives the finalizer logs and captures before it deletes the scratch home.
+If stop or verification fails, the harness reports containment as unconfirmed and exits `2`.
+It retains the scratch home and captures without another stop attempt or trial.
+It also terminates its fixture subprocesses when containment remains unconfirmed.
+Do not reuse or restart a failed eval home; shutdown can preserve work for recovery.
+
+The verdict helpers can classify preserved evidence offline after an abort.
+A timeout or failed-turn classification remains separate from permission to dispatch another trial.
+Successful calls retain the current session and multi-turn behavior.
 
 The harness preloads `evals/fixtures/config/netclaw.json` into the ephemeral
 home before startup. It auto-approves tools and grants read/write access for the
@@ -574,13 +596,21 @@ The existing archive also records the image ID, harness revision, asset revision
 Any runtime failure, model failure, or harness error fails the run. The ordinary suite percentage threshold does not apply.
 Local fixture tests run with `python3 -m unittest discover -s evals -p test_background_evals.py -v` and also run in CI.
 
+### Daemon log segment windows
+
+The harness snapshots the line count of each valid daemon log segment before each prompt and trial.
+The shared reader includes later lines once, in date and numeric segment order.
+Each prompt has its own baseline. A multi-turn trial also keeps the baseline from its first turn.
+Malformed filenames remain outside the window. Missing or shorter baseline segments cause a visible error.
+The final trial archive includes `raw/daemon-baseline.json` and segment offsets in `raw/assert.json`.
+
 ## Results Database
 
 Results are accumulated in `$EVAL_HOME/evals/results.db` during execution.
-On exit, the harness archives the database, run metadata, daemon log, and
-per-turn stdout under `evals/runs/<run-id>/` before deleting the throwaway
-home. These archives are gitignored and can be compared locally without
-touching the operator's `~/.netclaw/` state.
+After confirmed container containment, the harness archives the database, run metadata, daemon log, and per-turn stdout under `evals/runs/<run-id>/`.
+It then deletes the scratch home.
+If containment remains unconfirmed, it retains the home and captures without this final archive step.
+These archives are gitignored and permit local comparisons without access to the operator's `~/.netclaw/` state.
 
 Raw archives can contain prompts, session identities, tool calls, and provider
 configuration. Do not publish them. Publish only reviewed PII-free aggregates.
@@ -611,6 +641,9 @@ while the run goes on. `<nn>` is the trial number, `01` and up.
 
 After the assertion, `trial_verdict.py trial-status` writes `verdict.json` in the
 trial folder (next to `raw/`). It holds `status`, `reason`, and `error`.
+An aborted prompt stops before the assertion and verdict steps.
+After the harness stops and verifies the container, it collects the failed trial's session evidence before scratch deletion.
+The raw CLI result and available session evidence remain available for offline verdict and score analysis.
 
 A multi-turn trial keeps `prompt.txt`, `cli-exit.json`, `cli-stdout.*`, and
 `cli-stderr.txt` of each turn in `raw/turn-<nn>/`. It keeps the session files
@@ -708,11 +741,11 @@ A trial has one of three states:
   - `assertion_exit_<code>`: the assertion exited with a code other than 0 and 1
     (141 for a pipe failure, 127 for a missing command).
 
-**Known limit:** for now, a failed turn is inconclusive. A model behavior
-failure that fails the turn cannot give a FAIL. The CLI reports `category=model`
-for this failure, but the harness does not read the category yet. Thus, if a
-runtime fails the turn after a repeated refusal, `tool_cycle_repeat_nudge`
-shows `turn_failed` and the run exits 3. The case does not show a FAIL.
+**Known limit:** the verdict helper classifies a failed turn as inconclusive.
+A model behavior failure that fails the turn cannot give a FAIL.
+The CLI reports `category=model` for this failure, but the harness does not read the category yet.
+For example, a failed turn after repeated refusal can receive `turn_failed` during offline analysis.
+The nonzero CLI result aborts the suite with exit `2` before the case receives a score.
 
 A `CANCELLED` record in `headless-errors.log` is the normal sign of a cut turn.
 It is not an infrastructure fault, so the verdict does not read that file.
@@ -733,9 +766,8 @@ line shows the inconclusive trials and their reasons, for example
   inconclusive), YELLOW (>= 80% pass), RED (< 80% pass)
 - **Overall:** cases passed / total cases, with the number of failed and
   inconclusive cases
-- **Exit code:** 0 if all cases pass, 1 if any case fails, 2 if the harness
-  stopped (a bad setting, the eval container died during startup or mid-run, or
-  an evidence step crashed), 3 if no case fails and some case is inconclusive.
+- **Exit code:** 0 if all cases pass, 1 if any case fails, or 3 if no case fails and some case is inconclusive.
+  A harness abort uses exit `2`, including a nonzero prompt result, unconfirmed containment, invalid configuration, container death, or evidence failure.
   The order is 2, then 1, then 3.
 
 ## Prerequisites

@@ -524,7 +524,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             Persist(new ToolCallRecorded
             {
                 SessionId = _sessionId,
-                ToolResult = result.Message,
+                ToolResult = result.MessageWithProgress,
                 StartedBackgroundJob = result.StartedBackgroundJob,
                 RecordedAtMs = NowMs()
             }, evt =>
@@ -1505,6 +1505,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
+        // The progress axis: the calls already ran and failed, so this refuses nothing. At the end threshold
+        // the turn ends quietly with the text of the model, the same way an ignored escalation does.
+        if (prepared.Decision.Progress == RefusedRepeatAction.EndTurn)
+        {
+            TurnLog().Warning("turn_no_progress_end failedCalls={FailedCalls}",
+                prepared.Decision.FailedCallsSinceProgress);
+            EndTurnAfterIgnoredEscalation(lastMessage, usage);
+            return;
+        }
+
         // A repeat of a refused call does not stop the turn at once (Aaron, 18 Oct 2026). The pipeline refuses
         // it again, and the batch adds a model-facing nudge after its results. No error reaches the person.
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage
@@ -1583,7 +1593,8 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
         RecordIntermediateUsage(usage);
 
         var repeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: false);
-        DispatchToolBatch(toolCalls, cycleDecision.RefusedCallIds, repeatNudge,
+        DispatchToolBatch(toolCalls, cycleDecision.RefusedCallIds,
+            repeatNudge is null ? null : (cycleDecision.RefusedRepeat, repeatNudge),
             preparedCycleBatch: preparedCycleBatch);
     }
 
@@ -1687,14 +1698,14 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
         IReadOnlySet<string> refusedCallIds,
-        string? repeatNudge,
+        (RefusedRepeatAction Stage, string Text)? repeatNudge,
         ApprovalRedrivePlan? approvalPlan = null,
         PreparedToolCycleBatch? preparedCycleBatch = null,
         bool recordCompletedCycle = true)
     {
         _toolWorkflow.StartDispatch(toolCalls, preparedCycleBatch, _toolExecutor, recordCompletedCycle);
         if (repeatNudge is not null)
-            _toolWorkflow.AddRepeatNudgeAfterBatch(repeatNudge);
+            _toolWorkflow.AddRepeatNudgeAfterBatch(repeatNudge.Value);
 
         // The pipeline sends each result before it signals batch completion.
         TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",

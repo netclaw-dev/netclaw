@@ -406,6 +406,52 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         Assert.Equal("http://192.168.1.20:6200", endpoint);
     }
 
+    [Theory]
+    [InlineData("malformed config", "{", null, false, null, "netclaw.json")]
+    [InlineData("config path directory", null, null, true, null, "netclaw.json")]
+    [InlineData("malformed secrets", "{\"Daemon\":{\"Port\":6200}}", "{", false, null, "secrets.json")]
+    [InlineData("valid custom port", "{\"Daemon\":{\"Port\":6200}}", null, false, "http://127.0.0.1:6200", null)]
+    [InlineData("absent optional files control", null, null, false, DaemonApi.DefaultEndpoint, null)]
+    public void ResolveLocalControlEndpoint_requires_readable_optional_files(
+        string _, string? config, string? secrets, bool configIsDirectory,
+        string? expectedEndpoint, string? unreadableFile)
+    {
+        if (configIsDirectory)
+            Directory.CreateDirectory(_paths.NetclawConfigPath);
+        else if (config is not null)
+            File.WriteAllText(_paths.NetclawConfigPath, config);
+
+        if (secrets is not null)
+            File.WriteAllText(_paths.SecretsPath, secrets);
+
+        // Resolve only. A baseline HTTP call could reach the host daemon after a file load failure.
+        if (expectedEndpoint is null)
+        {
+            var failure = Assert.Throws<InvalidDataException>(
+                () => DaemonApi.ResolveLocalControlEndpoint(_paths));
+
+            Assert.Contains(unreadableFile!, failure.Message, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(expectedEndpoint, DaemonApi.ResolveLocalControlEndpoint(_paths));
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "https://client.example.test")]
+    [InlineData(true, "https://override.example.test")]
+    public void ResolveEndpoint_preserves_explicit_remote_state_with_malformed_local_config(
+        bool useEnvironmentOverride, string expectedEndpoint)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{");
+        ClientConfigFile.WriteEndpoint(_paths, "https://client.example.test");
+        if (useEnvironmentOverride)
+            Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", "https://override.example.test/");
+
+        Assert.Equal(expectedEndpoint, DaemonApi.ResolveEndpoint(_paths));
+    }
+
     [Fact]
     public async Task ProbeReadinessAsync_ReportsHealthyAndParsesGenerationHeader()
     {

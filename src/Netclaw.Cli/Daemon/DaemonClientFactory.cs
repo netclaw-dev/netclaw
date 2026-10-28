@@ -62,13 +62,15 @@ internal static class DaemonClientFactory
     }
 
     internal static ExposureMode ResolveExposureMode(NetclawPaths paths)
-        => LoadDaemonConfig(paths).ExposureMode;
+        => LoadDaemonConfig(paths, lenient: true).ExposureMode;
 
-    internal static DaemonConfig LoadDaemonConfig(NetclawPaths paths)
+    internal static DaemonConfig LoadDaemonConfig(NetclawPaths paths, bool lenient)
     {
-        // Lenient: status and doctor still need an endpoint when the files cannot be loaded.
-        // Every other command has already stopped at the config load that precedes this.
-        var config = CliConfigPreflight.AddConfigSources(new ConfigurationBuilder(), paths, lenient: true).Build();
+        // Optional JSON providers can treat a directory as an absent file. Preflight rejects it.
+        if (!lenient && CliConfigPreflight.TryDescribeUnreadableConfig(paths, out var message, out var fix))
+            throw new InvalidDataException($"{message} {fix}");
+
+        var config = CliConfigPreflight.AddConfigSources(new ConfigurationBuilder(), paths, lenient).Build();
 
         return DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
     }

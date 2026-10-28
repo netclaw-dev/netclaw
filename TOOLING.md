@@ -38,8 +38,23 @@ A `FakeToolExecutor` result does not prove that the real executor accepts those 
 
 ## Focused Mutation Tests
 
+The no-progress guard adds focused targets to `tool-batch-readiness`.
+The delivered-cause target mutates `delivered.Cause == key` in `TurnStateTracker`.
+The gate requires its one equality mutant to run and die.
+The xUnit theories cover selected and unselected causes, repairs, and consent restore.
+This target shares the existing Stryker invocation and adds no separate build.
+
+The target changes `anySuccess || _incompleteBatchHadSuccess` to `&&`.
+`Completed_outcomes_replace_progress_nudges_and_a_success_clears_them` must reject it.
+The gate requires that one mutant to run and die. It adds no Stryker invocation.
+The child resume gate also checks negative `CallsSinceProgress` values.
+Its span includes the cause-evidence guard, for an expected total of 62.
+The readiness gate killed all 22 selected mutants in three minutes on the local host.
+The delivered-cause target adds no invocation. Hosted CI must still measure the cold-run cost.
+The final child gate killed all 62 selected mutants in about four minutes on the local host.
+
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request and merge group. They do not run on `dev` pushes.
-The job has thirteen Linux matrix groups that run in parallel with the normal test matrix.
+The Linux matrix groups run in parallel with the normal test matrix.
 The job timeout is 25 minutes.
 Each Stryker invocation builds the test project and runs the initial test run again. That fixed cost is about 1.5 to 2 minutes per invocation.
 The mutant run itself takes under 1 minute for most spans. Group time is mostly the sum of the invocations of its gates.
@@ -55,13 +70,20 @@ The table retains earlier group measurements. Gate notes below describe later ad
 | `shell-consent` | `shell-once-identity` (2.3 local), `compound-redirect` (2.2 local), `thinking-settings` (74 mutants, three invocations, 6.8 local) | 11.3 local; hosted time pending |
 | `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9), `secrets-plaintext-leaf` (8 mutants, one invocation, 2 to 3, estimate) | 10 to 11 (estimate) |
 | `shell-command-analysis-a` | 131 Security mutants and 27 Actors mutants | [11m28s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616567) |
-| `shell-command-analysis-b` | 172 Security mutants | [11m03s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616477) |
+| `shell-command-analysis-b` | 198 Security mutants | Prior 172-mutant run: [11m03s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616477) |
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally), `stopped-turn-continuation` (10 mutants, one invocation, 2.5 locally) | 13.5 to 14.5 (estimate; hosted measurement required) |
 | `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry` (two mutants, one CLI invocation) | [8m14s](https://github.com/netclaw-dev/netclaw/actions/runs/40069130760/job/120798739243) |
 | `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
-| `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local), `child-resume-gate` (55 mutants, one invocation, 3.2 local) | 9 to 11 (estimate) |
+| `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local), `child-resume-gate` (62 mutants, one invocation; local time below) | 9 to 11 (estimate) |
+
+The approval-directory gate includes one retained-hop producer target in `FileSystemAuthority.FollowLinkChainCore`.
+The gate requires the omission of `knownTargets?.Add(current);` to have the `Killed` status.
+The gate pins its source span, `Statement mutation` operator, `;` replacement, and one expected mutant.
+A missing, ignored, compile-error, uncovered, timed-out, or surviving target fails the gate.
+This adds one Security target, from 18 to 19, and keeps six Actors targets.
+The shell-command-analysis B gate stays at 198 mutants and 43 required identities.
 
 The curation gate targets only `sameNameMatch is not null` in `CurationRulesEvaluator`.
 Run `./scripts/run-curation-same-name-mutations.sh` to verify this boundary.
@@ -90,7 +112,18 @@ durable-child-consent-wait adds the child resume gate, which replaces the resume
 A [hosted run on 2026-10-19](https://github.com/netclaw-dev/netclaw/actions/runs/39340209966/job/118359593287) measured 15 minutes 57 seconds for that group.
 All five gates passed. The total includes checkout, tool restore, and report upload. It excludes queue time. The loopback gate took 4 minutes 15 seconds.
 
-The prior `shell-command-analysis` group was still the longest group. Its security invocation (303 mutants) took 15.8 minutes in the slow run. The new A and B groups run 131 and 172 Security mutants. The A group also runs 27 Actors mutants.
+The prior `shell-command-analysis` group was still the longest group. Its security invocation (303 mutants) took 15.8 minutes in the slow run. The original A and B groups run 131 and 172 Security mutants. The A group also runs 27 Actors mutants.
+Contained-alias proof changes B to 198 required mutants and uses two mutation workers.
+The source guard now checks 42 alias authority mutants and one zero-residual precision mutant within that total.
+Each required target must execute and reach `Killed` status.
+A missing, ignored, uncovered, compile-error, timed-out, or surviving required target fails the gate.
+The report retains each target identity in `reports/contained-alias-targets.ndjson`.
+The precision check selects the false-conditional mutant by source span and mutator name.
+It does not require an invalid string-subtraction mutant that cannot compile.
+Use `--verify-b <output-root>` to check a retained B report without a new mutation run.
+The first local 198-mutant run took 30m36s with one observed worker and retained one precision survivor.
+The next run uses compact boundary fixtures and two workers; both factors affect its duration.
+Hosted CI must still prove the 25-minute job budget.
 
 The 2026-10-23 hosted run measured 11m28s for A, 11m03s for B, and 3m17s for the combined child group.
 These totals include checkout, tool restore, and report upload. They exclude queue time.
@@ -125,9 +158,9 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
-| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an unknown operand with a safe phrase or a grant for anywhere, attended or not) covers it; a glob word gets the decision of each protected path that it can match (D5), and its link walk stays inside the covering directory; a bound value gets the hard-deny decision of its literal twin; a Bash test builtin is data only with proved operand values without `[`; a data command keeps its assignment digest unless each operand is proved data, and only such a data command with no redirect keeps its normal candidate after an unknown directory; a variable word that is not a path word is an unknown operand, so a folder grant cannot cover a loop or an assignment value outside the folder; an option value that the parser splits from its option (`--name=value`, `-p:Name=value`) and that can leave the working directory gets the scope of a path word with the same text, so a folder or repository grant cannot cover it; fixed text on stdin (a quoted heredoc or a proved here string) is data only on stdin and only for a receiver that is not a shell and has no argument that can name one | 330 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
+| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an unknown operand with a safe phrase or a grant for anywhere, attended or not) covers it; a glob word gets the decision of each protected path that it can match (D5), and its link walk stays inside the covering directory; a bound value gets the hard-deny decision of its literal twin; a Bash test builtin is data only with proved operand values without `[`; a data command keeps its assignment digest unless each operand is proved data, and only such a data command with no redirect keeps its normal candidate after an unknown directory; a variable word that is not a path word is an unknown operand, so a folder grant cannot cover a loop or an assignment value outside the folder; an option value that the parser splits from its option (`--name=value`, `-p:Name=value`) and that can leave the working directory gets the scope of a path word with the same text, so a folder or repository grant cannot cover it; fixed text on stdin (a quoted heredoc or a proved here string) is data only on stdin and only for a receiver that is not a shell and has no argument that can name one | 356 required | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, Bash sanitation, and Bash launch-value digest | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract; only an assignment that can reach the program qualifies a grant, a Bash data command keeps every assignment, and the parser names come from the same launch snapshot; an exact effective Bash value can qualify a digest when authored text is unknown, while PowerShell keeps the authored-value check (F3) | 84 killed | `./scripts/run-shell-assignment-mutations.sh` |
-| Filesystem authority folder membership, repository identity, repository persistence, the folder of a new grant, and the link target scope | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a word that names a link also has the scope of its final target, and a target after a `..` that leaves a link is unknown (#2375); a new folder grant uses the directory where its occurrence runs | 24 killed | `./scripts/run-approval-directory-mutations.sh` |
+| Filesystem authority folder membership, repository identity, repository persistence, the folder of a new grant, and the link target scope | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a word that names a link also has the scope of its final target, and a target after a `..` that leaves a link is unknown (#2375); a new folder grant uses the directory where its occurrence runs | 25 required | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `SessionInputFlow.PrepareAdmission` drop decision (`TryFindWaitingFire`, `TryReadFireKey`) and `ReminderFireKey.TryParse` | Rule 3: a session drops a newer fire only while an earlier input of the same reminder waits (the definition id matches, the flow's own queue holds that input, and only reminder-kind inputs count; a journal row that nothing will run never blocks); text that is not a fire key is never dropped and never blocks; the parser refuses any text but `{id}:{digits}` | 21 killed | `./scripts/run-reminder-execution-mutations.sh` |
@@ -151,9 +184,24 @@ coverage. They do not replace positive and negative behavior tests.
 | `SessionToolWorkflow.IsChildConsentPaused`, `SessionToolWorkflow.RefusesChildStart`, the pause hold of `SessionToolWorkflow.PlanNewInputAbandonment`, the pause rules of the `SessionInputFlow.DrainBufferedBatch` drain (`PassesPause`, `IsHeldByPause`, `MoveHeldInputBehind`), the hold rule `ChildConsentPause.Holds` that the drain and the recovery share, and `TurnContext.IsChildConsentNotice` | Design D5 of child-approval-events-and-parent-pause: an open child consent request pauses the session, and an answered request does not. While paused, a `spawn_agent` start is refused and a slash start of a person is accepted; automated input and a child result notice wait in Ready and in the drain, never join a running turn, and run after the last close; a person input runs; a replay continues its turn. An approval notice needs the principal `VerifiedAutomation`, the authenticity `LocalProcess`, and the source kind and sender `child-consent`, so a webhook cannot pose as one; a notice is never held, never joins a turn, and nothing joins a notice turn | 36 killed | `./scripts/run-child-consent-mutations.sh` |
 | The guard of `SessionToolWorkflow.TryResolveTextResponse` and the count rule of `PendingApprovalLookup.Resolve` | Design D7 of child-approval-events-and-parent-pause: when a child prompt is among two or more prompts that the sender can answer, a text answer resolves none, and the session and the channel tell the sender to use the buttons; text that answers no prompt keeps the option-unavailable reply; with parent prompts only, the session resolves the latest prompt and the channels the earliest | 15 killed | `./scripts/run-text-answer-guard-mutations.sh` |
 | `TurnContext.HasSameRequester`, `SessionState.RequireNoticeRun`, restart-resume partition, `TurnContext.CanControlChildRunOf`, reminder report and retry state, child approval close, and the continuing-turn notice scan in `SessionInputFlow` | These targets protect child ownership, notice admission, restart order, child control, one-time reminder reports, retry links, and approval cleanup. The continuing-turn scan skips a queued notice while it finds a replay or owner input. | 74 killed | `./scripts/run-child-owner-and-report-mutations.sh` |
-| `ChildParkRules.AcceptPark`, `ResumeGate`, `RecoveryAction`, `ParkFits`, `CountsAsUnreported`, `RejectedEventEnds`, `IgnoredBySnapshot`, `LoopGuardDamage`, `RequesterCanAnswer`, and `ResumeStart` (`// <child-resume-gate>`), and `SessionExecutionLifetime.WaitsForChildren` (`// <child-drain-wait>`) | durable-child-consent-wait: only the owned child of an `Accepted` run opens prompts, a cancelling run ends cancelled, and any other sender gets the stop signal; a parked run resumes only when every request has an answer and no restart drain is pending. durable-child-park-recovery: recovery records a running child as lost and keeps or resumes a park; a park above 4 MiB is refused; a park with an open request does not keep the session in memory; a rejected record ends only the lifecycle that it expected; a child request does not block a snapshot and a parent request does; a damaged loop guard is found by each episode and named. running-child-drain-park: a drain park (no request) needs no requester who can answer, and a consent park still needs one; a resumed child starts with a model call only for a drain park, runs its parked calls only when each request has an answer, and otherwise ends; the drain acknowledgement waits only while a drain is requested, a live child exists, and the child wait has not ended | 55 killed | `./scripts/run-child-resume-gate-mutations.sh` |
+| `ChildParkRules.AcceptPark`, `ResumeGate`, `RecoveryAction`, `ParkFits`, `CountsAsUnreported`, `RejectedEventEnds`, `IgnoredBySnapshot`, `LoopGuardDamage`, `RequesterCanAnswer`, and `ResumeStart` (`// <child-resume-gate>`), and `SessionExecutionLifetime.WaitsForChildren` (`// <child-drain-wait>`) | durable-child-consent-wait: only the owned child of an `Accepted` run opens prompts, a cancelling run ends cancelled, and any other sender gets the stop signal; a parked run resumes only when every request has an answer and no restart drain is pending. durable-child-park-recovery: recovery records a running child as lost and keeps or resumes a park; a park above 4 MiB is refused; a park with an open request does not keep the session in memory; a rejected record ends only the lifecycle that it expected; a child request does not block a snapshot and a parent request does; a damaged loop guard is found by each episode and named. running-child-drain-park: a drain park (no request) needs no requester who can answer, and a consent park still needs one; a resumed child starts with a model call only for a drain park, runs its parked calls only when each request has an answer, and otherwise ends; the drain acknowledgement waits only while a drain is requested, a live child exists, and the child wait has not ended | 62 killed | `./scripts/run-child-resume-gate-mutations.sh` |
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
 | The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
+| `DaemonLogRetention.Prune` (`// daemon-log-retention-cutoff:begin` to `end`) | Issue #2484: only daemon segments before the UTC retention cutoff can be deleted. A segment on the cutoff remains. | 2 killed | `./scripts/run-daemon-log-retention-mutations.sh` |
+
+### Daemon Log Retention Cutoff
+
+The gate selects only the daemon age predicate in `DaemonLogRetention.Prune`.
+Stryker changes `<` to `>` and `<=`.
+`DaemonLogRetentionMutationTests` rejects both changes through dated files and the real prune operation.
+The gate requires both replacements, exactly two mutants, and a `Killed` status for each.
+A missing target, survivor, untested mutant, or target compilation error fails the gate.
+Stryker records unrelated compilation artifacts outside the selected span; the verifier excludes only those artifacts.
+
+The manual `<=` mutation failed the cutoff row before this gate was added.
+The first local Stryker run killed both expected mutants in 161 seconds.
+The `daemon-log-retention` matrix group keeps this cost separate from existing groups.
+The gate does not measure general code coverage or replace the writer and retention tests.
 
 Run the path-access check locally:
 
@@ -363,6 +411,46 @@ In `DaemonManager`, only `Killed` counts.
 CI runs it in the `stop-proof` group of the `mutation-gates` job, with the secrets plaintext leaf gate.
 The gate took 6.9 minutes on a hosted runner, and it made `guard-and-authority` take 20 minutes.
 
+### Local Daemon Address Gate
+
+Run the strict local address gate:
+
+```bash
+./scripts/run-local-daemon-address-mutations.sh
+```
+
+`DaemonApi.ResolveLocalControlEndpoint` must reject an unreadable local config source.
+The gate selects only `false` in `ResolveDaemonConfigEndpoint(paths, lenient: false)`.
+The `local-control-strict-config:begin/end` markers must each occur once.
+The script verifies the complete decision between those markers before Stryker starts.
+
+`LocalDaemonAddressMutationTests` calls the real resolver without HTTP or a PID file.
+Its five xUnit 2 rows cover malformed config, a config directory, malformed secrets,
+a valid custom port, and absent optional files. Each row deletes its temporary home.
+The malformed secrets row also supplies valid config, so partial source omission cannot pass.
+
+The expected mutant count is **one**, with the exact replacement `false` to `true`.
+Only `Killed` passes. A missing, ignored, untested, survived, timeout, or target compile-error mutant fails.
+The script checks the exact source, literal location, replacement, and count.
+It rejects any executed mutant outside the literal.
+It records all compile errors in `reports/local-daemon-address-compile-errors.json` before it excludes artifacts outside the literal.
+The full Stryker report remains in `reports/mutation-report.json`.
+The score threshold does not decide acceptance; the exact mutant check does.
+
+CI runs this gate in the `stop-proof` group. The existing stop-proof selectors remain unchanged.
+The group retains its 25-minute timeout. The stop-proof gate previously took 6.9 minutes on a hosted runner.
+The secrets gate took 1 minute 33 seconds locally; that figure is not a hosted group measurement.
+This addition supplies five pure tests and one mutant in one Stryker invocation.
+The local run killed the exact mutant in 191 seconds. Its initial test run included all 1102 mutation-project cases.
+The verifier rejected eight unsafe report fixtures and accepted the real report.
+The added local cost is 3.2 minutes. The combined hosted group cost remains unverified.
+Move the gate to another group if the measured group cost exceeds the scope-review budget.
+
+On a shared host, hold the shared build lock for Stryker's initial build.
+Release it when `Initial test run started` appears. Keep it free during mutation analysis.
+The report directory defaults to `artifacts/stryker/local-daemon-address`.
+Pass an absolute artifact directory as the first argument to retain local evidence elsewhere.
+
 ### Secrets Plaintext Leaf Gate
 
 Run the secrets plaintext leaf gate:
@@ -505,6 +593,11 @@ The selectors reject missing or repeated source markers before Stryker starts.
 The gate requires one killed mutant in each of six single-expression spans, two killed history mutants, and eleven killed refused repeat count mutants.
 It fails for no mutant, a survivor, or a compile error in a selected span.
 
+The gate also selects `!recordCompletedCycle` in `SessionToolWorkflow.StartDispatch`.
+One expected mutant replaces the re-drive path with a fresh batch.
+`Recovered_parent_approval_keeps_all_sibling_outcomes_once` rejects that loss of sibling results.
+The script requires the mutant to run and die.
+
 The combined local calibration took 1 minute 56 seconds with a warm build cache.
 The earlier readiness-only run took 5 minutes 44 seconds after tool restore.
 The three-target local run took 1 minute 46 seconds with a warm build cache.
@@ -514,7 +607,7 @@ The seven-mutant local run took 1 minute 48 seconds with a warm build cache.
 The eight-mutant combined local run took 2 minutes 6 seconds with a warm build cache.
 Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
 Its Windows test took 16 minutes 6 seconds. A target in any of those four groups would extend that critical path.
-All eight source spans produce 19 expected mutants in one Stryker invocation in the `session-reliability` group.
+The current eleven source spans require 22 expected mutants in one Stryker invocation in the `session-reliability` group.
 The local run with the refused repeat span took 2 minutes 21 seconds with a warm build cache. The earlier run without it took 2 minutes 13 seconds.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.
@@ -736,7 +829,7 @@ group of the `mutation-gates` job. Its report directory is `artifacts/stryker/te
 ```
 
 The script runs Stryker one time over two spans of `Netclaw.Actors`: `// <child-resume-gate>` in
-`SubAgents/ChildRunPark.cs` and `// <child-drain-wait>` in `Sessions/Handlers/SessionExecutionLifetime.cs` (55 mutants
+`SubAgents/ChildRunPark.cs` and `// <child-drain-wait>` in `Sessions/Handlers/SessionExecutionLifetime.cs` (62 killed mutants
 together). The target row above lists the rules. `ChildParkRulesTests` (linked into
 `Netclaw.Actors.MutationTests`) covers them as tables, with no actor, no timer, and no delay. The selector rejects a
 missing or repeated marker before Stryker starts, and the gate fails for a survivor or a changed count. CI runs the
@@ -1497,6 +1590,20 @@ lines:
 
 Two revisions with the same behavior therefore give the same lines. The
 report shows the tokens, never a revision hash.
+
+The cache key includes the complete committed Git tree, the active runner,
+the probe, the adapter, the corpus, and the selected states. Root package, SDK, and build files can
+change the loaded code even when `src/` stays equal. Any tracked tree change
+therefore creates a separate `tree-*` output. An identical committed tree can
+reuse its completed output. The script does not reuse or rename legacy
+`src-*` outputs. The cache summary still counts them, and `--prune-cache`
+can remove them explicitly.
+
+The key does not identify the installed toolchain, host environment, external
+imports, or package bytes from a mutable feed. Use a new `--out` directory
+after those inputs change. `--fresh-head` reruns the candidate, but it does
+not refresh the baseline. Record the resolved package and loaded DLL identity
+when a comparison changes dependencies.
 
 Bash 5.2 states:
 

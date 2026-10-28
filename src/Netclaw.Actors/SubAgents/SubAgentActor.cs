@@ -92,7 +92,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly TurnStateTracker _turnState = new();
     private PreparedToolCycleBatch? _activeCycleBatch;
     // The repeat nudge for the active batch. The child adds it after the batch results.
-    private string? _activeRepeatNudge;
+    private (RefusedRepeatAction Stage, string Text)? _activeRepeatNudge;
 
     // Stopwatch tracking the total wall-clock duration of the sub-agent run.
     // Used for the summary log on completion (ProcessingWatchdog is only a
@@ -581,31 +581,24 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 ToolExecutionContext.RunScope.InheritedCwd);
             var parked = msg.Results.Where(static result => result.Parked is not null).ToArray();
 
-            // A parked batch records no loop observation (cut plan): the resumed child observes only its own batches.
+            var cycleResults = msg.Results.Where(static result => result.Parked is null).ToDictionary(
+                result => result.Message.ToolCallId is { } callId
+                    ? callId.Value
+                    : throw new InvalidOperationException("A tool cycle result requires a call identity."),
+                result => ToolCycleResult.FromInvocation(result.Message, result.Receipt, result.FailureCode),
+                StringComparer.Ordinal);
+            // A park omits cycle history. Its finished calls and each resumed call still affect progress once.
             if (_activeCycleBatch is { } cycleBatch && parked.Length == 0)
-            {
-                var cycleResults = msg.Results.ToDictionary(
-                    result => result.Message.ToolCallId is { } callId
-                        ? callId.Value
-                        : throw new InvalidOperationException("A tool cycle result requires a call identity."),
-                    result => new ToolCycleResult(
-                        result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-                        result.Message.Content ?? string.Empty)
-                    {
-                        PendingJob = result.Receipt is ToolInvocationReceipt.PendingBackgroundJob,
-                        Synthetic = result.Receipt is ToolInvocationReceipt.Correction
-                            { RemediationCode: ToolRemediationCode.BreakToolCycle }
-                    },
-                    StringComparer.Ordinal);
                 _turnState.ObserveCompleted(ToolCycleSignatureFactory.Complete(cycleBatch, cycleResults));
-            }
+            else
+                _turnState.ObserveProgress(cycleResults.Values, batchComplete: parked.Length == 0);
             _activeCycleBatch = null;
 
             // Append tool results as MEAI messages and log each result. A parked call has no result yet.
             foreach (var result in msg.Results.Where(static result => result.Parked is null))
             {
                 var message = result.Message;
-                AddMessage(message);
+                AddMessage(cycleResults[message.ToolCallId!.Value.Value].WithMessageFacts(message));
                 if (message.ToolCallId is { } callId)
                 {
                     var receipt = result.Receipt;
@@ -644,17 +637,17 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             AddModelInputMediaNudge(msg.Results
                 .SelectMany(result => result.ModelInputMediaReferences)
                 .ToArray());
-            if (_activeRepeatNudge is { } repeatNudge)
+            var nudge = _turnState.CreateNudgeAfterResults(_activeRepeatNudge, childRun: true);
+            // Keep repeat advice until another nudge replaces it. Retire cause advice when its cause leaves the batch.
+            if (nudge is not null)
             {
-                // The latest repeat nudge replaces the earlier one, so equal nudges do not pile up.
-                const string earlierNudge = $"[system: {ToolCycleMessages.RepeatNudgeStart}";
-                _history.RemoveAll(static message => message.Role == Microsoft.Extensions.AI.ChatRole.User
-                    && message.Text.StartsWith(earlierNudge, StringComparison.Ordinal));
-                _transcript.RemoveAll(static message => message.Role == Protocol.ChatRole.User
-                    && message.Content.StartsWith(earlierNudge, StringComparison.Ordinal));
-                AddSystemNudge(repeatNudge);
-                _activeRepeatNudge = null;
+                RemoveLoopNudges(ToolCycleMessages.IsLoopNudge);
+                AddSystemNudge(nudge);
             }
+            else
+                RemoveLoopNudges(_turnState.CallsSinceProgress == 0
+                    ? ToolCycleMessages.IsProgressOrCauseNudge : ToolCycleMessages.IsCauseNudge);
+            _activeRepeatNudge = null;
 
             _turnState.RecordToolCompletion(msg.Results.Length);
 
@@ -823,9 +816,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             return;
         }
 
+        // The progress axis: the calls already ran and failed, so this refuses nothing. At the end threshold
+        // the run ends as a partial run, the same way an ignored escalation does.
+        if (cycleDecision.Progress == RefusedRepeatAction.EndTurn)
+        {
+            Complete(true, LastChildText(assistantMessage), SubAgentRunOutcome.Partial,
+                SubAgentOutcomeReason.ToolCycleStopped);
+            return;
+        }
+
         // A repeat of a refused call does not stop the child at once. The call is refused again, and the child
         // nudge follows the batch results. The child nudge offers no background job: a child has none.
-        _activeRepeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: true);
+        var repeatNudge = ToolCycleMessages.ForRefusedRepeat(cycleDecision, toolCalls, childRun: true);
+        _activeRepeatNudge = repeatNudge is null ? null : (cycleDecision.RefusedRepeat, repeatNudge);
 
         // Add assistant message (with tool calls) to history
         _history.Add(assistantMessage);
@@ -1229,6 +1232,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void AddSystemNudge(string nudge)
         => AddMessage(new SerializableChatMessage { Role = Protocol.ChatRole.User, Content = $"[system: {nudge}]" });
+
+    private void RemoveLoopNudges(Func<string, bool> matches)
+    {
+        _history.RemoveAll(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+            && matches(message.Text));
+        _transcript.RemoveAll(message => message.Role == Protocol.ChatRole.User
+            && matches(message.Content));
+    }
 
     private void AddMessage(SerializableChatMessage message)
     {
@@ -1651,7 +1662,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         ? new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle)
                         : new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
                     var message = refused ? $"{rejection.Message}\n{ToolCycleMessages.Correction}" : rejection.Message;
-                    return BuildToolResult(tc, message, toolContext, modelInputBudget);
+                    return BuildToolResult(tc, message, toolContext, modelInputBudget, failureCode: rejection.DenyReason);
                 }
 
                 if (refusedCallIds.Contains(tc.CallId))
@@ -1825,7 +1836,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ToolExecutionContext toolContext,
         ModelInputBatchBudget modelInputBudget,
         ManagedTemporaryCorrectionChange? managedTemporaryCorrectionUpdate = null,
-        ToolExposureRequest? exposureRequest = null)
+        ToolExposureRequest? exposureRequest = null,
+        string? failureCode = null)
     {
         var materialization = MaterializeModelInputFiles(toolContext, modelInputBudget);
         if (materialization.RequestedCount > materialization.MediaReferences.Count)
@@ -1849,7 +1861,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             managedTemporaryCorrectionUpdate,
             receipt,
             exposureRequest,
-            toolContext.Approval.AuthorizationAttemptId);
+            toolContext.Approval.AuthorizationAttemptId,
+            failureCode);
     }
 
     private static ModelInputMaterializationResult MaterializeModelInputFiles(
@@ -1875,7 +1888,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ManagedTemporaryCorrectionChange? ManagedTemporaryCorrectionUpdate,
         ToolInvocationReceipt? Receipt,
         ToolExposureRequest? ExposureRequest,
-        AuthorizationAttemptId AuthorizationAttemptId)
+        AuthorizationAttemptId AuthorizationAttemptId,
+        string? FailureCode = null)
     {
         /// <summary>The consent request of a parked call. A parked call has no result yet.</summary>
         public ParentApprovalRequest? Parked { get; init; }

@@ -47,3 +47,25 @@ It SHALL NOT invoke the requested tool or change authorization state.
 - **WHEN** Netclaw returns the cycle correction
 - **THEN** Netclaw does not request approval or execute the tool
 - **AND** a later different call still uses the normal policy gates
+
+### Requirement: Shell exit status produces a typed outcome
+
+The shell tool SHALL report exit status zero as a successful receipt.
+The shell tool SHALL report a nonzero exit status as a failed receipt.
+Both execution paths SHALL use the process exit status, without executable-specific interpretation.
+A failed launch or a timeout SHALL produce a failed receipt.
+The tool SHALL preserve the existing model-visible result and cancellation contract.
+
+#### Scenario: A failed shell command does not reset the failure budget
+
+- **GIVEN** the turn contains an earlier tool failure
+- **WHEN** a shell process exits with status 7
+- **THEN** the shell result carries a failure receipt
+- **AND** the result does not reset the failure budget
+
+#### Scenario: A successful shell command resets the failure budget
+
+- **GIVEN** the turn contains an earlier tool failure
+- **WHEN** a shell process exits with status zero
+- **THEN** the shell result carries a success receipt
+- **AND** the result resets the failure budget

@@ -195,7 +195,7 @@ fi
 printf '%s' "${FAKE_STDOUT-}"
 printf '%s' "${FAKE_STDERR-}" >&2
 if [[ "${FAKE_PRINT_PID:-}" == "1" ]]; then printf 'pid=%s\n' "$$"; fi
-if [[ "$prompt" == *SLOW* ]]; then exec sleep 30; fi
+if [[ "$prompt" == *SLOW* ]]; then exec python3 -c 'import signal; signal.pause()'; fi
 if [[ "$prompt" == *FAIL* ]]; then exit 1; fi
 exit 0
 """
@@ -229,10 +229,12 @@ class HarnessCase(unittest.TestCase):
         self.cli.chmod(0o755)
         self.results = self.root / "results.txt"
 
-    def run_harness(self, kind, prompts, runs=1, timeout="5", seed=None, **env):
+    def run_harness(self, kind, prompts, runs=1, timeout="5", seed=None, expect_abort=False, **env):
         environment = {
             "PATH": os.environ["PATH"],
             "HOME": str(self.root),
+            "TMPDIR": str(self.root),
+            "PYTHONDONTWRITEBYTECODE": "1",
             "HARNESS_SCRIPT": str(self.script),
             "NETCLAW_BIN": str(self.cli),
             "NETCLAW_EVAL_RUNS": str(runs),
@@ -248,10 +250,14 @@ class HarnessCase(unittest.TestCase):
         environment.update({key: str(value) for key, value in env.items()})
         completed = subprocess.run(["bash", "-c", DRIVER, "bash", *prompts],
                                    env=environment, capture_output=True, text=True)
-        self.assertIn(
-            "DRIVER_DONE", completed.stdout,
-            "the harness stopped before run_case returned. "
-            f"exit={completed.returncode} stderr tail={completed.stderr[-400:]!r}")
+        if expect_abort:
+            self.assertEqual(2, completed.returncode, completed.stderr)
+            self.assertNotIn("DRIVER_DONE", completed.stdout)
+        else:
+            self.assertIn(
+                "DRIVER_DONE", completed.stdout,
+                "the harness stopped before run_case returned. "
+                f"exit={completed.returncode} stderr tail={completed.stderr[-400:]!r}")
         return completed
 
     def trial_dir(self, number=1, case="demo"):
@@ -279,7 +285,8 @@ class TrialFolderTests(HarnessCase):
     def test_run_prompt_records_exit_124_on_timeout(self):
         # Planted bug: keep `|| true`, so the exit file says 0 (or the run
         # aborts under `set -e`) when the CLI is cut off.
-        self.run_harness("text", ["SLOW prompt"], timeout=1, FAKE_SESSION="signalr/cut")
+        self.run_harness("text", ["SLOW prompt"], runs=2, timeout=1,
+                         expect_abort=True, FAKE_SESSION="signalr/cut")
 
         record = self.read_json(self.raw("cli-exit.json"))
         self.assertEqual(124, record["exit_code"])
@@ -289,16 +296,22 @@ class TrialFolderTests(HarnessCase):
         self.assertIsNotNone(started.tzinfo, "started_at needs a UTC offset")
         self.assertIsNotNone(ended.tzinfo, "ended_at needs a UTC offset")
         self.assertGreaterEqual(ended, started)
-        self.assertIn("demo|1|", self.results.read_text(),
-                      "the run must go on and store a result after a cut-off trial")
+        self.assertEqual(["SLOW prompt"], (self.state / "prompts.txt").read_text().splitlines())
+        self.assertFalse(self.trial_dir(2).exists())
+        self.assertFalse(self.results.exists() and self.results.read_text(),
+                         "The abort must precede score calculation")
 
     def test_run_prompt_records_the_real_exit_code_of_a_failed_or_clean_turn(self):
         # Planted bug: write a constant exit code, or record only exit 124.
         for prompt, expected in (("FAIL prompt", 1), ("clean prompt", 0)):
             with self.subTest(prompt=prompt):
                 shutil.rmtree(self.root / "checkout" / "evals" / "runs", ignore_errors=True)
-                self.run_harness("text", [prompt], FAKE_SESSION="signalr/exit")
+                (self.state / "prompts.txt").unlink(missing_ok=True)
+                self.run_harness("text", [prompt], runs=2 if expected else 1,
+                                 expect_abort=expected != 0, FAKE_SESSION="signalr/exit")
                 self.assertEqual(expected, self.read_json(self.raw("cli-exit.json"))["exit_code"])
+                self.assertEqual([prompt], (self.state / "prompts.txt").read_text().splitlines())
+                self.assertFalse(self.trial_dir(2).exists())
 
     def test_raw_folder_holds_the_cli_output_of_a_text_trial(self):
         # Planted bug: capture the CLI output in the shared temp dir only, or
@@ -428,12 +441,16 @@ class TrialFolderTests(HarnessCase):
         # Planted bug: keep `|| true` in run_prompt_resume, or write one exit
         # file for the whole multi-turn trial. Multi-turn trials keep one
         # sub-folder for each turn: raw/turn-01/, raw/turn-02/.
-        self.run_harness("multi", ["turn one", "SLOW turn two"], timeout=1)
+        self.run_harness("multi", ["turn one", "SLOW turn two", "forbidden turn three"],
+                         runs=2, timeout=1, expect_abort=True)
 
         self.assertEqual(0, self.read_json(self.raw("cli-exit.json", turn=1))["exit_code"])
         self.assertEqual(124, self.read_json(self.raw("cli-exit.json", turn=2))["exit_code"])
         self.assertEqual("turn one", self.read_text(self.raw("prompt.txt", turn=1)).rstrip("\n"))
         self.assertEqual("SLOW turn two", self.read_text(self.raw("prompt.txt", turn=2)).rstrip("\n"))
+        self.assertEqual(["turn one", "SLOW turn two"], (self.state / "prompts.txt").read_text().splitlines())
+        self.assertFalse(self.raw("cli-exit.json", turn=3).parent.exists())
+        self.assertFalse(self.trial_dir(2).exists())
 
 
 class VariantSeedTests(HarnessCase):

@@ -39,7 +39,7 @@ public sealed partial class SessionToolWorkflowTests
         [
             new FunctionCallContent(first.CallId, "shell_execute"),
             new FunctionCallContent(second.CallId, "shell_execute")
-        ], cycle: null, executor: null, recordCompletedCycle: false);
+        ], cycle: null, executor: null, recordCompletedCycle: true);
 
         // Act and assert
         Assert.False(workflow.CanParkForRestart());
@@ -309,8 +309,10 @@ public sealed partial class SessionToolWorkflowTests
         SenderId = new SenderId("user-1")
     };
 
-    [Fact]
-    public void Recovered_dispatch_waits_for_siblings_and_retains_each_resolution()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Recovered_dispatch_waits_for_siblings_and_retains_each_resolution(bool legacyReceipt)
     {
         // Arrange
         var state = new SessionToolWorkflow();
@@ -328,7 +330,8 @@ public sealed partial class SessionToolWorkflowTests
                 Role = ChatRole.Tool,
                 ToolCallId = new ToolCallId(approved.CallId),
                 Name = approved.ToolName,
-                Content = "completed result"
+                Content = "completed result",
+                ToolOutcomeCategory = legacyReceipt ? null : (int)ToolInvocationOutcomeCategory.Success
             })
         };
 
@@ -342,8 +345,14 @@ public sealed partial class SessionToolWorkflowTests
         Assert.IsType<RecoveredContinuation.WaitForSiblings>(
             state.PlanRecoveredContinuation(history, denied.CallId, denied.SessionId, nowMs: 40));
         ResolveRecovered(state, pending, ApprovalOptionKeys.Deny);
-        var dispatch = Assert.IsType<RecoveredContinuation.Dispatch>(
-            state.PlanRecoveredContinuation(history, pending.CallId, pending.SessionId, nowMs: 50));
+        var continuation = state.PlanRecoveredContinuation(history, pending.CallId, pending.SessionId, nowMs: 50);
+        if (legacyReceipt)
+        {
+            var abandoned = Assert.IsType<RecoveredContinuation.Abandon>(continuation);
+            Assert.Contains("lacks progress receipt facts", abandoned.Diagnostic, StringComparison.Ordinal);
+            return;
+        }
+        var dispatch = Assert.IsType<RecoveredContinuation.Dispatch>(continuation);
         var plan = dispatch.ApprovalPlan;
 
         Assert.Equal([denied.CallId, pending.CallId], dispatch.Calls.Select(call => call.CallId));

@@ -181,7 +181,7 @@ public sealed class GlobPolicyMutationTests
     [InlineData("*/x", "", true)]
     [InlineData("*", "a>outside", false)]
     [InlineData("*", "a>b", true)]
-    [InlineData("*/x", "a>b", false)]
+    [InlineData("*/x", "a>b", true)]
     [InlineData("*/x", "a>outside", false)]
     [InlineData("*/x", "b/l>outside", false)]
     [InlineData("b*/x", "zzz/l>outside", true)]
@@ -214,20 +214,55 @@ public sealed class GlobPolicyMutationTests
         Assert.Equal(contained, IsLinkContained(Path.Combine(tree.Root, "cover"), pattern));
     }
 
-    [Theory]
-    [InlineData(4096, true)]
-    [InlineData(4097, false)]
-    public void Glob_link_walk_has_a_directory_bound(int directories, bool contained)
+    [Fact]
+    public void Glob_link_walk_has_a_directory_bound()
     {
-        // The glob and binding facts belong to the POSIX Bash 5.2 host.
         if (OperatingSystem.IsWindows())
             return;
 
         using var tree = new TemporaryTree();
-        for (var index = 0; index < directories; index++)
-            Directory.CreateDirectory(Path.Combine(tree.Root, "cover", $"d{index}"));
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        for (var index = 0; index < 4096; index++)
+            Directory.CreateDirectory(Path.Combine(covering, $"d{index}"));
 
-        Assert.Equal(contained, IsLinkContained(Path.Combine(tree.Root, "cover"), "*/x"));
+        Assert.True(IsLinkContained(covering, "*/x"));
+        Directory.CreateDirectory(Path.Combine(covering, "d4096"));
+        Assert.False(IsLinkContained(covering, "*/x"));
+    }
+
+    [Fact]
+    public void Glob_work_bound_counts_alias_hops_and_directory_visits()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var target = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
+        for (var index = 0; index < 4094; index++)
+            Directory.CreateDirectory(Path.Combine(covering, $"a{index}"));
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), target);
+
+        Assert.True(IsLinkContained(covering, "a*/x"));
+        Directory.CreateDirectory(Path.Combine(covering, "a4094"));
+        Assert.False(IsLinkContained(covering, "a*/x"));
+    }
+
+    [Fact]
+    public void Glob_leaf_alias_hops_retain_both_sides_of_the_work_bound()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var target = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
+        for (var index = 0; index < 4096; index++)
+            Directory.CreateSymbolicLink(Path.Combine(covering, $"a{index}"), target);
+
+        Assert.True(IsLinkContained(covering, "a*/"));
+        Directory.CreateSymbolicLink(Path.Combine(covering, "a4096"), target);
+        Assert.False(IsLinkContained(covering, "a*/"));
     }
 
     [Fact]
@@ -242,6 +277,351 @@ public sealed class GlobPolicyMutationTests
         Assert.True(IsLinkContained(Path.Combine(tree.Root, "missing"), "*/x"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Known_alias_protection_survives_an_unresolved_sibling(bool brokenFirst)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var protectedDirectory = Directory.CreateDirectory(Path.Combine(covering, "private")).FullName;
+        var protectedFile = Path.Combine(protectedDirectory, "key.xml");
+        File.WriteAllText(protectedFile, "test");
+        void AddBroken() => Directory.CreateSymbolicLink(Path.Combine(covering, "broken"), Path.Combine(covering, "missing"));
+        void AddProtected() => Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), protectedDirectory);
+        if (brokenFirst)
+        {
+            AddBroken();
+            AddProtected();
+        }
+        else
+        {
+            AddProtected();
+            AddBroken();
+        }
+        var policy = new ToolPathPolicy(Bash52, [protectedFile]);
+
+        Assert.False(IsLinkContained(covering, "*/key.xml"));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/*/key.xml", tree.Root));
+    }
+
+    [Fact]
+    public void A_broken_alias_retains_its_known_protected_suffix()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var missing = Path.Combine(covering, "missing");
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), missing);
+        var policy = new ToolPathPolicy(Bash52, [Path.Combine(missing, "key.xml")]);
+
+        Assert.False(IsLinkContained(covering, "a*/key.xml"));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/a*/key.xml", tree.Root));
+    }
+
+    [Fact]
+    public void Alias_residual_pattern_reaches_a_protected_descendant()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var ordinary = Directory.CreateDirectory(Path.Combine(covering, "ordinary")).FullName;
+        var protectedDirectory = Directory.CreateDirectory(Path.Combine(ordinary, "keys")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), ordinary);
+        var policy = new ToolPathPolicy(Bash52, [protectedDirectory]);
+
+        Assert.True(IsLinkContained(covering, "a*/*/key.xml"));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/a*/*/key.xml", tree.Root));
+        Assert.False(policy.CommandReferencesDeniedPath($"cat {covering}/a*/logs/key.xml", tree.Root));
+    }
+
+    [Fact]
+    public void Alias_residual_directory_keeps_the_literal_parent_decision()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var ordinary = Directory.CreateDirectory(Path.Combine(covering, "ordinary")).FullName;
+        var keys = Directory.CreateDirectory(Path.Combine(ordinary, "keys")).FullName;
+        var protectedFile = Path.Combine(keys, "key.xml");
+        File.WriteAllText(protectedFile, "test");
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), ordinary);
+        var policy = new ToolPathPolicy(Bash52, [protectedFile]);
+
+        Assert.False(policy.CommandReferencesDeniedPath($"ls -d {covering}/a*/*", tree.Root));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/a*/*/*.xml", tree.Root));
+    }
+
+    [Fact]
+    public void Incomplete_alias_residual_reach_keeps_the_default_credential_store_protection()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var environment = Bash52;
+        Assert.NotNull(environment.HomeDirectory);
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), environment.HomeDirectory);
+        var policy = new ToolPathPolicy(environment, [Path.Combine(tree.Root, "unrelated")]);
+
+        Assert.False(IsLinkContained(covering, "a*/.netclaw/k*/*.xml"));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/a*/.netclaw/k*/*.xml", tree.Root));
+    }
+
+    [Theory]
+    [InlineData("self")]
+    [InlineData("cycle")]
+    [InlineData("broken")]
+    [InlineData("outside-then-back")]
+    public void Unproved_alias_reach_cannot_supply_reusable_scope(string kind)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var ordinary = Directory.CreateDirectory(Path.Combine(covering, "ordinary")).FullName;
+        var alias = Path.Combine(covering, "alias");
+        switch (kind)
+        {
+            case "self":
+                Directory.CreateSymbolicLink(alias, alias);
+                break;
+            case "cycle":
+                Directory.CreateSymbolicLink(alias, Path.Combine(covering, "other"));
+                Directory.CreateSymbolicLink(Path.Combine(covering, "other"), alias);
+                break;
+            case "broken":
+                Directory.CreateSymbolicLink(alias, Path.Combine(covering, "missing"));
+                break;
+            case "outside-then-back":
+                var outside = Path.Combine(tree.Root, "outside");
+                Directory.CreateSymbolicLink(outside, ordinary);
+                Directory.CreateSymbolicLink(alias, outside);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+
+        Assert.False(IsLinkContained(covering, "*/x"));
+    }
+
+    [Fact]
+    public void An_alias_cannot_return_to_a_physical_ancestor_that_the_first_alias_skipped()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var parent = Directory.CreateDirectory(Path.Combine(covering, "parent")).FullName;
+        var child = Directory.CreateDirectory(Path.Combine(parent, "child")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), child);
+        Directory.CreateSymbolicLink(Path.Combine(child, "back"), parent);
+
+        Assert.False(IsLinkContained(covering, "a*/b*/x"));
+    }
+
+    [Theory]
+    [InlineData("local", true)]
+    [InlineData("sibling", false)]
+    [InlineData("outside", false)]
+    [InlineData("sibling-directory", false)]
+    [InlineData("matching-intermediate", true)]
+    [InlineData("nonmatching-leaf", false)]
+    [InlineData("nonmatching-intermediate", false)]
+    public void A_leaf_alias_retains_the_immediate_directory_boundary(string shape, bool complete)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var source = Directory.CreateDirectory(Path.Combine(covering, "a")).FullName;
+        var sibling = Directory.CreateDirectory(Path.Combine(covering, "b")).FullName;
+        var outside = Directory.CreateDirectory(Path.Combine(tree.Root, "outside")).FullName;
+        var targetDirectory = shape switch
+        {
+            "local" => source,
+            "sibling" or "sibling-directory" or "nonmatching-leaf" or "nonmatching-intermediate" or "matching-intermediate" => sibling,
+            "outside" => outside,
+            _ => throw new ArgumentOutOfRangeException(nameof(shape))
+        };
+        var target = Path.Combine(targetDirectory, "item.txt");
+        File.WriteAllText(target, "test");
+        var pattern = shape switch
+        {
+            "sibling-directory" => "*/*/",
+            "nonmatching-leaf" => "*/wanted*.txt",
+            "nonmatching-intermediate" => "*/x*/*.txt",
+            "matching-intermediate" => "*/a*/*.txt",
+            _ => "*/*.txt"
+        };
+        if (shape is "sibling-directory" or "nonmatching-intermediate" or "matching-intermediate")
+            Directory.CreateSymbolicLink(Path.Combine(source, "alias"), targetDirectory);
+        else
+            File.CreateSymbolicLink(Path.Combine(source, "alias.txt"), target);
+
+        Assert.Equal(complete, IsLinkContained(covering, pattern));
+        if (shape is "local" or "sibling" or "outside")
+        {
+            var policy = new ToolPathPolicy(Bash52, [target]);
+            Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/{pattern}", tree.Root));
+        }
+    }
+
+    [Fact]
+    public void A_leaf_chain_can_return_to_its_immediate_directory_within_the_original_cover()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var source = Directory.CreateDirectory(Path.Combine(covering, "a")).FullName;
+        var sibling = Directory.CreateDirectory(Path.Combine(covering, ".hop-directory")).FullName;
+        var target = Path.Combine(source, "item.txt");
+        File.WriteAllText(target, "test");
+        var hop = Path.Combine(sibling, "hop");
+        File.CreateSymbolicLink(hop, target);
+        File.CreateSymbolicLink(Path.Combine(source, "alias.txt"), hop);
+
+        Assert.True(IsLinkContained(covering, "a*/*.txt"));
+        var policy = new ToolPathPolicy(Bash52, [target]);
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/a*/*.txt", tree.Root));
+    }
+
+    [Fact]
+    public void A_nonmatching_alias_does_not_add_an_unrelated_target_scope()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var source = Directory.CreateDirectory(Path.Combine(covering, "a")).FullName;
+        var target = Directory.CreateDirectory(Path.Combine(source, "private")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(source, "other"), target);
+        var analysis = new ShellCommandAnalyzer(Bash52).Analyze($"touch {covering}/*/wanted*.txt", tree.Root);
+        var occurrence = Assert.Single(analysis.Commands);
+        var pattern = Assert.IsType<ShellValueDomain.PathPattern>(
+            ShellGlobScope.FindGlobPattern(occurrence, occurrence.Clause.Args.Last()));
+        Assert.True(Netclaw.Security.Authorization.Filesystem.CanonicalPath.TryCreateHost(covering, null, out var canonical));
+
+        var reach = Assert.IsType<ShellGlobReach.Complete>(ShellGlobScope.ResolveReach(canonical, pattern));
+
+        Assert.Equal(canonical, Assert.Single(reach.Scopes));
+        Assert.Empty(reach.Targets);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Alias_child_reach_requires_a_remaining_pattern_segment(bool hasRemainingSegment)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var target = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
+        var child = Path.Combine(target, "child.txt");
+        File.WriteAllText(child, "test");
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), target);
+        var suffix = hasRemainingSegment ? "a*/*" : "a*/";
+        var analysis = new ShellCommandAnalyzer(Bash52).Analyze($"ls {covering}/{suffix}", tree.Root);
+        var occurrence = Assert.Single(analysis.Commands);
+        var pattern = Assert.IsType<ShellValueDomain.PathPattern>(
+            ShellGlobScope.FindGlobPattern(occurrence, occurrence.Clause.Args.Last()));
+        Assert.True(Netclaw.Security.Authorization.Filesystem.CanonicalPath.TryCreateHost(covering, null, out var canonical));
+        var reach = Assert.IsType<ShellGlobReach.Complete>(ShellGlobScope.ResolveReach(canonical, pattern));
+        var alias = Assert.Single(reach.Targets);
+
+        var match = ShellGlobScope.MatchPathToward(pattern, alias, child);
+
+        Assert.Equal(hasRemainingSegment ? child : null, match);
+    }
+
+    [Fact]
+    public void A_final_file_alias_has_the_scope_of_its_target_directory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var targetDirectory = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
+        var targetFile = Path.Combine(targetDirectory, "file.txt");
+        File.WriteAllText(targetFile, "test");
+        File.CreateSymbolicLink(Path.Combine(covering, "alias"), targetFile);
+        var analysis = new ShellCommandAnalyzer(Bash52).Analyze($"cat {covering}/a*", tree.Root);
+        var occurrence = Assert.Single(analysis.Commands);
+        var pattern = Assert.IsType<ShellValueDomain.PathPattern>(
+            ShellGlobScope.FindGlobPattern(occurrence, occurrence.Clause.Args.Last()));
+        Assert.True(Netclaw.Security.Authorization.Filesystem.CanonicalPath.TryCreateHost(covering, null, out var canonical));
+
+        var reach = Assert.IsType<ShellGlobReach.Complete>(ShellGlobScope.ResolveReach(canonical, pattern));
+
+        Assert.Contains(reach.Scopes, path => path.Value == targetDirectory);
+        Assert.DoesNotContain(reach.Scopes, path => path.Value == targetFile);
+    }
+
+    [Fact]
+    public void Directory_only_glob_excludes_a_final_file_alias_from_protected_reach()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var targetDirectory = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
+        var protectedFile = Path.Combine(covering, "private.txt");
+        File.WriteAllText(protectedFile, "test");
+        File.CreateSymbolicLink(Path.Combine(covering, "alias-file"), protectedFile);
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias-directory"), targetDirectory);
+        var policy = new ToolPathPolicy(Bash52, [protectedFile]);
+
+        Assert.True(IsLinkContained(covering, "a*/"));
+        Assert.False(policy.CommandReferencesDeniedPath($"ls -d {covering}/a*/", tree.Root));
+        Assert.False(policy.CommandReferencesDeniedPath($"ls -d {covering}/a*/*/", tree.Root));
+        Assert.False(policy.CommandReferencesDeniedPath($"ls -d {covering}/a*/*", tree.Root));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/a*", tree.Root));
+    }
+
+    [Fact]
+    public void Complete_alias_reach_retains_the_real_target_scope()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var target = Directory.CreateDirectory(Path.Combine(covering, "target")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), target);
+        var analysis = new ShellCommandAnalyzer(Bash52).Analyze($"cat {covering}/a*/x", tree.Root);
+        var occurrence = Assert.Single(analysis.Commands);
+        var pattern = Assert.IsType<ShellValueDomain.PathPattern>(
+            ShellGlobScope.FindGlobPattern(occurrence, occurrence.Clause.Args.Last()));
+        Assert.True(Netclaw.Security.Authorization.Filesystem.CanonicalPath.TryCreateHost(covering, null, out var canonical));
+
+        var reach = Assert.IsType<ShellGlobReach.Complete>(ShellGlobScope.ResolveReach(canonical, pattern));
+
+        Assert.Contains(reach.Scopes, path => path.Value == target);
+        var aliasReach = Assert.Single(reach.Targets);
+        Assert.Equal(target, aliasReach.Target.Value);
+        Assert.Equal(1, aliasReach.NextSegmentIndex);
+    }
+
     private static bool IsLinkContained(string coveringDirectory, string pattern)
     {
         var analysis = new ShellCommandAnalyzer(Bash52).Analyze($"ls {coveringDirectory}/{pattern}", "/work");
@@ -250,7 +630,7 @@ public sealed class GlobPolicyMutationTests
             ShellGlobScope.FindGlobPattern(occurrence, occurrence.Clause.Args.Last()));
         Assert.True(Netclaw.Security.Authorization.Filesystem.CanonicalPath.TryCreateHost(
             glob.CoveringDirectory, null, out var covering));
-        return ShellGlobScope.IsLinkContained(covering, glob.Glob!);
+        return ShellGlobScope.ResolveReach(covering, glob) is ShellGlobReach.Complete;
     }
 
     private sealed class TemporaryTree : IDisposable

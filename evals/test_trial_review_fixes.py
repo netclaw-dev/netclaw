@@ -190,11 +190,9 @@ class MidnightRotationTests(ReviewHarnessCase):
         self.assertEqual([self.EARLY], self.lines("daemon-session.log"), done.stderr)
         self.assertEqual([self.NEUTRAL, self.EARLY], self.lines("daemon-window.log"))
 
-    def test_daemon_file_that_exists_before_the_trial_is_not_part_of_the_window(self):
-        # M5 guard. Planted bug: look up the newest daemon file again just
-        # before the window copy. A touched older file then replaces the file
-        # that was read at the start of the trial. The window and the session
-        # lines come from the wrong file.
+    def test_trial_keeps_new_tails_from_older_and_current_files_in_date_order_without_old_prefixes(self):
+        # Each file contributes only the lines after its baseline offset.
+        # The future mtime must not make the older file replace the current file.
         old = self.home / "logs" / "daemon-2026-10-14.log"
         old.write_text("08:00:00.000 [INF] Old.Day: one\n08:00:01.000 [INF] Old.Day: two\n"
                        "08:00:02.000 [INF] Old.Day: three\n")
@@ -206,7 +204,7 @@ class MidnightRotationTests(ReviewHarnessCase):
                          FAKE_FUTURE_MTIME="daemon-2026-10-14.log")
 
         self.assertEqual([self.LATE], self.lines("daemon-session.log"))
-        self.assertEqual([self.LATE], self.lines("daemon-window.log"))
+        self.assertEqual([stray, self.LATE], self.lines("daemon-window.log"))
 
 
 class AssertionEvidenceTests(ReviewHarnessCase):
@@ -279,15 +277,20 @@ class MultiTurnEvidenceTests(ReviewHarnessCase):
         self.assertTrue(all(f"session={session['session_id']} " in line for line in kept))
 
     def test_cli_crash_is_recorded_with_its_exit_code_and_crash_log(self):
-        # Guard. Planted bug: drop other_new_files, or stop the run at exit 134.
-        # The crash log (D4 row 59: disk full) is the only trace of an abort.
-        self.run_harness("text", ["CRASH now"], FAKE_SESSION="signalr/crash")
+        # The abort must retain the crash log reference and the original exit code.
+        self.run_harness("text", ["CRASH now"], runs=2,
+                         expect_abort=True, FAKE_SESSION="signalr/crash")
 
         self.assertEqual(134, self.read_json(self.raw("cli-exit.json"))["exit_code"])
         session = self.read_json(self.raw("session.json"))
         self.assertEqual("ok", session["status"])
         self.assertEqual(["crash-20261015-131615.log"], session["other_new_files"])
-        self.assertIn("demo|1|", self.results.read_text(), "the run must store a result")
+        self.assertEqual("No space left on device\n",
+                         (self.home / "logs/crash-20261015-131615.log").read_text())
+        self.assertEqual(["CRASH now"], (self.state / "prompts.txt").read_text().splitlines())
+        self.assertFalse(self.trial_dir(2).exists())
+        self.assertFalse(self.results.exists() and self.results.read_text(),
+                         "The abort must precede score calculation")
 
 
 class DiscoverCrashTests(ReviewHarnessCase):

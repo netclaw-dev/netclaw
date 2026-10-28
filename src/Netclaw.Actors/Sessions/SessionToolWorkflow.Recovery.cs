@@ -73,9 +73,13 @@ internal sealed partial class SessionToolWorkflow
             out var redriveFailure);
         if (redriveFailure is not null)
             return UnsafeReplay(redriveFailure);
+        var completedSiblings = ParkedToolBatchHistory.FindToolResultsFor(state.History, assistant).ToArray();
+        if (completedSiblings.Any(static result => result.ToolOutcomeCategory is null))
+            return UnsafeReplay("a recovered sibling result lacks progress receipt facts");
         if (!MarkRedriving(resolved.Pending))
             return UnsafeReplay($"approval turn phase is {TurnPhase}");
 
+        _activeBatch.Start(assistant, completedSiblings);
         return new RecoveredContinuation.Dispatch(calls, context, plan);
 
         RecoveredContinuation.Abandon UnsafeReplay(string diagnostic)

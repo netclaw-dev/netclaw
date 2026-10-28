@@ -45,7 +45,11 @@ internal sealed record ToolCallResult(
     ManagedTemporaryCorrectionChange? ManagedTemporaryCorrectionUpdate = null,
     string? FailureCode = null,
     ToolInvocationReceipt? Receipt = null,
-    ToolExposureRequest? ExposureRequest = null);
+    ToolExposureRequest? ExposureRequest = null)
+{
+    public SerializableChatMessage MessageWithProgress
+        => ToolCycleResult.FromInvocation(Message, Receipt, FailureCode).WithMessageFacts(Message);
+}
 
 internal sealed record ModelInputMaterializationResult(
     IReadOnlyList<SerializableMediaReference> MediaReferences,

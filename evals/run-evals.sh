@@ -52,7 +52,7 @@
 # Exit codes:
 #   0  every case passed
 #   1  at least one case failed
-#   2  the harness stopped (bad setting, eval container died, broken evidence step)
+#   2  the harness stopped (prompt failure, unconfirmed containment, or infrastructure fault)
 #   3  no case failed, and at least one case is inconclusive
 set -euo pipefail
 
@@ -68,6 +68,9 @@ PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-60}"
 MAX_PROMPT_TIMEOUT="$PROMPT_TIMEOUT"
 EVAL_PORT="${NETCLAW_EVAL_PORT:-5299}"
 EVAL_CONTAINER_NAME="netclaw-eval-$$"
+EVAL_CONTAINER_ID=""
+# A failed containment attempt must not repeat during EXIT cleanup.
+EVAL_CONTAINMENT_STATUS=""
 # True after seed_eval_memories seeded the store. reset_memory_store acts only then.
 # A failed seed stops the run, so a run never goes on with the reset off.
 EVAL_MEMORY_SEEDED=false
@@ -143,13 +146,10 @@ LARGE_OUTPUT_EVAL_COMMAND="awk 'BEGIN{x=1;for(i=1;i<=20000;i++){x=(x*48271)%2147
 STDOUT_FILE=""
 STDERR_FILE=""
 LAST_TURN_STDOUT_FILE=""
-DAEMON_LOG_LINES_BEFORE=0
 
 # Per-trial state (set by begin_trial, read by the evidence helpers)
 TRIAL_RAW=""
 TRIAL_KNOWN_LOGS_FILE=""
-TRIAL_DAEMON_LOG=""
-TRIAL_DAEMON_LINES_BEFORE=0
 PICKED_VARIANT=""
 PICKED_VARIANT_INDEX=0
 PICKED_TRIAL_SEED=0
@@ -270,14 +270,44 @@ resolve_eval_target() {
     EVAL_COMPACTION_MODEL_ID="${EVAL_COMPACTION_MODEL_ID:-$EVAL_MODEL_ID}"
 }
 
-cleanup_eval_env() {
-    # Archive logs and results to a persistent location before teardown.
-    archive_eval_run
+contain_eval_container() {
+    case "$EVAL_CONTAINMENT_STATUS" in
+        confirmed) return 0 ;;
+        unconfirmed) return 1 ;;
+    esac
+    # No launch means that this harness owns no container.
+    [[ -n "$EVAL_CONTAINER_ID" ]] || return 0
 
-    # Container is launched with --rm, so `docker stop` also removes it.
-    if [[ -n "${EVAL_CONTAINER_NAME:-}" ]]; then
-        docker stop "$EVAL_CONTAINER_NAME" >/dev/null 2>&1 || true
+    EVAL_CONTAINMENT_STATUS=unconfirmed
+    if ! docker stop "$EVAL_CONTAINER_ID" >/dev/null; then
+        echo "ERROR: containment unconfirmed: the owned container stop failed." >&2
+        return 1
     fi
+
+    local running remaining_ids
+    if running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_ID"); then
+        if [[ "$running" == false ]]; then
+            EVAL_CONTAINMENT_STATUS=confirmed
+            return 0
+        fi
+    else
+        # --rm can remove the container before inspect. An inspect error proves nothing.
+        if remaining_ids=$(docker ps --all --no-trunc --quiet --filter "id=$EVAL_CONTAINER_ID") \
+            && [[ -z "$remaining_ids" ]]; then
+            EVAL_CONTAINMENT_STATUS=confirmed
+            return 0
+        fi
+    fi
+    echo "ERROR: containment unconfirmed: Docker did not verify container stop or removal." >&2
+    return 1
+}
+
+cleanup_eval_env() {
+    local exit_code=$? containment_failed=false
+    if ! contain_eval_container; then
+        containment_failed=true
+    fi
+    # Fixture processes belong to this harness, even when container containment fails.
     if [[ -n "${CYCLE_FIXTURE_PID_SAVED:-}" ]]; then
         kill "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
         wait "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
@@ -286,6 +316,14 @@ cleanup_eval_env() {
         kill "$SPILL_FIXTURE_PID_SAVED" 2>/dev/null || true
         wait "$SPILL_FIXTURE_PID_SAVED" 2>/dev/null || true
     fi
+    if [[ "$containment_failed" == true ]]; then
+        echo "ERROR: containment unconfirmed; retain the eval home and captures. Do not reuse or restart this home." >&2
+        exit 2
+    fi
+
+    # Container finalizers must finish before the archive copies their logs.
+    archive_eval_run
+
     # TMPDIR_EVAL only holds host-owned per-prompt stdout/stderr captures, so a
     # plain rm always succeeds — no force_rmrf fallback needed.
     if [[ -n "${TMPDIR_EVAL:-}" && -d "$TMPDIR_EVAL" ]]; then
@@ -296,6 +334,7 @@ cleanup_eval_env() {
     if [[ -n "${EVAL_HOME:-}" && -d "$EVAL_HOME" ]]; then
         force_rmrf "$EVAL_HOME"
     fi
+    exit "$exit_code"
 }
 
 # Archive daemon logs, results DB, and stdout captures to evals/runs/<run-id>/
@@ -770,12 +809,18 @@ start_eval_daemon() {
 
     docker_args+=("$NETCLAW_IMAGE")
 
-    local docker_err
-    if ! docker_err=$(docker "${docker_args[@]}" 2>&1 >/dev/null); then
-        echo "ERROR: failed to start eval container" >&2
-        [[ -n "$docker_err" ]] && echo "$docker_err" >&2
+    local container_id
+    EVAL_CONTAINMENT_STATUS=unconfirmed
+    if ! container_id=$(docker "${docker_args[@]}"); then
+        echo "ERROR: failed to start eval container; containment unconfirmed." >&2
         exit 2
     fi
+    if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "ERROR: Docker returned no valid container ID; containment unconfirmed." >&2
+        exit 2
+    fi
+    readonly EVAL_CONTAINER_ID="$container_id"
+    EVAL_CONTAINMENT_STATUS=""
 
     # Poll /api/health/ready up to 60s.
     local deadline=$((SECONDS + 60))
@@ -796,7 +841,7 @@ start_eval_daemon() {
         fi
 
         local running
-        running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_NAME" 2>/dev/null || echo "false")
+        running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_ID" 2>/dev/null || echo "false")
         if [[ "$running" != "true" ]]; then
             echo "ERROR: eval container exited during startup" >&2
             docker logs "$EVAL_CONTAINER_NAME" >&2 2>&1 || true
@@ -1118,12 +1163,7 @@ record_variant() {
 snapshot_trial_baseline() {
     TRIAL_KNOWN_LOGS_FILE="$TMPDIR_EVAL/known_logs_$(date +%s%N).txt"
     find "$EVAL_HOME/logs" -maxdepth 1 -type f -printf '%f\n' > "$TRIAL_KNOWN_LOGS_FILE"
-    resolve_daemon_log
-    TRIAL_DAEMON_LOG="$DAEMON_LOG"
-    TRIAL_DAEMON_LINES_BEFORE=0
-    if [[ -f "$TRIAL_DAEMON_LOG" ]]; then
-        TRIAL_DAEMON_LINES_BEFORE=$(wc -l < "$TRIAL_DAEMON_LOG")
-    fi
+    resolve_daemon_log "$TRIAL_RAW/daemon-baseline.json"
     # The memory snapshot: the ids of every memory that exists now and that the
     # harness did not seed. reset_trial_state ran just before, so the list
     # should be empty. trial_verdict.py makes the trial inconclusive when
@@ -1235,41 +1275,15 @@ finish_trial() {
 
 ## Copies the daemon window and writes assert.json. Call it right after the
 ## assertion, so the window holds every line that the assertion could read.
-## The window starts at the first line after the trial baseline, in the daemon
-## file that was current then. A multi-turn trial starts at turn 1, not at the
-## last turn. A daemon file that did not exist at the baseline (the UTC day
-## changed) is added in full, in name order.
+## The trial baseline holds each segment offset before turn 1.
+## The same reader supplies prompt assertions and this complete trial window.
 ## Args: assertion exit code
 finish_assertion_evidence() {
     local assert_rc="$1"
     local window="$TRIAL_RAW/daemon-window.log"
-    local lines_after name
-    local -a new_files=()
-    while IFS= read -r name; do
-        if [[ "$name" != "$(basename "$TRIAL_DAEMON_LOG")" ]] \
-            && ! grep -qxF -- "$name" "$TRIAL_KNOWN_LOGS_FILE"; then
-            new_files+=("$name")
-        fi
-    done < <(find "$EVAL_HOME/logs" -maxdepth 1 -type f -name 'daemon-*.log' -printf '%f\n' | sort)
-
-    if [[ ! -f "$TRIAL_DAEMON_LOG" ]]; then
-        echo "ERROR: daemon log $TRIAL_DAEMON_LOG is gone after the assertion" >&2
-        exit 2
-    fi
-    lines_after=$(wc -l < "$TRIAL_DAEMON_LOG")
-    head -n "$lines_after" "$TRIAL_DAEMON_LOG" \
-        | tail -n +"$((TRIAL_DAEMON_LINES_BEFORE + 1))" > "$window"
-    for name in "${new_files[@]}"; do
-        cat "$EVAL_HOME/logs/$name" >> "$window"
-    done
-
-    jq -n --argjson exit_code "$assert_rc" \
-        --arg daemon_log "$(basename "$TRIAL_DAEMON_LOG")" \
-        --argjson before "$TRIAL_DAEMON_LINES_BEFORE" --argjson after "$lines_after" \
-        --args '{exit_code: $exit_code, daemon_log: $daemon_log,
-                 window_lines_before: $before, window_lines_after: $after,
-                 extra_daemon_logs: $ARGS.positional}' "${new_files[@]}" \
-        > "$TRIAL_RAW/assert.json"
+    python3 "$TRIAL_EVIDENCE_PY" daemon-window --logs-dir "$EVAL_HOME/logs" \
+        --baseline "$TRIAL_RAW/daemon-baseline.json" --assert-report "$TRIAL_RAW/assert.json" \
+        --exit-code "$assert_rc" > "$window" || exit 2
 
     # An assertion that reports "inconclusive" returns 1 like a fail. The report
     # tells them apart (trial_verdict.py reads assert-report.json). A report
@@ -1401,6 +1415,13 @@ check_prompt_exit_status() {
         else
             echo "ERROR: $prompt_kind exited with status $exit_code; the eval run stops before another prompt." >&2
         fi
+        if ! contain_eval_container; then
+            exit 2
+        fi
+        # Warm-up has no trial. Preserve trial session evidence before EXIT deletes the home.
+        if [[ -n "$TRIAL_RAW" ]]; then
+            finish_trial
+        fi
         exit 2
     fi
 }
@@ -1409,7 +1430,7 @@ check_prompt_exit_status() {
 
 check_daemon_alive() {
     local running
-    running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_NAME" 2>/dev/null || echo "false")
+    running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_ID" 2>/dev/null || echo "false")
     if [[ "$running" != "true" ]]; then
         echo ""
         echo "ERROR: Eval container died mid-run. Aborting eval." >&2
@@ -1438,15 +1459,8 @@ run_prompt() {
     STDOUT_FILE="$TMPDIR_EVAL/stdout_${ts}.txt"
     STDERR_FILE="$TMPDIR_EVAL/stderr_${ts}.txt"
 
-    # Record daemon log position before the prompt (the daemon writes to a
-    # daily-rotating file at /root/.netclaw/logs/daemon-YYYY-MM-DD.log, and
-    # the container bind-mounts that directory from $EVAL_HOME/logs).
-    resolve_daemon_log
-    if [[ -f "$DAEMON_LOG" ]]; then
-        DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
-    else
-        DAEMON_LOG_LINES_BEFORE=0
-    fi
+    # Snapshot all segment offsets before the prompt.
+    resolve_daemon_log "${STDOUT_FILE}.daemon-baseline.json"
 
     # Run prompt via the host CLI, but redirect it at the eval container's
     # daemon and keep CLI-side path resolution inside the eval sandbox.
@@ -1469,6 +1483,7 @@ run_prompt() {
     ended_at=$(iso_now)
     record_cli_call "$TRIAL_RAW" "$prompt" "$output_format" "$exit_code" \
         "$started_at" "$ended_at" "$STDOUT_FILE" "$STDERR_FILE"
+    check_prompt_exit_status "$ts" "$exit_code" "Trial prompt"
 
     # Brief pause for daemon log flush
     sleep 2
@@ -1480,12 +1495,7 @@ run_coordination_observer_prompt() {
     ts="$(date +%s%N)"
     STDOUT_FILE="$TMPDIR_EVAL/stdout_${ts}.txt"
     STDERR_FILE="$TMPDIR_EVAL/stderr_${ts}.txt"
-    resolve_daemon_log
-    if [[ -f "$DAEMON_LOG" ]]; then
-        DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
-    else
-        DAEMON_LOG_LINES_BEFORE=0
-    fi
+    resolve_daemon_log "${STDOUT_FILE}.daemon-baseline.json"
 
     local started_at ended_at exit_code=0
     started_at=$(iso_now)
@@ -1497,6 +1507,7 @@ run_coordination_observer_prompt() {
     ended_at=$(iso_now)
     record_cli_call "$TRIAL_RAW" "$prompt" json "$exit_code" \
         "$started_at" "$ended_at" "$STDOUT_FILE" "$STDERR_FILE"
+    check_prompt_exit_status "$ts" "$exit_code" "Coordination observer prompt"
 }
 
 ## Runs a prompt against an existing (or new) named session via `chat -p --resume`.
@@ -1533,12 +1544,7 @@ run_prompt_resume() {
     fi
     STDERR_FILE="$MULTI_TURN_STDERR_FILE"
 
-    resolve_daemon_log
-    if [[ -f "$DAEMON_LOG" ]]; then
-        DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
-    else
-        DAEMON_LOG_LINES_BEFORE=0
-    fi
+    resolve_daemon_log "${STDOUT_FILE}.daemon-baseline.json"
 
     local -a output_args=()
     if [[ "$output_format" == "json" ]]; then
@@ -1555,6 +1561,7 @@ run_prompt_resume() {
     ended_at=$(iso_now)
     record_cli_call "$TRIAL_RAW/turn-$(printf '%02d' "$turn_number")" "$prompt" "$output_format" \
         "$exit_code" "$started_at" "$ended_at" "$turn_file" "$turn_stderr_file"
+    check_prompt_exit_status "$ts" "$exit_code" "Resumed trial prompt"
 
     # Append this turn's output to the shared files so assertions see all turns.
     cat "$turn_file" >> "$STDOUT_FILE"
@@ -1703,61 +1710,42 @@ stdout_parent_text_not_contains() {
     return 0
 }
 
-## The daemon runs inside the container on its own clock (UTC), so a host
-## date computation can name a log file the daemon never writes — every
-## daemon_log_contains then fails silently for the whole run (observed when a
-## CDT-evening run crossed UTC midnight). Resolve the newest real log file
-## instead of trusting a computed date. Callers re-resolve before they take a
-## per-case line baseline; a midnight rollover inside a single case remains
-## unhandled and acceptable.
-## A run needs a daemon log, because every assertion and the trial evidence
-## read it. When none exists, the daemon did not start or write its log, so
-## the run stops.
+## Use actual daemon segments. The daemon clock can differ from the host clock.
+## The snapshot path belongs to either the prompt capture or the complete trial.
 resolve_daemon_log() {
-    local newest
-    # `ls` exits non-zero when no file matches. The empty check below turns
-    # that case into a clear error.
-    newest=$(ls -1t "$EVAL_HOME"/logs/daemon-*.log 2>/dev/null | head -n 1) || true
-    if [[ -z "$newest" ]]; then
-        echo "ERROR: no daemon log (daemon-*.log) in $EVAL_HOME/logs. The daemon did not write its log." >&2
-        exit 2
-    fi
-    DAEMON_LOG="$newest"
+    DAEMON_LOG=$(python3 "$TRIAL_EVIDENCE_PY" daemon-snapshot --logs-dir "$EVAL_HOME/logs" \
+        --dest "${1:?daemon baseline path is required}") || exit 2
 }
 
 daemon_log_tail() {
-    if [[ -f "$DAEMON_LOG" ]]; then
-        tail -n +"$((DAEMON_LOG_LINES_BEFORE + 1))" "$DAEMON_LOG" 2>/dev/null
-    fi
+    python3 "$TRIAL_EVIDENCE_PY" daemon-window --logs-dir "$EVAL_HOME/logs" \
+        --baseline "${STDOUT_FILE:?prompt capture path is required}.daemon-baseline.json"
 }
 
 daemon_log_tail_contains_fixed() {
-    local text="$1"
-    [[ -f "$DAEMON_LOG" ]] || return 1
-    awk -v start="$((DAEMON_LOG_LINES_BEFORE + 1))" -v text="$text" '
-        NR >= start && index($0, text) { found = 1 }
-        END { exit found ? 0 : 1 }
-    ' "$DAEMON_LOG"
+    local window
+    window=$(daemon_log_tail) || return 2
+    grep -qaF -- "$1" <<< "$window"
 }
 
 daemon_log_tail_not_contains_fixed() {
-    ! daemon_log_tail_contains_fixed "$1"
+    local window
+    window=$(daemon_log_tail) || return 2
+    ! grep -qaF -- "$1" <<< "$window"
 }
 
 daemon_log_contains() {
-    daemon_log_tail | grep -qaE "$1" 2>/dev/null
+    local window
+    window=$(daemon_log_tail) || return 2
+    grep -qaE -- "$1" <<< "$window"
 }
 
 daemon_log_skill_loaded() {
-    local skill_name="$1"
-    daemon_log_tail | grep -qaE "turn_skill_loaded skill=$skill_name" 2>/dev/null
+    daemon_log_contains "turn_skill_loaded skill=$1"
 }
 
 daemon_log_skill_loaded_by_method() {
-    local skill_name="$1"
-    local method="$2"
-    daemon_log_tail | grep -qaE \
-        "turn_skill_loaded skill=$skill_name method=$method" 2>/dev/null
+    daemon_log_contains "turn_skill_loaded skill=$1 method=$2"
 }
 
 daemon_log_skill_loaded_via_skill_tool() {
@@ -1769,14 +1757,16 @@ daemon_log_skill_loaded_via_file_read() {
 }
 
 daemon_log_no_skill_loaded() {
-    ! daemon_log_tail | grep -qaE "turn_skill_loaded" 2>/dev/null
+    local window
+    window=$(daemon_log_tail) || return 2
+    ! grep -qaE "turn_skill_loaded" <<< "$window"
 }
 
 daemon_log_no_unexpected_skill_loaded() {
-    local expected_skill="$1"
-    ! daemon_log_tail \
-        | grep -aE "turn_skill_loaded" 2>/dev/null \
-        | grep -qavE "turn_skill_loaded skill=$expected_skill method=skill_load" 2>/dev/null
+    local expected_skill="$1" window
+    window=$(daemon_log_tail) || return 2
+    ! grep -aE "turn_skill_loaded" <<< "$window" \
+        | grep -avE "turn_skill_loaded skill=$expected_skill method=skill_load" > /dev/null
 }
 
 stdout_tool_called() {
@@ -3332,6 +3322,20 @@ assert_approval_scratch_scope_guidance() {
         && stdout_json_response_contains 'cwd=preserve'
 }
 
+assert_approval_contained_alias_guidance() {
+    stdout_json_envelope_valid \
+        && daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
+        && ! stdout_json_tool_called 'shell_execute' \
+        && jq -e '
+          [.response | scan("(?<![[:alnum:]_-])(contained|protected|outside|budget|auto-protected)=([[:alnum:]_-]+)(?![[:alnum:]_/|+-])")] as $fields
+          | {contained: "proof-and-authority", protected: "deny", outside: "exact-consent-or-deny", budget: "4096", "auto-protected": "deny"}
+          | to_entries
+          | all(.[]; . as $expected
+              | [$fields[] | select(.[0] == $expected.key)] as $matches
+              | ($matches | length) == 1 and $matches[0][1] == $expected.value)
+        ' "$STDOUT_FILE" >/dev/null
+}
+
 # One command in another directory should use the typed shell argument.
 assert_approval_shell_working_directory_argument() {
     local shell_call
@@ -4497,6 +4501,9 @@ run_all() {
 
     run_case --json approval_scratch_scope_guidance "uses the skill to distinguish program grants and managed scratch authority" \
         "Load netclaw-operations and answer without executing commands. A saved grant names only uv. Does it cover uv run? For command output that needs a Bash redirect, choose shared or managed scratch. Choose whether to preserve or change the project directory. Answer with these fields: subcommands=covered|separate; scratch=shared|managed; cwd=preserve|change."
+
+    run_case --json approval_contained_alias_guidance "keeps bounded alias reach subject to existing authority and protection" \
+        "Load netclaw-operations and answer without executing commands. In a Personal session with Approval consent, a bounded Bash glob crosses a directory alias whose target stays inside its covering directory. State the permission rule, the result for a protected target, and the result for an outside or unproved target. Also state whether Auto consent permits a known protected target. Choose exactly one value per field: contained=automatic|proof-and-authority; protected=allow|deny; outside=reuse|exact-consent-or-deny; budget=4096|unbounded; auto-protected=allow|deny."
 
     run_case --json approval_shell_working_directory_argument "uses the typed WorkingDirectory argument instead of inline cd" \
         "Run pwd from /tmp with one shell_execute call. Do not change the session project directory."

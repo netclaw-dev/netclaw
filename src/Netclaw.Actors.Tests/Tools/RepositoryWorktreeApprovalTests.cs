@@ -21,6 +21,48 @@ namespace Netclaw.Actors.Tests.Tools;
 public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture fixture)
 {
     [Fact]
+    public async Task Glob_alias_target_inside_the_cover_requires_its_own_repository_identity()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = CreateTestRoot("repository-glob-alias-");
+        try
+        {
+            var main = Path.Combine(root.FullName, "main");
+            var session = Directory.CreateDirectory(Path.Combine(root.FullName, "session")).FullName;
+            RunGit(root.FullName, "init", main);
+            var ordinary = Directory.CreateDirectory(Path.Combine(main, "ordinary")).FullName;
+            var nested = Path.Combine(main, "nested");
+            RunGit(main, "init", nested);
+            var alias = Path.Combine(main, "alias");
+            Directory.CreateSymbolicLink(alias, ordinary);
+            var command = $"touch '{main}'/a*/*.tmp";
+            await using var sameRepository = await CreateHarnessAsync(
+                "glob-alias-same-repository", main, main, session, command,
+                Approvals.PersistentRepository("touch"), ShellApprovalHost.Bash52);
+            var sameDecision = await sameRepository.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ToolAuthorizationOutcome.Allowed, sameDecision.Outcome);
+            Assert.Equal(ToolAllowReason.StoredApproval, sameDecision.AllowReason);
+
+            Directory.Delete(alias);
+            Directory.CreateSymbolicLink(alias, nested);
+            await using var nestedRepository = await CreateHarnessAsync(
+                "glob-alias-other-repository", main, main, session, command,
+                Approvals.PersistentRepository("touch"), ShellApprovalHost.Bash52);
+            var nestedDecision = await nestedRepository.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, nestedDecision.Outcome);
+            Assert.Contains(nestedDecision.ApprovalContext!.Candidates!, candidate => candidate.Directory == nested);
+            Assert.Equal(Path.Combine(nested, ".git"), nestedDecision.ApprovalContext!.RepositoryCommonDirectory);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Assignment_repository_grant_requires_the_same_assignment_in_a_registered_sibling()
     {
         var root = CreateTestRoot("repository-assignment-fixture-");

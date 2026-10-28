@@ -272,6 +272,11 @@ environment rule, or the held lock file where the environment cannot be read,
 and report a PID with no proof as "not shown to serve" this home. Runbook:
 `docs/runbooks/daemon-upgrade.md`, section "When a command refuses".
 
+An unreadable local config source leaves the local daemon address unknown.
+The stop command reports that state and sends no shutdown notice.
+It still requires the existing process home proof before it sends a signal.
+An absent optional source retains its normal default semantics.
+
 The session journals each accepted input before it acknowledges the source.
 The record retains the text, media, source message ID, and original authority.
 A completed reply, a started tool batch, or a terminal failure consumes the
@@ -325,6 +330,8 @@ then probes `/api/health/ready` on this home's own daemon endpoint (the `Daemon`
 section of `netclaw.json`, not `NETCLAW_DAEMON_ENDPOINT` or a paired remote).
 It exits 1 when the process is not running or readiness does not answer, which
 the container `HEALTHCHECK` relies on. Reports: running/stopped, PID, uptime.
+When a local source cannot be read, status reports an unknown address and exits 1.
+It sends no readiness probe in that state.
 
 `netclaw update` preserves the daemon's lifecycle owner, using the same stop and
 start path as `netclaw daemon stop` and `start`. If the Linux systemd user unit

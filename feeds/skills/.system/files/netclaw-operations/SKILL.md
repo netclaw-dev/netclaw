@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.140.0"
+  version: "2.144.0"
 ---
 
 # Netclaw Operations
@@ -111,6 +111,14 @@ For disposable text that you write, use `file_write` in `temp_dir`, then use `fi
 Standard temporary APIs use `temp_dir` in each shell process. Do not set `TMPDIR`, `TMP`, or `TEMP` in a shell command.
 Use `load_tool` directly for a known exact tool name.
 Use `search_tools` when the capability is known but its exact tool name is not.
+
+For Personal Approval mode, a bounded Bash glob can reuse coverage across a directory alias only after Netclaw proves its full reach.
+The alias and target need the existing path authority and grant scope.
+A protected target still denies the call, also under Auto consent.
+In Approval mode, a broken, outside, cyclic, or uninspectable alias retains exact consent or denial.
+Reusable scope requires 4096 counted units or less. Each intermediate directory visit and each link hop uses one unit.
+Ordinary directory-entry scans are outside this count.
+Do not rewrite a refused glob to hide its target or bypass that limit.
 
 Keep shell approval friction bounded:
 
@@ -316,6 +324,11 @@ Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
+A cause nudge identifies a repeated validation failure across different calls.
+Repair that cause before the next call. A successful repair clears active cause advice.
+Netclaw keeps recent cause evidence for six complete feedback batches.
+A consent pause preserves the unfinished batch. It does not count as another feedback opportunity.
+A nonzero shell exit status counts as a failed tool result, even when the process returns output.
 Repeated empty replies get the `ModelBehavior` kind only when the stream ended with the finish reason `stop` or `length`.
 A text reply that ends with the finish reason `length` and has no tool call is also `ModelBehavior`. Netclaw does not post the cut-off text.
 One model call that streams only thinking for three times `Session.NoProgressTimeoutSeconds` is also `ModelBehavior`.
@@ -653,7 +666,7 @@ An option word with an expansion and no proved value (`-o"$n"`, `--$n=x`) is
 an unknown operand.
 
 On Linux, a glob word (`ls -d ~/repositories/*/akka*`) reaches the paths below
-its covering directory, and that directory is its scope. A glob that can match
+its covering directory. Its scopes include that directory and each proved alias target. A glob that can match
 a protected path or the credential store (`~/.netclaw/keys`,
 `~/.netclaw/config/secrets.json`) is denied, as the literal path is. A glob
 whose first segment is a wildcard (`*/notes.md`) can expand to an option, so

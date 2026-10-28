@@ -11,6 +11,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
@@ -138,6 +139,129 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
         Assert.Equal(expected, ResultOf(resumed.ReceivedMessagesByCall[0], "call-park"));
     }
 
+    [Fact]
+    public async Task A_park_counts_actual_failures_from_finished_sibling_calls()
+    {
+        var looper = new ProgressTool();
+        var consent = new CountingTool(ConsentToolName);
+        var first = new FunctionCallContent("bad-before", "looper", new Dictionary<string, object?> { ["query"] = "a" });
+        var sibling = new FunctionCallContent("bad-sibling", "looper", new Dictionary<string, object?> { ["query"] = "b" });
+        var client = new ScriptedToolCallChatClient([[first], [Call("call-park", ConsentToolName), sibling]], "unused");
+        var owner = CreateTestProbe("progress-park-owner");
+        var child = Launch(owner, Definition(looper, consent), client, Scope(), null);
+
+        var (_, park, _) = await ExpectParkAsync(owner, []);
+        owner.Send(child, new ChildTerminalCommitted());
+
+        Assert.Equal(2, park.LoopGuard.CallsSinceProgress);
+        Assert.Empty(looper.Queries);
+        Assert.Equal(0, consent.CallCount);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task A_resumed_approval_result_updates_progress_before_the_next_model_request(bool approve, bool siblingSucceeded)
+    {
+        var consent = new CountingTool(ConsentToolName);
+        var first = new ScriptedToolCallChatClient([[Call("call-park", ConsentToolName)]], "unused");
+        var owner = CreateTestProbe("progress-resume-owner");
+        var child = Launch(owner, Definition(consent), first, Scope(), null);
+        var (_, park, requests) = await ExpectParkAsync(owner, []);
+        owner.Send(child, new ChildTerminalCommitted());
+        park = park with { LoopGuard = park.LoopGuard with { CallsSinceProgress = siblingSucceeded ? 0 : 6,
+            // The stage drives the nudge, so a park must carry a score and stage that agree with the count:
+            // six strong failures are twelve half-units, which is the escalation rung.
+            ProgressFailureUnits = siblingSucceeded ? 0 : 12,
+            ProgressStage = siblingSucceeded ? RefusedRepeatAction.None : RefusedRepeatAction.EscalatedNudge,
+            IncompleteBatchHadSuccess = siblingSucceeded } };
+        var request = Assert.Single(requests);
+        var answer = approve
+            ? new ApprovalRedriveEntry(request.AuthorizationAttemptId, OneTimeApprovalKeys.Create(request.Approval), null, null)
+            : new ApprovalRedriveEntry(request.AuthorizationAttemptId, null, RefusalKind.Denied, null);
+        var resumed = new ScriptedToolCallChatClient([], "Done.");
+        var resumedOwner = CreateTestProbe("progress-resumed-owner");
+        Launch(resumedOwner, Definition(consent), resumed, Scope(),
+            new ChildRunResume(park, new Dictionary<string, ApprovalRedriveEntry> { ["call-park"] = answer }));
+        var end = await NextOwnerMessageAsync(resumedOwner, []);
+
+        Assert.IsType<ChildTerminalReturned>(end);
+        var nudges = resumed.ReceivedMessagesByCall[0].Where(message => ToolCycleMessages.IsLoopNudge(message.Text)).ToArray();
+        if (approve || siblingSucceeded)
+            Assert.Empty(nudges);
+        else
+            Assert.Contains("7 tool calls failed", Assert.Single(nudges).Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Repeated_cause_across_tools_receives_a_cause_nudge_with_child_wording()
+    {
+        // The child shares the same DispatchingToolExecutor front door as the parent, so a call without
+        // _rationale fails with invalid_rationale. Different arguments keep action identity blind; only the
+        // cause detector sees the repetition.
+        var client = new ScriptedToolCallChatClient([
+            [CauseCall("cause-1", "looper", "a")],
+            [CauseCall("cause-2", "looper", "b")],
+            [CauseCall("cause-3", "looper", "c")]
+        ], "Done.");
+        var owner = CreateTestProbe("cause-child-owner");
+        Launch(owner, Definition(new CountingTool("looper")), client, Scope(), null);
+
+        var end = await NextOwnerMessageAsync(owner, []);
+        Assert.IsType<ChildTerminalReturned>(end);
+
+        var nudge = client.ReceivedMessagesByCall.SelectMany(static messages => messages)
+            .First(message => ToolCycleMessages.IsCauseNudge(message.Text));
+        Assert.Contains("invalid_rationale", nudge.Text, StringComparison.Ordinal);
+        Assert.Contains("_rationale", nudge.Text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(3)] [InlineData(4)] [InlineData(5)]
+    public async Task Successful_repairs_allow_the_child_to_finish_useful_work(int failures)
+    {
+        var tool = new CountingTool("looper");
+        var rounds = Enumerable.Range(1, failures).SelectMany(index => new[]
+        {
+            new[] { CauseCall($"bad-{index}", "looper", $"bad-{index}") },
+            new[] { Loop($"good-{index}", $"good-{index}") }
+        }).ToArray();
+        var client = new ScriptedToolCallChatClient(rounds, "Done.");
+        var owner = CreateTestProbe();
+        Launch(owner, Definition(tool), client, Scope(), null);
+        var terminal = Assert.IsType<ChildTerminalReturned>(await NextOwnerMessageAsync(owner, []));
+        Assert.Equal("Done.", terminal.Result.Output);
+        Assert.Equal(failures, tool.CallCount);
+        Assert.DoesNotContain(client.ReceivedMessagesByCall[^1], message => ToolCycleMessages.IsCauseNudge(message.Text));
+    }
+
+    [Theory]
+    [InlineData(true)] [InlineData(false)]
+    public async Task A_child_keeps_sibling_cause_failures_across_consent(bool approve)
+    {
+        var consent = new CountingTool(ConsentToolName);
+        var first = new ScriptedToolCallChatClient([
+            [CauseCall("bad-1", "looper", "a"), CauseCall("bad-2", "looper", "b"),
+             CauseCall("bad-3", "looper", "c"), Call("parked", ConsentToolName)]
+        ], "unused");
+        var owner = CreateTestProbe();
+        Launch(owner, Definition(new CountingTool("looper"), consent), first, Scope(), null);
+        var (_, park, requests) = await ExpectParkAsync(owner, []);
+        var request = Assert.Single(requests);
+        var answer = approve
+            ? new ApprovalRedriveEntry(request.AuthorizationAttemptId, OneTimeApprovalKeys.Create(request.Approval), null, null)
+            : new ApprovalRedriveEntry(request.AuthorizationAttemptId, null, RefusalKind.Denied, null);
+        var resumed = new ScriptedToolCallChatClient([], "Done.");
+        var resumedOwner = CreateTestProbe();
+        Launch(resumedOwner, Definition(new CountingTool("looper"), consent), resumed, Scope(),
+            new ChildRunResume(park, new Dictionary<string, ApprovalRedriveEntry> { ["parked"] = answer }));
+        Assert.IsType<ChildTerminalReturned>(await NextOwnerMessageAsync(resumedOwner, []));
+        var nudge = Assert.Single(resumed.ReceivedMessagesByCall[0], message => ToolCycleMessages.IsCauseNudge(message.Text));
+        Assert.Contains("invalid_rationale", nudge.Text, StringComparison.Ordinal);
+        Assert.Equal(approve ? 1 : 0, consent.CallCount);
+    }
+
     private IActorRef Launch(TestProbe owner, SubAgentDefinition definition, IChatClient client, ChildRunScope scope,
         ChildRunResume? resume)
     {
@@ -190,6 +314,10 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
 
     private static FunctionCallContent Loop(string callId, string query) => new(callId, "looper",
         new Dictionary<string, object?> { ["query"] = query, ["_rationale"] = "Test the child park." });
+
+    // A call with no _rationale, so the shared front door rejects it with invalid_rationale.
+    private static FunctionCallContent CauseCall(string callId, string name, string query)
+        => new(callId, name, new Dictionary<string, object?> { ["query"] = query });
 
     private static ToolAccessPolicy ConsentPolicy()
     {

@@ -145,11 +145,16 @@ internal sealed partial class SessionToolWorkflow
     {
         if (recordCompletedCycle && cycle is null && executor is not null)
             cycle = ToolCycleSignatureFactory.Prepare(calls, executor);
+        if (!recordCompletedCycle)
+        {
+            _activeBatch.ResumeDispatch(calls);
+            return;
+        }
         _activeBatch.Start(calls, cycle);
     }
 
     /// <summary>Add the repeat nudge after the results of the batch that <see cref="StartDispatch"/> started.</summary>
-    public void AddRepeatNudgeAfterBatch(string nudge) => _activeBatch.AddNudgeAfterResults(nudge);
+    public void AddRepeatNudgeAfterBatch((RefusedRepeatAction Stage, string Text) nudge) => _activeBatch.AddNudgeAfterResults(nudge);
 
     public SessionToolBatch CreateBatch(
         TurnContext turnContext,

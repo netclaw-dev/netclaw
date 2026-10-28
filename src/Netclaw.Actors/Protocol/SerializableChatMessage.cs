@@ -17,6 +17,18 @@ public sealed record SerializableChatMessage : INetclawSerializableMessage
 {
     public ChatRole Role { get; init; }
 
+    // The journal keeps receipt facts so an approval re-drive can account for completed siblings.
+    // Null identifies a legacy result whose receipt facts are unknown.
+    public int? ToolOutcomeCategory { get; init; }
+    public bool ToolResultIsPendingJob { get; init; }
+    public bool ToolResultIsSynthetic { get; init; }
+
+    // The structured failure cause, so a restored batch keeps the identity instead of guessing it from the
+    // category. Null means no known cause: a legacy record, a success, or a failure with no stable key.
+    public string? ToolFailureSource { get; init; }
+    public string? ToolFailureCode { get; init; }
+    public string? ToolFailureScope { get; init; }
+
     public string Content { get; init; } = string.Empty;
 
     /// <summary>Optional name (used for tool results: the tool function name).</summary>

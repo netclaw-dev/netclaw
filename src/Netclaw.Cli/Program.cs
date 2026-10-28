@@ -528,7 +528,10 @@ static async Task RunAsync(string[] args)
     {
         var subcommand = args.Length > 1 ? args[1] : "help";
         if (IsHelpToken(subcommand))
-            subcommand = "help";
+        {
+            WriteDaemonHelp();
+            return;
+        }
 
         // See DaemonCommandDispatch remarks: `pair`/`devices` guard their own trailing --help
         // below; the remaining lifecycle verbs previously executed for real on a trailing help
@@ -579,7 +582,9 @@ static async Task RunAsync(string[] args)
 
                 if (!ready)
                 {
-                    Console.WriteLine($"Daemon process is running but {readyEndpoint}/api/health/ready did not answer.");
+                    Console.WriteLine(readyEndpoint is null
+                        ? "The local daemon address is unknown. No readiness probe was sent. Repair the local configuration and retry."
+                        : $"Daemon process is running but {readyEndpoint}/api/health/ready did not answer.");
                     Environment.ExitCode = 1;
                     return;
                 }

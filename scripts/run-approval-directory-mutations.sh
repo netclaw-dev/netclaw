@@ -15,6 +15,7 @@ from pathlib import Path
 import sys
 
 repo_root = Path(sys.argv[1])
+producer_marker = "knownTargets?.Add(current);"
 targets = [
     # Folder grants: one containment rule and one link walker serve Bash and
     # PowerShell. The two shell-specific containment copies are gone.
@@ -91,6 +92,11 @@ targets = [
         "if (HasParentSegmentAfterLink(next, baseDirectory: null))",
         1,
     ),
+    (
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        producer_marker,
+        1,
+    ),
 ]
 
 for relative_path, marker, expected_count in targets:
@@ -107,13 +113,17 @@ for relative_path, marker, expected_count in targets:
         start + len(marker),
         line,
         expected_count,
+        "Statement mutation" if marker == producer_marker else "*",
+        ";" if marker == producer_marker else "*",
+        start - text.rfind("\n", 0, start),
+        start - text.rfind("\n", 0, start) + len(marker),
         sep="\t",
     )
 PY
 )"
 
 mutate_args=()
-while IFS=$'\t' read -r source_name _source_file span_start span_end _line _count; do
+while IFS=$'\t' read -r source_name _source_file span_start span_end _line _count _mutator _replacement _first_column _last_column; do
   mutate_args+=(--mutate "$source_name{$span_start..$span_end}")
 done <<< "$spans"
 
@@ -128,11 +138,18 @@ done <<< "$spans"
 )
 
 report="$output_path/reports/mutation-report.json"
-while IFS=$'\t' read -r _source_name source_file _span_start _span_end line count; do
-  jq -e --arg source "$source_file" --argjson line "$line" --argjson count "$count" '
+while IFS=$'\t' read -r _source_name source_file _span_start _span_end line count mutator replacement first_column last_column; do
+  jq -e --arg source "$source_file" --argjson line "$line" --argjson count "$count" \
+    --arg mutator "$mutator" --arg replacement "$replacement" \
+    --argjson firstColumn "$first_column" --argjson lastColumn "$last_column" '
     [.files[$source].mutants[] | select(.status != "Ignored")
       | select(.location.start.line == $line)] as $mutants
-    | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
+    | ($mutants | length) == $count and all($mutants[];
+        .status == "Killed"
+        and ($mutator == "*" or (
+          .mutatorName == $mutator and .replacement == $replacement
+          and .location.start.column == $firstColumn
+          and .location.end.line == $line and .location.end.column == $lastColumn)))
   ' "$report" > /dev/null || {
     echo "Expected $count killed approval directory mutants at line $line." >&2
     exit 1
@@ -140,9 +157,9 @@ while IFS=$'\t' read -r _source_name source_file _span_start _span_end line coun
 done <<< "$spans"
 
 # Each target above must die even if Stryker reports unrelated compiler errors.
-jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 18' \
+jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 19' \
   "$report" > /dev/null || {
-  echo "Expected exactly 18 approval directory mutants." >&2
+  echo "Expected exactly 19 approval directory mutants." >&2
   exit 1
 }
 

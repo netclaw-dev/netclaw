@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Protocol;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions.Handlers;
@@ -28,6 +29,21 @@ internal sealed class TurnStateTracker
     /// quietly (Aaron, 18 Oct 2026): the loop gets an end, but the person never sees a Netclaw error.
     /// </summary>
     internal const int EscalatedRefusedRepeat = 5;
+
+    /// <summary>
+    /// The weighted failure score since the last success that gets the first no-progress nudge. A legitimate
+    /// <c>file_edit</c> retry can fail three times before it succeeds, so the first nudge waits for four.
+    /// </summary>
+    internal const int ProgressNudgeAt = 4;
+
+    /// <summary>The weighted failure score since the last success that gets the escalated no-progress nudge.</summary>
+    internal const int ProgressEscalateAt = 6;
+
+    /// <summary>The weighted failure score since the last success that ends the turn quietly.</summary>
+    internal const int ProgressEndTurnAt = 8;
+
+    /// <summary>How many actual occurrences of one failure cause trigger its first nudge.</summary>
+    internal const int CauseNudgeAt = 3;
 
     // Nudge for a thinking-only response: the model emitted reasoning but no
     // final answer. Generic across providers — no provider-specific payload.
@@ -66,6 +82,21 @@ internal sealed class TurnStateTracker
     // the loop. A different completed action does not reset the count.
     private int _refusedRepeatCount;
 
+    // Failed calls since the last success. This is the progress axis: it counts outcomes, not action
+    // identity, so identical failures across different tools still accumulate. A success resets it.
+    // Synthetic results and pending background jobs do not count (see ObserveCompleted).
+    private int _callsSinceProgress;
+    private int _progressFailureUnits;
+    private RefusedRepeatAction _progressStage;
+    private bool _incompleteBatchHadSuccess;
+    private bool _incompleteBatchHadFailure;
+
+    internal const int MaximumCauseBatches = 6;
+    private readonly List<CauseFeedbackBatch> _causeBatches = [];
+    private readonly List<ToolFailureKey> _incompleteFailureKeys = [];
+
+    public int CallsSinceProgress => _callsSinceProgress;
+
     public int ToolCallCount { get; private set; }
     public int ToolIterationCount { get; private set; }
 
@@ -84,6 +115,13 @@ internal sealed class TurnStateTracker
         _completedToolCycles.Clear();
         _lastBlockedAction = null;
         _episodes.Clear();
+        _callsSinceProgress = 0;
+        _progressFailureUnits = 0;
+        _progressStage = RefusedRepeatAction.None;
+        _incompleteBatchHadSuccess = false;
+        _incompleteBatchHadFailure = false;
+        _causeBatches.Clear();
+        _incompleteFailureKeys.Clear();
     }
 
     /// <summary>
@@ -217,11 +255,16 @@ internal sealed class TurnStateTracker
                 _episodes[group.Key] = episode with { Corrected = true };
         }
 
+        var progress = EvaluateProgressDecision();
         return new ToolCycleBatchDecision(refused.Count == 0 ? ToolCycleDecisionKind.Execute : ToolCycleDecisionKind.Correct,
             refused, exempt)
         {
             RepeatedCallIds = repeated,
-            RefusedRepeat = CountRefusedRepeat(repeated.Count > 0)
+            RefusedRepeat = CountRefusedRepeat(repeated.Count > 0),
+            Progress = progress.Stage,
+            ProgressReason = progress.Reason,
+            FailureCause = progress.Cause,
+            FailedCallsSinceProgress = _callsSinceProgress
         };
     }
 
@@ -252,6 +295,11 @@ internal sealed class TurnStateTracker
     {
         foreach (var group in iteration.Groups)
             ObserveGroup(group);
+
+        // The progress axis counts outcomes, not action identity. It runs before the RecordAdjacent
+        // early return so a batch that does not enter cycle history still moves the counter.
+        ObserveProgress(iteration.Results, batchComplete: true);
+
         if (!iteration.RecordAdjacent)
             return;
         _completedToolCycles.Add(iteration);
@@ -260,6 +308,136 @@ internal sealed class TurnStateTracker
 
         if (_lastBlockedAction is { } blocked && iteration.Action != blocked)
             _lastBlockedAction = null;
+    }
+
+    // A park or an approval re-drive can omit cycle history but still return actual outcomes.
+    public void ObserveProgress(IEnumerable<ToolCycleResult> results, bool batchComplete)
+    {
+        var actual = results.Where(static result => !result.Synthetic && !result.PendingJob).ToArray();
+        ObserveProgress(actual.Any(static result => result.Category == ToolInvocationOutcomeCategory.Success),
+            actual.Count(static result => result.Category != ToolInvocationOutcomeCategory.Success),
+            actual.Sum(static result => result.FailureUnits), batchComplete);
+        ObserveCauses(actual.Where(static result => result.Category != ToolInvocationOutcomeCategory.Success && result.FailureKey is not null)
+            .Select(static result => result.FailureKey!.Value), batchComplete);
+    }
+
+    private void ObserveProgress(bool anySuccess, int failureCount, int failureUnits, bool batchComplete)
+    {
+        _callsSinceProgress = anySuccess || _incompleteBatchHadSuccess ? 0
+            : (int)Math.Min(int.MaxValue, (long)_callsSinceProgress + failureCount);
+        if (anySuccess || _incompleteBatchHadSuccess)
+        {
+            _progressFailureUnits = 0;
+            _progressStage = RefusedRepeatAction.None;
+        }
+        else
+        {
+            _progressFailureUnits = (int)Math.Min(int.MaxValue, (long)_progressFailureUnits + failureUnits);
+            if (batchComplete && (failureCount > 0 || _incompleteBatchHadFailure))
+                _progressStage = CapAtNextProgressRung(_progressStage, _progressFailureUnits);
+        }
+        // A success applies to the full feedback batch, even when consent splits its dispatches.
+        _incompleteBatchHadSuccess = !batchComplete && (anySuccess || _incompleteBatchHadSuccess);
+        _incompleteBatchHadFailure = !batchComplete && (failureCount > 0 || _incompleteBatchHadFailure);
+    }
+
+    // One batch advances at most one stage, so the model receives each level of advice before the turn ends.
+    private static RefusedRepeatAction CapAtNextProgressRung(RefusedRepeatAction current, int failureUnits)
+        => current switch
+        {
+            RefusedRepeatAction.None when failureUnits >= ProgressNudgeAt * 2 => RefusedRepeatAction.Nudge,
+            RefusedRepeatAction.Nudge when failureUnits >= ProgressEscalateAt * 2 => RefusedRepeatAction.EscalatedNudge,
+            RefusedRepeatAction.EscalatedNudge when failureUnits >= ProgressEndTurnAt * 2 => RefusedRepeatAction.EndTurn,
+            _ => current
+        };
+
+    // Consent can divide execution, but only the complete logical batch reaches the model.
+    private void ObserveCauses(IEnumerable<ToolFailureKey> keys, bool batchComplete)
+    {
+        _incompleteFailureKeys.AddRange(keys);
+        if (!batchComplete)
+            return;
+
+        _causeBatches.Add(new CauseFeedbackBatch(_incompleteFailureKeys.GroupBy(static key => key)
+            .SelectMany(static group => group.Take(CauseNudgeAt)).ToArray(), default));
+        _incompleteFailureKeys.Clear();
+        if (_causeBatches.Count > MaximumCauseBatches)
+            _causeBatches.RemoveAt(0);
+    }
+
+    private ProgressDecision EvaluateCause()
+    {
+        var decision = default(ProgressDecision);
+        if (_causeBatches.Count == 0)
+            return decision;
+
+        var delivered = _causeBatches.Count < 2 ? default : _causeBatches[^2].Advice;
+        foreach (var key in _causeBatches[^1].Keys.Distinct())
+        {
+            if (_causeBatches.Sum(batch => batch.Keys.Count(candidate => candidate == key)) < CauseNudgeAt)
+                continue;
+            var stage = delivered.Cause == key ? delivered.Stage switch
+            {
+                RefusedRepeatAction.Nudge => RefusedRepeatAction.EscalatedNudge,
+                RefusedRepeatAction.EscalatedNudge or RefusedRepeatAction.EndTurn => RefusedRepeatAction.EndTurn,
+                _ => RefusedRepeatAction.Nudge
+            } : RefusedRepeatAction.Nudge;
+            if (stage > decision.Stage)
+                decision = new ProgressDecision(stage, LoopInterventionReason.FailureCauseRecurrence, key);
+        }
+        return decision;
+    }
+
+    // Record the advice that the next model request receives, not every eligible cause in the batch.
+    public string? CreateNudgeAfterResults((RefusedRepeatAction Stage, string Text)? repeatAdvice, bool childRun)
+    {
+        var progress = EvaluateProgressDecision();
+        var (selected, nudge) = ToolCycleMessages.AfterResults(repeatAdvice, progress, _callsSinceProgress, childRun);
+        if (_causeBatches.Count > 0)
+            _causeBatches[^1] = _causeBatches[^1] with
+            { Advice = selected.Reason == LoopInterventionReason.FailureCauseRecurrence ? selected : default };
+        return nudge;
+    }
+
+    /// <summary>
+    /// Decide what the turn owner does about a run of failed calls with no success between them. This is the
+    /// progress axis: it reads outcomes, not action identity, so identical failures across different tools
+    /// still accumulate. It refuses no call, because the calls already ran and failed. The response is a
+    /// nudge attached to the results, then an escalated nudge, then a quiet end.
+    /// </summary>
+    /// <remarks>
+    /// A success resets the count, so a productive turn never trips it. Synthetic results and pending
+    /// background jobs do not count: a synthetic correction is the guard's own output, and a pending job is
+    /// the behavior the repeat nudge recommends.
+    /// <para>
+    /// Known asymmetry: only <c>BreakToolCycle</c> marks a correction synthetic. The pre-execution refusals in
+    /// <c>ManagedTemporaryCorrection</c> (<c>use_native_tool</c>, <c>rewrite_shell_command_words</c>, and their
+    /// siblings) and the <c>MissingBase</c> advice are <c>RecoverableCorrection</c>, so they do count. A model
+    /// that keeps tripping one rule therefore reaches the ladder. That is deliberate: their argument hashes
+    /// differ, so the repeat axis is blind to them and this axis is the only catcher. Recorded here because it
+    /// is the one place where the "guard output does not count" rule does not apply.
+    /// </para>
+    /// </remarks>
+    public RefusedRepeatAction EvaluateProgress() => EvaluateProgressDecision().Stage;
+
+    /// <summary>
+    /// The reason for the current post-results intervention. A repeated failure cause wins over the generic
+    /// budget when its stage is at least as urgent, because it is higher-confidence guidance.
+    /// </summary>
+    public LoopInterventionReason EvaluateProgressReason() => EvaluateProgressDecision().Reason;
+
+    /// <summary>The cause that currently drives the progress advice, or null when the budget does.</summary>
+    public ToolFailureKey? EvaluateActiveCause() => EvaluateProgressDecision().Cause;
+
+    /// <summary>The consolidated post-results stage, reason, and (when relevant) cause.</summary>
+    public ProgressDecision EvaluateProgressDecision()
+    {
+        var cause = EvaluateCause();
+        if (cause.Stage != RefusedRepeatAction.None && cause.Stage >= _progressStage)
+            return cause;
+        if (_progressStage != RefusedRepeatAction.None)
+            return new ProgressDecision(_progressStage, LoopInterventionReason.FailureBudget, null);
+        return new ProgressDecision(RefusedRepeatAction.None, LoopInterventionReason.None, null);
     }
 
     private bool HasEqualCycleCopies(int start, int period)
@@ -289,7 +467,16 @@ internal sealed class TurnStateTracker
             _completedToolCycles.Select(static cycle => (cycle.Action, cycle.OutcomeValue)).ToArray(),
             _lastBlockedAction,
             new Dictionary<ToolRecurrenceKey, ToolRecurrenceEpisode>(_episodes),
-            _refusedRepeatCount);
+            _refusedRepeatCount,
+            _callsSinceProgress,
+            _incompleteBatchHadSuccess)
+        {
+            ProgressFailureUnits = _progressFailureUnits,
+            ProgressStage = _progressStage,
+            IncompleteBatchHadFailure = _incompleteBatchHadFailure,
+            CauseBatches = _causeBatches.Select(static batch => batch with { Keys = batch.Keys.ToArray() }).ToArray(),
+            IncompleteFailureKeys = _incompleteFailureKeys.ToArray()
+        };
 
     /// <summary>
     /// Replaces the loop guard with an exported copy. The tracker then makes the same decisions as the tracker that
@@ -304,6 +491,12 @@ internal sealed class TurnStateTracker
             throw new ArgumentException(
                 $"A loop guard holds at most {ToolCycleSignatureFactory.MaximumHistory} completed cycles.", nameof(state));
 
+        if (!HasValidCauseEvidence(state))
+            throw new ArgumentException("A loop guard has invalid cause evidence.", nameof(state));
+
+        if (state.ProgressFailureUnits < 0 || !Enum.IsDefined(state.ProgressStage))
+            throw new ArgumentException("A loop guard has an invalid progress score or stage.", nameof(state));
+
         ToolIterationCount = state.ToolIterationCount;
         ToolCallCount = state.ToolCallCount;
         // The history keeps only the cycles that ObserveCompleted recorded as adjacent. The adjacent check reads only
@@ -316,7 +509,28 @@ internal sealed class TurnStateTracker
         foreach (var (key, episode) in state.Episodes)
             _episodes[key] = episode;
         _refusedRepeatCount = state.RefusedRepeatCount;
+        _callsSinceProgress = state.CallsSinceProgress;
+        _progressFailureUnits = state.ProgressFailureUnits;
+        _progressStage = state.ProgressStage;
+        _incompleteBatchHadSuccess = state.IncompleteBatchHadSuccess;
+        _incompleteBatchHadFailure = state.IncompleteBatchHadFailure;
+        _causeBatches.Clear();
+        _causeBatches.AddRange(state.CauseBatches.Select(static batch => batch with { Keys = batch.Keys.ToArray() }));
+        _incompleteFailureKeys.Clear();
+        _incompleteFailureKeys.AddRange(state.IncompleteFailureKeys);
     }
+
+    internal static bool HasValidCauseEvidence(TurnLoopGuardState state)
+        => state.CauseBatches.Count <= MaximumCauseBatches
+            && state.CauseBatches.All(static batch => batch.Keys.All(IsValidFailureKey)
+                && (batch.Advice == default || batch.Advice is
+                    { Reason: LoopInterventionReason.FailureCauseRecurrence,
+                      Stage: RefusedRepeatAction.Nudge or RefusedRepeatAction.EscalatedNudge or RefusedRepeatAction.EndTurn,
+                      Cause: { } cause } && batch.Keys.Contains(cause)))
+            && state.IncompleteFailureKeys.All(IsValidFailureKey);
+
+    private static bool IsValidFailureKey(ToolFailureKey key)
+        => !string.IsNullOrWhiteSpace(key.Source) && !string.IsNullOrWhiteSpace(key.Code);
 
     public void RecordToolCompletion(int resultCount)
     {
@@ -395,7 +609,16 @@ internal sealed record TurnLoopGuardState(
     IReadOnlyList<(ToolActionSignature Action, string OutcomeValue)> CompletedCycles,
     ToolActionSignature? LastBlockedAction,
     IReadOnlyDictionary<ToolRecurrenceKey, ToolRecurrenceEpisode> Episodes,
-    int RefusedRepeatCount);
+    int RefusedRepeatCount,
+    int CallsSinceProgress = 0,
+    bool IncompleteBatchHadSuccess = false)
+{
+    public int ProgressFailureUnits { get; init; }
+    public RefusedRepeatAction ProgressStage { get; init; }
+    public bool IncompleteBatchHadFailure { get; init; }
+    public IReadOnlyList<CauseFeedbackBatch> CauseBatches { get; init; } = [];
+    public IReadOnlyList<ToolFailureKey> IncompleteFailureKeys { get; init; } = [];
+}
 
 internal sealed record CompletedToolCycleIteration(
     ToolActionSignature Action,
@@ -403,11 +626,32 @@ internal sealed record CompletedToolCycleIteration(
 {
     public IReadOnlyList<CompletedToolRecurrenceGroup> Groups { get; init; } = [];
     public bool RecordAdjacent { get; init; } = true;
+
+    public IReadOnlyList<ToolCycleResult> Results { get; init; } = [];
 }
 
+internal sealed record CauseFeedbackBatch(IReadOnlyList<ToolFailureKey> Keys, ProgressDecision Advice);
+
 internal readonly record struct ToolRecurrenceKey(ToolName ToolName, string ArgumentsHash);
+
+/// <summary>
+/// A stable identity for the underlying failure, independent of the tool name and its arguments. The
+/// <c>invalid_rationale</c> front-door rejection recurs across every tool because its source and code are
+/// fixed and it has no scope. A resource-specific failure carries a stable scope, so two unrelated missing
+/// paths stay two causes. The key never holds raw, possibly secret-bearing error text.
+/// </summary>
+internal readonly record struct ToolFailureKey(
+    string Source,
+    string Code,
+    string? Scope = null);
 internal sealed record ToolRecurrenceEpisode(string Outcome, int EqualRounds, bool Corrected, bool PendingJob);
 internal sealed record CompletedToolRecurrenceGroup(ToolRecurrenceKey Key, string Outcome, bool PendingJob);
+
+/// <summary>The consolidated post-results advice: what to do, why, and the cause when one drove it.</summary>
+internal readonly record struct ProgressDecision(
+    RefusedRepeatAction Stage,
+    LoopInterventionReason Reason,
+    ToolFailureKey? Cause);
 internal sealed record ToolCycleBatchDecision(ToolCycleDecisionKind Kind,
     IReadOnlySet<string> RefusedCallIds, IReadOnlySet<string> ExemptCallIds)
 {
@@ -416,6 +660,32 @@ internal sealed record ToolCycleBatchDecision(ToolCycleDecisionKind Kind,
 
     /// <summary>What the turn owner does for a refused repeat. <see cref="RefusedRepeatAction.None"/> without one.</summary>
     public RefusedRepeatAction RefusedRepeat { get; init; }
+
+    /// <summary>
+    /// What the turn owner does about a run of failed calls with no success between them. This is the progress
+    /// axis, independent of action identity. <see cref="RefusedRepeatAction.None"/> without one.
+    /// </summary>
+    public RefusedRepeatAction Progress { get; init; }
+
+    /// <summary>The failed-call count since the last success, for the progress nudge text.</summary>
+    public int FailedCallsSinceProgress { get; init; }
+
+    /// <summary>
+    /// Which post-results detector produced <see cref="Progress"/>: a repeated failure cause, or the generic
+    /// failure budget. <see cref="LoopInterventionReason.None"/> when the turn needs no progress advice.
+    /// </summary>
+    public LoopInterventionReason ProgressReason { get; init; }
+
+    /// <summary>The cause that drove <see cref="Progress"/>, or null when the budget drove it.</summary>
+    public ToolFailureKey? FailureCause { get; init; }
+
+    /// <summary>
+    /// The single consolidated reason for this decision. Action recurrence wins over failure-cause recurrence,
+    /// which wins over the failure budget.
+    /// </summary>
+    public LoopInterventionReason Reason =>
+        Kind == ToolCycleDecisionKind.Correct ? LoopInterventionReason.ActionRecurrence
+        : ProgressReason;
 }
 
 /// <summary>The response of the turn owner to a refused repeat. See <see cref="TurnStateTracker.EscalatedRefusedRepeat"/>.</summary>
@@ -435,6 +705,19 @@ internal enum RefusedRepeatAction
     /// turn quietly with the text of the model. No error reaches the person.
     /// </summary>
     EndTurn
+}
+
+/// <summary>
+/// Which detector produced an intervention. Tests and telemetry read this to tell a repeated cause from a
+/// generic failure streak. Priority when more than one fires: action recurrence, then failure-cause
+/// recurrence, then the failure budget.
+/// </summary>
+internal enum LoopInterventionReason
+{
+    None,
+    ActionRecurrence,
+    FailureCauseRecurrence,
+    FailureBudget
 }
 
 internal sealed record PreparedToolCycleCall(
@@ -466,6 +749,47 @@ internal readonly record struct ToolCycleResult(
 {
     public bool PendingJob { get; init; }
     public bool Synthetic { get; init; }
+
+    /// <summary>The structured failure cause when the outcome failed. Null means no known cause.</summary>
+    public ToolFailureKey? FailureKey { get; init; }
+
+    public static ToolCycleResult FromInvocation(SerializableChatMessage message, ToolInvocationReceipt? receipt, string? failureCode)
+        => new(receipt?.Category ?? ToolInvocationOutcomeCategory.Success, message.Content)
+        {
+            PendingJob = receipt is ToolInvocationReceipt.PendingBackgroundJob,
+            Synthetic = receipt is ToolInvocationReceipt.Correction { RemediationCode: ToolRemediationCode.BreakToolCycle },
+            FailureKey = ToolCycleSignatureFactory.FailureKeyFor(failureCode)
+        };
+
+    public static ToolCycleResult? FromMessage(SerializableChatMessage message)
+    {
+        if (message.ToolOutcomeCategory is not { } category)
+            return null;
+        if (!Enum.IsDefined((ToolInvocationOutcomeCategory)category))
+            throw new InvalidOperationException("A tool result has an unknown outcome category.");
+        return new ToolCycleResult((ToolInvocationOutcomeCategory)category, message.Content)
+        {
+            PendingJob = message.ToolResultIsPendingJob,
+            Synthetic = message.ToolResultIsSynthetic,
+            FailureKey = message is { ToolFailureSource: { } source, ToolFailureCode: { } code }
+                ? new ToolFailureKey(source, code, message.ToolFailureScope) : null
+        };
+    }
+
+    public SerializableChatMessage WithMessageFacts(SerializableChatMessage message) => message with
+    {
+        ToolOutcomeCategory = (int)Category,
+        ToolResultIsPendingJob = PendingJob,
+        ToolResultIsSynthetic = Synthetic,
+        ToolFailureSource = FailureKey?.Source,
+        ToolFailureCode = FailureKey?.Code,
+        ToolFailureScope = FailureKey?.Scope
+    };
+
+    // A missing path can guide discovery. Give NotFound one half-unit and other failures two half-units.
+    // InvalidInput and AccessDenied thus reach advice after four calls; distinct misses need eight.
+    public int FailureUnits => Synthetic || PendingJob || Category == ToolInvocationOutcomeCategory.Success ? 0
+        : Category == ToolInvocationOutcomeCategory.NotFound ? 1 : 2;
 }
 
 internal enum ToolCycleDecisionKind
@@ -485,6 +809,43 @@ internal static class ToolCycleMessages
     // Every repeat nudge, plain or escalated, parent or child, starts with this text. The batch owner uses it to
     // remove the earlier repeat nudge, so that the history keeps only the latest one.
     internal const string RepeatNudgeStart = "Netclaw refused your repeated call to ";
+    internal const string ProgressNudgeStart = "Netclaw observed no tool progress. ";
+    internal const string CauseNudgeStart = "Netclaw saw the same failure repeatedly. ";
+
+    public static bool IsLoopNudge(string text)
+        => IsRepeatNudge(text) || IsProgressNudge(text) || IsCauseNudge(text);
+
+    public static bool IsRepeatNudge(string text)
+        => text.StartsWith($"{SessionState.SystemNudgePrefix} {RepeatNudgeStart}", StringComparison.Ordinal);
+
+    public static bool IsProgressNudge(string text)
+        => text.StartsWith($"{SessionState.SystemNudgePrefix} {ProgressNudgeStart}", StringComparison.Ordinal);
+
+    public static bool IsProgressOrCauseNudge(string text) => IsProgressNudge(text) || IsCauseNudge(text);
+
+    public static bool IsCauseNudge(string text)
+        => text.StartsWith($"{SessionState.SystemNudgePrefix} {CauseNudgeStart}", StringComparison.Ordinal);
+
+    // A repeated cause is higher-confidence advice than a generic change-approach nudge, so it wins over the
+    // budget. Action recurrence (a refused call) is the only stronger signal; an escalation still wins over a
+    // plain repeat nudge.
+    private static ProgressDecision SelectAfterResults(RefusedRepeatAction repeatStage, ProgressDecision progress)
+        => repeatStage != RefusedRepeatAction.None && repeatStage >= progress.Stage
+            ? new ProgressDecision(repeatStage, LoopInterventionReason.ActionRecurrence, null)
+            : progress;
+
+    public static (ProgressDecision Decision, string? Text) AfterResults((RefusedRepeatAction Stage, string Text)? repeatAdvice,
+        ProgressDecision progress, int failedCalls, bool childRun)
+    {
+        var selected = SelectAfterResults(repeatAdvice?.Stage ?? RefusedRepeatAction.None, progress);
+        if (selected.Reason == LoopInterventionReason.ActionRecurrence)
+            return (selected, repeatAdvice!.Value.Text);
+        if (selected.Reason == LoopInterventionReason.FailureCauseRecurrence && selected.Cause is { } cause)
+            return (selected, CauseNudge(cause, selected.Stage, childRun));
+        if (selected.Stage is RefusedRepeatAction.EscalatedNudge or RefusedRepeatAction.EndTurn)
+            return (selected, EscalatedProgressNudge(failedCalls, childRun, endingTurn: selected.Stage == RefusedRepeatAction.EndTurn));
+        return (selected, ForProgress(selected.Stage, failedCalls, childRun));
+    }
 
     public const string Correction =
         "Netclaw stopped this tool call because it would continue a repeated action-and-outcome cycle. "
@@ -531,6 +892,55 @@ internal static class ToolCycleMessages
             + "Name the action that did not finish. "
             + "If you send a refused call again, Netclaw ends this run with your last text. No call in that response runs.";
 
+    // Model-facing. The turn made no progress: this many calls failed with no success between them. The
+    // calls already ran, so this nudge refuses nothing. It asks the model to change approach.
+    public static string ProgressNudge(int failedCalls)
+        => $"{ProgressNudgeStart}{failedCalls} tool calls failed without a successful result. "
+            + "Change your approach:\n"
+            + "- Read the error text. It names the cause.\n"
+            + "- Change the arguments, the path, or the tool.\n"
+            + "- Divide the work into smaller steps.\n"
+            + "- Ask the person how to continue.";
+
+    // Model-facing. The turn still made no progress after the first nudge. The model must stop and report.
+    public static string EscalatedProgressNudge(int failedCalls, bool childRun, bool endingTurn)
+        => $"{ProgressNudgeStart}{failedCalls} tool calls failed without a successful result. "
+            + "Stop. End your turn now. "
+            + (childRun ? "Give your result to the parent. Name the action that did not finish. "
+                : "Tell the person what blocked you. Name the action that did not finish. ")
+            + (endingTurn
+                ? "The no-progress guard reached its final stage. Netclaw ends the turn."
+                : "If tool calls still fail, Netclaw ends the turn at the next stage.");
+
+    /// <summary>
+    /// The nudge for the progress decision of <paramref name="action"/>, or null when the turn needs none.
+    /// <see cref="RefusedRepeatAction.EndTurn"/> has no nudge: the turn ends.
+    /// </summary>
+    public static string? ForProgress(RefusedRepeatAction action, int failedCalls, bool childRun)
+        => action switch
+        {
+            RefusedRepeatAction.Nudge => ProgressNudge(failedCalls),
+            RefusedRepeatAction.EscalatedNudge => EscalatedProgressNudge(failedCalls, childRun, endingTurn: false),
+            _ => null
+        };
+
+    // Model-facing. The same failure cause repeated across different calls. The first nudge names the cause and
+    // its fix; the escalation tells the model to stop, because the fix was ignored.
+    public static string CauseNudge(ToolFailureKey cause, RefusedRepeatAction stage, bool childRun)
+        => stage is RefusedRepeatAction.EscalatedNudge or RefusedRepeatAction.EndTurn
+            ? $"{CauseNudgeStart}Several different tool calls failed with the same cause: '{cause.Code}'. Stop. End your turn now. "
+                + (childRun ? "Give your result to the parent." : "Tell the person what blocked you.")
+            : $"{CauseNudgeStart}Several different tool calls failed with the same cause: '{cause.Code}'. {CauseFix(cause)}";
+
+    private static string CauseFix(ToolFailureKey cause) => cause.Code switch
+    {
+        "invalid_rationale" => "Every tool call needs a non-empty `_rationale` argument that states the intent.",
+        "unrecognized_argument" => "Remove the argument that the tool does not accept.",
+        "args_parse_error" => "Write the tool call arguments as valid JSON.",
+        "invalid_meta_value" => "Fix the `_timeout_seconds` or `_background` value.",
+        _ => "Change the call so this failure does not repeat."
+    };
+
     /// <summary>
     /// The nudge for the refused repeat of <paramref name="decision"/>, or null when the batch needs none. It
     /// names only the repeated tools. <see cref="RefusedRepeatAction.EndTurn"/> has no nudge: the turn ends.
@@ -558,6 +968,27 @@ internal static class ToolCycleSignatureFactory
     internal const int MaximumPeriod = 3;
     // Two complete copies of the longest supported cycle require six entries.
     internal const int MaximumHistory = MaximumPeriod * 2;
+
+    /// <summary>The source of a failure that Netclaw produced itself, not a tool or a remote service.</summary>
+    internal const string NetclawFailureSource = "netclaw";
+
+    /// <summary>
+    /// The structured failure cause of a raw <c>FailureCode</c>, or null when the code has no stable identity.
+    /// The live dispatch path derives a key from this method. The restore path does not re-derive it: it
+    /// rebuilds the already-mapped key that the journal carried, so a future source or code survives a replay.
+    /// </summary>
+    /// <remarks>
+    /// The four front-door validation codes name a cause that recurs across every tool, so the key carries no
+    /// scope. <c>access_denied</c> is a permission wall that several different paths reach, so it is not one
+    /// cause and stays budget territory. Any other code is unknown to this version, so it must not claim a
+    /// cause: a guessed key would report a recurrence that does not exist.
+    /// </remarks>
+    public static ToolFailureKey? FailureKeyFor(string? failureCode) => failureCode switch
+    {
+        "invalid_rationale" or "unrecognized_argument" or "args_parse_error" or "invalid_meta_value"
+            => new ToolFailureKey(NetclawFailureSource, failureCode),
+        _ => null
+    };
 
     public static PreparedToolCycleBatch Prepare(
         IReadOnlyList<FunctionCallContent> calls,
@@ -636,7 +1067,8 @@ internal static class ToolCycleSignatureFactory
         return new CompletedToolCycleIteration(batch.Action, outcomeHash)
         {
             Groups = groups,
-            RecordAdjacent = !results.Values.Any(result => result.Synthetic) && !groups.Any(static group => group.PendingJob)
+            RecordAdjacent = !results.Values.Any(result => result.Synthetic) && !groups.Any(static group => group.PendingJob),
+            Results = batch.Calls.Select(call => results[call.CallId.Value]).ToArray()
         };
     }
 

@@ -75,6 +75,13 @@ message SerializableChatMessageProto {
   repeated SerializableToolCallProto tool_calls = 4;
   optional string tool_call_id = 5;
   repeated SerializableMediaReferenceProto media_references = 6;
+  optional int32 tool_outcome_category = 7;
+  bool tool_result_is_pending_job = 8;
+  bool tool_result_is_synthetic = 9;
+  // The structured failure cause. A record from before these fields has no value, which means no known cause.
+  optional string tool_failure_source = 10;
+  optional string tool_failure_code = 11;
+  optional string tool_failure_scope = 12;
 }
 
 // ── Commands ──
@@ -727,4 +734,21 @@ message ChildLoopGuardProto {
   optional string last_blocked_action = 4;
   repeated Episode episodes = 5;
   int32 refused_repeat_count = 6;
+  int32 calls_since_progress = 7;
+  bool incomplete_batch_had_success = 8;
+  optional int32 progress_failure_units = 9;
+  optional int32 progress_stage = 10;
+  bool incomplete_batch_had_failure = 11;
+  message FailureKey {
+    string source = 1;
+    string code = 2;
+    optional string scope = 3;
+  }
+  message CauseBatch {
+    repeated FailureKey keys = 1;
+    int32 advice_stage = 2;
+    FailureKey advice_cause = 3;
+  }
+  repeated CauseBatch cause_batches = 12;
+  repeated FailureKey incomplete_failure_keys = 13;
 }

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text;
 using Netclaw.Tests.Utilities;
 using Akka.Actor;
 using Akka.Hosting;
@@ -1088,7 +1089,93 @@ public sealed class ToolApprovalActorTests : TestKit, IAsyncDisposable
             path,
             timeProvider: null,
             migrationContext: new ApprovalStoreMigrationContext(NativeShell),
-            lockTimeout: TimeSpan.Zero);
+            lockTimeout: TimeSpan.Zero,
+            fileAccess: NoFsyncFileAccess.Instance);
+    }
+
+    /// <summary>
+    /// Delegates every store operation to the real file access, except that it
+    /// writes without a forced disk flush. The approval tests assert grant
+    /// matching, not durability. A forced flush on a loaded CI runner can take
+    /// longer than the 5 s ask budget and fail the test with AskTimeoutException.
+    /// The real flush path stays covered by Netclaw.Configuration.Tests.
+    /// </summary>
+    private sealed class NoFsyncFileAccess : IApprovalStoreFileAccess
+    {
+        internal static NoFsyncFileAccess Instance { get; } = new();
+
+        private readonly IApprovalStoreFileAccess _inner = ApprovalStoreFileAccess.Instance;
+
+        public FileStream AcquireLock(string lockPath, TimeSpan timeout) =>
+            _inner.AcquireLock(lockPath, timeout);
+
+        public byte[] ReadAllBytes(string path) => _inner.ReadAllBytes(path);
+
+        public void WriteAtomic(string path, string contents, byte[]? expectedSourceBytes)
+        {
+            _inner.EnsureNotLink(path);
+            var tempPath = path + ".tmp-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                using (var stream = new FileStream(
+                           tempPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None,
+                           bufferSize: 4096,
+                           FileOptions.None))
+                {
+                    stream.Write(Encoding.UTF8.GetBytes(contents));
+                }
+
+                _inner.EnsureNotLink(path);
+                if (!SourceMatches(path, expectedSourceBytes))
+                {
+                    throw new ApprovalStoreException(
+                        ApprovalStoreFailure.IoFailure,
+                        "The approval store changed before replace.");
+                }
+
+                File.Move(tempPath, path, overwrite: true);
+            }
+            catch
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Approval store temporary-file cleanup failed: {ex.Message}");
+                }
+
+                throw;
+            }
+        }
+
+        public void ReplaceVersion2(
+            string path,
+            string backupPath,
+            byte[] sourceBytes,
+            string version3Contents) =>
+            _inner.ReplaceVersion2(path, backupPath, sourceBytes, version3Contents);
+
+        public void EnsureNotLink(string path) => _inner.EnsureNotLink(path);
+
+        private static bool SourceMatches(string path, byte[]? expectedSourceBytes)
+        {
+            if (expectedSourceBytes is null)
+            {
+                return !File.Exists(path);
+            }
+
+            return File.Exists(path) &&
+                   File.ReadAllBytes(path).AsSpan().SequenceEqual(expectedSourceBytes);
+        }
     }
 
     private sealed class StubRequiredActor : IRequiredActor<ToolApprovalActorKey>

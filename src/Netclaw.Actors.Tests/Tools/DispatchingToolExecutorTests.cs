@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.AI;
@@ -2318,6 +2319,13 @@ public partial class DispatchingToolExecutorTests : IDisposable
     [Fact]
     public async Task One_time_approval_allows_immediate_retry_only()
     {
+        using var setup = Process.Start(new ProcessStartInfo("git")
+        {
+            ArgumentList = { "init", "--quiet", BoundSessionDirectory },
+            UseShellExecute = false
+        }) ?? throw new InvalidOperationException("The test could not start git.");
+        await setup.WaitForExitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(0, setup.ExitCode);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
 
         var system = ActorSystem.Create($"tool-approval-{Guid.NewGuid():N}");
@@ -2352,10 +2360,8 @@ public partial class DispatchingToolExecutorTests : IDisposable
 
             context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext)));
 
-            // The one-time-approval bypass should let the call succeed.
-            // Output text varies by test environment (git status); meaningful
-            // assertion is that no ToolApprovalRequiredException is thrown.
-            _ = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
+            var result = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
+            Assert.Contains("Exit code: 0", result, StringComparison.Ordinal);
             Assert.Equal(ToolInvocationOutcomeCategory.Success, context.Receipt?.Category);
 
             context.Approval.ClearOneTimeConsent();

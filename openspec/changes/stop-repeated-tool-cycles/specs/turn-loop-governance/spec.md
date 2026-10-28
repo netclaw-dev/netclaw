@@ -190,6 +190,87 @@ only to the message text. The source SHALL be constant across sessions.
 - **THEN** the event contains the period, repetition count, and decision only
 - **AND** the event contains no arguments, results, session data, or hashes
 
+### Requirement: A repeated failure cause across different actions triggers advice
+
+A failure cause SHALL be a stable identity of source, code, and optional scope.
+It SHALL NOT include a tool name or an argument hash. Netclaw SHALL keep a
+history of failure causes from the latest six completed feedback batches. Three occurrences of one cause
+SHALL trigger a cause-specific nudge. A repeated cause in a later completed
+batch SHALL escalate only after the model receives advice for that cause. A repeated cause after an escalated nudge SHALL end the
+next attempted dispatch.
+
+A completed batch SHALL advance one cause at most one stage. Distinct codes and
+distinct scopes SHALL NOT combine into one cause. A cause with an unknown code
+SHALL NOT be recorded. An unrelated success SHALL NOT erase recent cause evidence. A batch without
+that cause SHALL retire its active advice. A later recurrence SHALL start with
+the first nudge. A new turn SHALL clear the history.
+
+A consent pause SHALL preserve the cause history, delivered advice, and unfinished
+batch facts. Only the complete logical batch SHALL consume a feedback opportunity.
+The system SHALL choose advice by severity before detector priority.
+
+The cause nudge SHALL name the cause and its fix. A repeated cause SHALL win
+over a generic no-progress nudge when its stage is at least as urgent.
+
+#### Scenario: One cause across different tools triggers advice
+
+- **GIVEN** three tool calls used different tools and one identical structured failure cause
+- **WHEN** the third call completes
+- **THEN** Netclaw adds a nudge that names the cause and its fix
+
+#### Scenario: Distinct causes do not combine
+
+- **GIVEN** calls failed with different structured codes in the same category
+- **WHEN** Netclaw computes the cause history
+- **THEN** no single cause reaches the nudge threshold
+- **AND** the failures fall to the generic budget
+
+#### Scenario: One parallel burst advances one rung
+
+- **GIVEN** three identical causes occur in one completed batch
+- **WHEN** Netclaw observes the batch
+- **THEN** the cause advances one stage, not three
+
+#### Scenario: A cause survives an unrelated success
+
+- **GIVEN** one cause occurred twice, then an unrelated call succeeded
+- **WHEN** the same cause occurs once more
+- **THEN** Netclaw still triggers the cause nudge
+
+#### Scenario: A successful correction retires active advice
+
+- **GIVEN** a cause reached an escalated nudge
+- **WHEN** a later batch succeeds without that cause
+- **THEN** the system removes the cause advice
+- **AND** one later occurrence cannot end the turn
+
+#### Scenario: A consent split preserves sibling failures
+
+- **GIVEN** three calls fail with one cause and another call needs consent
+- **WHEN** the final call completes after consent
+- **THEN** the system observes the complete batch once
+- **AND** the three failures trigger the first cause nudge
+
+#### Scenario: A cause cannot skip advice that the model did not receive
+
+- **GIVEN** two causes each qualify for their first nudge
+- **AND** the model receives advice for only one cause
+- **WHEN** the other cause repeats
+- **THEN** its advice starts at the first nudge
+
+#### Scenario: An urgent repeat warning takes priority
+
+- **GIVEN** an action repeat requires an escalated warning
+- **AND** a failure cause qualifies for a plain nudge
+- **WHEN** the system selects advice
+- **THEN** the model receives the escalated action warning
+
+#### Scenario: A new turn clears cause history
+
+- **GIVEN** a cause reached its nudge threshold
+- **WHEN** a new user turn starts
+- **THEN** the cause history is empty
+
 ## REMOVED Requirements
 
 ### Requirement: Per-turn tool loop limit is iteration-based

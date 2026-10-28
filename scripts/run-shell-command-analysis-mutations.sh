@@ -8,6 +8,9 @@ output_root="$repo_root/artifacts/stryker/shell-command-analysis"
 if [[ "${1:-}" == "--part" ]]; then
   part="${2:?Set the shell mutation part to a, b, or all.}"
   output_root="${3:-$output_root}"
+elif [[ "${1:-}" == "--verify-b" ]]; then
+  part="verify-b"
+  output_root="${2:?Set the retained shell mutation output directory.}"
 elif [[ "${1:-}" == "--collect" ]]; then
   part="collect"
 else
@@ -43,6 +46,10 @@ run_group() {
   local expected_count="$3"
   shift 3
 
+  local worker_args=()
+  if [[ "$target_output" == */security-b ]]; then
+    worker_args=(--concurrency 2)
+  fi
   local mutate_args=()
   local mutation
   for mutation in "$@"; do
@@ -54,10 +61,17 @@ run_group() {
     dotnet stryker \
       --config-file "$config_file" \
       "${mutate_args[@]}" \
+      "${worker_args[@]}" \
       --output "$target_output" \
       --skip-version-check
   )
 
+  verify_group "$target_output" "$expected_count"
+}
+
+verify_group() {
+  local target_output="$1"
+  local expected_count="$2"
   local report="$target_output/reports/mutation-report.json"
   local tested_count
   local killed_count
@@ -410,8 +424,8 @@ glob_file="$repo_root/src/Netclaw.Security/ShellGlobScope.cs"
 read -r glob_deny_start glob_deny_end < <(
   find_span \
     "$path_policy_file" \
-    "private bool GlobMayReachDeniedPath(" \
-    "var glob = ShellGlobScope.AsGlobPattern(pattern);" \
+    "private static bool MatchIsDenied(" \
+    "var match = ShellGlobScope.MatchPathToward(glob, target);" \
     "|| IsShellDenied(shell, match));"
 )
 security_mutations+=("ToolPathPolicy.cs{$glob_deny_start..$glob_deny_end}")
@@ -457,9 +471,9 @@ security_mutations+=("ShellGlobScope.cs{$segment_start..$segment_end}")
 read -r toward_start toward_end < <(
   find_span \
     "$glob_file" \
-    "internal static string? MatchPathToward(" \
-    "var glob = pattern.Glob!;" \
-    "return prefix + string.Join(separator, relative[..reach]);"
+    "private static string? MatchPathToward(" \
+    "const char separator = '/';" \
+    "return reach == 0 ? null : prefix + string.Join(separator, relative[..reach]);"
 )
 security_mutations+=("ShellGlobScope.cs{$toward_start..$toward_end}")
 
@@ -472,12 +486,14 @@ read -r bracket_start bracket_end < <(
 )
 security_mutations+=("ShellGlobScope.cs{$bracket_start..$bracket_end}")
 
+# The complete result is the reusable-scope boundary. The alias gate covers
+# target checks and the two work counters separately.
 read -r walk_start walk_end < <(
   find_span \
     "$glob_file" \
-    "internal static bool IsLinkContained(" \
-    "if (!Directory.Exists(coveringDirectory.Value))" \
-    "return current.All(HasOnlyContainedLinkEntries);"
+    "internal static ShellGlobReach ResolveReach(" \
+    "return complete" \
+    ": new ShellGlobReach.Unresolved(scopePaths, targetReach);"
 )
 security_mutations+=("ShellGlobScope.cs{$walk_start..$walk_end}")
 
@@ -669,30 +685,97 @@ fi
 
 # These partitions use one list of source spans.
 # The workflow runs each partition in a separate job.
-# This keeps the 303 Security mutants out of one 15-minute group with Actors.
+# The two groups keep the Security mutants outside one long group with Actors.
 security_a_mutations=("${security_mutations[@]:0:27}")
 security_b_mutations=("${security_mutations[@]:27}")
+# These narrow spans retain the contained-alias authority boundaries in the
+# existing Security-B invocation. A missing or duplicated marker stops setup.
+alias_spans="$(
+  python3 - "$repo_root" <<'ALIAS_SPANS'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1]) / "src/Netclaw.Security"
+targets = targets = targets = [
+    ('ShellGlobScope.cs', '!coveringDirectory.Contains(knownPath)', 1, '*'),
+    ('ShellGlobScope.cs', 'matches && isDirectory && index < glob.SegmentDepth - 1', 5, '*'),
+    ('ShellGlobScope.cs', 'if (walked > MaximumWalkWork)', 3, '*'),
+    ('ShellGlobScope.cs', 'if (++walked > MaximumWalkWork)', 4, '*'),
+    ('ShellGlobScope.cs', 'directory.Ancestors.Contains(target) || target.Contains(directory.Path)', 2, '*'),
+    ('ShellGlobScope.cs', 'scopes.Add(isDirectory\n                                    ? target\n                                    : CanonicalPath.TryCreateHost(Path.GetDirectoryName(path), null, out parent) ? parent : target);', 4, '*'),
+    ('ShellGlobScope.cs', 'index < glob.SegmentDepth - 1 || hasTrailingSlash', 4, '*'),
+    ('ShellGlobScope.cs', 'requiresDirectory && targetExists && !isDirectory', 4, '*'),
+    ('ShellGlobScope.cs', 'targetExists && Directory.Exists(path)', 1, '*'),
+    ('ShellGlobScope.cs', 'if (matches)\n                                        targets.Add(new ShellGlobTargetReach(knownPath, index + 1));', 3, '*'),
+    ('ShellGlobScope.cs', '!targetExists\n                                    || !CanonicalPath.TryCreateHost(path, null, out target)', 3, '*'),
+    ('ShellGlobScope.cs', 'FileSystemAuthority.EvaluateMembership(target,\n                                        [new PathBoundary.Folder(linkBoundary, LinkRule.BelowRoot)]) is not PathDecision.Allowed', 1, '*'),
+    ('ShellGlobScope.cs', 'if (!matches)\n                                    continue;', 2, '*'),
+    ('ToolPathPolicy.cs', 'IsProvedValueDenied(shell, known.Target.Value)', 1, '*'),
+    ('ToolPathPolicy.cs', 'match is not null\n                    && (string.Equals(match, target, StringComparison.OrdinalIgnoreCase) || IsShellDenied(shell, match))', 4, '*'),
+    ('ShellGlobScope.cs', 'reach == 0 ? null : prefix + string.Join(separator, relative[..reach])', 1, 'Conditional (false) mutation'),
+]
+for name, marker, count, mutator in targets:
+    text = (root / name).read_text(encoding="utf-8")
+    if text.count(marker) != 1:
+        raise SystemExit("A contained-alias mutation boundary is missing or duplicated.")
+    start = text.index(marker)
+    first = text.count("\n", 0, start) + 1
+    last = text.count("\n", 0, start + len(marker)) + 1
+    print(f"{name}{{{start}..{start + len(marker)}}}", root / name, first, last, count, mutator, sep="\t")
+ALIAS_SPANS
+)"
+while IFS=$'\t' read -r alias_span _source _first _last _count _mutator; do
+  security_b_mutations+=("$alias_span")
+done <<< "$alias_spans"
+
+verify_alias_targets() {
+  local report="$1"
+  local receipt="$(dirname "$report")/contained-alias-targets.ndjson"
+  : > "$receipt"
+  while IFS=$'\t' read -r _span source first last count mutator; do
+    jq -c --arg source "$source" --argjson first "$first" --argjson last "$last" --arg mutator "$mutator" '
+      [.files[$source].mutants[] | select(.status != "Ignored")
+        | select($mutator == "*" or .mutatorName == $mutator)
+        | select(.location.start.line >= $first and .location.start.line <= $last)]
+      | {source: $source, first: $first, last: $last, mutants: .}
+    ' "$report" >> "$receipt"
+    jq -e --arg source "$source" --argjson first "$first" --argjson last "$last" --argjson count "$count" --arg mutator "$mutator" '
+      [.files[$source].mutants[] | select(.status != "Ignored")
+        | select($mutator == "*" or .mutatorName == $mutator)
+        | select(.location.start.line >= $first and .location.start.line <= $last)] as $mutants
+      | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
+    ' "$report" > /dev/null || {
+      echo "Expected $count killed contained-alias mutants in $source at lines $first-$last." >&2
+      return 1
+    }
+  done <<< "$alias_spans"
+}
 security_a_expected=131
-security_b_expected=172
-if [[ $((security_a_expected + security_b_expected)) -ne 303 ]]; then
-  echo "The Security partitions must total 303 mutants." >&2
+security_b_expected=198
+if [[ $((security_a_expected + security_b_expected)) -ne 329 ]]; then
+  echo "The Security partitions must total 329 mutants." >&2
   exit 1
 fi
 
 case "$part" in
+  verify-b)
+    verify_group "$output_root/security-b" "$security_b_expected"
+    verify_alias_targets "$output_root/security-b/reports/mutation-report.json"
+    ;;
   collect)
     printf 'security-a spans=%s\n' "${#security_a_mutations[@]}"
     printf '%s\n' "${security_a_mutations[@]}"
     printf 'security-b spans=%s\n' "${#security_b_mutations[@]}"
     printf '%s\n' "${security_b_mutations[@]}"
     printf 'actors spans=%s\n' "${#actor_mutations[@]}"
-    printf 'security total expected=303; actors expected=27; combined expected=330\n'
+    printf 'security total expected=329; actors expected=27; combined expected=356\n'
     ;;
   all)
     run_group "stryker-shell-command-analysis.json" "$output_root/security-a" \
       "$security_a_expected" "${security_a_mutations[@]}"
     run_group "stryker-shell-command-analysis.json" "$output_root/security-b" \
       "$security_b_expected" "${security_b_mutations[@]}"
+    verify_alias_targets "$output_root/security-b/reports/mutation-report.json"
     run_group "stryker-config.json" "$output_root/actors" 27 "${actor_mutations[@]}"
     ;;
   a)
@@ -703,9 +786,10 @@ case "$part" in
   b)
     run_group "stryker-shell-command-analysis.json" "$output_root/security-b" \
       "$security_b_expected" "${security_b_mutations[@]}"
+    verify_alias_targets "$output_root/security-b/reports/mutation-report.json"
     ;;
   *)
-    echo "Usage: $0 [output-path] | --part a|b|all [output-path] | --collect" >&2
+    echo "Usage: $0 [output-path] | --part a|b|all [output-path] | --verify-b output-path | --collect" >&2
     exit 2
     ;;
 esac

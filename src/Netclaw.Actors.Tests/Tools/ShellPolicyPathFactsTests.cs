@@ -18,6 +18,30 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public sealed class ShellPolicyPathFactsTests
 {
+    [Fact]
+    public void Incomplete_glob_path_view_retains_the_known_target_of_a_broken_chain()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var directory = new DisposableTempDir();
+        var covering = Directory.CreateDirectory(Path.Combine(directory.Path, "cover")).FullName;
+        var knownTarget = Path.Combine(covering, "missing");
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), knownTarget);
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2));
+        var analysis = new ShellCommandAnalyzer(environment).Analyze($"cat {covering}/a*/x", directory.Path);
+        var occurrence = Assert.Single(analysis.Commands);
+        var pattern = Assert.IsType<ShellValueDomain.PathPattern>(
+            ShellGlobScope.FindGlobPattern(occurrence, occurrence.Clause.Args.Last()));
+        var source = new ShellPolicySourcePathFact(ShellPolicyPathOrigin.AuthoredArgument, pattern, ShellPathShape.Posix);
+
+        var resolved = ShellPolicyOccurrencePathFacts.Resolve(source, directory.Path, ShellPathStyle.Posix);
+
+        Assert.Equal(ShellPolicyPathResolutionState.InvalidKnownValue, resolved.State);
+        Assert.Contains(resolved.Paths, path => path.Value == covering);
+        Assert.Contains(resolved.Paths, path => path.Value == knownTarget);
+    }
+
     [Theory]
     [InlineData("/dev/tcp/host/80")]
     [InlineData("/dev/udp/host/80")]

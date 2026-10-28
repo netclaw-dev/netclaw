@@ -1093,7 +1093,8 @@ public sealed class ToolAccessPolicy
         if (view.ResolutionBase.Path is { } resolutionBase)
             yield return new ShellPathAccess(resolutionBase, readOnly ? ShellPathRead.Scope : ShellPathRead.None);
 
-        foreach (var fact in view.Facts.Where(static fact => fact.State == ShellPolicyPathResolutionState.Known))
+        // Partial glob reach can still name a protected target. Incomplete scope never erases known path checks.
+        foreach (var fact in view.Facts.Where(static fact => fact.Paths.Count > 0))
         {
             // A redirect that writes (cat cfg > /tmp/x) keeps write protection for its target.
             var read = readOnly

@@ -119,6 +119,55 @@ public sealed class ChildRunParkSerializationTests : TestKit
             Serialization.Proto.SessionSnapshotV2Proto.Parser.ParseFrom(snapshot.ToByteArray())));
     }
 
+    [Theory]
+    [InlineData(0, false)] [InlineData(1, false)] [InlineData(3, false)]
+    [InlineData(0, true)] [InlineData(1, true)] [InlineData(3, true)]
+    public void Cause_feedback_and_unfinished_facts_survive_the_park_wire(int unfinishedFailures, bool delivered)
+    {
+        var tracker = new TurnStateTracker();
+        var failure = new ToolCycleResult(ToolInvocationOutcomeCategory.InvalidInput, "rejected")
+            { FailureKey = new ToolFailureKey("netclaw", "invalid_rationale") };
+        tracker.ObserveProgress(Enumerable.Repeat(failure, 3), true);
+        if (delivered)
+            tracker.CreateNudgeAfterResults(null, false);
+        tracker.ObserveProgress(Enumerable.Repeat(failure, unfinishedFailures)
+            .Append(new ToolCycleResult(ToolInvocationOutcomeCategory.Success, "sibling")), false);
+        var evt = new ChildRunEvent.Parked(FullPark() with { LoopGuard = tracker.ExportLoopGuard() }, [Request(1)])
+            { SessionId = Owner, RunId = RunId, RecordedAtMs = 10 };
+        var restoredPark = RoundTrip(Codec(), evt).Park;
+        var restored = new TurnStateTracker();
+        restored.RestoreLoopGuard(restoredPark.LoopGuard);
+        restored.ObserveProgress([failure], true);
+        Assert.Equal(delivered ? RefusedRepeatAction.EscalatedNudge : RefusedRepeatAction.Nudge, restored.EvaluateProgress());
+        Assert.Equal(LoopInterventionReason.FailureCauseRecurrence, restored.EvaluateProgressReason());
+        Assert.Equal(0, restored.CallsSinceProgress);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public void Legacy_cause_fields_are_empty_and_an_orphan_advice_stage_fails(bool orphanStage)
+    {
+        var evt = new ChildRunEvent.Parked(FullPark(), [Request(1)])
+            { SessionId = Owner, RunId = RunId, RecordedAtMs = 10 };
+        var wire = NetclawProtoMapper.ToProto(evt);
+        var guard = wire.Parked.LoopGuard;
+        guard.CauseBatches.Clear();
+        guard.IncompleteFailureKeys.Clear();
+        if (orphanStage)
+        {
+            guard.CauseBatches.Add(new Serialization.Proto.ChildLoopGuardProto.Types.CauseBatch { AdviceStage = 1 });
+            Assert.Throws<InvalidDataException>(() => NetclawProtoMapper.FromProto(wire));
+        }
+        else
+        {
+            var restored = Assert.IsType<ChildRunEvent.Parked>(NetclawProtoMapper.FromProto(wire));
+            var tracker = new TurnStateTracker();
+            tracker.RestoreLoopGuard(restored.Park.LoopGuard);
+            Assert.Equal(LoopInterventionReason.FailureBudget, tracker.EvaluateProgressReason());
+            Assert.Null(tracker.EvaluateActiveCause());
+        }
+    }
+
     // The bytes of a message with field 30 added: an empty embedded message that this binary does not know.
     private static byte[] WithUnknownField(byte[] bytes)
     {
@@ -195,7 +244,14 @@ public sealed class ChildRunParkSerializationTests : TestKit
             {
                 [new ToolRecurrenceKey(new ToolName("shell_execute"), "hash-a")] = new("success", 1, Corrected: true, PendingJob: true)
             },
-            RefusedRepeatCount: 1),
+            RefusedRepeatCount: 1, CallsSinceProgress: 6, IncompleteBatchHadSuccess: true)
+        {
+            ProgressFailureUnits = 12, ProgressStage = RefusedRepeatAction.EscalatedNudge, IncompleteBatchHadFailure = true,
+            CauseBatches = [new CauseFeedbackBatch([new ToolFailureKey("netclaw", "invalid_rationale", "validation")],
+                new ProgressDecision(RefusedRepeatAction.Nudge, LoopInterventionReason.FailureCauseRecurrence,
+                    new ToolFailureKey("netclaw", "invalid_rationale", "validation")))],
+            IncompleteFailureKeys = [new ToolFailureKey("netclaw", "args_parse_error", "validation")]
+        },
         ScopeDirectories = new ChildParkScopeDirectories("/repo", "/repo/tools"),
         FileActivity = new WorkingContextDelta
         {

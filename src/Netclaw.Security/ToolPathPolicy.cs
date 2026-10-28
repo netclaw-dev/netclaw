@@ -596,25 +596,40 @@ public sealed class ToolPathPolicy
             _ => false
         };
 
-    /// <summary>
-    /// Returns true when a glob word can reach a protected path or the default
-    /// credential store.
-    /// </summary>
-    /// <remarks>
-    /// SECURITY (decision D5, option A): a glob word reaches each path below its
-    /// covering directory that its segments can match. When the segments can match
-    /// a protected path, or a directory that contains one, the word gets the
-    /// decision of that literal path. The match is lexical. Netclaw does not list
-    /// the directory or follow links here, so a link below the covering directory
-    /// that leads to a protected path is an accepted gap.
-    /// </remarks>
+    /// <summary>Checks lexical glob reach and every known alias target, also when scope is incomplete.</summary>
     private bool GlobMayReachDeniedPath(ShellValueDomain.PathPattern pattern, FileSystemAuthority shell)
     {
         var glob = ShellGlobScope.AsGlobPattern(pattern);
-        return glob is not null
-               && shell.GetProtectedPaths(PathOperation.Shell)
-                   .Concat(DefaultCredentialStorePaths())
-                   .Any(target => MatchIsDenied(glob, target, shell));
+        if (glob is null)
+            return false;
+
+        var protectedPaths = shell.GetProtectedPaths(PathOperation.Shell)
+            .Concat(DefaultCredentialStorePaths())
+            .ToArray();
+        if (protectedPaths.Any(target => MatchIsDenied(glob, target, shell)))
+            return true;
+
+        if (!CanonicalPath.TryCreate(pattern.CoveringDirectory, null, Environment.PathStyle, out var covering))
+            return false;
+
+        var reach = ShellGlobScope.ResolveReach(covering, glob);
+        foreach (var known in reach.Targets)
+        {
+            if (IsProvedValueDenied(shell, known.Target.Value))
+                return true;
+
+            foreach (var target in protectedPaths)
+            {
+                var match = ShellGlobScope.MatchPathToward(glob, known, target);
+                if (match is not null
+                    && (string.Equals(match, target, StringComparison.OrdinalIgnoreCase) || IsShellDenied(shell, match)))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     // The match is the target itself, a directory that contains it (the glob
