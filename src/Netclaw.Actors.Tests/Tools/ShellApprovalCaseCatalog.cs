@@ -2825,7 +2825,7 @@ public static class ShellApprovalCases
             ExpectedApproval.Deny("shell_references_protected_path")),
         Case(
             "glob-in-directory-segment-uses-global-grant",
-            Bash52("ls -d ~/repositories/*/akka*"),
+            Bash52("ls -d {repositories}/*/akka*"),
             Approvals.PersistentAnywhere("ls"),
             ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:ls")),
         Case(

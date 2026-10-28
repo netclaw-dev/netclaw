@@ -325,6 +325,17 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         Directory.CreateDirectory(sessionDirectory);
         Directory.CreateDirectory(externalDirectory);
 
+        if (caseId == "glob-in-directory-segment-uses-global-grant")
+        {
+            var repositories = Path.Combine(projectDirectory, "repositories");
+            Directory.CreateDirectory(Path.Combine(repositories, "owner", "akka-fixture"));
+            var quotedRepositories = "'" + repositories.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
+            invocation = invocation with
+            {
+                Command = invocation.Command.Replace("{repositories}", quotedRepositories, StringComparison.Ordinal)
+            };
+        }
+
         var environment = invocation.CreateEnvironment();
         var approvalProjectDirectory = scope?.ProjectDirectory ?? projectDirectory;
         var approvalSessionDirectory = scope?.SessionDirectory ?? sessionDirectory;
