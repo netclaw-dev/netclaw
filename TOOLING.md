@@ -63,6 +63,13 @@ The table retains earlier group measurements. Gate notes below describe later ad
 | `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local), `child-resume-gate` (55 mutants, one invocation, 3.2 local) | 9 to 11 (estimate) |
 
+The approval-directory gate includes one retained-hop producer target in `FileSystemAuthority.FollowLinkChainCore`.
+The gate requires the omission of `knownTargets?.Add(current);` to have the `Killed` status.
+The gate pins its source span, `Statement mutation` operator, `;` replacement, and one expected mutant.
+A missing, ignored, compile-error, uncovered, timed-out, or surviving target fails the gate.
+This adds one Security target, from 18 to 19, and keeps six Actors targets.
+The shell-command-analysis B gate stays at 198 mutants and 43 required identities.
+
 The curation gate targets only `sameNameMatch is not null` in `CurationRulesEvaluator`.
 Run `./scripts/run-curation-same-name-mutations.sh` to verify this boundary.
 The paired rules tests reject its one equality mutant, `sameNameMatch is null`.
@@ -138,7 +145,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
 | Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an unknown operand with a safe phrase or a grant for anywhere, attended or not) covers it; a glob word gets the decision of each protected path that it can match (D5), and its link walk stays inside the covering directory; a bound value gets the hard-deny decision of its literal twin; a Bash test builtin is data only with proved operand values without `[`; a data command keeps its assignment digest unless each operand is proved data, and only such a data command with no redirect keeps its normal candidate after an unknown directory; a variable word that is not a path word is an unknown operand, so a folder grant cannot cover a loop or an assignment value outside the folder; an option value that the parser splits from its option (`--name=value`, `-p:Name=value`) and that can leave the working directory gets the scope of a path word with the same text, so a folder or repository grant cannot cover it; fixed text on stdin (a quoted heredoc or a proved here string) is data only on stdin and only for a receiver that is not a shell and has no argument that can name one | 356 required | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, Bash sanitation, and Bash launch-value digest | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract; only an assignment that can reach the program qualifies a grant, a Bash data command keeps every assignment, and the parser names come from the same launch snapshot; an exact effective Bash value can qualify a digest when authored text is unknown, while PowerShell keeps the authored-value check (F3) | 84 killed | `./scripts/run-shell-assignment-mutations.sh` |
-| Filesystem authority folder membership, repository identity, repository persistence, the folder of a new grant, and the link target scope | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a word that names a link also has the scope of its final target, and a target after a `..` that leaves a link is unknown (#2375); a new folder grant uses the directory where its occurrence runs | 24 killed | `./scripts/run-approval-directory-mutations.sh` |
+| Filesystem authority folder membership, repository identity, repository persistence, the folder of a new grant, and the link target scope | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a word that names a link also has the scope of its final target, and a target after a `..` that leaves a link is unknown (#2375); a new folder grant uses the directory where its occurrence runs | 25 required | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `SessionInputFlow.PrepareAdmission` drop decision (`TryFindWaitingFire`, `TryReadFireKey`) and `ReminderFireKey.TryParse` | Rule 3: a session drops a newer fire only while an earlier input of the same reminder waits (the definition id matches, the flow's own queue holds that input, and only reminder-kind inputs count; a journal row that nothing will run never blocks); text that is not a fire key is never dropped and never blocks; the parser refuses any text but `{id}:{digits}` | 21 killed | `./scripts/run-reminder-execution-mutations.sh` |
@@ -1508,6 +1515,20 @@ lines:
 
 Two revisions with the same behavior therefore give the same lines. The
 report shows the tokens, never a revision hash.
+
+The cache key includes the complete committed Git tree, the active runner,
+the probe, the adapter, the corpus, and the selected states. Root package, SDK, and build files can
+change the loaded code even when `src/` stays equal. Any tracked tree change
+therefore creates a separate `tree-*` output. An identical committed tree can
+reuse its completed output. The script does not reuse or rename legacy
+`src-*` outputs. The cache summary still counts them, and `--prune-cache`
+can remove them explicitly.
+
+The key does not identify the installed toolchain, host environment, external
+imports, or package bytes from a mutable feed. Use a new `--out` directory
+after those inputs change. `--fresh-head` reruns the candidate, but it does
+not refresh the baseline. Record the resolved package and loaded DLL identity
+when a comparison changes dependencies.
 
 Bash 5.2 states:
 
