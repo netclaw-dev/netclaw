@@ -102,9 +102,12 @@ public sealed class DaemonLifecycleNotifier
     {
         var pid = Environment.ProcessId;
         var exceptionType = exception.GetType().FullName ?? exception.GetType().Name;
-        var exceptionMessage = string.IsNullOrWhiteSpace(exception.Message)
+        // Sanitize first, then apply the placeholder. A message made only of control
+        // characters strips to empty, and the alert must still say something.
+        var sanitizedMessage = LogSafe.Text(exception.Message, 400);
+        var exceptionMessage = string.IsNullOrWhiteSpace(sanitizedMessage)
             ? "(no exception message)"
-            : exception.Message;
+            : sanitizedMessage;
         // Today every caller passes a code-side constant for `reason`, but
         // sanitizing here keeps the contract symmetric with NotifyShutdown and
         // forecloses on future callers that might forward HTTP input.
@@ -122,7 +125,7 @@ public sealed class DaemonLifecycleNotifier
             ["pid"] = pid.ToString(CultureInfo.InvariantCulture),
             ["reason"] = safeReason,
             ["exceptionType"] = exceptionType,
-            ["exceptionMessage"] = LogSafe.Text(exceptionMessage, 400),
+            ["exceptionMessage"] = exceptionMessage,
         };
 
         if (!string.IsNullOrWhiteSpace(crashLogPath))

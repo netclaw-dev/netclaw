@@ -82,6 +82,19 @@ public sealed class DaemonLifecycleNotifierTests
         Assert.Equal("C123/171313.123", alert.Context["latest_session_id"]);
     }
 
+    [Fact]
+    public void NotifyCrashing_uses_placeholder_when_message_is_only_control_characters()
+    {
+        // The message strips to empty, so the alert must still say something rather than
+        // ship an empty field that a webhook consumer reads as a missing value.
+        var ex = new InvalidOperationException("\0\n\r");
+
+        _sut.NotifyCrashing("daemon-unhandled", ex);
+
+        var alert = Assert.Single(_sink.Alerts);
+        Assert.Equal("(no exception message)", alert.Context!["exceptionMessage"]);
+    }
+
     [Theory]
     [InlineData("ok\r\nlevel=critical attacker=admin", "oklevel=critical attacker=admin")]
     [InlineData("ok\nfake-line", "okfake-line")]

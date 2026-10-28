@@ -74,6 +74,22 @@ public sealed class LogSafeTests
     }
 
     [Fact]
+    public void Text_NonpositiveLimit_Throws()
+    {
+        // A zero limit would index before the first character. Fail loudly instead.
+        Assert.Throws<ArgumentOutOfRangeException>(() => LogSafe.Text("a", 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LogSafe.Text("a", -1));
+    }
+
+    [Fact]
+    public void Text_EmptyValueWithNonpositiveLimit_Throws()
+    {
+        // The limit contract holds even when there is nothing to trim, so a caller cannot
+        // ship a broken limit that only fails on some inputs.
+        Assert.Throws<ArgumentOutOfRangeException>(() => LogSafe.Text(string.Empty, 0));
+    }
+
+    [Fact]
     public void Text_CutAfterCompletePair_KeepsThePair()
     {
         var input = "ab\U0001F600cd";

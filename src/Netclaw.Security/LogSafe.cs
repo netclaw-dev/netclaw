@@ -34,8 +34,14 @@ public static class LogSafe
     /// Removes line-breaking characters from <paramref name="value"/> and trims the result to
     /// <paramref name="maxChars"/>.
     /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="maxChars"/> is zero or negative. A zero limit indexes before the first
+    /// character, and an empty result is never what a caller wants from a sanitizer.
+    /// </exception>
     public static string Text(string? value, int maxChars = DefaultMaxChars)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxChars);
+
         if (string.IsNullOrEmpty(value))
             return string.Empty;
 
