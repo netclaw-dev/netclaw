@@ -16,17 +16,18 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// answer the guard gives:
 /// <list type="bullet">
 /// <item><see cref="Caught_failure_shapes_intervene"/> — the turn is stuck and
-/// the guard catches it today. These are the controls.</item>
+/// the guard catches it through the action-identity axis. These are the controls.</item>
 /// <item><see cref="Missed_failure_shapes_must_intervene"/> — the turn is stuck
-/// and the guard misses it. This theory FAILS until #2706 lands. The red run is
-/// the deliverable: the gap stated as an executable spec.</item>
+/// and the action-identity axis misses it. These went red until #2706 landed and
+/// they caught the gap. The progress axis catches them now.</item>
 /// <item><see cref="Success_shapes_must_not_intervene"/> — the turn is making
 /// progress. A failure here is a false positive, which is worse than a gap.</item>
 /// </list>
-/// The guard is action-identity centric: it compares a repeated action against
-/// its own earlier result. It never compares one action's failure against a
-/// different action's failure, so a turn that rotates tools while failing the
-/// same way is invisible to it.
+/// The guard has two axes. The action-identity axis compares a repeated action
+/// against its own earlier result. It never compares one action's failure
+/// against a different action's failure, so a turn that rotates tools while
+/// failing the same way is invisible to it. The progress axis counts failed
+/// calls across all tools, and catches that turn.
 /// </summary>
 public sealed class LoopGuardShapeTests
 {
@@ -210,9 +211,9 @@ public sealed class LoopGuardShapeTests
         => Assert.True(Run(shape), $"The guard did not intervene for '{shape.Name}'.");
 
     /// <summary>
-    /// The gap inventory. Every case here MUST intervene and does not yet, so
-    /// this theory fails until #2706 lands. That failure is the deliverable: it
-    /// is the gap stated as an executable spec.
+    /// The gap inventory. Every case here MUST intervene. The action-identity
+    /// axis misses all six; the progress axis catches them. If one of these goes
+    /// red, the progress axis regressed.
     /// </summary>
     [Theory]
     [MemberData(nameof(MissedFailureShapes))]
@@ -236,7 +237,8 @@ public sealed class LoopGuardShapeTests
             var batch = Prepare(step);
             var decision = tracker.EvaluateBeforeDispatch(batch);
             if (decision.Kind == ToolCycleDecisionKind.Correct
-                || decision.RefusedRepeat != RefusedRepeatAction.None)
+                || decision.RefusedRepeat != RefusedRepeatAction.None
+                || decision.Progress != RefusedRepeatAction.None)
             {
                 return true;
             }
