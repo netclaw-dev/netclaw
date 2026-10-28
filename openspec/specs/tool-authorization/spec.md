@@ -739,6 +739,8 @@ have their glossary meaning.
   Each intermediate directory visit and each link hop SHALL consume one unit.
   Ordinary directory-entry scans are outside this count.
   Every target and residual match SHALL stay inside the original covering boundary.
+  Only a matched intermediate directory alias MAY use that original boundary.
+  Every other link SHALL also retain its immediate directory containment rule.
   A pattern with a trailing slash SHALL retain its directory-only restriction
   when Netclaw computes known target reach.
   A contained directory alias SHALL be reusable only after complete target,
@@ -746,8 +748,10 @@ have their glossary meaning.
   The walk SHALL retain the existing link-hop bound.
   A cycle, broken link, unknown target, inspection failure, outside target, or
   exhausted bound SHALL keep reusable scope unresolved.
-  In Personal Approval mode, an unresolved walk SHALL retain exact `Once` and
-  `Deny` choices unless a prior screen denies it.
+  In Personal Approval mode, unresolved reach alone SHALL NOT support reusable approval.
+  Existing hard and protected-path rules SHALL still apply before exact consent.
+  These rules include R13 denial when link resolution fails.
+  If those rules permit consent, the call SHALL retain exact `Once` and `Deny` choices.
   Explicit Auto consent SHALL retain its existing behavior and SHALL NOT
   bypass hard or protected-path denials.
   Incomplete reach SHALL NOT support reusable grants or reviewed-safe coverage.
@@ -1101,6 +1105,22 @@ the command exact, so the call gets the rewrite correction.
 - **AND** every reachable target passes protection and the applicable authority rules
 - **WHEN** Netclaw evaluates `ls -d ~/repositories/*/ ~/repositories/*/*/ 2>/dev/null | head -60`
 - **THEN** the existing reviewed diagnostic policy can permit the complete call
+
+#### Scenario: A leaf alias cannot transfer scope to a sibling directory
+
+- **GIVEN** a Personal Approval-mode folder grant for `touch` covers `<P>`
+- **AND** `<P>/a/alias.txt` links to `<P>/b/item.txt`
+- **WHEN** the user calls `touch '<P>'/*/*.txt`
+- **THEN** the call requires exact consent because the leaf target leaves its immediate directory
+- **AND** the same-directory leaf alias retains its existing grant behavior
+
+#### Scenario: A cycle retains the literal failed-resolution denial
+
+- **GIVEN** `<P>/alias` links to itself
+- **WHEN** the user calls `touch '<P>'/a*/*.txt`
+- **THEN** the protected-path screen denies the call with `shell_references_protected_path`
+- **AND** the equivalent literal path also denies under R13
+- **AND** the denial does not assert that the cycle reveals a credential path
 
 #### Scenario: An outside alias stays unresolved under a global grant
 

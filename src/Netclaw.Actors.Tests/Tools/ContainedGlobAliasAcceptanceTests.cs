@@ -16,6 +16,56 @@ public sealed class ContainedGlobAliasAcceptanceTests(ShellApprovalMatrixFixture
     public static bool IsPosix => !OperatingSystem.IsWindows();
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    [SlopwatchSuppress("SW001", "The fixture requires native POSIX file aliases.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The fixture requires POSIX file aliases.")]
+    [InlineData("local", true)]
+    [InlineData("sibling", false)]
+    [InlineData("outside", false)]
+    [InlineData("sibling-directory", false)]
+    [InlineData("nonmatching-leaf", false)]
+    [InlineData("nonmatching-intermediate", false)]
+    public async Task A_leaf_alias_retains_its_immediate_directory_boundary(string shape, bool allowed)
+    {
+        await using var harness = await CreateHarnessAsync(
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "touch"), true);
+        var source = Directory.CreateDirectory(Path.Combine(harness.ProjectDirectory, "a")).FullName;
+        var sibling = Directory.CreateDirectory(Path.Combine(harness.ProjectDirectory, "b")).FullName;
+        var targetDirectory = shape switch
+        {
+            "local" => source,
+            "sibling" or "sibling-directory" or "nonmatching-leaf" or "nonmatching-intermediate" => sibling,
+            "outside" => harness.SessionDirectory,
+            _ => throw new ArgumentOutOfRangeException(nameof(shape))
+        };
+        var target = Path.Combine(targetDirectory, "item.txt");
+        await File.WriteAllTextAsync(target, "original", Ct);
+        var pattern = shape switch
+        {
+            "sibling-directory" => "*/*/",
+            "nonmatching-leaf" => "*/wanted*.txt",
+            "nonmatching-intermediate" => "*/x*/*.txt",
+            _ => "*/*.txt"
+        };
+        if (shape is "sibling-directory" or "nonmatching-intermediate")
+            Directory.CreateSymbolicLink(Path.Combine(source, "alias"), targetDirectory);
+        else
+            File.CreateSymbolicLink(Path.Combine(source, "alias.txt"), target);
+
+        var decision = await harness.EvaluateShellAsync($"touch '{harness.ProjectDirectory}'/{pattern}", Ct);
+
+        Assert.Equal(allowed ? ApprovalOutcome.Allowed : ApprovalOutcome.RequiresApproval, decision.Outcome);
+        if (allowed)
+            Assert.Equal(ApprovalAllowReason.StoredApproval, decision.AllowReason);
+        else
+        {
+            Assert.NotNull(decision.Prompt);
+            Assert.Contains(ObservedOptionKeys.ApproveOnce, decision.Prompt.OptionKeys);
+            Assert.DoesNotContain(ObservedOptionKeys.ApproveAlways, decision.Prompt.OptionKeys);
+            Assert.DoesNotContain(ObservedOptionKeys.ApproveEverywhere, decision.Prompt.OptionKeys);
+        }
+        Assert.Equal("original", await File.ReadAllTextAsync(target, Ct));
+    }
+
     [SlopwatchSuppress("SW001", "The fixture requires native POSIX directory aliases.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The fixture requires POSIX directory aliases.")]
     [InlineData(true, false)]
@@ -99,7 +149,6 @@ public sealed class ContainedGlobAliasAcceptanceTests(ShellApprovalMatrixFixture
     [InlineData("outside", true)]
     [InlineData("outside", false)]
     [InlineData("broken", true)]
-    [InlineData("cycle", true)]
     public async Task An_unresolved_alias_does_not_reuse_a_global_grant(string shape, bool interactive)
     {
         await using var harness = await CreateHarnessAsync(Approvals.PersistentAnywhere("touch"), interactive);
@@ -108,7 +157,6 @@ public sealed class ContainedGlobAliasAcceptanceTests(ShellApprovalMatrixFixture
         {
             "outside" => Path.GetDirectoryName(harness.ProjectDirectory)!,
             "broken" => Path.Combine(harness.ProjectDirectory, "absent"),
-            "cycle" => alias,
             _ => throw new ArgumentOutOfRangeException(nameof(shape))
         };
         Directory.CreateSymbolicLink(alias, target);
@@ -123,6 +171,25 @@ public sealed class ContainedGlobAliasAcceptanceTests(ShellApprovalMatrixFixture
             Assert.DoesNotContain(ObservedOptionKeys.ApproveEverywhere, decision.Prompt.OptionKeys);
             Assert.DoesNotContain(ObservedOptionKeys.ApproveAlways, decision.Prompt.OptionKeys);
         }
+    }
+
+    [SlopwatchSuppress("SW001", "The fixture requires native POSIX directory aliases.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The fixture requires POSIX directory aliases.")]
+    public async Task A_cycle_retains_the_literal_failed_resolution_denial()
+    {
+        await using var harness = await CreateHarnessAsync(Approvals.PersistentAnywhere("touch"), true);
+        var alias = Path.Combine(harness.ProjectDirectory, "alias");
+        Directory.CreateSymbolicLink(alias, alias);
+
+        var literal = await harness.EvaluateShellAsync($"touch '{alias}/item.txt'", Ct);
+        var glob = await harness.EvaluateShellAsync($"touch '{harness.ProjectDirectory}'/a*/*.txt", Ct);
+
+        Assert.Equal(ApprovalOutcome.Denied, literal.Outcome);
+        Assert.Equal("shell_references_protected_path", literal.DenyReason);
+        Assert.Equal(literal.Outcome, glob.Outcome);
+        Assert.Equal(literal.DenyReason, glob.DenyReason);
+        Assert.Null(glob.Prompt);
+        Assert.Equal(0, glob.ApprovalChecks);
     }
 
     [SlopwatchSuppress("SW001", "The glob facts require the native POSIX path model.")]

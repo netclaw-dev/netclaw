@@ -855,6 +855,10 @@ Leaks today:
   every known alias target with its remaining parser segments.
   `ShellGlobScope.ResolveReach` supplies call-local complete or unresolved reach.
   An unresolved result retains known targets for protection.
+  The existing R13 rule can deny failed link resolution without a configured protected entry.
+  This rule does not identify a credential path.
+  Only matched intermediate directory aliases use the original covering boundary.
+  Other links retain their immediate directory containment rule.
   Only complete reach supports reusable scope or reviewed-safe coverage.
   Arguments, redirects, the resolved path view, and reviewed policy use the
   same scope facts. Approval requires existing grant coverage for the original

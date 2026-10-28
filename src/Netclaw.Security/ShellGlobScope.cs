@@ -121,6 +121,10 @@ internal static class ShellGlobScope
                                 // An unknown target type keeps its known reach. A proved file cannot fill a directory segment.
                                 if (requiresDirectory && targetExists && !isDirectory)
                                     matches = false;
+                                // Only matched intermediate directories receive the wider original-cover boundary.
+                                var linkBoundary = matches && isDirectory && index < glob.SegmentDepth - 1
+                                    ? coveringDirectory
+                                    : directory.Path;
                                 walked += Math.Max(1, knownTargets.Count);
                                 foreach (var known in knownTargets)
                                 {
@@ -133,7 +137,7 @@ internal static class ShellGlobScope
 
                                     if (matches)
                                         targets.Add(new ShellGlobTargetReach(knownPath, index + 1));
-                                    if (!coveringDirectory.Contains(knownPath))
+                                    if (!coveringDirectory.Contains(knownPath) || !linkBoundary.Contains(knownPath))
                                         complete = false;
                                 }
 
@@ -146,7 +150,9 @@ internal static class ShellGlobScope
                                 var target = default(CanonicalPath);
                                 if (!targetExists
                                     || !CanonicalPath.TryCreateHost(path, null, out target)
-                                    || FileSystemAuthority.EvaluateMembership(target, held) is not PathDecision.Allowed)
+                                    || FileSystemAuthority.EvaluateMembership(target, held) is not PathDecision.Allowed
+                                    || FileSystemAuthority.EvaluateMembership(target,
+                                        [new PathBoundary.Folder(linkBoundary, LinkRule.BelowRoot)]) is not PathDecision.Allowed)
                                 {
                                     complete = false;
                                     continue;

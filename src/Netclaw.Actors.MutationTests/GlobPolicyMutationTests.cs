@@ -432,6 +432,54 @@ public sealed class GlobPolicyMutationTests
         Assert.False(IsLinkContained(covering, "a*/b*/x"));
     }
 
+    [Theory]
+    [InlineData("local", true)]
+    [InlineData("sibling", false)]
+    [InlineData("outside", false)]
+    [InlineData("sibling-directory", false)]
+    [InlineData("matching-intermediate", true)]
+    [InlineData("nonmatching-leaf", false)]
+    [InlineData("nonmatching-intermediate", false)]
+    public void A_leaf_alias_retains_the_immediate_directory_boundary(string shape, bool complete)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var source = Directory.CreateDirectory(Path.Combine(covering, "a")).FullName;
+        var sibling = Directory.CreateDirectory(Path.Combine(covering, "b")).FullName;
+        var outside = Directory.CreateDirectory(Path.Combine(tree.Root, "outside")).FullName;
+        var targetDirectory = shape switch
+        {
+            "local" => source,
+            "sibling" or "sibling-directory" or "nonmatching-leaf" or "nonmatching-intermediate" or "matching-intermediate" => sibling,
+            "outside" => outside,
+            _ => throw new ArgumentOutOfRangeException(nameof(shape))
+        };
+        var target = Path.Combine(targetDirectory, "item.txt");
+        File.WriteAllText(target, "test");
+        var pattern = shape switch
+        {
+            "sibling-directory" => "*/*/",
+            "nonmatching-leaf" => "*/wanted*.txt",
+            "nonmatching-intermediate" => "*/x*/*.txt",
+            "matching-intermediate" => "*/a*/*.txt",
+            _ => "*/*.txt"
+        };
+        if (shape is "sibling-directory" or "nonmatching-intermediate" or "matching-intermediate")
+            Directory.CreateSymbolicLink(Path.Combine(source, "alias"), targetDirectory);
+        else
+            File.CreateSymbolicLink(Path.Combine(source, "alias.txt"), target);
+
+        Assert.Equal(complete, IsLinkContained(covering, pattern));
+        if (shape is "local" or "sibling" or "outside")
+        {
+            var policy = new ToolPathPolicy(Bash52, [target]);
+            Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/{pattern}", tree.Root));
+        }
+    }
+
     [Fact]
     public void A_final_file_alias_has_the_scope_of_its_target_directory()
     {

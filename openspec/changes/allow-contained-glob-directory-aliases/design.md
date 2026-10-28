@@ -23,12 +23,16 @@ The design does not reproduce executable grammar or enumerate exact shell result
 `ShellGlobScope` returns complete or unresolved reach with all known target facts.
 The facts contain the authored scope, target scopes, and residual patterns.
 An unresolved result retains known reach so protection can still deny it.
+The existing R13 rule denies failed link resolution, including a cycle.
+This denial does not identify a credential path.
 Only a complete result can support reusable grants or reviewed-safe coverage.
 Explicit Auto consent retains its existing authority and protected-path screens.
 
 `FileSystemAuthority` remains the only reader of link-target text.
 The walk reuses its chain, parent-after-link, inspection, and membership rules.
 Each target stays inside the original covering boundary.
+Only a matched intermediate directory alias uses that wider boundary.
+All other links retain their immediate directory containment rule.
 Reusable scope requires a combined directory-visit and link-hop count of 4096 or less.
 Ordinary directory-entry scans are outside this count and can increase inspection cost.
 Its visited key includes the effective directory and remaining segment index.
