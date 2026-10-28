@@ -19,6 +19,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Netclaw.Actors" />
     <InternalsVisibleTo Include="Netclaw.Actors.Tests" />
+    <!-- The mutation project links Netclaw.Actors.Tests sources, so it needs the same visibility. -->
+    <InternalsVisibleTo Include="Netclaw.Actors.MutationTests" />
     <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
   </ItemGroup>
 
