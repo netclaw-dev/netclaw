@@ -1,6 +1,10 @@
 # NetClaw Release Notes
 
-## Unreleased
+## 0.28.2 (2026-10-28)
+
+This is a stable patch release for 0.28.0. A model definition now carries a provider-neutral output limit and thinking level, so an Anthropic reply is no longer cut at 1024 tokens. The daemon rotates its log into bounded numbered segments. The CLI refuses to send local control traffic to a guessed address when the configuration cannot be read.
+
+**Upgrade impact:** none. 0.28.2 uses the same database format as 0.28.0 and 0.28.1, and it changes no configuration format. Three behaviors change: a turn that keeps failing through different tools now stops, `netclaw doctor --json` writes only JSON to stdout, and `Logs:Days` now also prunes numbered daemon log segments.
 
 ### Models
 
@@ -11,6 +15,34 @@
   - A hand-edited level that the provider dialect cannot send now fails startup and `netclaw doctor`, and so does a level other than `off` on an Ollama provider with `DisableThinking`.
 - **Each model definition resolves its capabilities against its own provider.** Before, the capability chain used the Main provider's endpoint for every role.
 - **A fallback model no longer receives the request fields of a failed candidate.** Each failover candidate gets its own copy of the request options ([#2681](https://github.com/netclaw-dev/netclaw/issues/2681)).
+
+### Security
+
+- **An unreadable local configuration no longer leaves the CLI to guess a daemon address.** Before, a config that failed to load fell back to the default local daemon address, so a lifecycle command could send local control traffic to a destination that no configuration named. Now the CLI reports an unknown address before it creates the local control transport, and it skips the shutdown notice and the readiness probe. An explicit remote endpoint still takes precedence for a remote operation, and the existing process identity proof still governs a stop signal ([#2726](https://github.com/netclaw-dev/netclaw/pull/2726), fixes [#2476](https://github.com/netclaw-dev/netclaw/issues/2476)).
+- **A bounded glob that crosses a contained directory alias can use an existing grant.** Before, a directory alias anywhere in a bounded glob asked for exact consent, so an ordinary repository-listing command could not use a folder or repository grant that already covered it. Now the glob resolves each known alias target with the same filesystem authority rules, and the grant applies only when it covers the authored scope and every target scope. A walk that is incomplete, external, cyclic, broken, or uninspectable stays unresolved, so it still asks. The target check also compares the authored pattern and each target's remaining pattern against protected paths, so a protected path that a lexical check hid is now refused ([#2716](https://github.com/netclaw-dev/netclaw/pull/2716), [#2718](https://github.com/netclaw-dev/netclaw/pull/2718)).
+
+### Sessions
+
+- **The loop guard counts failed calls, not only repeated actions.** The guard keyed on the tool name and the arguments hash, so a model that rotated tools never repeated a key and a model that hit one error through several tools stayed invisible to it. Now a second axis counts failed calls and resets the count when a batch holds one success. The model receives a nudge that names the repeated cause and its fix, in the parent session and in a child run ([#2710](https://github.com/netclaw-dev/netclaw/pull/2710), fixes [#2706](https://github.com/netclaw-dev/netclaw/issues/2706)).
+
+### Configuration
+
+- **The daemon log rotates into bounded numbered segments.** `~/.netclaw/logs/daemon-{yyyy-MM-dd}.log` stops at 10 MiB, and the writer continues in `daemon-{yyyy-MM-dd}.1.log`, then `.2.log`, and further numbered files. A restart appends to the first segment below the threshold, and a new UTC date starts a new series. `netclaw doctor` and the eval tools read every segment. **Upgrade impact:** `Logs:Days` now prunes those numbered segments as well as the daily file and `crash-*.log`, judged by the date in the file name. The newest 3 daemon logs and the newest 3 crash logs are still always kept ([#2712](https://github.com/netclaw-dev/netclaw/pull/2712)).
+
+### CLI/TUI
+
+- **`netclaw daemon help` exits successfully.** `netclaw daemon help`, `--help`, and `-h` print the usage text and exit with code `0`, so a script that asks for help no longer reads it as a failure. An unknown subcommand still exits non-zero. Help does not control the daemon or change a service file ([#2709](https://github.com/netclaw-dev/netclaw/pull/2709)).
+- **`netclaw doctor --json` writes only JSON to stdout.** Before, a repair notice could join the JSON document and break a caller that parses stdout. The notice now goes to stderr ([#2711](https://github.com/netclaw-dev/netclaw/pull/2711)).
+
+### Bug Fixes
+
+- **A tool call that misspells a required key in another form resolves again.** A model that writes `rationale` or another variation instead of `_rationale` no longer fails the call. The argument resolver gains the entries that the timeout key already had ([#2705](https://github.com/netclaw-dev/netclaw/pull/2705)).
+
+### Dependency Updates
+
+- **Anthropic 13.3.0.** The provider SDK moves from 12.50.0 to 13.3.0 ([#2697](https://github.com/netclaw-dev/netclaw/pull/2697)).
+- **Termina 0.17.1.** The terminal library moves from 0.17.0 ([#2708](https://github.com/netclaw-dev/netclaw/pull/2708)).
+- **ShellSyntaxTree 0.5.0-beta.2.** The parser that proves a launch-variable glob moves from 0.5.0-beta.1, and its bounded handle-glob rules back the alias walk above ([#2718](https://github.com/netclaw-dev/netclaw/pull/2718)).
 
 ## 0.28.1 (2026-10-26)
 
