@@ -217,6 +217,29 @@ public sealed class ContainedGlobAliasAcceptanceTests(ShellApprovalMatrixFixture
         Assert.Equal(allowed ? ApprovalOutcome.Allowed : ApprovalOutcome.RequiresApproval, decision.Outcome);
     }
 
+    [SlopwatchSuppress("SW001", "The glob facts require the native POSIX path model.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The glob facts require POSIX paths.")]
+    [InlineData(4096)]
+    [InlineData(4097)]
+    public async Task Auto_consent_retains_its_authority_at_the_glob_work_bound(int directories)
+    {
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            "contained-alias-auto-bound",
+            new ShellApprovalInvocation("true", Host: ShellApprovalHost.Bash52),
+            Approvals.None,
+            fixture.ActorSystem,
+            Ct,
+            shellApprovalMode: ToolApprovalMode.Auto);
+        for (var index = 0; index < directories; index++)
+            Directory.CreateDirectory(Path.Combine(harness.ProjectDirectory, $"entry-{index:D4}"));
+
+        var decision = await harness.EvaluateShellAsync($"touch '{harness.ProjectDirectory}'/*/item.txt", Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, decision.Outcome);
+        Assert.Equal(0, decision.ApprovalChecks);
+        Assert.Null(decision.Prompt);
+    }
+
     [SlopwatchSuppress("SW001", "The fixture requires native POSIX directory aliases.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The fixture requires POSIX directory aliases.")]
     [InlineData(TrustAudience.Team, ToolApprovalMode.Approval)]
