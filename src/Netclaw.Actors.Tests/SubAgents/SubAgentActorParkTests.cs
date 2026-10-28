@@ -194,6 +194,29 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
             Assert.Contains("7 tool calls failed", Assert.Single(nudges).Text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Repeated_cause_across_tools_receives_a_cause_nudge_with_child_wording()
+    {
+        // The child shares the same DispatchingToolExecutor front door as the parent, so a call without
+        // _rationale fails with invalid_rationale. Different arguments keep action identity blind; only the
+        // cause detector sees the repetition.
+        var client = new ScriptedToolCallChatClient([
+            [CauseCall("cause-1", "looper", "a")],
+            [CauseCall("cause-2", "looper", "b")],
+            [CauseCall("cause-3", "looper", "c")]
+        ], "Done.");
+        var owner = CreateTestProbe("cause-child-owner");
+        Launch(owner, Definition(new CountingTool("looper")), client, Scope(), null);
+
+        var end = await NextOwnerMessageAsync(owner, []);
+        Assert.IsType<ChildTerminalReturned>(end);
+
+        var nudge = client.ReceivedMessagesByCall.SelectMany(static messages => messages)
+            .First(message => ToolCycleMessages.IsCauseNudge(message.Text));
+        Assert.Contains("invalid_rationale", nudge.Text, StringComparison.Ordinal);
+        Assert.Contains("_rationale", nudge.Text, StringComparison.Ordinal);
+    }
+
     private IActorRef Launch(TestProbe owner, SubAgentDefinition definition, IChatClient client, ChildRunScope scope,
         ChildRunResume? resume)
     {
@@ -246,6 +269,10 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
 
     private static FunctionCallContent Loop(string callId, string query) => new(callId, "looper",
         new Dictionary<string, object?> { ["query"] = query, ["_rationale"] = "Test the child park." });
+
+    // A call with no _rationale, so the shared front door rejects it with invalid_rationale.
+    private static FunctionCallContent CauseCall(string callId, string name, string query)
+        => new(callId, name, new Dictionary<string, object?> { ["query"] = query });
 
     private static ToolAccessPolicy ConsentPolicy()
     {

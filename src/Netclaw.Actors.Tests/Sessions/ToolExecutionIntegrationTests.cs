@@ -504,6 +504,18 @@ internal sealed class FakeToolExecutor : IToolExecutor
     /// <summary>Tool names that should throw on execution.</summary>
     public HashSet<string> FailForTools { get; } = [];
 
+    /// <summary>Tool names whose preflight validation fails with <c>invalid_rationale</c>, as the real front
+    /// door does when <c>_rationale</c> is absent.</summary>
+    public HashSet<string> InvalidRationaleTools { get; } = [];
+
+    public ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall)
+        => InvalidRationaleTools.Contains(toolCall.Name)
+            ? new ToolArgumentRejection(
+                "Error: Required meta argument '_rationale' must be a non-empty string. "
+                + "Supply one sentence that states the tool call intent. The tool was NOT executed.",
+                "invalid_rationale")
+            : null;
+
     public Task AuthorizeAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext context, CancellationToken ct = default)
     {
         if (Corrections.TryGetValue(toolCall.Name, out var correction))

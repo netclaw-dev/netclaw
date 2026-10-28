@@ -982,8 +982,58 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         => message.Role == Microsoft.Extensions.AI.ChatRole.User
             && message.Text.StartsWith(RepeatNudgeStart, StringComparison.Ordinal);
 
+    private static bool IsCauseNudge(ChatMessage message)
+        => message.Role == Microsoft.Extensions.AI.ChatRole.User
+            && message.Text.StartsWith("[system: Netclaw saw the same failure repeatedly. ", StringComparison.Ordinal);
+
     private static FunctionCallContent SearchCall(string callId, string query)
         => new(callId, "search_tools", new Dictionary<string, object?> { ["query"] = query });
+
+    [Fact]
+    public async Task Repeated_cause_across_different_arguments_receives_a_cause_nudge_naming_the_fix()
+    {
+        // Issue #2706: the model rotated tools/arguments while failing the same front-door validation.
+        // Action identity is blind here because every argument differs; only the cause detector sees it.
+        _fakeToolExecutor.InvalidRationaleTools.Add("search_tools");
+        _fakeChatClient.PlannedResponses.Enqueue([SearchCall("cause-1", "a")]);
+        _fakeChatClient.PlannedResponses.Enqueue([SearchCall("cause-2", "b")]);
+        _fakeChatClient.PlannedResponses.Enqueue([SearchCall("cause-3", "c")]);
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("I keep failing the same way.")]);
+
+        var sessionId = new SessionId("channel-cause/repeated-cause");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("repeated-cause-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Do the thing."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var outputs = new List<object>();
+        await subscriber.FishForMessageAsync<object>(message =>
+        {
+            outputs.Add(message);
+            return message is TurnCompleted;
+        }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        // The turn completes normally with the model's own text; the cause advice is for the model, not the person.
+        Assert.DoesNotContain(outputs, static output => output is ErrorOutput);
+        Assert.Equal(TurnOutcome.Completed, Assert.IsType<TurnCompleted>(outputs[^1]).Outcome);
+        Assert.Equal(0, _fakeToolExecutor.CallCount);
+
+        // The third rejection crosses the cause threshold and the next model request carries the cause nudge.
+        var requests = _fakeChatClient.ReceivedMessages;
+        var nudge = requests[^1].Last(IsCauseNudge);
+        Assert.Contains("invalid_rationale", nudge.Text, StringComparison.Ordinal);
+        Assert.Contains("_rationale", nudge.Text, StringComparison.Ordinal);
+    }
 
     [Fact]
     public async Task Repeated_refused_call_is_refused_again_with_a_nudge_and_the_turn_continues()
