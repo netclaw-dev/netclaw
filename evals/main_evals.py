@@ -15,7 +15,6 @@ import uuid
 
 from trial_verdict import case_status
 
-EXPECTED_CASES = 113
 BOUNDED_CASE = 'approval_natural_directory_change'
 COORDINATION_CASES = {
     'coordination_retained_child_inspection',
@@ -59,10 +58,15 @@ def inventory(source, timeout):
                       'kind': command, 'context': 'bounded' if name == BOUNDED_CASE else 'broad',
                       'timeout_seconds': 300 if name in COORDINATION_CASES else effective_timeout})
     names = [case['name'] for case in cases]
-    if len(names) != EXPECTED_CASES or len(set(names)) != len(names):
-        raise ValueError(f'Main needs {EXPECTED_CASES} unique declared cases; found {len(names)}.')
-    if names.count(BOUNDED_CASE) != 1 or not COORDINATION_CASES.issubset(names):
-        raise ValueError('The required context or coordination cases are absent.')
+    if len(set(names)) != len(names):
+        raise ValueError('Main case declarations must have unique names.')
+    required = COORDINATION_CASES | {BOUNDED_CASE, 'identity_name', 'skill_operations_diagnostics', 'long_command_background_job'}
+    if not required.issubset(names):
+        raise ValueError('A critical Main case declaration is absent.')
+    assertions = set(re.findall(r'^assert_([a-z][a-z0-9_]*)\(\)\s*\{', source, re.MULTILINE))
+    missing = set(names) - assertions
+    if missing:
+        raise ValueError('A declared Main case has no assertion: ' + ', '.join(sorted(missing)))
     # The stock cap remains authoritative. A source change must update this contract too.
     if not re.search(r'PROMPT_TIMEOUT=300\s+run_case --json coordination_retained_child_inspection', body):
         raise ValueError('The stock coordination timeout changed; review the Main inventory contract.')

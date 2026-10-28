@@ -104,8 +104,10 @@ The normal unfiltered `./evals/run-evals.sh` entrypoint selects both contexts th
 A category that contains both contexts uses the same driver for its selected subset.
 The parent resolves the provider, prepares the image and observer, and freezes the actual image ID once.
 Each child uses one exact case filter, one shared seed, and the original trial code.
-The driver records all 113 cases, the planned trial count, and each child run ID in `evals/main-runs/<id>/main.json`.
-Five trials per case produce 565 trial slots.
+The driver derives every case from the current `run_all` declarations.
+It rejects duplicate names, unknown declaration helpers, missing critical cases, and declarations without assertions.
+It records the selected inventory, the planned trial count, and each child run ID in `evals/main-runs/<id>/main.json`.
+The trial slot count equals the declared case count times the trials per case.
 Category receipts identify only their selected subset and do not imply full-suite acceptance.
 The driver preserves conclusive failures and stops before another case after a containment or harness error.
 The child stops synchronously after an inconclusive verdict, before another trial or setup step.

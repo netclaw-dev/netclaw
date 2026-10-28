@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,11 @@ class MainEntrypointTests(unittest.TestCase):
         (self.root / 'feeds/skills/.system/files').mkdir(parents=True)
         for filename in ('run-evals.sh', 'main_evals.py', 'trial_verdict.py'):
             shutil.copyfile(ROOT / 'evals' / filename, self.root / 'evals' / filename)
+        source = (self.root / 'evals/run-evals.sh').read_text().split('run_all() {', 1)[1].split('\n}', 1)[0]
+        self.declarations = re.findall(r'^\s+run_(?:multi_turn_)?case\s+(?:--[\w-]+\s+)*([a-z][a-z0-9_]*)\s+', source, re.MULTILINE)
+        self.case_count = len(self.declarations)
+        approval = source.split('print_category "Approval Policy v2"', 1)[1].split('    end_category', 1)[0]
+        self.approval_count = len(re.findall(r'^\s+run_(?:multi_turn_)?case\s+', approval, re.MULTILINE))
         for filename in ('netclaw.json', 'netclaw-bounded.json'):
             shutil.copyfile(ROOT / 'evals/fixtures/config' / filename,
                             self.root / 'evals/fixtures/config' / filename)
@@ -114,8 +120,8 @@ raise SystemExit(1 if fails>1 else 0)
         result = self.run_default()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         calls = self.records(self.calls)
-        self.assertEqual(113, len(calls))
-        self.assertEqual(113, len({call['name'] for call in calls}))
+        self.assertEqual(self.declarations, [call['name'] for call in calls])
+        self.assertEqual(self.case_count, len({call['name'] for call in calls}))
         self.assertEqual(1, sum(call['name'] == 'approval_natural_directory_change' for call in calls))
         for call in calls:
             expected = 'netclaw-bounded.json' if call['name'] == 'approval_natural_directory_change' else 'netclaw.json'
@@ -126,10 +132,10 @@ raise SystemExit(1 if fails>1 else 0)
             self.assertEqual('fixture-model', call['model'])
             self.assertEqual(hashlib.sha256(b'private-test-credential').hexdigest(), call['key_hash'])
         receipt = self.receipt()
-        self.assertEqual(('pass', 113, 565), tuple(receipt[key] for key in ('status', 'completed_cases', 'completed_trials')))
-        self.assertEqual(113, len({child['run_id'] for child in receipt['children']}))
+        self.assertEqual(('pass', self.case_count, self.case_count * 5), tuple(receipt[key] for key in ('status', 'completed_cases', 'completed_trials')))
+        self.assertEqual(self.case_count, len({child['run_id'] for child in receipt['children']}))
         self.assertEqual(3, sum(case['timeout_seconds'] == 300 for case in receipt['cases']))
-        self.assertEqual(110, sum(case['timeout_seconds'] == 600 for case in receipt['cases']))
+        self.assertEqual(self.case_count - 3, sum(case['timeout_seconds'] == 600 for case in receipt['cases']))
         tools = self.records(self.tool_calls)
         self.assertEqual(1, sum(tool[0] == 'dotnet' for tool in tools))
         self.assertEqual(1, sum(tool[0] == 'docker' for tool in tools))
@@ -149,9 +155,9 @@ raise SystemExit(1 if fails>1 else 0)
         result = self.run_default()
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         receipt = self.receipt()
-        self.assertEqual(('fail', 113, 565), tuple(receipt[key] for key in ('status', 'completed_cases', 'completed_trials')))
+        self.assertEqual(('fail', self.case_count, self.case_count * 5), tuple(receipt[key] for key in ('status', 'completed_cases', 'completed_trials')))
         self.assertEqual(2, receipt['children'][0]['result']['fails'])
-        self.assertEqual(113, len(self.records(self.calls)))
+        self.assertEqual(self.case_count, len(self.records(self.calls)))
 
     def test_missing_or_duplicate_case_fails_before_a_build_or_child(self):
         path = self.root / 'evals/run-evals.sh'
@@ -219,8 +225,8 @@ raise SystemExit(1 if fails>1 else 0)
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         receipt = self.receipt()
         self.assertEqual('stopped', receipt['status'])
-        self.assertEqual(113, len(receipt['children']))
-        self.assertEqual(565, receipt['stored_slots'])
+        self.assertEqual(self.case_count, len(receipt['children']))
+        self.assertEqual(self.case_count * 5, receipt['stored_slots'])
 
     def test_missing_verdict_stops_and_reports_actual_slots(self):
         self.environment['TEST_MISSING_VERDICT'] = '1'
@@ -236,6 +242,14 @@ raise SystemExit(1 if fails>1 else 0)
         result = self.run_default()
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertIn('unknown run_', result.stderr)
+        self.assertFalse(self.tool_calls.exists())
+
+    def test_declared_case_without_its_assertion_fails_before_a_build_or_child(self):
+        path = self.root / 'evals/run-evals.sh'
+        path.write_text(path.read_text().replace('assert_identity_name() {', 'removed_identity_name() {', 1))
+        result = self.run_default()
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('no assertion: identity_name', result.stderr)
         self.assertFalse(self.tool_calls.exists())
 
     def test_default_plan_records_stock_timeout_floors(self):
@@ -280,9 +294,9 @@ raise SystemExit(1 if fails>1 else 0)
         result = self.run_default()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         receipt = self.receipt()
-        self.assertEqual((18, 90), tuple(receipt[key] for key in ('completed_cases', 'completed_trials')))
+        self.assertEqual((self.approval_count, self.approval_count * 5), tuple(receipt[key] for key in ('completed_cases', 'completed_trials')))
         calls = self.records(self.calls)
-        self.assertEqual(18, len(calls))
+        self.assertEqual(self.approval_count, len(calls))
         self.assertEqual(1, sum(Path(call['config']).name=='netclaw-bounded.json' for call in calls))
         self.assertEqual(0, sum(tool[0]=='dotnet' for tool in self.records(self.tool_calls)))
 
