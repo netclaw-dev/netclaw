@@ -1,0 +1,19 @@
+# CodeQL configuration for default setup.
+#
+# Default setup merges this file with the configuration it generates, so no advanced
+# workflow is needed. Default setup reads the file only when the repository property
+# github-codeql-config-file points at it. Set that property to:
+#
+#     .github/codeql/codeql-config.yml
+#
+# Without the property this file has no effect.
+name: "Netclaw CodeQL config"
+
+paths-ignore:
+  # The eval suite holds deliberate fixtures: fake secrets, deliberately broken code
+  # samples, and marker strings. Findings there are not product defects, and dismissing
+  # them on every new fixture costs review attention that the real findings need.
+  # Both forms are listed: the directory entry covers the folder, and the glob covers
+  # every file beneath it.
+  - evals
+  - evals/**

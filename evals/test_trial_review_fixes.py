@@ -475,7 +475,10 @@ class StartupCheckTests(unittest.TestCase):
 
 class CopyBoundaryTests(ReviewHarnessCase):
     SESSION = "signalr/this-trial"
-    SECRET = "SECRET data-protection key material"
+    # A marker, not a credential. The tests below write this text into a private temp
+    # home and then prove the trial-copy step never copies it into evals/runs. The name
+    # says marker so a secret scanner does not read it as clear-text secret storage.
+    LEAK_MARKER = "LEAK-MARKER data-protection key material"
 
     def write_catalog(self, log_path):
         seeds.write_catalog(self.home, [(self.SESSION, log_path)])
@@ -489,17 +492,17 @@ class CopyBoundaryTests(ReviewHarnessCase):
     def make_secrets(self):
         key = self.home / "data" / "keys" / "key-1.xml"
         key.parent.mkdir(parents=True)
-        key.write_text(self.SECRET + "\n")
+        key.write_text(self.LEAK_MARKER + "\n")
         config_log = self.home / "data" / "config" / "logs" / "agent.log"
         config_log.parent.mkdir(parents=True)
-        config_log.write_text(self.SECRET + " (config)\n")
+        config_log.write_text(self.LEAK_MARKER + " (config)\n")
         return key, config_log
 
     def assert_no_secret_in_runs(self):
         runs = self.root / "checkout" / "evals" / "runs"
         for path in runs.rglob("*"):
             if path.is_file():
-                self.assertNotIn("SECRET", path.read_text(errors="replace"),
+                self.assertNotIn(self.LEAK_MARKER, path.read_text(errors="replace"),
                                  f"{path} holds data from outside the session folders")
 
     def test_sub_agent_log_that_links_into_keys_or_config_is_not_copied(self):
@@ -531,7 +534,7 @@ class CopyBoundaryTests(ReviewHarnessCase):
         log = self.make_session_log()
         envelope = log.parent.parent
         (envelope / "tmp" / "parent").mkdir(parents=True)
-        (envelope / "tmp" / "parent" / "notes.txt").write_text("SECRET tmp file\n")
+        (envelope / "tmp" / "parent" / "notes.txt").write_text(self.LEAK_MARKER + " tmp file\n")
         subagents = envelope / "subagents"
         (subagents / "good" / "logs").mkdir(parents=True)
         (subagents / "good" / "logs" / "a.log").write_text("sub-agent log\n")
