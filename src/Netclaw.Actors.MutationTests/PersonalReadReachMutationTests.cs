@@ -138,21 +138,25 @@ public sealed class PersonalReadReachMutationTests : IDisposable
 
     // Review item S1: a configured root over the base reaches the base and the own key folder,
     // never the key folder of another session. The deny compares without case and the own key
-    // folder compares with case, so a case variant fails closed.
+    // folder compares with case, so a distinct case variant fails closed.
     [Theory]
-    [InlineData(TrustAudience.Team)]
-    [InlineData(TrustAudience.Public)]
-    public void A_root_over_the_base_does_not_reach_another_key_folder(TrustAudience audience)
+    [InlineData(TrustAudience.Team, "mixed-hex", "/synthetic-netclaw-case-fixture/0")]
+    [InlineData(TrustAudience.Public, "mixed-hex", "/synthetic-netclaw-case-fixture/0")]
+    [InlineData(TrustAudience.Team, "all-digits", "/synthetic-netclaw-case-fixture/1825")]
+    [InlineData(TrustAudience.Public, "all-digits", "/synthetic-netclaw-case-fixture/1825")]
+    public void A_root_over_the_base_does_not_reach_another_key_folder(
+        TrustAudience audience, string keyShape, string envelopeRoot)
     {
         if (OperatingSystem.IsWindows())
             return;
 
         var temporaryBase = Path.Combine(_basePath, "netclaw-base");
         var layout = new ManagedTemporaryLayout.PrivateBase(new ManagedTemporaryBase(temporaryBase));
+        // These virtual roots supply deterministic hash input. The constructors perform no file I/O.
         var own = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "a")), layout);
+            new SessionStorageEnvelopeRoot(envelopeRoot), layout);
         var other = SessionStoragePaths.CreateVersion2(
-            new SessionStorageEnvelopeRoot(Path.Combine(_paths.SessionsDirectory, "b")), layout);
+            new SessionStorageEnvelopeRoot("/synthetic-netclaw-case-fixture/other"), layout);
         var config = new ToolConfig();
         var profile = audience == TrustAudience.Team ? config.AudienceProfiles.Team : config.AudienceProfiles.Public;
         profile.ReadFiles = Roots(_basePath);
@@ -161,13 +165,19 @@ public sealed class PersonalReadReachMutationTests : IDisposable
         var read = PathAccessPolicy.FileOperation.Read;
         var ownKey = Path.GetFileName(own.ManagedTemporary.StorageRoot.Value);
         var otherKey = Path.GetFileName(other.ManagedTemporary.StorageRoot.Value);
+        var allDigits = keyShape == "all-digits";
+        var uppercaseOwnKey = ownKey.ToUpperInvariant();
+
+        Assert.Matches(allDigits ? "^[0-9]{16}$" : "^(?=.*[0-9])(?=.*[a-f])[0-9a-f]{16}$", ownKey);
+        Assert.Equal(allDigits, string.Equals(ownKey, uppercaseOwnKey, StringComparison.Ordinal));
+        Assert.False(string.Equals(ownKey, otherKey, StringComparison.OrdinalIgnoreCase));
 
         Assert.True(Allowed(policy, context, Path.Combine(own.ManagedTemporary.Directory.Value, "x"), read));
         Assert.True(Allowed(policy, context, temporaryBase, read));
         Assert.True(Allowed(policy, context, Path.Combine(_basePath, "NETCLAW-BASE"), read));
         Assert.False(Allowed(policy, context, Path.Combine(other.ManagedTemporary.Directory.Value, "x"), read));
         Assert.False(Allowed(policy, context, Path.Combine(_basePath, "NETCLAW-BASE", otherKey, "p", "x"), read));
-        Assert.False(Allowed(policy, context, Path.Combine(temporaryBase, ownKey.ToUpperInvariant(), "p", "x"), read));
+        Assert.Equal(allDigits, Allowed(policy, context, Path.Combine(temporaryBase, uppercaseOwnKey, "p", "x"), read));
     }
 
     private SessionStoragePaths Deep()

@@ -214,7 +214,7 @@ public sealed class DaemonManagerInstallTests : IDisposable
     }
 
     private DaemonManager CreateManager(FakeSystemCommandRunner runner)
-        => new(_paths, TimeProvider.System, new FakeSupervisor(), runner);
+        => new(_paths, TimeProvider.System, new FakeSupervisor(), runner, DaemonApi.CreateLocalControlHttpClient);
 
     private sealed class FakeSupervisor : IContainerSupervisor
     {

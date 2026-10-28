@@ -509,8 +509,11 @@ Slack Socket Mode channel configuration.
 
 Unified daemon logging settings used by both Microsoft.Extensions.Logging and
 Akka.NET logger integration. Daemon-global logs write to
-`~/.netclaw/logs/daemon-{yyyy-MM-dd}.log` (rolled daily, capped at 10 MB
-per file). Session-owned diagnostics and session audit lines are consolidated
+`~/.netclaw/logs/daemon-{yyyy-MM-dd}.log`. At 10 MiB, the writer starts
+`daemon-{yyyy-MM-dd}.1.log`, then `.2.log`, and subsequent numbered files.
+One complete entry can exceed the threshold. A restart preserves existing entries
+and appends to the first segment below the threshold. The UTC date starts a new series.
+Session-owned diagnostics and session audit lines are consolidated
 into `~/.netclaw/logs/sessions/{sanitized-session-id}/session.log` when they
 execute under a session diagnostics context.
 
@@ -539,6 +542,8 @@ are not size-rotated today (tracked separately).
 | `LogLevel:Default` | string | `Warning` | Minimum log level (`Debug`, `Information`, `Warning`, `Error`, etc.) shared by MEL and Akka.NET. Standard `Logging:LogLevel:{Category}` overrides also apply. |
 | `Console:Enabled` | bool | `false` | Enables console logger provider output for daemon debugging. |
 
+The doctor includes valid numbered daemon segments in its diagnostic date window.
+
 ### Retention
 
 A daemon actor (`DataRetentionActor`) deletes expired data shortly after the daemon starts and then every
@@ -559,7 +564,7 @@ value without a manual restart. Set a value in the `netclaw config` dashboard (D
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `Logs:Days` | int | `14` | Days to keep `daemon-{yyyy-MM-dd}.log` and `crash-*.log` in `~/.netclaw/logs`, judged by the date in the file name. `0` keeps them forever. The newest 3 daemon logs and the newest 3 crash logs are always kept, so a wrong clock cannot delete the whole history. A value that is not an integer falls back to `14` with a startup warning. `logs/sessions/` and other files in the directory are never pruned. Environment form: `NETCLAW_Retention__Logs__Days`. |
+| `Logs:Days` | int | `14` | Days to keep `daemon-{yyyy-MM-dd}.log`, its numbered segments, and `crash-*.log` in `~/.netclaw/logs`, judged by the date in the file name. `0` keeps them forever. The newest 3 daemon logs and the newest 3 crash logs are always kept, so a wrong clock cannot delete the whole history. A value that is not an integer falls back to `14` with a startup warning. `logs/sessions/` and other files in the directory are never pruned. Environment form: `NETCLAW_Retention__Logs__Days`. |
 
 ### Webhooks
 

@@ -596,6 +596,14 @@ The existing archive also records the image ID, harness revision, asset revision
 Any runtime failure, model failure, or harness error fails the run. The ordinary suite percentage threshold does not apply.
 Local fixture tests run with `python3 -m unittest discover -s evals -p test_background_evals.py -v` and also run in CI.
 
+### Daemon log segment windows
+
+The harness snapshots the line count of each valid daemon log segment before each prompt and trial.
+The shared reader includes later lines once, in date and numeric segment order.
+Each prompt has its own baseline. A multi-turn trial also keeps the baseline from its first turn.
+Malformed filenames remain outside the window. Missing or shorter baseline segments cause a visible error.
+The final trial archive includes `raw/daemon-baseline.json` and segment offsets in `raw/assert.json`.
+
 ## Results Database
 
 Results are accumulated in `$EVAL_HOME/evals/results.db` during execution.

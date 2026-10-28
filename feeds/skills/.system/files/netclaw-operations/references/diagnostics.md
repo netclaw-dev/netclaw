@@ -13,8 +13,12 @@ When something seems wrong with Netclaw itself:
 2. If doctor reports fixable issues, run `netclaw doctor --fix --dry-run` to
    preview auto-repairs (schema-driven: stale properties, enum coercion, missing defaults)
 3. Run `netclaw status` via `shell_execute` — live runtime state from daemon
-3. Check daemon logs at `<NETCLAW_HOME>/logs/daemon-{yyyy-MM-dd}.log` (`NETCLAW_HOME` defaults to `~/.netclaw`)
+3. Check daemon logs at `<NETCLAW_HOME>/logs/daemon-{yyyy-MM-dd}*.log` (`NETCLAW_HOME` defaults to `~/.netclaw`)
 4. Check session logs at `<NETCLAW_HOME>/logs/sessions/{sanitized-session-id}/session.log`
+
+If a local config source cannot be read, `netclaw daemon status` reports an unknown address and skips its readiness probe.
+`netclaw daemon stop` also skips its shutdown notice. It still requires proof that the process serves this home.
+Repair or restore the file that the command names, then retry.
 
 The daemon deletes `daemon-*.log` and `crash-*.log` files older than `Retention:Logs:Days`
 (default 14, `0` keeps them forever). It does not delete anything under `logs/sessions/`.
@@ -45,7 +49,10 @@ Log split — one stream, partitioned locally by session:
   the notification sink). Note the *per-call* failover/retry
   log lines emitted while serving a specific session carry that session's id, so they
   partition into its `session.log`; the daemon-wide outage signal is the alert in
-  `daemon.log`. Rolled daily, capped at 10 MB per file.
+  the daemon log. Each UTC date starts a new file series. At 10 MiB,
+  the writer adds `.1.log`, then `.2.log`, to the dated base name.
+  One complete entry can exceed the threshold. A restart preserves previous entries.
+  The retention policy also covers numbered segments. The doctor reads all valid segments in its date window.
 - The **full** stream (daemon and session lines alike) is also exported to OTEL/Seq
   with the session id as an attribute; do the global slicing/distilling on the OTEL
   receiver side.

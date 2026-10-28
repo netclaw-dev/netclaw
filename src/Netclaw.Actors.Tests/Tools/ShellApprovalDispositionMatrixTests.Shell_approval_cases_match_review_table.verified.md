@@ -486,7 +486,7 @@
 | glob-credential-keys-denied-as-literal | Bash52 | Personal | Project | Interactive | cat ~/.netclaw/k*/*.xml | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
 | glob-link-to-credential-keys-denied-as-literal | Bash52 | Personal | Project | Interactive | ln -s ~/.netclaw/k* keys-link | persistent[anywhere]:ln | Denied | shell_references_protected_path | none | Not applicable |
 | literal-link-to-credential-keys-denies | Bash52 | Personal | Project | Interactive | ln -s ~/.netclaw/keys keys-link | persistent[anywhere]:ln | Denied | shell_references_protected_path | none | Not applicable |
-| glob-in-directory-segment-uses-global-grant | Bash52 | Personal | Project | Interactive | ls -d ~/repositories/*/akka* | persistent[anywhere]:ls | Allowed | StoredApproval | none | Not applicable |
+| glob-in-directory-segment-uses-global-grant | Bash52 | Personal | Project | Interactive | ls -d {repositories}/*/akka* | persistent[anywhere]:ls | Allowed | StoredApproval | none | Not applicable |
 | glob-dot-entries-use-global-grant | Bash52 | Personal | Project | Interactive | du -sh ~/repositories/akka.net/.* | persistent[anywhere]:du | Allowed | StoredApproval | none | Not applicable |
 | glob-leaf-in-project-uses-reviewed-phrase | Bash52 | Personal | Project | Interactive | ls src/*.cs | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | glob-that-may-add-option-uses-global-grant | Bash52 | Personal | Project | Interactive | rm */stale.tmp | persistent[anywhere]:rm | Allowed | StoredApproval | none | Not applicable |

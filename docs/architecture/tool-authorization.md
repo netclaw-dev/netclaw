@@ -54,7 +54,8 @@ Not in scope:
   `daemon-exposure`, `device-pairing`, `hub-auth`, and `local-control-proof`).
   A local-control proof grants one host operation: a pairing code or the read
   of one provider OAuth result. It never authorizes a tool call, and a tool
-  grant never replaces it;
+  grant never replaces it. The CLI lifecycle commands use the
+  [process home proof](../spec/SPEC-011-daemon-architecture.md#daemon-lifecycle-management);
 - validation of tool arguments against a schema (`tool-arg-validation`);
 - output bounds and spill (`bounded-tool-output`);
 - containment of what an allowed process does after it starts. Netclaw has no
@@ -849,11 +850,27 @@ Leaks today:
   - An option word with an expansion and no proved value (`-o"$n"`,
     `--$n=x`, `--$(cmd)=x`) has an `Unknown` value, so it is an unknown
     operand (decision D1).
-- Owner decision D5 (option A): a glob word gets the decision of each literal
-  protected path that its segments can match, or of a directory that contains
-  one (`ToolPathPolicy.GlobMayReachDeniedPath`). The match is lexical: Netclaw
-  does not list directories or follow links for this check. A link below the
-  covering directory that leads to a protected path is an accepted gap.
+- Owner decision D5: a glob word gets the decision of each literal protected
+  path that its segments can match, or of a directory that contains one.
+  `ToolPathPolicy.GlobMayReachDeniedPath` keeps the lexical match and checks
+  every known alias target with its remaining parser segments.
+  `ShellGlobScope.ResolveReach` supplies call-local complete or unresolved reach.
+  An unresolved result retains known targets for protection.
+  The existing R13 rule can deny failed link resolution without a configured protected entry.
+  This rule does not identify a credential path.
+  Only matched intermediate directory aliases use the original covering boundary.
+  Other final targets retain their immediate directory containment rule.
+  Known hops retain the original covering boundary, so a contained leaf chain can return to its source directory.
+  Only complete reach supports reusable scope or reviewed-safe coverage.
+  Arguments, redirects, the resolved path view, and reviewed policy use the
+  same scope facts. Approval requires existing grant coverage for the original
+  scope and every target scope. Each grant retains its own membership rules.
+  `FileSystemAuthority` remains the link-target reader.
+  Reusable scope requires a combined count of 4096 or less for intermediate
+  directory visits and link hops. Each event consumes one unit.
+  Ordinary directory-entry scans are outside this count, so wide directories
+  can increase inspection cost. The existing link-hop limit also applies.
+  The checks do not remove the filesystem race after authorization.
 
 ### 3.5 Consent
 

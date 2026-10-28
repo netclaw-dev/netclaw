@@ -3,8 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Globalization;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
@@ -13,10 +11,9 @@ namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
 /// Age-based pruning of the daemon's own rolled files in the top level of the logs directory.
-/// Only names the daemon itself produces are candidates: exactly <c>daemon-yyyy-MM-dd.log</c>
-/// (a size roll reopens the same file, so there is no suffixed form) and the crash log names
-/// <see cref="CrashLogWriter.TryParseFileName"/> accepts. Age comes from the date in the file
-/// name. Every other file, and everything in sub-directories such as <c>sessions/</c>, is never touched.
+/// Candidates use <c>daemon-yyyy-MM-dd.log</c>, <c>daemon-yyyy-MM-dd.N.log</c>, or a crash log name
+/// that <see cref="CrashLogWriter.TryParseFileName"/> accepts. N is a positive integer without leading zeros.
+/// Age comes from the date in the file name. Other files and subdirectories such as <c>sessions/</c> remain untouched.
 /// </summary>
 internal static class DaemonLogRetention
 {
@@ -31,10 +28,6 @@ internal static class DaemonLogRetention
 
     // No Netclaw build predates this; it keeps a decoy like daemon-0001-01-01.log out of reach.
     private const int EarliestPlausibleYear = 2000;
-
-    private static readonly Regex DaemonFileNamePattern = new(
-        "^daemon-([0-9]{4}-[0-9]{2}-[0-9]{2})\\.log$",
-        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     /// <summary>The retention job for the daemon and crash logs in <paramref name="paths"/>.</summary>
     public static RetentionJob CreateJob(IConfiguration configuration, NetclawPaths paths, out string? warning)
@@ -69,13 +62,13 @@ internal static class DaemonLogRetention
             return (0, 1);
         }
 
-        var daemonLogs = new List<(string Path, DateOnly Date)>();
+        var daemonLogs = new List<(string Path, DateOnly Date, int Segment)>();
         var crashLogs = new List<(string Path, DateTimeOffset Time)>();
         foreach (var file in files)
         {
             var name = Path.GetFileName(file);
-            if (TryGetDaemonLogDate(name, out var daemonDate))
-                daemonLogs.Add((file, daemonDate));
+            if (DaemonLogFileName.TryParse(name, out var daemonDate, out var segment) && daemonDate.Year >= EarliestPlausibleYear)
+                daemonLogs.Add((file, daemonDate, segment));
             else if (CrashLogWriter.TryParseFileName(name, out var crashTime) && crashTime.Year >= EarliestPlausibleYear)
                 crashLogs.Add((file, crashTime));
         }
@@ -89,8 +82,11 @@ internal static class DaemonLogRetention
 
         candidates.AddRange(daemonLogs
             .OrderByDescending(static x => x.Date)
+            .ThenByDescending(static x => x.Segment)
             .Skip(AlwaysKeepNewestDaemonLogs)
+            // daemon-log-retention-cutoff:begin
             .Where(x => x.Date < cutoff)
+            // daemon-log-retention-cutoff:end
             .Select(static x => x.Path));
 
         var deleted = 0;
@@ -109,14 +105,5 @@ internal static class DaemonLogRetention
         }
 
         return (deleted, failed);
-    }
-
-    private static bool TryGetDaemonLogDate(string fileName, out DateOnly date)
-    {
-        date = default;
-        var match = DaemonFileNamePattern.Match(fileName);
-        return match.Success
-            && DateOnly.TryParseExact(match.Groups[1].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date)
-            && date.Year >= EarliestPlausibleYear;
     }
 }

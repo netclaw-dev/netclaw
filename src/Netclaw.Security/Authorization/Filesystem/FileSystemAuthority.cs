@@ -519,6 +519,23 @@ internal sealed class FileSystemAuthority
     /// </para>
     /// </remarks>
     internal static LinkChainEnd FollowLinkChain(string path, out string target)
+        => FollowLinkChainCore(path, out target, knownTargets: null);
+
+    /// <summary>Retains each known target when a later link makes the chain unresolved.</summary>
+    internal static LinkChainEnd FollowLinkChain(
+        string path,
+        out string target,
+        out IReadOnlyList<string> knownTargets)
+    {
+        var targets = new List<string>();
+        knownTargets = targets.AsReadOnly();
+        return FollowLinkChainCore(path, out target, targets);
+    }
+
+    private static LinkChainEnd FollowLinkChainCore(
+        string path,
+        out string target,
+        ICollection<string>? knownTargets)
     {
         ArgumentNullException.ThrowIfNull(path);
         target = string.Empty;
@@ -557,6 +574,7 @@ internal sealed class FileSystemAuthority
                     return LinkChainEnd.Unknown;
 
                 current = Path.GetFullPath(next);
+                knownTargets?.Add(current);
             }
         }
         catch (Exception ex) when (IsInspectionFailure(ex))

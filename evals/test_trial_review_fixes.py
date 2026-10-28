@@ -190,11 +190,9 @@ class MidnightRotationTests(ReviewHarnessCase):
         self.assertEqual([self.EARLY], self.lines("daemon-session.log"), done.stderr)
         self.assertEqual([self.NEUTRAL, self.EARLY], self.lines("daemon-window.log"))
 
-    def test_daemon_file_that_exists_before_the_trial_is_not_part_of_the_window(self):
-        # M5 guard. Planted bug: look up the newest daemon file again just
-        # before the window copy. A touched older file then replaces the file
-        # that was read at the start of the trial. The window and the session
-        # lines come from the wrong file.
+    def test_trial_keeps_new_tails_from_older_and_current_files_in_date_order_without_old_prefixes(self):
+        # Each file contributes only the lines after its baseline offset.
+        # The future mtime must not make the older file replace the current file.
         old = self.home / "logs" / "daemon-2026-10-14.log"
         old.write_text("08:00:00.000 [INF] Old.Day: one\n08:00:01.000 [INF] Old.Day: two\n"
                        "08:00:02.000 [INF] Old.Day: three\n")
@@ -206,7 +204,7 @@ class MidnightRotationTests(ReviewHarnessCase):
                          FAKE_FUTURE_MTIME="daemon-2026-10-14.log")
 
         self.assertEqual([self.LATE], self.lines("daemon-session.log"))
-        self.assertEqual([self.LATE], self.lines("daemon-window.log"))
+        self.assertEqual([stray, self.LATE], self.lines("daemon-window.log"))
 
 
 class AssertionEvidenceTests(ReviewHarnessCase):
