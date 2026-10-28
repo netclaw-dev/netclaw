@@ -88,3 +88,17 @@ Three groups, each asserting the **reason** and **stage** independently:
 
 - Fixing the `_rationale` gate itself — #2707 owns that.
 - Task-level progress judgment — belongs to the model, not this guard.
+
+## Persistence
+
+Loop-detection state is ephemeral runtime information, not persistent state. A session that resumes after a
+restart comes back from compacted context, possibly on a different code path. Stale "you are stuck" counters
+from the prior run would leak into a fresh situation and punish a model for history it no longer has.
+
+The cause-recurrence history is therefore deliberately **not persisted**: it is turn-local, resets on a new
+turn or a resume, and re-establishes after three fresh occurrences. The failure budget is the one cheap,
+durable safety floor, and it is already carried only where a consent park needs it to keep the same in-flight
+turn honest. Nothing else in the detector is part of the persisted record.
+
+When a session resumes, treat the detector as starting fresh. Never reconstruct loop state from journaled
+history; if a park record happens to carry it, it is advisory for the same live turn, not a durable fact.

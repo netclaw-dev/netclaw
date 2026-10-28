@@ -91,8 +91,10 @@ internal sealed class TurnStateTracker
     private bool _incompleteBatchHadFailure;
 
     // One failure cause and how many times it has actually occurred this turn. Keyed by the stable identity,
-    // never by category alone. Per-turn reset bounds the history; the failure budget ends the turn before the
-    // dictionary can grow large, so no explicit eviction is needed.
+    // never by category alone. This is deliberately ephemeral runtime state: it resets on a new turn or a
+    // resume and is never persisted, because a resumed session comes back from compacted context and must not
+    // inherit stale "you are stuck" evidence. Per-turn reset bounds the history; the failure budget ends the
+    // turn before the dictionary can grow large, so no explicit eviction is needed.
     private readonly Dictionary<ToolFailureKey, CauseRecurrenceEpisode> _causeEpisodes = [];
 
     public int CallsSinceProgress => _callsSinceProgress;
