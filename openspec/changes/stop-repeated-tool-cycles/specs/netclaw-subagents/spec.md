@@ -50,6 +50,20 @@ remain an isolated worker by default:
   future opt-in setting.
 - It SHALL inherit audience and boundary context from the launch invocation.
 
+#### Scenario: Child acceptance returns before child completion
+
+- **GIVEN** a valid child request whose durable acceptance succeeds
+- **WHEN** the parent calls `spawn_agent`
+- **THEN** the parent receives the accepted run identity before the child completes
+- **AND** the child starts only after the acceptance persists
+
+#### Scenario: Failed acceptance starts no child
+
+- **GIVEN** a valid child request whose durable acceptance fails
+- **WHEN** the parent calls `spawn_agent`
+- **THEN** the call returns a failure
+- **AND** the system starts no child work
+
 #### Scenario: Subagent completes with text response and findings
 
 - **GIVEN** a `SubAgentDefinition` with a name, system prompt, and tool list

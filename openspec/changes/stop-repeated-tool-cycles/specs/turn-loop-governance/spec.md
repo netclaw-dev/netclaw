@@ -190,6 +190,54 @@ only to the message text. The source SHALL be constant across sessions.
 - **THEN** the event contains the period, repetition count, and decision only
 - **AND** the event contains no arguments, results, session data, or hashes
 
+### Requirement: A repeated failure cause across different actions triggers advice
+
+A failure cause SHALL be a stable identity of source, code, and optional scope.
+It SHALL NOT include a tool name or an argument hash. Netclaw SHALL keep a
+bounded per-turn history of failure causes. Three occurrences of one cause
+SHALL trigger a cause-specific nudge. A repeated cause in a later completed
+batch SHALL escalate. A repeated cause after an escalated nudge SHALL end the
+next attempted dispatch.
+
+A completed batch SHALL advance one cause at most one stage. Distinct codes and
+distinct scopes SHALL NOT combine into one cause. A cause with an unknown code
+SHALL NOT be recorded. An unrelated success SHALL NOT erase cause evidence. A
+new turn SHALL clear the history.
+
+The cause nudge SHALL name the cause and its fix. A repeated cause SHALL win
+over a generic no-progress nudge when its stage is at least as urgent.
+
+#### Scenario: One cause across different tools triggers advice
+
+- **GIVEN** three tool calls used different tools and one identical structured failure cause
+- **WHEN** the third call completes
+- **THEN** Netclaw adds a nudge that names the cause and its fix
+
+#### Scenario: Distinct causes do not combine
+
+- **GIVEN** calls failed with different structured codes in the same category
+- **WHEN** Netclaw computes the cause history
+- **THEN** no single cause reaches the nudge threshold
+- **AND** the failures fall to the generic budget
+
+#### Scenario: One parallel burst advances one rung
+
+- **GIVEN** three identical causes occur in one completed batch
+- **WHEN** Netclaw observes the batch
+- **THEN** the cause advances one stage, not three
+
+#### Scenario: A cause survives an unrelated success
+
+- **GIVEN** one cause occurred twice, then an unrelated call succeeded
+- **WHEN** the same cause occurs once more
+- **THEN** Netclaw still triggers the cause nudge
+
+#### Scenario: A new turn clears cause history
+
+- **GIVEN** a cause reached its nudge threshold
+- **WHEN** a new user turn starts
+- **THEN** the cause history is empty
+
 ## REMOVED Requirements
 
 ### Requirement: Per-turn tool loop limit is iteration-based
