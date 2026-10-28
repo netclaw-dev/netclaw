@@ -34,7 +34,7 @@ the link check, then protection.
   base.
 - Protection SHALL depend on the operation. Each file under the config
   directory is
-  [ordinary configuration](../../../docs/spec/GLOSSARY.md#ordinary-configuration)
+  [ordinary configuration](../../../../../../docs/spec/GLOSSARY.md#ordinary-configuration)
   and SHALL be readable by a file tool (owner decision D6), except
   `secrets.json` and the webhook route files, which hold the verification
   secret. This includes `netclaw.json`, the grant store `tool-approvals.json`,
@@ -316,9 +316,9 @@ process-local. No state of these checks is durable.
 Netclaw SHALL analyze a shell call with ShellSyntaxTree for the native shell
 of the daemon: Bash on Linux and macOS, and the probed PowerShell dialect
 (7.x or Windows PowerShell 5.1) on Windows. All stages of one call SHALL share
-one analysis. The terms [candidate](../../../docs/spec/GLOSSARY.md#candidate),
-[phrase](../../../docs/spec/GLOSSARY.md#phrase), and
-[unresolved syntax](../../../docs/spec/GLOSSARY.md#unresolved-syntax)
+one analysis. The terms [candidate](../../../../../../docs/spec/GLOSSARY.md#candidate),
+[phrase](../../../../../../docs/spec/GLOSSARY.md#phrase), and
+[unresolved syntax](../../../../../../docs/spec/GLOSSARY.md#unresolved-syntax)
 have their glossary meaning.
 
 - Netclaw SHALL derive one candidate from each complete command occurrence.
@@ -755,7 +755,7 @@ the command exact, so the call gets the rewrite correction.
 ### Requirement: TA-8 Every candidate needs coverage
 
 A call SHALL run without a prompt only when every candidate has
-[coverage](../../../docs/spec/GLOSSARY.md#coverage). Coverage sources
+[coverage](../../../../../../docs/spec/GLOSSARY.md#coverage). Coverage sources
 SHALL be:
 
 - a one-time consent for the exact blocked call (the retry passes every check
@@ -764,7 +764,7 @@ SHALL be:
 - a persistent grant: global (any directory), folder (the candidate's real
   scope is inside the folder, with no link below the grant root), or
   repository;
-- [reviewed-safe policy](../../../docs/spec/GLOSSARY.md#reviewed-safe-policy),
+- [reviewed-safe policy](../../../../../../docs/spec/GLOSSARY.md#reviewed-safe-policy),
   only for a catalog phrase, and only when the path rule below permits every
   known path. Under decision D1 it also covers an unknown operand value;
 - under decision D1, a grant for anywhere for an exact candidate whose only

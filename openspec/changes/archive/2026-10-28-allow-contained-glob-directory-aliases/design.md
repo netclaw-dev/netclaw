@@ -1,7 +1,7 @@
 ## Context
 
 See [the proposal](proposal.md) for the source PRDs and scope.
-Use [the engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+Use [the engineering glossary](../../../../docs/spec/GLOSSARY.md) for shared terms.
 
 The current glob walker returns one boolean.
 The approval matcher, redirect matcher, and reviewed policy consume that boolean.
@@ -86,6 +86,6 @@ Residual patterns preserve the parser's conservative reach without exact expansi
 Deliver traversal, target protection, all consumer updates, tests, and the specification in one atomic PR.
 Update the canonical architecture description only after the code implements this contract.
 Update the mapped operations skill and its version in the same diff.
-Run its required eval suite and retain the result.
+Retain the targeted guidance result and the user-canceled broad attempts.
 No stored grant migration or operator action is required.
 Revert the atomic PR to restore the prior conservative intermediate-link refusal.
