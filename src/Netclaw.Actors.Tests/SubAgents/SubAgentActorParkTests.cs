@@ -11,6 +11,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
@@ -136,6 +137,57 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
         Assert.Equal(approve ? 1 : 0, consent.CallCount);
         var expected = answer.TryGetRefusalText(ConsentToolName, out var refusal) ? refusal : "ok";
         Assert.Equal(expected, ResultOf(resumed.ReceivedMessagesByCall[0], "call-park"));
+    }
+
+    [Fact]
+    public async Task A_park_counts_actual_failures_from_finished_sibling_calls()
+    {
+        var looper = new ProgressTool();
+        var consent = new CountingTool(ConsentToolName);
+        var first = new FunctionCallContent("bad-before", "looper", new Dictionary<string, object?> { ["query"] = "a" });
+        var sibling = new FunctionCallContent("bad-sibling", "looper", new Dictionary<string, object?> { ["query"] = "b" });
+        var client = new ScriptedToolCallChatClient([[first], [Call("call-park", ConsentToolName), sibling]], "unused");
+        var owner = CreateTestProbe("progress-park-owner");
+        var child = Launch(owner, Definition(looper, consent), client, Scope(), null);
+
+        var (_, park, _) = await ExpectParkAsync(owner, []);
+        owner.Send(child, new ChildTerminalCommitted());
+
+        Assert.Equal(2, park.LoopGuard.CallsSinceProgress);
+        Assert.Empty(looper.Queries);
+        Assert.Equal(0, consent.CallCount);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task A_resumed_approval_result_updates_progress_before_the_next_model_request(bool approve, bool siblingSucceeded)
+    {
+        var consent = new CountingTool(ConsentToolName);
+        var first = new ScriptedToolCallChatClient([[Call("call-park", ConsentToolName)]], "unused");
+        var owner = CreateTestProbe("progress-resume-owner");
+        var child = Launch(owner, Definition(consent), first, Scope(), null);
+        var (_, park, requests) = await ExpectParkAsync(owner, []);
+        owner.Send(child, new ChildTerminalCommitted());
+        park = park with { LoopGuard = park.LoopGuard with { CallsSinceProgress = siblingSucceeded ? 0 : 6,
+            IncompleteBatchHadSuccess = siblingSucceeded } };
+        var request = Assert.Single(requests);
+        var answer = approve
+            ? new ApprovalRedriveEntry(request.AuthorizationAttemptId, OneTimeApprovalKeys.Create(request.Approval), null, null)
+            : new ApprovalRedriveEntry(request.AuthorizationAttemptId, null, RefusalKind.Denied, null);
+        var resumed = new ScriptedToolCallChatClient([], "Done.");
+        var resumedOwner = CreateTestProbe("progress-resumed-owner");
+        Launch(resumedOwner, Definition(consent), resumed, Scope(),
+            new ChildRunResume(park, new Dictionary<string, ApprovalRedriveEntry> { ["call-park"] = answer }));
+        var end = await NextOwnerMessageAsync(resumedOwner, []);
+
+        Assert.IsType<ChildTerminalReturned>(end);
+        var nudges = resumed.ReceivedMessagesByCall[0].Where(message => ToolCycleMessages.IsLoopNudge(message.Text)).ToArray();
+        if (approve || siblingSucceeded)
+            Assert.Empty(nudges);
+        else
+            Assert.Contains("7 tool calls failed", Assert.Single(nudges).Text, StringComparison.Ordinal);
     }
 
     private IActorRef Launch(TestProbe owner, SubAgentDefinition definition, IChatClient client, ChildRunScope scope,

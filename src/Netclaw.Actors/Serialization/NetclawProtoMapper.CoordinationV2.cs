@@ -448,7 +448,9 @@ internal static partial class NetclawProtoMapper
         {
             ToolIterationCount = loopGuard.ToolIterationCount,
             ToolCallCount = loopGuard.ToolCallCount,
-            RefusedRepeatCount = loopGuard.RefusedRepeatCount
+            RefusedRepeatCount = loopGuard.RefusedRepeatCount,
+            CallsSinceProgress = loopGuard.CallsSinceProgress,
+            IncompleteBatchHadSuccess = loopGuard.IncompleteBatchHadSuccess
         };
         if (loopGuard.LastBlockedAction is { } blocked)
             proto.LastBlockedAction = blocked.Value;
@@ -470,7 +472,9 @@ internal static partial class NetclawProtoMapper
         proto.Episodes.ToDictionary(
             static episode => new ToolRecurrenceKey(new ToolName(episode.ToolName), episode.ArgumentsHash),
             static episode => new ToolRecurrenceEpisode(episode.Outcome, episode.EqualRounds, episode.Corrected, episode.PendingJob)),
-        proto.RefusedRepeatCount);
+        proto.RefusedRepeatCount,
+        proto.CallsSinceProgress,
+        proto.IncompleteBatchHadSuccess);
 
     private static Proto.BackgroundChildRunV2Proto ToProto(BackgroundChildRun run)
     {

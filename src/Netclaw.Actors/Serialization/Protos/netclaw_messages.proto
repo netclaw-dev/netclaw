@@ -727,4 +727,6 @@ message ChildLoopGuardProto {
   optional string last_blocked_action = 4;
   repeated Episode episodes = 5;
   int32 refused_repeat_count = 6;
+  int32 calls_since_progress = 7;
+  bool incomplete_batch_had_success = 8;
 }

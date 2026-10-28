@@ -192,6 +192,7 @@ internal static class ChildParkRules
     // Returns the damage of a loop-guard state, or null when the state can be valid. A damaged state must not resume.
     public static string? LoopGuardDamage(TurnLoopGuardState loopGuard)
         => loopGuard.ToolIterationCount < 0 || loopGuard.ToolCallCount < 0 || loopGuard.RefusedRepeatCount < 0
+            || loopGuard.CallsSinceProgress < 0
             ? "a count is negative"
             : loopGuard.RefusedRepeatCount > TurnStateTracker.EscalatedRefusedRepeat + 1
                 ? "the refused-repeat count is above the escalation"

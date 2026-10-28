@@ -581,24 +581,24 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 ToolExecutionContext.RunScope.InheritedCwd);
             var parked = msg.Results.Where(static result => result.Parked is not null).ToArray();
 
-            // A parked batch records no loop observation (cut plan): the resumed child observes only its own batches.
+            var cycleResults = msg.Results.Where(static result => result.Parked is null).ToDictionary(
+                result => result.Message.ToolCallId is { } callId
+                    ? callId.Value
+                    : throw new InvalidOperationException("A tool cycle result requires a call identity."),
+                result => new ToolCycleResult(
+                    result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
+                    result.Message.Content ?? string.Empty)
+                {
+                    PendingJob = result.Receipt is ToolInvocationReceipt.PendingBackgroundJob,
+                    Synthetic = result.Receipt is ToolInvocationReceipt.Correction
+                        { RemediationCode: ToolRemediationCode.BreakToolCycle }
+                },
+                StringComparer.Ordinal);
+            // A park omits cycle history. Its finished calls and each resumed call still affect progress once.
             if (_activeCycleBatch is { } cycleBatch && parked.Length == 0)
-            {
-                var cycleResults = msg.Results.ToDictionary(
-                    result => result.Message.ToolCallId is { } callId
-                        ? callId.Value
-                        : throw new InvalidOperationException("A tool cycle result requires a call identity."),
-                    result => new ToolCycleResult(
-                        result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
-                        result.Message.Content ?? string.Empty)
-                    {
-                        PendingJob = result.Receipt is ToolInvocationReceipt.PendingBackgroundJob,
-                        Synthetic = result.Receipt is ToolInvocationReceipt.Correction
-                            { RemediationCode: ToolRemediationCode.BreakToolCycle }
-                    },
-                    StringComparer.Ordinal);
                 _turnState.ObserveCompleted(ToolCycleSignatureFactory.Complete(cycleBatch, cycleResults));
-            }
+            else
+                _turnState.ObserveProgress(cycleResults.Values, batchComplete: parked.Length == 0);
             _activeCycleBatch = null;
 
             // Append tool results as MEAI messages and log each result. A parked call has no result yet.
@@ -644,17 +644,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             AddModelInputMediaNudge(msg.Results
                 .SelectMany(result => result.ModelInputMediaReferences)
                 .ToArray());
-            if (_activeRepeatNudge is { } repeatNudge)
-            {
-                // The latest repeat nudge replaces the earlier one, so equal nudges do not pile up.
-                const string earlierNudge = $"[system: {ToolCycleMessages.RepeatNudgeStart}";
-                _history.RemoveAll(static message => message.Role == Microsoft.Extensions.AI.ChatRole.User
-                    && message.Text.StartsWith(earlierNudge, StringComparison.Ordinal));
-                _transcript.RemoveAll(static message => message.Role == Protocol.ChatRole.User
-                    && message.Content.StartsWith(earlierNudge, StringComparison.Ordinal));
-                AddSystemNudge(repeatNudge);
-                _activeRepeatNudge = null;
-            }
+            var nudge = ToolCycleMessages.AfterResults(_activeRepeatNudge, _turnState.EvaluateProgress(),
+                _turnState.CallsSinceProgress, childRun: true);
+            _history.RemoveAll(static message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+                && ToolCycleMessages.IsLoopNudge(message.Text));
+            _transcript.RemoveAll(static message => message.Role == Protocol.ChatRole.User
+                && ToolCycleMessages.IsLoopNudge(message.Content));
+            if (nudge is not null)
+                AddSystemNudge(nudge);
+            _activeRepeatNudge = null;
 
             _turnState.RecordToolCompletion(msg.Results.Length);
 
@@ -818,6 +816,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         {
             // The child ignored the escalated nudge (Aaron, 18 Oct 2026). The run ends with no dispatch and no
             // model request. It is a successful partial run, so the parent gets the child text and no error.
+            Complete(true, LastChildText(assistantMessage), SubAgentRunOutcome.Partial,
+                SubAgentOutcomeReason.ToolCycleStopped);
+            return;
+        }
+
+        // The progress axis: the calls already ran and failed, so this refuses nothing. At the end threshold
+        // the run ends as a partial run, the same way an ignored escalation does.
+        if (cycleDecision.Progress == RefusedRepeatAction.EndTurn)
+        {
             Complete(true, LastChildText(assistantMessage), SubAgentRunOutcome.Partial,
                 SubAgentOutcomeReason.ToolCycleStopped);
             return;

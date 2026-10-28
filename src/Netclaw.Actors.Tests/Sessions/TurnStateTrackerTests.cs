@@ -671,7 +671,7 @@ public sealed class TurnStateTrackerTests
                 [Key(c)] = new(Outcome(completedC), EqualRounds: 2, Corrected: false, PendingJob: false),
                 [Key(a)] = new(Outcome(completedA), EqualRounds: 2, Corrected: true, PendingJob: false)
             },
-            RefusedRepeatCount: 2);
+            RefusedRepeatCount: 2, CallsSinceProgress: 2);
 
         // Act
         var exported = live.ExportLoopGuard();
@@ -734,6 +734,8 @@ public sealed class TurnStateTrackerTests
         Assert.Equal(expected.LastBlockedAction, actual.LastBlockedAction);
         Assert.Equal(Entries(expected.Episodes), Entries(actual.Episodes));
         Assert.Equal(expected.RefusedRepeatCount, actual.RefusedRepeatCount);
+        Assert.Equal(expected.CallsSinceProgress, actual.CallsSinceProgress);
+        Assert.Equal(expected.IncompleteBatchHadSuccess, actual.IncompleteBatchHadSuccess);
 
         static (string Tool, string ArgumentsHash, ToolRecurrenceEpisode Episode)[] Entries(
             IReadOnlyDictionary<ToolRecurrenceKey, ToolRecurrenceEpisode> episodes)
@@ -750,6 +752,235 @@ public sealed class TurnStateTrackerTests
         string Repeated,
         string Exempt,
         RefusedRepeatAction RefusedRepeat);
+
+    // ── No-progress guard: the progress axis counts outcomes, not action identity ──
+
+    [Fact]
+    public void Identical_failures_across_different_tools_trip_the_progress_guard()
+    {
+        // The reported incident: rotating tools, identical error, no action repeats. The cycle guard cannot
+        // see it because every action identity differs. The progress axis must.
+        var tracker = new TurnStateTracker();
+        var tools = new[] { "sample/a", "sample/b", "sample/c", "sample/d" };
+        for (var i = 0; i < tools.Length; i++)
+        {
+            var batch = Prepare(Call($"call-{i}", tools[i]));
+            Assert.Equal(RefusedRepeatAction.None, tracker.EvaluateBeforeDispatch(batch).Progress);
+            tracker.ObserveCompleted(Complete(batch,
+                ($"call-{i}", ToolInvocationOutcomeCategory.InvalidInput, "Error: the same failure.")));
+        }
+
+        var next = Prepare(Call("call-next", "sample/e"));
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateBeforeDispatch(next).Progress);
+    }
+
+    [Fact]
+    public void A_success_resets_the_progress_counter()
+    {
+        var tracker = new TurnStateTracker();
+        for (var i = 0; i < 3; i++)
+        {
+            var batch = Prepare(Call($"fail-{i}", "sample/a"));
+            tracker.ObserveCompleted(Complete(batch,
+                ($"fail-{i}", ToolInvocationOutcomeCategory.InvalidInput, "Error: no.")));
+        }
+
+        var ok = Prepare(Call("ok", "sample/b"));
+        tracker.ObserveCompleted(Complete(ok, ("ok", ToolInvocationOutcomeCategory.Success, "done")));
+
+        // Three failures then a success: the counter is back to zero, so three more failures stay quiet.
+        for (var i = 0; i < 3; i++)
+        {
+            var batch = Prepare(Call($"again-{i}", "sample/c"));
+            Assert.Equal(RefusedRepeatAction.None, tracker.EvaluateBeforeDispatch(batch).Progress);
+            tracker.ObserveCompleted(Complete(batch,
+                ($"again-{i}", ToolInvocationOutcomeCategory.InvalidInput, "Error: no.")));
+        }
+    }
+
+    [Fact]
+    public void The_progress_guard_escalates_then_ends_the_turn()
+    {
+        // The guard evaluates before dispatch, so the counter holds completed failures. After N failures the
+        // next evaluation reads N. The first nudge therefore appears on the call after the Nth failure.
+        var tracker = new TurnStateTracker();
+        var seen = new List<RefusedRepeatAction>();
+        for (var i = 0; i <= TurnStateTracker.ProgressEndTurnAt; i++)
+        {
+            var batch = Prepare(Call($"call-{i}", "sample/a"));
+            seen.Add(tracker.EvaluateBeforeDispatch(batch).Progress);
+            tracker.ObserveCompleted(Complete(batch,
+                ($"call-{i}", ToolInvocationOutcomeCategory.InvalidInput, "Error: no.")));
+        }
+
+        Assert.Equal(RefusedRepeatAction.None, seen[0]);
+        Assert.Equal(RefusedRepeatAction.None, seen[TurnStateTracker.ProgressNudgeAt - 1]);
+        Assert.Equal(RefusedRepeatAction.Nudge, seen[TurnStateTracker.ProgressNudgeAt]);
+        Assert.Equal(RefusedRepeatAction.EscalatedNudge, seen[TurnStateTracker.ProgressEscalateAt]);
+        Assert.Equal(RefusedRepeatAction.EndTurn, seen[TurnStateTracker.ProgressEndTurnAt]);
+    }
+
+    [Fact]
+    public void A_pending_background_job_is_not_a_failure()
+    {
+        // Counting a pending job as a failure would punish the model for doing what the repeat nudge asks.
+        var tracker = new TurnStateTracker();
+        for (var i = 0; i < TurnStateTracker.ProgressEndTurnAt; i++)
+        {
+            var batch = Prepare(Call($"job-{i}", "check_background_job"));
+            tracker.ObserveCompleted(ToolCycleSignatureFactory.Complete(batch,
+                new Dictionary<string, ToolCycleResult>(StringComparer.Ordinal)
+                {
+                    [$"job-{i}"] = new(ToolInvocationOutcomeCategory.Success, "running") { PendingJob = true }
+                }));
+        }
+
+        var next = Prepare(Call("next", "sample/a"));
+        Assert.Equal(RefusedRepeatAction.None, tracker.EvaluateBeforeDispatch(next).Progress);
+    }
+
+    [Fact]
+    public void A_synthetic_result_does_not_move_the_progress_counter()
+    {
+        // A synthetic correction is the guard's own output. Counting it would make the guard trip itself.
+        var tracker = new TurnStateTracker();
+        for (var i = 0; i < TurnStateTracker.ProgressEndTurnAt; i++)
+        {
+            var batch = Prepare(Call($"call-{i}", "sample/a"));
+            tracker.ObserveCompleted(CompleteSynthetic(batch,
+                ($"call-{i}", ToolInvocationOutcomeCategory.RecoverableCorrection, "Corrected.")));
+        }
+
+        var next = Prepare(Call("next", "sample/b"));
+        Assert.Equal(RefusedRepeatAction.None, tracker.EvaluateBeforeDispatch(next).Progress);
+    }
+
+    [Fact]
+    public void The_progress_counter_survives_an_export_and_restore()
+    {
+        var tracker = new TurnStateTracker();
+        for (var i = 0; i < TurnStateTracker.ProgressNudgeAt; i++)
+        {
+            var batch = Prepare(Call($"call-{i}", "sample/a"));
+            tracker.ObserveCompleted(Complete(batch,
+                ($"call-{i}", ToolInvocationOutcomeCategory.InvalidInput, "Error: no.")));
+        }
+
+        var restored = new TurnStateTracker();
+        restored.RestoreLoopGuard(tracker.ExportLoopGuard());
+
+        var next = Prepare(Call("next", "sample/b"));
+        Assert.Equal(RefusedRepeatAction.Nudge, restored.EvaluateBeforeDispatch(next).Progress);
+    }
+
+    [Fact]
+    public void A_new_turn_resets_the_progress_counter()
+    {
+        var tracker = new TurnStateTracker();
+        for (var i = 0; i < TurnStateTracker.ProgressNudgeAt; i++)
+        {
+            var batch = Prepare(Call($"call-{i}", "sample/a"));
+            tracker.ObserveCompleted(Complete(batch,
+                ($"call-{i}", ToolInvocationOutcomeCategory.InvalidInput, "Error: no.")));
+        }
+
+        tracker.ResetForNewTurn();
+
+        var next = Prepare(Call("next", "sample/b"));
+        Assert.Equal(RefusedRepeatAction.None, tracker.EvaluateBeforeDispatch(next).Progress);
+    }
+
+    [Fact]
+    public void Pending_and_synthetic_successes_do_not_reset_actual_failures()
+    {
+        var tracker = new TurnStateTracker();
+        var batch = Prepare(Call("failed", "sample/a"), Call("pending", "check_background_job"),
+            Call("synthetic", "sample/b"));
+        var completed = ToolCycleSignatureFactory.Complete(batch,
+            new Dictionary<string, ToolCycleResult>(StringComparer.Ordinal)
+            {
+                ["failed"] = new(ToolInvocationOutcomeCategory.InvalidInput, "Error."),
+                ["pending"] = new(ToolInvocationOutcomeCategory.Success, "pending") { PendingJob = true },
+                ["synthetic"] = new(ToolInvocationOutcomeCategory.Success, "synthetic") { Synthetic = true }
+            });
+
+        Assert.False(completed.AnySuccess);
+        Assert.Equal(1, completed.FailureCount);
+        Assert.False(completed.RecordAdjacent);
+        for (var i = 0; i < TurnStateTracker.ProgressNudgeAt; i++)
+            tracker.ObserveCompleted(completed);
+
+        Assert.Equal(4, tracker.CallsSinceProgress);
+        Assert.Equal(RefusedRepeatAction.Nudge, tracker.EvaluateProgress());
+    }
+
+    [Fact]
+    public void Mixed_actual_outcomes_reset_progress_regardless_of_call_order()
+    {
+        foreach (var reverse in new[] { false, true })
+        {
+            var tracker = new TurnStateTracker();
+            tracker.ObserveProgress([new(ToolInvocationOutcomeCategory.InvalidInput, "Error.")], batchComplete: true);
+            FunctionCallContent[] calls = [Call("failed", "sample/a"), Call("ok", "sample/b"), Call("failed-again", "sample/c")];
+            var batch = Prepare(reverse ? calls.Reverse().ToArray() : calls);
+            var completed = Complete(batch,
+                ("failed", ToolInvocationOutcomeCategory.InvalidInput, "Error."),
+                ("ok", ToolInvocationOutcomeCategory.Success, "Done."),
+                ("failed-again", ToolInvocationOutcomeCategory.NotFound, "Missing."));
+
+            Assert.True(completed.AnySuccess);
+            Assert.Equal(2, completed.FailureCount);
+            tracker.ObserveCompleted(completed);
+            Assert.Equal(0, tracker.CallsSinceProgress);
+        }
+    }
+
+    [Fact]
+    public void Progress_without_cycle_history_preserves_neutral_results_and_counts_actual_outcomes()
+    {
+        var tracker = new TurnStateTracker();
+        tracker.ObserveProgress([new(ToolInvocationOutcomeCategory.InvalidInput, "Error.")], batchComplete: true);
+        tracker.ObserveProgress([
+            new(ToolInvocationOutcomeCategory.Success, "pending") { PendingJob = true },
+            new(ToolInvocationOutcomeCategory.RecoverableCorrection, "synthetic") { Synthetic = true }
+        ], batchComplete: true);
+        Assert.Equal(1, tracker.CallsSinceProgress);
+        tracker.ObserveProgress([new(ToolInvocationOutcomeCategory.NotFound, "Missing.")], batchComplete: true);
+        Assert.Equal(2, tracker.CallsSinceProgress);
+        tracker.ObserveProgress([new(ToolInvocationOutcomeCategory.Success, "Done.")], batchComplete: true);
+        Assert.Equal(0, tracker.CallsSinceProgress);
+        Assert.Equal(0, tracker.CompletedCycleHistoryCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Progress_escalation_replaces_conflicting_repeat_advice(bool childRun)
+    {
+        var repeat = childRun ? ToolCycleMessages.ChildRepeatNudge(["sample/a"])
+            : ToolCycleMessages.RepeatNudge(["sample/a"]);
+        var nudge = ToolCycleMessages.AfterResults(repeat, RefusedRepeatAction.EscalatedNudge, 6, childRun);
+        Assert.Contains("End your turn now", nudge, StringComparison.Ordinal);
+        Assert.DoesNotContain("Select a different action", nudge, StringComparison.Ordinal);
+        Assert.Equal(repeat, ToolCycleMessages.AfterResults(repeat, RefusedRepeatAction.Nudge, 4, childRun));
+        if (childRun)
+            Assert.Contains("Give your result to the parent", nudge, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_success_before_a_park_wins_over_failures_until_the_feedback_batch_completes()
+    {
+        var tracker = new TurnStateTracker();
+        tracker.ObserveProgress([new(ToolInvocationOutcomeCategory.Success, "Done.")], batchComplete: false);
+        var restored = new TurnStateTracker();
+        restored.RestoreLoopGuard(tracker.ExportLoopGuard());
+        restored.ObserveProgress([new(ToolInvocationOutcomeCategory.InvalidInput, "Error.")], batchComplete: false);
+        restored.ObserveProgress([new(ToolInvocationOutcomeCategory.NotFound, "Missing.")], batchComplete: true);
+        Assert.Equal(0, restored.CallsSinceProgress);
+        Assert.False(restored.ExportLoopGuard().IncompleteBatchHadSuccess);
+        restored.ObserveProgress([new(ToolInvocationOutcomeCategory.NotFound, "Missing.")], batchComplete: true);
+        Assert.Equal(1, restored.CallsSinceProgress);
+    }
 
     private static DecisionShape Shape(ToolCycleBatchDecision decision)
         => new(decision.Kind,

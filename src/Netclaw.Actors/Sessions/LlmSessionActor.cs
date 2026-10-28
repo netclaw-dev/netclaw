@@ -1505,6 +1505,16 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             return;
         }
 
+        // The progress axis: the calls already ran and failed, so this refuses nothing. At the end threshold
+        // the turn ends quietly with the text of the model, the same way an ignored escalation does.
+        if (prepared.Decision.Progress == RefusedRepeatAction.EndTurn)
+        {
+            TurnLog().Warning("turn_no_progress_end failedCalls={FailedCalls}",
+                prepared.Decision.FailedCallsSinceProgress);
+            EndTurnAfterIgnoredEscalation(lastMessage, usage);
+            return;
+        }
+
         // A repeat of a refused call does not stop the turn at once (Aaron, 18 Oct 2026). The pipeline refuses
         // it again, and the batch adds a model-facing nudge after its results. No error reaches the person.
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage

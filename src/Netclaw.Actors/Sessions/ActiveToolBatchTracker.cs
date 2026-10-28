@@ -113,17 +113,23 @@ internal sealed class ActiveToolBatchTracker
             return BatchCompletion.Pending.Instance;
 
         var updated = AddMediaNudge(current, DrainPendingMedia());
-        // The repeat nudge follows every result of the batch, so the next model request ends with it. It replaces
-        // the earlier repeat nudge: equal nudges in a stack give the model no new information.
-        if (_repeatNudge is { } repeatNudge)
-        {
-            updated = updated.ReplaceSystemNudge(ToolCycleMessages.RepeatNudgeStart, repeatNudge);
-            _repeatNudge = null;
-        }
-
         if (_preparedCycleBatch is { } prepared)
             turn.ObserveCompleted(ToolCycleSignatureFactory.Complete(prepared, _cycleResults));
+        else
+            turn.ObserveProgress(_cycleResults.Values, batchComplete: true);
 
+        // Use the completed outcomes, so a success cannot receive a stale progress nudge.
+        var nudge = ToolCycleMessages.AfterResults(_repeatNudge, turn.EvaluateProgress(),
+            turn.CallsSinceProgress, childRun: false);
+        var history = updated.History.RemoveAll(static message => message.Role == Protocol.ChatRole.User
+            && ToolCycleMessages.IsLoopNudge(message.Content));
+        if (!ReferenceEquals(history, updated.History))
+            updated = updated with { History = history };
+        if (nudge is not null)
+            updated = updated.AddSystemNudge(nudge);
+        _repeatNudge = null;
+
+        ExecutionTaskCompleted = false;
         turn.RecordToolCompletion(CompletedCount);
         return new BatchCompletion.Ready(updated, CompletedCount);
     }

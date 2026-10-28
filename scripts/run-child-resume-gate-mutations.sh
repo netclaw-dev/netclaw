@@ -47,7 +47,7 @@ read -r wait_start wait_end wait_first wait_last < <(span_of child-drain-wait "$
 )
 
 report="$output_path/reports/mutation-report.json"
-expected_count=55
+expected_count=58
 jq -e --arg source "$source_file" --arg wait "$wait_file" \
   --argjson first "$first_line" --argjson last "$last_line" \
   --argjson wfirst "$wait_first" --argjson wlast "$wait_last" \

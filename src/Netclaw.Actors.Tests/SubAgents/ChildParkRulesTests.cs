@@ -154,6 +154,8 @@ public sealed class ChildParkRulesTests
         [
             ("valid", Guard(round: 3, calls: 4, refused: limit, equalRounds: [2, 0]), null),
             ("valid with zero counts", Guard(round: 0, calls: 0, refused: 0), null),
+            ("negative progress count", Guard() with { CallsSinceProgress = -1 }, Negative),
+            ("valid progress count", Guard() with { CallsSinceProgress = 8 }, null),
             ("negative round", Guard(round: -1), Negative),
             ("negative call count", Guard(calls: -1), Negative),
             ("negative refused repeat", Guard(refused: -1), Negative),

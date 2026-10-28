@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Media;
 using Netclaw.Tools;
 using Xunit;
@@ -139,6 +140,61 @@ public sealed class ActiveToolBatchTrackerTests
 
         // Assert
         Assert.Equal(expectedAction, action);
+    }
+
+    [Fact]
+    public void Completed_outcomes_replace_progress_nudges_and_a_success_clears_them()
+    {
+        var batch = new ActiveToolBatchTracker();
+        var turn = new TurnStateTracker();
+        var state = SessionState.Empty;
+        for (var i = 0; i < 9; i++)
+        {
+            var call = new FunctionCallContent($"call-{i}", $"sample/{i}");
+            batch.Start([call], new PreparedToolCycleBatch(new ToolActionSignature($"action-{i}"),
+                [new PreparedToolCycleCall(new ToolCallId(call.CallId), new ToolName(call.Name), $"args-{i}")]));
+            var message = Result(call.CallId);
+            var receipt = i < 8 ? (ToolInvocationReceipt)new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput)
+                : new ToolInvocationReceipt.Succeeded([], null);
+            batch.RecordOutcome(new ToolCallResult(message, [], [], [], AuthorizationAttemptId.New(), Receipt: receipt));
+            state = batch.ApplyRecordedResult(state, message);
+            batch.MarkExecutionTaskCompleted();
+            var ready = Assert.IsType<BatchCompletion.Ready>(batch.CompleteIfReady(state, turn));
+            state = ready.State;
+            var nudges = state.History.Where(message => ToolCycleMessages.IsLoopNudge(message.Content)).ToArray();
+            if (i is >= 3 and < 8)
+            {
+                var nudge = Assert.Single(nudges);
+                Assert.Same(nudge, state.History[^1]);
+                Assert.Contains($"{i + 1} tool calls failed", nudge.Content, StringComparison.Ordinal);
+                if (i >= 5)
+                    Assert.Contains("End your turn now", nudge.Content, StringComparison.Ordinal);
+            }
+            else
+                Assert.Empty(nudges);
+            Assert.IsType<BatchCompletion.Pending>(batch.CompleteIfReady(state, turn));
+            Assert.Equal(i + 1, turn.ToolIterationCount);
+        }
+        Assert.Equal(0, turn.CallsSinceProgress);
+    }
+
+    [Fact]
+    public void Approval_redrive_outcomes_update_progress_without_cycle_history()
+    {
+        var batch = new ActiveToolBatchTracker();
+        var turn = new TurnStateTracker();
+        turn.ObserveProgress([new(ToolInvocationOutcomeCategory.InvalidInput, "Error.")], batchComplete: true);
+        var call = new FunctionCallContent("call-approved", "sample/a");
+        batch.Start([call], preparedCycleBatch: null);
+        var message = Result(call.CallId);
+        batch.RecordOutcome(new ToolCallResult(message, [], [], [], AuthorizationAttemptId.New(),
+            Receipt: new ToolInvocationReceipt.Succeeded([], null)));
+        var state = batch.ApplyRecordedResult(SessionState.Empty, message);
+        batch.MarkExecutionTaskCompleted();
+
+        Assert.IsType<BatchCompletion.Ready>(batch.CompleteIfReady(state, turn));
+        Assert.Equal(0, turn.CallsSinceProgress);
+        Assert.Equal(0, turn.CompletedCycleHistoryCount);
     }
 
     private static FunctionCallContent[] Calls() =>

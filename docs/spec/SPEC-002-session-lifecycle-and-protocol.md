@@ -72,6 +72,42 @@ retains synchronous execution behavior. This internal composition does not
 change MCP schemas, persisted actor messages, approval outcomes, or model-facing
 tool results.
 
+### Tool Outcomes Without Progress
+
+`TurnStateTracker` owns an actor-local count of failed calls since the last
+successful batch. This rule supports PRD-001 and PRD-006. See
+[the engineering glossary](GLOSSARY.md) for shared terms.
+
+The tracker counts each actual failed call, including duplicates in one batch.
+Any actual success in a batch resets the count. Synthetic cycle corrections
+and pending-job receipts neither increase nor reset it. A park, a resume, and
+an approval re-drive count only the actual outcomes that each dispatch returns.
+A child park stores the count through the protobuf mapper. It also stores
+whether a sibling succeeded, so that success applies until the feedback batch
+completes.
+
+The batch owner observes outcomes before it selects a nudge. Four failures
+produce advice. Six failures produce an escalation. After eight failures, the
+next response with tool calls ends the turn quietly. The model can still give
+a final text response. This rule adds no iteration limit or per-call refusal.
+
+An escalation takes priority over advice from either guard axis. A repeat
+nudge takes priority over ordinary progress advice because it names refused
+calls. Each completed batch removes earlier guard nudges before it adds the
+current nudge.
+
+For example, four failures across four tools produce a progress nudge.
+Three failed edit attempts followed by a success produce no progress nudge.
+
+```text
+complete dispatch
+  -> observe actual outcomes once
+  -> reset on success, otherwise add failures
+  -> select one nudge from the current count and the repeat decision
+  -> ask the model for its next response
+  -> end quietly if the count is at least eight and the response requests tools
+```
+
 ### Working Context and Child Runs
 
 For Team and Personal turns with a declared project directory, the session

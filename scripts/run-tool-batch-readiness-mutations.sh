@@ -129,6 +129,20 @@ read -r refused_span_start refused_span_end refused_first_line refused_last_line
   ' "$refused_source_file"
 )
 
+read -r progress_span_start progress_span_end progress_line progress_column progress_end_column < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $marker = "_callsSinceProgress = anySuccess || _incompleteBatchHadSuccess";
+    $start = index($_, $marker);
+    die "The progress success guard is missing or duplicated.\n"
+      if $start < 0 || index($_, $marker, $start + 1) >= 0;
+    $start += length("_callsSinceProgress = ");
+    $end = $start + length("anySuccess || _incompleteBatchHadSuccess");
+    $line = 1 + (substr($_, 0, $start) =~ tr/\n//);
+    $column = $start - rindex(substr($_, 0, $start), "\n");
+    print "$start $end $line $column ", $column + $end - $start, "\n";
+  ' "$refused_source_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
@@ -142,6 +156,7 @@ read -r refused_span_start refused_span_end refused_first_line refused_last_line
     --mutate "Sessions/Handlers/SessionExecutionLifetime.cs{$reap_span_start..$reap_span_end}" \
     --mutate "Sessions/Handlers/SessionInputFlow.cs{$input_span_start..$input_span_end}" \
     --mutate "Sessions/Handlers/TurnStateTracker.cs{$refused_span_start..$refused_span_end}" \
+    --mutate "Sessions/Handlers/TurnStateTracker.cs{$progress_span_start..$progress_span_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -265,7 +280,22 @@ jq -e --arg source "$refused_source_file" \
   exit 1
 }
 
-total_count=$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count + expected_refused_count))
+expected_progress_count=1
+jq -e --arg source "$refused_source_file" \
+  --argjson line "$progress_line" \
+  --argjson first "$progress_column" --argjson last "$progress_end_column" \
+  --argjson count "$expected_progress_count" '
+  [(.files[$source].mutants // [])[]
+    | select(.status != "Ignored")
+    | select(.location.start.line == $line and .location.end.line == $line)
+    | select(.location.start.column >= $first and .location.end.column <= $last)] as $mutants
+  | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
+' "$report" > /dev/null || {
+  echo "Expected $expected_progress_count killed progress success mutant in the selected expression." >&2
+  exit 1
+}
+
+total_count=$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count + expected_refused_count + expected_progress_count))
 jq -e --argjson count "$total_count" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count
