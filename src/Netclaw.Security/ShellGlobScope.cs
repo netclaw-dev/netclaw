@@ -110,12 +110,17 @@ internal static class ShellGlobScope
                         {
                             var attributes = File.GetAttributes(entry);
                             var isDirectory = (attributes & FileAttributes.Directory) != 0;
-                            var matches = SegmentMayMatch(segment, Path.GetFileName(entry))
-                                && (!requiresDirectory || isDirectory);
+                            var isLink = (attributes & FileAttributes.ReparsePoint) != 0;
+                            var matches = SegmentMayMatch(segment, Path.GetFileName(entry));
                             var path = entry;
-                            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                            if (isLink)
                             {
                                 var end = FileSystemAuthority.FollowLinkChain(entry, out path, out var knownTargets);
+                                var targetExists = end is LinkChainEnd.Target && Path.Exists(path);
+                                isDirectory = targetExists && Directory.Exists(path);
+                                // An unknown target type keeps its known reach. A proved file cannot fill a directory segment.
+                                if (requiresDirectory && targetExists && !isDirectory)
+                                    matches = false;
                                 walked += Math.Max(1, knownTargets.Count);
                                 foreach (var known in knownTargets)
                                 {
@@ -139,8 +144,7 @@ internal static class ShellGlobScope
                                 }
 
                                 var target = default(CanonicalPath);
-                                if (end is not LinkChainEnd.Target
-                                    || !Path.Exists(path)
+                                if (!targetExists
                                     || !CanonicalPath.TryCreateHost(path, null, out target)
                                     || FileSystemAuthority.EvaluateMembership(target, held) is not PathDecision.Allowed)
                                 {
@@ -153,7 +157,7 @@ internal static class ShellGlobScope
 
                                 scopes.Add(directory.Path);
                                 var parent = default(CanonicalPath);
-                                scopes.Add(Directory.Exists(path)
+                                scopes.Add(isDirectory
                                     ? target
                                     : CanonicalPath.TryCreateHost(Path.GetDirectoryName(path), null, out parent) ? parent : target);
                                 if (directory.Ancestors.Contains(target) || target.Contains(directory.Path))

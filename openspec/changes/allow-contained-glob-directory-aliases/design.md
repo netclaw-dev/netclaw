@@ -23,7 +23,8 @@ The design does not reproduce executable grammar or enumerate exact shell result
 `ShellGlobScope` returns complete or unresolved reach with all known target facts.
 The facts contain the authored scope, target scopes, and residual patterns.
 An unresolved result retains known reach so protection can still deny it.
-Only a complete result can support reusable authority.
+Only a complete result can support reusable grants or reviewed-safe coverage.
+Explicit Auto consent retains its existing authority and protected-path screens.
 
 `FileSystemAuthority` remains the only reader of link-target text.
 The walk reuses its chain, parent-after-link, inspection, and membership rules.
@@ -47,7 +48,8 @@ The ordered flow is schematic and omits unrelated tool gates:
 parser pattern facts
   -> bounded filesystem reach, with known facts even if incomplete
   -> authored and target protected-path checks
-  -> unresolved reach retains exact consent or unattended denial
+  -> explicit Auto consent retains its existing policy and protected-path denials
+  -> Approval mode keeps unresolved reach under exact consent or unattended denial
   -> complete reach supplies source and target path scopes
   -> existing reviewed policy or grants cover every scope
   -> existing final launch checks

@@ -359,7 +359,11 @@ have their glossary meaning.
   The walk SHALL retain the existing link-hop bound.
   A cycle, broken link, unknown target, inspection failure, outside target, or
   exhausted bound SHALL keep reusable scope unresolved.
-  An unresolved walk SHALL retain `Once` and `Deny` only unless a prior screen denies it.
+  In Personal Approval mode, an unresolved walk SHALL retain exact `Once` and
+  `Deny` choices unless a prior screen denies it.
+  Explicit Auto consent SHALL retain its existing behavior and SHALL NOT
+  bypass hard or protected-path denials.
+  Incomplete reach SHALL NOT support reusable grants or reviewed-safe coverage.
   A repeated physical directory SHALL NOT suppress a different remaining pattern.
   A glob with a wildcard in a directory segment (`*/notes.md`) can expand to an
   option word, so decision D1 SHALL apply to it. A leaf glob (`*.cs`) SHALL
@@ -714,7 +718,7 @@ the command exact, so the call gets the rewrite correction.
 #### Scenario: An outside alias stays unresolved under a global grant
 
 - **GIVEN** a bounded glob with a matched directory alias outside the original covering directory
-- **WHEN** Netclaw evaluates the call with a global grant
+- **WHEN** Netclaw evaluates the call in Personal Approval mode with a global grant
 - **THEN** the grant does not replace the missing bounded scope proof
 - **AND** an interactive call retains exact consent unless a prior screen denies it
 - **AND** an unattended call denies the unresolved call
@@ -808,9 +812,10 @@ call SHALL be denied before grant lookup, also under a grant. The link check
 SHALL NOT change folder, repository, or global grant coverage, so a link to an
 ordinary file SHALL keep the decision of its grant.
 
-For a bounded glob that crosses a directory alias, each existing grant SHALL
-cover the authored covering scope and every target scope. A folder grant SHALL
-NOT cover an outside target. A repository grant SHALL prove each target's
+For a bounded glob that crosses a directory alias, reusable approval SHALL
+require existing grant coverage for the authored covering scope and every target scope.
+Each grant SHALL retain its ordinary folder or repository membership rules.
+A folder grant SHALL NOT cover an outside target. A repository grant SHALL prove each target's
 repository identity through the existing checkout and registered-worktree rules.
 The same rule SHALL apply to argument and redirect targets.
 Reviewed diagnostic policy SHALL check read authority for every known target scope.

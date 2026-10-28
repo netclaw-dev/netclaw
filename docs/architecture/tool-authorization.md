@@ -857,8 +857,9 @@ Leaks today:
   An unresolved result retains known targets for protection.
   Only complete reach supports reusable scope or reviewed-safe coverage.
   Arguments, redirects, the resolved path view, and reviewed policy use the
-  same scope facts. Each folder or repository grant covers the original scope
-  and every target scope. `FileSystemAuthority` remains the link-target reader.
+  same scope facts. Approval requires existing grant coverage for the original
+  scope and every target scope. Each grant retains its own membership rules.
+  `FileSystemAuthority` remains the link-target reader.
   Reusable scope requires a combined count of 4096 or less for intermediate
   directory visits and link hops. Each event consumes one unit.
   Ordinary directory-entry scans are outside this count, so wide directories

@@ -309,6 +309,22 @@ public sealed class GlobPolicyMutationTests
     }
 
     [Fact]
+    public void A_broken_alias_retains_its_known_protected_suffix()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var tree = new TemporaryTree();
+        var covering = Directory.CreateDirectory(Path.Combine(tree.Root, "cover")).FullName;
+        var missing = Path.Combine(covering, "missing");
+        Directory.CreateSymbolicLink(Path.Combine(covering, "alias"), missing);
+        var policy = new ToolPathPolicy(Bash52, [Path.Combine(missing, "key.xml")]);
+
+        Assert.False(IsLinkContained(covering, "a*/key.xml"));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {covering}/a*/key.xml", tree.Root));
+    }
+
+    [Fact]
     public void Alias_residual_pattern_reaches_a_protected_descendant()
     {
         if (OperatingSystem.IsWindows())

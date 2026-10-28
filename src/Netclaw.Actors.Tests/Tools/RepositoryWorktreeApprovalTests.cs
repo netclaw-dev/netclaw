@@ -54,8 +54,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
 
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, nestedDecision.Outcome);
             Assert.Contains(nestedDecision.ApprovalContext!.Candidates!, candidate => candidate.Directory == nested);
-            Assert.DoesNotContain(nestedDecision.ApprovalContext!.Options,
-                option => option.Key.Value == Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveRepository);
+            Assert.Equal(Path.Combine(nested, ".git"), nestedDecision.ApprovalContext!.RepositoryCommonDirectory);
         }
         finally
         {

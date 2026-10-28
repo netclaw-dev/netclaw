@@ -20,7 +20,7 @@ public partial class DispatchingToolExecutorTests
 
     [SlopwatchSuppress("SW001", "This native launch requires the Linux Bash host and POSIX directory aliases.")]
     [Fact(SkipUnless = nameof(SupportsGlobAliasLaunch), Skip = "This native launch requires Linux Bash.")]
-    public async Task Glob_alias_diagnostic_runs_with_the_parser_home_and_real_directory_matches()
+    public async Task Glob_alias_diagnostic_runs_with_private_absolute_paths_and_the_captured_home()
     {
         using var directory = new DisposableTempDir();
         FileSystemAuthority.TryResolveLinks(directory.Path, out var home);
@@ -29,13 +29,14 @@ public partial class DispatchingToolExecutorTests
         Directory.CreateDirectory(Path.Combine(target, "leaf"));
         var alias = Path.Combine(repositories, "alias");
         Directory.CreateSymbolicLink(alias, target);
-        var environment = await GlobAliasEnvironmentAsync(home);
+        var environment = await GlobAliasEnvironmentAsync();
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(environment,
             safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, ["ls", "head"]));
         var executor = new DispatchingToolExecutor(registry, policy, GrantEveryShellCandidate());
         var context = TestToolExecutionContext.CreateBound("launch/glob-alias", home,
             new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
-        const string command = "ls -d ~/repositories/*/ ~/repositories/*/*/ 2>/dev/null | head -60";
+        var quotedRepositories = "'" + repositories.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
+        var command = $"ls -d {quotedRepositories}/*/ {quotedRepositories}/*/*/ 2>/dev/null | head -60";
         var call = CreateToolCall("launch-glob-alias", ShellTool.ToolName, ToolInput.Create("Command", command));
 
         var launch = await executor.PrepareShellLaunchAsync(call, context, TestContext.Current.CancellationToken);
@@ -45,13 +46,13 @@ public partial class DispatchingToolExecutorTests
         var error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(home, process.StartInfo.Environment["HOME"]);
+        Assert.Equal(environment.HomeDirectory, process.StartInfo.Environment["HOME"]);
         Assert.Contains(command, process.StartInfo.ArgumentList);
         Assert.Equal(0, process.ExitCode);
         Assert.Equal(string.Empty, error);
         Assert.Contains(alias + "/", output, StringComparison.Ordinal);
         Assert.Contains(Path.Combine(alias, "leaf") + "/", output, StringComparison.Ordinal);
-        TestContext.Current.TestOutputHelper?.WriteLine($"Command: {command}\nHOME: {home}\nExit: {process.ExitCode}\n{output}");
+        TestContext.Current.TestOutputHelper?.WriteLine($"Command: {command}\nHOME: {environment.HomeDirectory}\nExit: {process.ExitCode}\n{output}");
     }
 
     [SlopwatchSuppress("SW001", "This native launch requires the Linux Bash host and POSIX directory aliases.")]
@@ -72,7 +73,7 @@ public partial class DispatchingToolExecutorTests
         File.SetLastWriteTimeUtc(secondFile, originalTime);
         var alias = Path.Combine(cover, "alias");
         Directory.CreateSymbolicLink(alias, first);
-        var environment = await GlobAliasEnvironmentAsync(home);
+        var environment = await GlobAliasEnvironmentAsync();
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(environment);
         var checks = 0;
         var service = new FixedShellApprovalService(request =>
@@ -104,7 +105,7 @@ public partial class DispatchingToolExecutorTests
         Assert.Equal(originalTime, File.GetLastWriteTimeUtc(secondFile));
     }
 
-    private static async Task<ShellExecutionEnvironment> GlobAliasEnvironmentAsync(string home)
+    private static async Task<ShellExecutionEnvironment> GlobAliasEnvironmentAsync()
     {
         using var versionProcess = new Process
         {
@@ -126,6 +127,6 @@ public partial class DispatchingToolExecutorTests
         Assert.True(version >= new Version(5, 2), versionText);
         TestContext.Current.TestOutputHelper?.WriteLine(versionText);
         return ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, version,
-            new Dictionary<string, string> { ["HOME"] = home, ["PATH"] = "/usr/bin:/bin" });
+            new Dictionary<string, string> { ["PATH"] = "/usr/bin:/bin" });
     }
 }
