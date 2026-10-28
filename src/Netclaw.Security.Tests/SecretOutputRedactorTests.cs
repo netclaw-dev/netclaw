@@ -579,4 +579,33 @@ public sealed class SecretOutputRedactorTests
         Assert.DoesNotContain("B000TEST", redacted.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("fakeWebhookToken", redacted.ToString(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void RedactForLoggingOnOneLine_removes_a_forged_line_and_keeps_the_secret_masked()
+    {
+        // A remote server writes its own error body. The body holds both a credential and a
+        // line break that would start a second log entry.
+        var exception = new HttpRequestException(
+            HttpRequestError.Unknown,
+            "invalid_client: client_secret=secret-value\n2026-01-01 00:00:00 INFO shutdown authorized",
+            null,
+            HttpStatusCode.BadRequest);
+
+        var message = SecretOutputRedactor.RedactForLoggingOnOneLine(exception).Message;
+
+        Assert.DoesNotContain("secret-value", message, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', message);
+        Assert.Contains("INFO shutdown authorized", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RedactForLoggingOnOneLine_keeps_a_local_failure_readable()
+    {
+        var exception = new HttpRequestException("Connection refused");
+
+        var message = SecretOutputRedactor.RedactForLoggingOnOneLine(exception).Message;
+
+        Assert.Contains("HttpRequestException", message, StringComparison.Ordinal);
+        Assert.Contains("Connection refused", message, StringComparison.Ordinal);
+    }
 }

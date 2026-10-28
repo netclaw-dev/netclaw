@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Mcp;
@@ -87,12 +88,14 @@ public static class McpEndpointRouteBuilderExtensions
             }
             catch (McpOAuthOperationException ex)
             {
-                logger.LogError(ex, "MCP OAuth start failed for server '{Name}'", name);
+                // `name` comes from the route. A line break in it would start a forged
+                // log line, so pass the sanitized value. (cs/log-forging)
+                logger.LogError(ex, "MCP OAuth start failed for server '{Name}'", LogSafe.Text(name));
                 return Results.Json(ex.Error, statusCode: StatusCodes.Status502BadGateway);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "MCP OAuth start failed for server '{Name}'", name);
+                logger.LogError(ex, "MCP OAuth start failed for server '{Name}'", LogSafe.Text(name));
                 var error = McpClientManager.CreateSafeOAuthError(ex, "authorization start");
                 return Results.Json(error, statusCode: StatusCodes.Status502BadGateway);
             }

@@ -392,6 +392,26 @@ public static partial class SecretOutputRedactor
 
     private sealed class RedactedLoggingException(string message) : Exception(message);
 
+    /// <summary>
+    /// Redacts secrets, then forces the message onto one line.
+    /// </summary>
+    /// <remarks>
+    /// Use this only where the exception text comes from a remote server that can write
+    /// arbitrary content into its error body. Such a body can hold a line break, and a line
+    /// break lets the far side add a forged entry to the log (CWE-117), which
+    /// <see cref="RedactForLogging"/> does not prevent because it only masks secrets.
+    /// <para>
+    /// Caution: the returned exception replaces the original, so the native stack trace is
+    /// gone. Do not use this on a local failure that you need to debug.
+    /// </para>
+    /// </remarks>
+    public static Exception RedactForLoggingOnOneLine(Exception ex, int maxChars = 2000)
+    {
+        var redacted = RedactForLogging(ex);
+        var typeName = ex.GetType().FullName ?? ex.GetType().Name;
+        return new RedactedLoggingException($"{typeName}: {LogSafe.Text(redacted.Message, maxChars)}");
+    }
+
     // The secret-bearing words shared by the JSON and env-style name rules.
     private const string SecretNameWords = "api[_-]?key|token|secret|password|passwd|passphrase|authorization|access[_-]?token|refresh[_-]?token|client[_-]?secret|signing[_-]?key|private[_-]?key|connection[_-]?string|credential";
 

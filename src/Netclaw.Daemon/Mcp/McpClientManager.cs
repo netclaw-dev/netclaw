@@ -1127,13 +1127,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             var error = new McpErrorResponse(
                 "Authorization was cancelled or expired. Start a new MCP authorization attempt.",
                 "authorization exchange");
-            _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex), "Explicit MCP OAuth flow was cancelled for '{Name}'", flow.ServerName.Value);
+            _logger.LogWarning(SecretOutputRedactor.RedactForLoggingOnOneLine(ex), "Explicit MCP OAuth flow was cancelled for '{Name}'", LogSafe.Text(flow.ServerName.Value));
             _flowBroker.Fail(flow, error);
         }
         catch (Exception ex)
         {
             var error = CreateSafeOAuthError(ex, "connection initialization");
-            _logger.LogError(SecretOutputRedactor.RedactForLogging(ex), "Explicit MCP OAuth flow failed for '{Name}'", flow.ServerName.Value);
+            _logger.LogError(SecretOutputRedactor.RedactForLoggingOnOneLine(ex), "Explicit MCP OAuth flow failed for '{Name}'", LogSafe.Text(flow.ServerName.Value));
             _flowBroker.Fail(flow, error);
         }
     }
