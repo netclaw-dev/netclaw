@@ -38,6 +38,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="../../evals/fixtures/config/netclaw.json" Link="EvalFixtures/netclaw.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../evals/fixtures/config/netclaw-bounded.json" Link="EvalFixtures/netclaw-bounded.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../Netclaw.Security.Tests/ShellPolicyEvidenceModels.cs" Link="Tools/ApprovalEvidence/ShellPolicyEvidenceModels.cs" />
     <Compile Include="../Netclaw.Security.Tests/ToolFrictionEvidenceModels.cs" Link="Tools/ToolFrictionEvidenceModels.cs" />
     <None Include="../Netclaw.Security.Tests/Evidence/ApprovalEvidence/netclaw-policy-fixtures.json" Link="ApprovalEvidence/netclaw-policy-fixtures.json" CopyToOutputDirectory="PreserveNewest" />

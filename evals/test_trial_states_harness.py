@@ -179,7 +179,9 @@ case "$DRIVER_KIND" in
     scenario)
         # Like the last line of run-evals.sh: main is the last command, so the
         # exit code of the script is the exit code of main, under set -e.
-        run_all() { eval "$SCENARIO"; }
+        # This fixture tests synthetic cases through the single-context path.
+        FILTER_CATEGORY=synthetic-harness
+        run_all() { FILTER_CATEGORY=""; eval "$SCENARIO"; }
         main
         exit 0 ;;
 esac

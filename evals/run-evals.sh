@@ -1383,6 +1383,17 @@ record_trial() {
             ;;
     esac
     store_result "$case_name" "$run" "$prompt" "$status" "$reason" "$details"
+    if [[ "${NETCLAW_EVAL_MAIN_PREPARED:-0}" == "1" \
+        && ( "$status" == "inconclusive" || "$reason" == infra:* ) ]]; then
+        echo "ERROR: the Main protocol stops after an inconclusive trial: $reason" >&2
+        if ! contain_eval_container; then
+            exit 2
+        fi
+        # Keep the evidence that produced the verdict. Store drained logs separately.
+        mkdir -p "$TRIAL_RAW/post-containment"
+        TRIAL_RAW="$TRIAL_RAW/post-containment" finish_trial
+        exit 2
+    fi
 }
 
 ## Prints each distinct reason once, in order of first use, with a count when
@@ -4647,9 +4658,23 @@ run_all() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
+    if [[ "${NETCLAW_EVAL_MAIN_PREPARED:-0}" == "1" \
+        && ( -z "$FILTER_CASE" || -n "$FILTER_CATEGORY" ) ]]; then
+        echo "ERROR: a prepared Main child requires one exact case filter." >&2
+        exit 2
+    fi
+    # Reject contradictory contexts before a build or a provider request.
+    local main_route
+    main_route=$(NETCLAW_EVAL_CASE="$FILTER_CASE" NETCLAW_EVAL_CATEGORY="$FILTER_CATEGORY" \
+        python3 "$REPO_ROOT/evals/main_evals.py" --route)
+    if [[ "$main_route" == bounded ]]; then
+        export NETCLAW_EVAL_CONFIG_FILE="${NETCLAW_EVAL_CONFIG_FILE:-${NETCLAW_EVAL_MAIN_BOUNDED_CONFIG_FILE:-$EVAL_ASSET_ROOT/evals/fixtures/config/netclaw-bounded.json}}"
+    fi
     check_prerequisites
     build_local_image
-    build_coordination_observer
+    if [[ "${NETCLAW_EVAL_MAIN_PREPARED:-0}" != "1" ]]; then
+        build_coordination_observer
+    fi
 
     # Verify CLI binary exists (may have just been built by build_local_image).
     if [[ ! -x "$NETCLAW_BIN" ]]; then
@@ -4658,6 +4683,29 @@ main() {
     fi
 
     NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
+
+    # Full Main uses two fixed contexts. Each child retains the stock case and trial code.
+    if [[ "$main_route" == main ]]; then
+        local image_id
+        image_id=$(docker image inspect --format '{{.Id}}' "$NETCLAW_IMAGE")
+        NETCLAW_IMAGE="$image_id" NETCLAW_BIN="$NETCLAW_BIN" \
+        NETCLAW_EVAL_NO_BUILD=1 NETCLAW_EVAL_MAIN_PREPARED=1 \
+        NETCLAW_EVAL_ASSET_ROOT="$EVAL_ASSET_ROOT" \
+        NETCLAW_EVAL_CATEGORY="$FILTER_CATEGORY" NETCLAW_EVAL_CASE="$FILTER_CASE" \
+        NETCLAW_EVAL_RUNS="$RUNS" NETCLAW_EVAL_THRESHOLD="$THRESHOLD" \
+        NETCLAW_EVAL_SEED="$EVAL_SEED" NETCLAW_EVAL_TIMEOUT="$PROMPT_TIMEOUT" \
+        NETCLAW_EVAL_PORT="$EVAL_PORT" \
+        NETCLAW_EVAL_PROVIDER_TYPE="$EVAL_PROVIDER_TYPE" \
+        NETCLAW_EVAL_PROVIDER_ENDPOINT="$EVAL_PROVIDER_ENDPOINT" \
+        NETCLAW_EVAL_PROVIDER_API_KEY="$EVAL_PROVIDER_API_KEY" \
+        NETCLAW_EVAL_MODEL_ID="$EVAL_MODEL_ID" \
+        NETCLAW_EVAL_FALLBACK_MODEL_ID="$EVAL_FALLBACK_MODEL_ID" \
+        NETCLAW_EVAL_COMPACTION_MODEL_ID="$EVAL_COMPACTION_MODEL_ID" \
+        NETCLAW_EVAL_CONTEXT_WINDOW="$EVAL_CONTEXT_WINDOW" \
+        NETCLAW_EVAL_DISABLE_THINKING="$EVAL_DISABLE_THINKING" \
+        python3 "$REPO_ROOT/evals/main_evals.py"
+        return $?
+    fi
 
     local cycle_cases=false
     local spill_cases=false
