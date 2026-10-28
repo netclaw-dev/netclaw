@@ -1639,7 +1639,7 @@ class IsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "home" / "logs").mkdir(parents=True)
-            (root / "home" / "logs" / "daemon-1.log").write_text("x\n")
+            (root / "home" / "logs" / "daemon-2026-10-15.log").write_text("x\n")
             (root / "tmp").mkdir()
             trial = write_trial(root / "trial", daemon_lines=[])
             completed = self.run_harness(
