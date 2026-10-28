@@ -12,22 +12,7 @@ using Xunit;
 namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
-/// A catalog of agreed tool-loop shapes. Three theories split the catalog by the
-/// answer the guard gives:
-/// <list type="bullet">
-/// <item><see cref="Caught_failure_shapes_intervene"/> — the turn is stuck and
-/// the guard catches it through the action-identity axis. These are the controls.</item>
-/// <item><see cref="Missed_failure_shapes_must_intervene"/> — the turn is stuck
-/// and the action-identity axis misses it. These went red until #2706 landed and
-/// they caught the gap. The progress axis catches them now.</item>
-/// <item><see cref="Success_shapes_must_not_intervene"/> — the turn is making
-/// progress. A failure here is a false positive, which is worse than a gap.</item>
-/// </list>
-/// The guard has two axes. The action-identity axis compares a repeated action
-/// against its own earlier result. It never compares one action's failure
-/// against a different action's failure, so a turn that rotates tools while
-/// failing the same way is invisible to it. The progress axis counts failed
-/// calls across all tools, and catches that turn.
+/// A catalog of tool-loop shapes. Each case proves its detector and progress stage separately.
 /// </summary>
 public sealed class LoopGuardShapeTests
 {
@@ -44,7 +29,10 @@ public sealed class LoopGuardShapeTests
     }
 
     /// <summary>A named scripted turn.</summary>
-    public sealed record Shape(string Name, Step[] Steps);
+    public sealed record Shape(string Name, Step[] Steps)
+    {
+        public string ExpectedProgressStage { get; init; } = nameof(RefusedRepeatAction.EscalatedNudge);
+    }
 
     private static Step Fail(string tool, string args, string text = RationaleError)
         => new(tool, args, nameof(ToolInvocationOutcomeCategory.InvalidInput), text);
@@ -84,23 +72,16 @@ public sealed class LoopGuardShapeTests
         ])
     };
 
-    /// <summary>
-    /// Shapes the guard misses today. Each case asserts the behavior the guard
-    /// MUST have, so every case fails until the progress guard lands (#2706).
-    /// <para>
-    /// This is a failing spec, not a regression suite. A red run here is the
-    /// point: it states the gap in executable form. When the fix lands, these
-    /// cases turn green and the theory becomes ordinary regression coverage.
-    /// </para>
-    /// </summary>
+    /// <summary>These shapes require the progress axis because no action repeats.</summary>
     public static TheoryData<Shape> MissedFailureShapes => new()
     {
         // The reported incident. Six calls, six different tools, one identical
         // error. Every recurrence key differs, so no episode reaches two rounds.
         new Shape("rotating tools, identical error", [
             Fail("spawn_agent", "a"), Fail("search_tools", "b"), Fail("search_tools", "c"),
-            Fail("load_tool", "d"), Fail("search_tools", "e"), Fail("search_tools", "f")
-        ]),
+            Fail("load_tool", "d"), Fail("search_tools", "e"), Fail("search_tools", "f"),
+            Fail("spawn_agent", "g"), Fail("load_tool", "h")
+        ]) { ExpectedProgressStage = nameof(RefusedRepeatAction.EndTurn) },
 
         // Same tool, different arguments, identical error. The arguments hash
         // differs, so the recurrence key differs on every call.
@@ -126,7 +107,7 @@ public sealed class LoopGuardShapeTests
         new Shape("access denied streak across different paths", [
             Denied("file_read", "/etc/a"), Denied("file_read", "/etc/b"),
             Denied("file_write", "/etc/c"), Denied("file_read", "/root/d"),
-            Denied("file_write", "/root/e")
+            Denied("file_write", "/root/e"), Denied("file_read", "/root/f")
         ]),
 
         // Repeated misses on resources that do not exist. Each path differs, so
@@ -134,7 +115,10 @@ public sealed class LoopGuardShapeTests
         new Shape("not found streak across different paths", [
             Missing("file_read", "/a"), Missing("file_read", "/b"),
             Missing("file_read", "/c"), Missing("file_read", "/d"),
-            Missing("file_read", "/e")
+            Missing("file_read", "/e"), Missing("file_read", "/f"),
+            Missing("file_read", "/g"), Missing("file_read", "/h"),
+            Missing("file_read", "/i"), Missing("file_read", "/j"),
+            Missing("file_read", "/k"), Missing("file_read", "/l")
         ]),
 
         // A backend that keeps dropping the connection. The model retries with
@@ -142,7 +126,7 @@ public sealed class LoopGuardShapeTests
         new Shape("transient failure streak across different endpoints", [
             Transient("web_fetch", "https://a"), Transient("web_fetch", "https://b"),
             Transient("web_fetch", "https://c"), Transient("web_fetch", "https://d"),
-            Transient("web_fetch", "https://e")
+            Transient("web_fetch", "https://e"), Transient("web_fetch", "https://f")
         ])
     };
 
@@ -170,7 +154,9 @@ public sealed class LoopGuardShapeTests
         // search behavior, not a loop.
         new Shape("exploration then success", [
             Missing("search_tools", "q1"), Missing("search_tools", "q2"),
-            Missing("search_tools", "q3"), Ok("search_tools", "q4")
+            Missing("search_tools", "q3"), Missing("file_read", "/repo/a"),
+            Missing("file_read", "/repo/b"), Missing("file_read", "/repo/c"),
+            Missing("file_read", "/repo/d"), Ok("file_read", "/repo/found")
         ]),
 
         // Alternating failure and success. Every failure is followed by real
@@ -208,45 +194,77 @@ public sealed class LoopGuardShapeTests
     [Theory]
     [MemberData(nameof(CaughtFailureShapes))]
     public void Caught_failure_shapes_intervene(Shape shape)
-        => Assert.True(Run(shape), $"The guard did not intervene for '{shape.Name}'.");
+    {
+        var observations = Run(shape);
+        var last = observations[^1];
+        Assert.Equal(ToolCycleDecisionKind.Correct, last.Decision.Kind);
+        Assert.Equal(ToolCycleDecisionKind.Correct, last.Adjacent.Kind);
+        Assert.Equal(shape.Name == "alternating two-step cycle" ? 2 : 1, last.Adjacent.Period);
+        Assert.Equal(2, last.Adjacent.Repetitions);
+    }
 
-    /// <summary>
-    /// The gap inventory. Every case here MUST intervene. The action-identity
-    /// axis misses all six; the progress axis catches them. If one of these goes
-    /// red, the progress axis regressed.
-    /// </summary>
     [Theory]
     [MemberData(nameof(MissedFailureShapes))]
     public void Missed_failure_shapes_must_intervene(Shape shape)
-        => Assert.True(Run(shape), $"The guard did not intervene for '{shape.Name}'.");
+    {
+        var observations = Run(shape);
+        Assert.All(observations, observation =>
+        {
+            Assert.Equal(ToolCycleDecisionKind.Execute, observation.Decision.Kind);
+            Assert.Equal(ToolCycleDecisionKind.Execute, observation.Adjacent.Kind);
+            Assert.Equal(RefusedRepeatAction.None, observation.Decision.RefusedRepeat);
+        });
+        var final = Enum.Parse<RefusedRepeatAction>(shape.ExpectedProgressStage);
+        Assert.Equal(final, observations[^1].ProgressAfterResults);
+        RefusedRepeatAction[] stages = final == RefusedRepeatAction.EndTurn
+            ? [RefusedRepeatAction.Nudge, RefusedRepeatAction.EscalatedNudge, RefusedRepeatAction.EndTurn]
+            : [RefusedRepeatAction.Nudge, RefusedRepeatAction.EscalatedNudge];
+        Assert.Equal(stages, observations.Select(observation => observation.ProgressAfterResults)
+            .Where(stage => stage != RefusedRepeatAction.None).Distinct().ToArray());
+        Assert.Equal(shape.Steps.Length, observations.Count);
+    }
 
     [Theory]
     [MemberData(nameof(SuccessShapes))]
     public void Success_shapes_must_not_intervene(Shape shape)
-        => Assert.False(Run(shape), $"The guard intervened on a productive turn: '{shape.Name}'.");
+    {
+        var observations = Run(shape);
+        Assert.Equal(shape.Steps.Length, observations.Count);
+        Assert.All(observations, observation =>
+        {
+            Assert.Equal(ToolCycleDecisionKind.Execute, observation.Decision.Kind);
+            Assert.Equal(ToolCycleDecisionKind.Execute, observation.Adjacent.Kind);
+            Assert.Equal(RefusedRepeatAction.None, observation.Decision.RefusedRepeat);
+            Assert.Equal(RefusedRepeatAction.None, observation.Decision.Progress);
+            Assert.Equal(RefusedRepeatAction.None, observation.ProgressAfterResults);
+        });
+    }
 
-    /// <summary>
-    /// Replays the shape one call at a time. Returns true when the guard refuses
-    /// a call or asks the turn owner to nudge, escalate, or end the turn.
-    /// </summary>
-    private static bool Run(Shape shape)
+    private sealed record Observation(ToolCycleDecision Adjacent, ToolCycleBatchDecision Decision,
+        RefusedRepeatAction ProgressAfterResults);
+
+    private static IReadOnlyList<Observation> Run(Shape shape)
     {
         var tracker = new TurnStateTracker();
+        var observations = new List<Observation>();
         foreach (var step in shape.Steps)
         {
             var batch = Prepare(step);
+            // The adjacent check changes state. A copy exposes its decision without a second check on the live tracker.
+            var adjacentTracker = new TurnStateTracker();
+            adjacentTracker.RestoreLoopGuard(tracker.ExportLoopGuard());
+            var adjacent = adjacentTracker.EvaluateAdjacentBeforeDispatch(batch.Action);
             var decision = tracker.EvaluateBeforeDispatch(batch);
-            if (decision.Kind == ToolCycleDecisionKind.Correct
-                || decision.RefusedRepeat != RefusedRepeatAction.None
-                || decision.Progress != RefusedRepeatAction.None)
+            if (decision.Progress == RefusedRepeatAction.EndTurn || decision.RefusedRepeat == RefusedRepeatAction.EndTurn)
             {
-                return true;
+                observations.Add(new Observation(adjacent, decision, tracker.EvaluateProgress()));
+                break;
             }
-
-            tracker.ObserveCompleted(Complete(batch, step));
+            if (decision.Kind == ToolCycleDecisionKind.Execute)
+                tracker.ObserveCompleted(Complete(batch, step));
+            observations.Add(new Observation(adjacent, decision, tracker.EvaluateProgress()));
         }
-
-        return false;
+        return observations;
     }
 
     private static PreparedToolCycleBatch Prepare(Step step)

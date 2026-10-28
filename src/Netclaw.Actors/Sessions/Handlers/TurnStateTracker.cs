@@ -30,15 +30,15 @@ internal sealed class TurnStateTracker
     internal const int EscalatedRefusedRepeat = 5;
 
     /// <summary>
-    /// The failed-call count since the last success that gets the first no-progress nudge. A legitimate
+    /// The weighted failure score since the last success that gets the first no-progress nudge. A legitimate
     /// <c>file_edit</c> retry can fail three times before it succeeds, so the first nudge waits for four.
     /// </summary>
     internal const int ProgressNudgeAt = 4;
 
-    /// <summary>The failed-call count since the last success that gets the escalated no-progress nudge.</summary>
+    /// <summary>The weighted failure score since the last success that gets the escalated no-progress nudge.</summary>
     internal const int ProgressEscalateAt = 6;
 
-    /// <summary>The failed-call count since the last success that ends the turn quietly.</summary>
+    /// <summary>The weighted failure score since the last success that ends the turn quietly.</summary>
     internal const int ProgressEndTurnAt = 8;
 
     // Nudge for a thinking-only response: the model emitted reasoning but no
@@ -82,7 +82,10 @@ internal sealed class TurnStateTracker
     // identity, so identical failures across different tools still accumulate. A success resets it.
     // Synthetic results and pending background jobs do not count (see ObserveCompleted).
     private int _callsSinceProgress;
+    private int _progressFailureUnits;
+    private RefusedRepeatAction _progressStage;
     private bool _incompleteBatchHadSuccess;
+    private bool _incompleteBatchHadFailure;
 
     public int CallsSinceProgress => _callsSinceProgress;
 
@@ -105,7 +108,10 @@ internal sealed class TurnStateTracker
         _lastBlockedAction = null;
         _episodes.Clear();
         _callsSinceProgress = 0;
+        _progressFailureUnits = 0;
+        _progressStage = RefusedRepeatAction.None;
         _incompleteBatchHadSuccess = false;
+        _incompleteBatchHadFailure = false;
     }
 
     /// <summary>
@@ -279,7 +285,7 @@ internal sealed class TurnStateTracker
 
         // The progress axis counts outcomes, not action identity. It runs before the RecordAdjacent
         // early return so a batch that does not enter cycle history still moves the counter.
-        ObserveProgress(iteration.AnySuccess, iteration.FailureCount, batchComplete: true);
+        ObserveProgress(iteration.AnySuccess, iteration.FailureCount, iteration.FailureUnits, batchComplete: true);
 
         if (!iteration.RecordAdjacent)
             return;
@@ -296,33 +302,39 @@ internal sealed class TurnStateTracker
     {
         var actual = results.Where(static result => !result.Synthetic && !result.PendingJob).ToArray();
         ObserveProgress(actual.Any(static result => result.Category == ToolInvocationOutcomeCategory.Success),
-            actual.Count(static result => result.Category != ToolInvocationOutcomeCategory.Success), batchComplete);
+            actual.Count(static result => result.Category != ToolInvocationOutcomeCategory.Success),
+            actual.Sum(static result => result.FailureUnits), batchComplete);
     }
 
-    private void ObserveProgress(bool anySuccess, int failureCount, bool batchComplete)
+    private void ObserveProgress(bool anySuccess, int failureCount, int failureUnits, bool batchComplete)
     {
         _callsSinceProgress = anySuccess || _incompleteBatchHadSuccess ? 0
-            : CapAtNextProgressRung(_callsSinceProgress, (long)_callsSinceProgress + failureCount);
-        // One feedback batch can span several consent parks. Any actual success wins across those dispatches.
+            : (int)Math.Min(int.MaxValue, (long)_callsSinceProgress + failureCount);
+        if (anySuccess || _incompleteBatchHadSuccess)
+        {
+            _progressFailureUnits = 0;
+            _progressStage = RefusedRepeatAction.None;
+        }
+        else
+        {
+            _progressFailureUnits = (int)Math.Min(int.MaxValue, (long)_progressFailureUnits + failureUnits);
+            if (batchComplete && (failureCount > 0 || _incompleteBatchHadFailure))
+                _progressStage = CapAtNextProgressRung(_progressStage, _progressFailureUnits);
+        }
+        // A success applies to the full feedback batch, even when consent splits its dispatches.
         _incompleteBatchHadSuccess = !batchComplete && (anySuccess || _incompleteBatchHadSuccess);
+        _incompleteBatchHadFailure = !batchComplete && (failureCount > 0 || _incompleteBatchHadFailure);
     }
 
-    /// <summary>
-    /// Caps one batch's advance at the next rung of the nudge ladder. A batch of eight parallel failures
-    /// would otherwise jump from zero straight to <see cref="ProgressEndTurnAt"/>, so the model would never
-    /// see the nudge or the escalation and the turn would end with no advice.
-    /// </summary>
-    private static int CapAtNextProgressRung(int current, long advanced)
-    {
-        if (current >= ProgressEndTurnAt)
-            return (int)Math.Min(int.MaxValue, advanced);
-
-        var nextRung = current < ProgressNudgeAt ? ProgressNudgeAt
-            : current < ProgressEscalateAt ? ProgressEscalateAt
-            : ProgressEndTurnAt;
-
-        return Math.Min((int)Math.Min(int.MaxValue, advanced), nextRung);
-    }
+    // One batch advances at most one stage, so the model receives each level of advice before the turn ends.
+    private static RefusedRepeatAction CapAtNextProgressRung(RefusedRepeatAction current, int failureUnits)
+        => current switch
+        {
+            RefusedRepeatAction.None when failureUnits >= ProgressNudgeAt * 2 => RefusedRepeatAction.Nudge,
+            RefusedRepeatAction.Nudge when failureUnits >= ProgressEscalateAt * 2 => RefusedRepeatAction.EscalatedNudge,
+            RefusedRepeatAction.EscalatedNudge when failureUnits >= ProgressEndTurnAt * 2 => RefusedRepeatAction.EndTurn,
+            _ => current
+        };
 
     /// <summary>
     /// Decide what the turn owner does about a run of failed calls with no success between them. This is the
@@ -343,11 +355,7 @@ internal sealed class TurnStateTracker
     /// is the one place where the "guard output does not count" rule does not apply.
     /// </para>
     /// </remarks>
-    public RefusedRepeatAction EvaluateProgress()
-        => _callsSinceProgress >= ProgressEndTurnAt ? RefusedRepeatAction.EndTurn
-            : _callsSinceProgress >= ProgressEscalateAt ? RefusedRepeatAction.EscalatedNudge
-            : _callsSinceProgress >= ProgressNudgeAt ? RefusedRepeatAction.Nudge
-            : RefusedRepeatAction.None;
+    public RefusedRepeatAction EvaluateProgress() => _progressStage;
 
     private bool HasEqualCycleCopies(int start, int period)
     {
@@ -378,7 +386,12 @@ internal sealed class TurnStateTracker
             new Dictionary<ToolRecurrenceKey, ToolRecurrenceEpisode>(_episodes),
             _refusedRepeatCount,
             _callsSinceProgress,
-            _incompleteBatchHadSuccess);
+            _incompleteBatchHadSuccess)
+        {
+            ProgressFailureUnits = _progressFailureUnits,
+            ProgressStage = _progressStage,
+            IncompleteBatchHadFailure = _incompleteBatchHadFailure
+        };
 
     /// <summary>
     /// Replaces the loop guard with an exported copy. The tracker then makes the same decisions as the tracker that
@@ -393,6 +406,9 @@ internal sealed class TurnStateTracker
             throw new ArgumentException(
                 $"A loop guard holds at most {ToolCycleSignatureFactory.MaximumHistory} completed cycles.", nameof(state));
 
+        if (state.ProgressFailureUnits < 0 || !Enum.IsDefined(state.ProgressStage))
+            throw new ArgumentException("A loop guard has an invalid progress score or stage.", nameof(state));
+
         ToolIterationCount = state.ToolIterationCount;
         ToolCallCount = state.ToolCallCount;
         // The history keeps only the cycles that ObserveCompleted recorded as adjacent. The adjacent check reads only
@@ -406,7 +422,10 @@ internal sealed class TurnStateTracker
             _episodes[key] = episode;
         _refusedRepeatCount = state.RefusedRepeatCount;
         _callsSinceProgress = state.CallsSinceProgress;
+        _progressFailureUnits = state.ProgressFailureUnits;
+        _progressStage = state.ProgressStage;
         _incompleteBatchHadSuccess = state.IncompleteBatchHadSuccess;
+        _incompleteBatchHadFailure = state.IncompleteBatchHadFailure;
     }
 
     public void RecordToolCompletion(int resultCount)
@@ -488,7 +507,12 @@ internal sealed record TurnLoopGuardState(
     IReadOnlyDictionary<ToolRecurrenceKey, ToolRecurrenceEpisode> Episodes,
     int RefusedRepeatCount,
     int CallsSinceProgress = 0,
-    bool IncompleteBatchHadSuccess = false);
+    bool IncompleteBatchHadSuccess = false)
+{
+    public int ProgressFailureUnits { get; init; }
+    public RefusedRepeatAction ProgressStage { get; init; }
+    public bool IncompleteBatchHadFailure { get; init; }
+}
 
 internal sealed record CompletedToolCycleIteration(
     ToolActionSignature Action,
@@ -505,6 +529,7 @@ internal sealed record CompletedToolCycleIteration(
     /// behavior the repeat nudge recommends, so counting it would punish the model for complying.
     /// </summary>
     public int FailureCount { get; init; }
+    public int FailureUnits { get; init; }
 }
 
 internal readonly record struct ToolRecurrenceKey(ToolName ToolName, string ArgumentsHash);
@@ -577,6 +602,11 @@ internal readonly record struct ToolCycleResult(
 {
     public bool PendingJob { get; init; }
     public bool Synthetic { get; init; }
+
+    // A missing path can guide discovery. Give NotFound one half-unit and other failures two half-units.
+    // InvalidInput and AccessDenied thus reach advice after four calls; distinct misses need eight.
+    public int FailureUnits => Synthetic || PendingJob || Category == ToolInvocationOutcomeCategory.Success ? 0
+        : Category == ToolInvocationOutcomeCategory.NotFound ? 1 : 2;
 }
 
 internal enum ToolCycleDecisionKind
@@ -664,16 +694,14 @@ internal static class ToolCycleMessages
             + "- Ask the person how to continue.";
 
     // Model-facing. The turn still made no progress after the first nudge. The model must stop and report.
-    // The last sentence states the limit only while the turn can still reach it; once the guard is ending the
-    // turn the limit is already reached, and a conditional would read as a rule the model could still avoid.
     public static string EscalatedProgressNudge(int failedCalls, bool childRun, bool endingTurn)
         => $"{ProgressNudgeStart}{failedCalls} tool calls failed without a successful result. "
             + "Stop. End your turn now. "
             + (childRun ? "Give your result to the parent. Name the action that did not finish. "
                 : "Tell the person what blocked you. Name the action that did not finish. ")
             + (endingTurn
-                ? $"That reached the limit of {TurnStateTracker.ProgressEndTurnAt} failed calls. Netclaw ends the turn."
-                : $"If {TurnStateTracker.ProgressEndTurnAt} calls fail with no success, Netclaw ends the turn.");
+                ? "The no-progress guard reached its final stage. Netclaw ends the turn."
+                : "If tool calls still fail, Netclaw ends the turn at the next stage.");
 
     /// <summary>
     /// The nudge for the progress decision of <paramref name="action"/>, or null when the turn needs none.
@@ -800,7 +828,8 @@ internal static class ToolCycleSignatureFactory
             FailureCount = batch.Calls.Count(call =>
                 !results[call.CallId.Value].Synthetic
                 && !results[call.CallId.Value].PendingJob
-                && results[call.CallId.Value].Category != ToolInvocationOutcomeCategory.Success)
+                && results[call.CallId.Value].Category != ToolInvocationOutcomeCategory.Success),
+            FailureUnits = results.Values.Sum(static result => result.FailureUnits)
         };
     }
 

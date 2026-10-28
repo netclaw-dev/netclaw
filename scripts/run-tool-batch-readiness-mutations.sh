@@ -9,6 +9,7 @@ history_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionState.cs"
 stop_source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionExecutionLifetime.cs"
 input_source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/SessionInputFlow.cs"
 refused_source_file="$repo_root/src/Netclaw.Actors/Sessions/Handlers/TurnStateTracker.cs"
+redrive_source_file="$repo_root/src/Netclaw.Actors/Sessions/SessionToolWorkflow.cs"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
 output_path="${1:-$repo_root/artifacts/stryker/tool-batch-readiness}"
 if [[ "$output_path" != /* ]]; then
@@ -143,6 +144,18 @@ read -r progress_span_start progress_span_end progress_line progress_column prog
   ' "$refused_source_file"
 )
 
+read -r redrive_span_start redrive_span_end redrive_line redrive_column redrive_end_column < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $marker = "!recordCompletedCycle";
+    $start = index($_, $marker);
+    die "The approval re-drive guard is missing or duplicated.\n"
+      if $start < 0 || index($_, $marker, $start + 1) >= 0;
+    $line = 1 + (substr($_, 0, $start) =~ tr/\n//);
+    $column = $start - rindex(substr($_, 0, $start), "\n");
+    print "$start ", $start + length($marker), " $line $column ", $column + length($marker), "\n";
+  ' "$redrive_source_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
@@ -157,6 +170,7 @@ read -r progress_span_start progress_span_end progress_line progress_column prog
     --mutate "Sessions/Handlers/SessionInputFlow.cs{$input_span_start..$input_span_end}" \
     --mutate "Sessions/Handlers/TurnStateTracker.cs{$refused_span_start..$refused_span_end}" \
     --mutate "Sessions/Handlers/TurnStateTracker.cs{$progress_span_start..$progress_span_end}" \
+    --mutate "Sessions/SessionToolWorkflow.cs{$redrive_span_start..$redrive_span_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -295,7 +309,22 @@ jq -e --arg source "$refused_source_file" \
   exit 1
 }
 
-total_count=$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count + expected_refused_count + expected_progress_count))
+expected_redrive_count=1
+jq -e --arg source "$redrive_source_file" \
+  --argjson line "$redrive_line" \
+  --argjson first "$redrive_column" --argjson last "$redrive_end_column" \
+  --argjson count "$expected_redrive_count" '
+  [(.files[$source].mutants // [])[]
+    | select(.status != "Ignored")
+    | select(.location.start.line == $line and .location.end.line == $line)
+    | select(.location.start.column >= $first and .location.end.column <= $last)] as $mutants
+  | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
+' "$report" > /dev/null || {
+  echo "Expected $expected_redrive_count killed approval re-drive mutant in the selected expression." >&2
+  exit 1
+}
+
+total_count=$((expected_count + expected_requester_count + expected_inspection_count + expected_history_count + expected_stop_count + expected_reap_count + expected_input_count + expected_refused_count + expected_progress_count + expected_redrive_count))
 jq -e --argjson count "$total_count" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count

@@ -145,6 +145,11 @@ internal sealed partial class SessionToolWorkflow
     {
         if (recordCompletedCycle && cycle is null && executor is not null)
             cycle = ToolCycleSignatureFactory.Prepare(calls, executor);
+        if (!recordCompletedCycle)
+        {
+            _activeBatch.ResumeDispatch(calls);
+            return;
+        }
         _activeBatch.Start(calls, cycle);
     }
 

@@ -50,7 +50,10 @@ internal sealed class ActiveToolBatchTracker
         foreach (var result in existingResults)
         {
             if (result.ToolCallId is { } id)
+            {
                 _completedCallIds.Add(id.Value);
+                RestoreOutcome(result);
+            }
         }
 
         ExecutionTaskCompleted = false;
@@ -71,12 +74,36 @@ internal sealed class ActiveToolBatchTracker
         ExecutionTaskCompleted = false;
     }
 
+    public void ResumeDispatch(IReadOnlyList<FunctionCallContent> calls)
+    {
+        if (calls.Count == 0 || _expectedCallIds.Count == 0 || calls.Any(call => !_expectedCallIds.Contains(call.CallId) || _completedCallIds.Contains(call.CallId)))
+            throw new InvalidOperationException("An approval re-drive must contain only unfinished calls of the active batch.");
+        if (_completedCallIds.Any(id => !_cycleResults.ContainsKey(id)))
+            throw new InvalidOperationException("A recovered sibling result lacks progress receipt facts.");
+        _preparedCycleBatch = null;
+        ExecutionTaskCompleted = false;
+    }
+
+    private void RestoreOutcome(SerializableChatMessage result)
+    {
+        if (result.ToolOutcomeCategory is not { } category || result.ToolCallId is not { } id)
+            return;
+        if (!Enum.IsDefined((ToolInvocationOutcomeCategory)category))
+            throw new InvalidOperationException("A tool result has an unknown outcome category.");
+        _cycleResults[id.Value] = new ToolCycleResult((ToolInvocationOutcomeCategory)category, result.Content)
+        {
+            PendingJob = result.ToolResultIsPendingJob,
+            Synthetic = result.ToolResultIsSynthetic
+        };
+    }
+
     public SessionState ApplyRecordedResult(SessionState current, SerializableChatMessage result)
     {
         var alreadyRecorded = false;
         if (result.ToolCallId is { } callId)
         {
             _completedCallIds.Add(callId.Value);
+            RestoreOutcome(result);
             alreadyRecorded = ParkedToolBatchHistory.HasToolResult(current.History, callId.Value);
         }
 

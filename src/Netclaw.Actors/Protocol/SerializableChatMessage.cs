@@ -17,6 +17,12 @@ public sealed record SerializableChatMessage : INetclawSerializableMessage
 {
     public ChatRole Role { get; init; }
 
+    // The journal keeps receipt facts so an approval re-drive can account for completed siblings.
+    // Null identifies a legacy result whose receipt facts are unknown.
+    public int? ToolOutcomeCategory { get; init; }
+    public bool ToolResultIsPendingJob { get; init; }
+    public bool ToolResultIsSynthetic { get; init; }
+
     public string Content { get; init; } = string.Empty;
 
     /// <summary>Optional name (used for tool results: the tool function name).</summary>

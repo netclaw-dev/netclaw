@@ -524,7 +524,7 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
             Persist(new ToolCallRecorded
             {
                 SessionId = _sessionId,
-                ToolResult = result.Message,
+                ToolResult = result.MessageWithProgress,
                 StartedBackgroundJob = result.StartedBackgroundJob,
                 RecordedAtMs = NowMs()
             }, evt =>

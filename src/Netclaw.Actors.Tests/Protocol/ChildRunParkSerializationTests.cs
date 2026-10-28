@@ -195,7 +195,8 @@ public sealed class ChildRunParkSerializationTests : TestKit
             {
                 [new ToolRecurrenceKey(new ToolName("shell_execute"), "hash-a")] = new("success", 1, Corrected: true, PendingJob: true)
             },
-            RefusedRepeatCount: 1, CallsSinceProgress: 6, IncompleteBatchHadSuccess: true),
+            RefusedRepeatCount: 1, CallsSinceProgress: 6, IncompleteBatchHadSuccess: true)
+        { ProgressFailureUnits = 12, ProgressStage = RefusedRepeatAction.EscalatedNudge, IncompleteBatchHadFailure = true },
         ScopeDirectories = new ChildParkScopeDirectories("/repo", "/repo/tools"),
         FileActivity = new WorkingContextDelta
         {

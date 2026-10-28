@@ -45,7 +45,15 @@ internal sealed record ToolCallResult(
     ManagedTemporaryCorrectionChange? ManagedTemporaryCorrectionUpdate = null,
     string? FailureCode = null,
     ToolInvocationReceipt? Receipt = null,
-    ToolExposureRequest? ExposureRequest = null);
+    ToolExposureRequest? ExposureRequest = null)
+{
+    public SerializableChatMessage MessageWithProgress => Message with
+    {
+        ToolOutcomeCategory = (int)(Receipt?.Category ?? ToolInvocationOutcomeCategory.Success),
+        ToolResultIsPendingJob = Receipt is ToolInvocationReceipt.PendingBackgroundJob,
+        ToolResultIsSynthetic = Receipt is ToolInvocationReceipt.Correction { RemediationCode: ToolRemediationCode.BreakToolCycle }
+    };
+}
 
 internal sealed record ModelInputMaterializationResult(
     IReadOnlyList<SerializableMediaReference> MediaReferences,

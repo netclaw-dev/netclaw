@@ -514,6 +514,11 @@ The selectors reject missing or repeated source markers before Stryker starts.
 The gate requires one killed mutant in each of six single-expression spans, two killed history mutants, and eleven killed refused repeat count mutants.
 It fails for no mutant, a survivor, or a compile error in a selected span.
 
+The gate also selects `!recordCompletedCycle` in `SessionToolWorkflow.StartDispatch`.
+One expected mutant replaces the re-drive path with a fresh batch.
+`Recovered_parent_approval_keeps_all_sibling_outcomes_once` rejects that loss of sibling results.
+The script requires the mutant to run and die.
+
 The combined local calibration took 1 minute 56 seconds with a warm build cache.
 The earlier readiness-only run took 5 minutes 44 seconds after tool restore.
 The three-target local run took 1 minute 46 seconds with a warm build cache.
@@ -523,7 +528,7 @@ The seven-mutant local run took 1 minute 48 seconds with a warm build cache.
 The eight-mutant combined local run took 2 minutes 6 seconds with a warm build cache.
 Hosted run `38448179312` took 15 to 21 minutes for the four existing matrix groups.
 Its Windows test took 16 minutes 6 seconds. A target in any of those four groups would extend that critical path.
-All eight source spans produce 19 expected mutants in one Stryker invocation in the `session-reliability` group.
+The current ten source spans require 21 expected mutants in one Stryker invocation in the `session-reliability` group.
 The local run with the refused repeat span took 2 minutes 21 seconds with a warm build cache. The earlier run without it took 2 minutes 13 seconds.
 Hosted CI must measure the combined gate on a cold runner.
 Its report directory is `artifacts/stryker/tool-batch-readiness`.

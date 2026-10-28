@@ -3,8 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Google.Protobuf;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Serialization;
+using ChatMessageProto = Netclaw.Actors.Serialization.Proto.SerializableChatMessageProto;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Sessions.Pipelines;
@@ -148,13 +151,14 @@ public sealed class ActiveToolBatchTrackerTests
         var batch = new ActiveToolBatchTracker();
         var turn = new TurnStateTracker();
         var state = SessionState.Empty;
-        for (var i = 0; i < 9; i++)
+        for (var i = 0; i < 8; i++)
         {
             var call = new FunctionCallContent($"call-{i}", $"sample/{i}");
+            Assert.NotEqual(RefusedRepeatAction.EndTurn, turn.EvaluateProgress());
             batch.Start([call], new PreparedToolCycleBatch(new ToolActionSignature($"action-{i}"),
                 [new PreparedToolCycleCall(new ToolCallId(call.CallId), new ToolName(call.Name), $"args-{i}")]));
             var message = Result(call.CallId);
-            var receipt = i < 8 ? (ToolInvocationReceipt)new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput)
+            var receipt = i < 7 ? (ToolInvocationReceipt)new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput)
                 : new ToolInvocationReceipt.Succeeded([], null);
             batch.RecordOutcome(new ToolCallResult(message, [], [], [], AuthorizationAttemptId.New(), Receipt: receipt));
             state = batch.ApplyRecordedResult(state, message);
@@ -162,7 +166,7 @@ public sealed class ActiveToolBatchTrackerTests
             var ready = Assert.IsType<BatchCompletion.Ready>(batch.CompleteIfReady(state, turn));
             state = ready.State;
             var nudges = state.History.Where(message => ToolCycleMessages.IsLoopNudge(message.Content)).ToArray();
-            if (i is >= 3 and < 8)
+            if (i is >= 3 and < 7)
             {
                 var nudge = Assert.Single(nudges);
                 Assert.Same(nudge, state.History[^1]);
@@ -195,6 +199,73 @@ public sealed class ActiveToolBatchTrackerTests
         Assert.IsType<BatchCompletion.Ready>(batch.CompleteIfReady(state, turn));
         Assert.Equal(0, turn.CallsSinceProgress);
         Assert.Equal(0, turn.CompletedCycleHistoryCount);
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("success")]
+    [InlineData("pending")]
+    [InlineData("synthetic")]
+    public void Recovered_parent_approval_keeps_all_sibling_outcomes_once(string siblingOutcome)
+    {
+        var workflow = new SessionToolWorkflow();
+        var turn = new TurnStateTracker();
+        var successfulSibling = siblingOutcome == "success";
+        if (successfulSibling)
+            turn.ObserveProgress(Enumerable.Repeat(new ToolCycleResult(ToolInvocationOutcomeCategory.InvalidInput, "Earlier failure."), 3), true);
+        var calls = Enumerable.Range(0, 4).Select(i => new FunctionCallContent($"call-{i}", $"sample/{i}")).ToArray();
+        var started = new SessionProtocol.ToolBatchStarted
+        {
+            SessionId = new SessionId("test/approval-progress"),
+            AssistantMessage = new SerializableChatMessage
+            {
+                Role = ChatRole.Assistant,
+                ToolCalls = calls.Select(call => new SerializableToolCall
+                {
+                    CallId = new ToolCallId(call.CallId), Name = new ToolName(call.Name)
+                }).ToArray()
+            },
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Inspect the files." }
+        };
+        var state = workflow.ApplyBatchStarted(SessionState.Empty, started);
+        workflow.StartDispatch(calls, cycle: null, executor: null, recordCompletedCycle: true);
+        for (var i = 0; i < 3; i++)
+        {
+            ToolInvocationReceipt receipt = i == 0 ? siblingOutcome switch
+            {
+                "success" => new ToolInvocationReceipt.Succeeded([], null),
+                "pending" => new ToolInvocationReceipt.PendingBackgroundJob(),
+                "synthetic" => new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle),
+                _ => new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput)
+            } : new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput);
+            var outcome = new ToolCallResult(Result(calls[i].CallId), [], [], [], AuthorizationAttemptId.New(), Receipt: receipt);
+            workflow.RecordOutcome(outcome);
+            state = workflow.ApplyRecordedResult(state, Wire(outcome.MessageWithProgress));
+        }
+        workflow.MarkExecutionTaskCompleted();
+        Assert.IsType<BatchCompletion.Pending>(workflow.CompleteIfReady(state, turn));
+
+        // A fresh workflow reads the journal facts, as it does after a restart during approval.
+        workflow = new SessionToolWorkflow();
+        state = workflow.ApplyBatchStarted(state, started);
+        workflow.StartDispatch([calls[3]], cycle: null, executor: null, recordCompletedCycle: false);
+        var final = new ToolCallResult(Result(calls[3].CallId), [], [], [], AuthorizationAttemptId.New(),
+            Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
+        workflow.RecordOutcome(final);
+        workflow.RecordOutcome(final);
+        state = workflow.ApplyRecordedResult(state, Wire(final.MessageWithProgress));
+        workflow.MarkExecutionTaskCompleted();
+        var ready = Assert.IsType<BatchCompletion.Ready>(workflow.CompleteIfReady(state, turn));
+        Assert.Equal(4, ready.ResultCount);
+        Assert.Equal(successfulSibling ? 0 : siblingOutcome == "failed" ? 4 : 3, turn.CallsSinceProgress);
+        Assert.Equal(siblingOutcome == "failed" ? RefusedRepeatAction.Nudge : RefusedRepeatAction.None, turn.EvaluateProgress());
+        Assert.Equal(0, turn.CompletedCycleHistoryCount);
+        Assert.IsType<BatchCompletion.Pending>(workflow.CompleteIfReady(ready.State, turn));
+        Assert.Equal(1, turn.ToolIterationCount);
+
+        static SerializableChatMessage Wire(SerializableChatMessage message)
+            => NetclawProtoMapper.FromProto(ChatMessageProto.Parser.ParseFrom(
+                NetclawProtoMapper.ToProto(message).ToByteArray()));
     }
 
     private static FunctionCallContent[] Calls() =>

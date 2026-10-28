@@ -79,17 +79,26 @@ successful batch. This rule supports PRD-001 and PRD-006. See
 [the engineering glossary](GLOSSARY.md) for shared terms.
 
 The tracker counts each actual failed call, including duplicates in one batch.
-Any actual success in a batch resets the count. Synthetic cycle corrections
-and pending-job receipts neither increase nor reset it. A park, a resume, and
-an approval re-drive count only the actual outcomes that each dispatch returns.
-A child park stores the count through the protobuf mapper. It also stores
-whether a sibling succeeded, so that success applies until the feedback batch
-completes.
+It also keeps a weighted score and an escalation stage.
+A `NotFound` result adds half a point because a missing path can guide discovery.
+Each other failure adds one point. `InvalidInput` and `AccessDenied` therefore reach advice after four calls.
+The nudge text reports the actual call count, regardless of category.
 
-The batch owner observes outcomes before it selects a nudge. Four failures
-produce advice. Six failures produce an escalation. After eight failures, the
-next response with tool calls ends the turn quietly. The model can still give
-a final text response. This rule adds no iteration limit or per-call refusal.
+Any actual success in a batch resets the count, score, and stage.
+Synthetic cycle corrections and pending-job receipts neither increase nor reset them.
+The parent journal stores each receipt category and its synthetic and pending-job flags.
+An approval re-drive preserves the full batch and observes each outcome once at completion.
+A legacy sibling without receipt facts causes explicit batch abandonment before the re-drive.
+A child park stores the count, score, stage, and any sibling success or failure through the protobuf mapper.
+A sibling success applies until the feedback batch completes.
+
+The batch owner observes outcomes before it selects a nudge.
+Scores of 4, 6, and 8 select advice, escalation, and a quiet end of the turn.
+One completed batch advances at most one stage, so a wide batch cannot skip advice.
+The true count and score retain all failures, including those beyond the next threshold.
+The next response with tool calls ends the turn at the final stage.
+The model can still give a final text response.
+This rule adds no iteration limit or per-call refusal.
 
 An escalation takes priority over advice from either guard axis. A repeat
 nudge takes priority over ordinary progress advice because it names refused
@@ -103,9 +112,9 @@ Three failed edit attempts followed by a success produce no progress nudge.
 complete dispatch
   -> observe actual outcomes once
   -> reset on success, otherwise add failures
-  -> select one nudge from the current count and the repeat decision
+  -> select one nudge from the stage, actual count, and repeat decision
   -> ask the model for its next response
-  -> end quietly if the count is at least eight and the response requests tools
+  -> end quietly at the final stage if the response requests tools
 ```
 
 ### Working Context and Child Runs

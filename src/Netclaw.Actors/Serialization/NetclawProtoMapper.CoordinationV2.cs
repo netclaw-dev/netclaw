@@ -450,7 +450,10 @@ internal static partial class NetclawProtoMapper
             ToolCallCount = loopGuard.ToolCallCount,
             RefusedRepeatCount = loopGuard.RefusedRepeatCount,
             CallsSinceProgress = loopGuard.CallsSinceProgress,
-            IncompleteBatchHadSuccess = loopGuard.IncompleteBatchHadSuccess
+            IncompleteBatchHadSuccess = loopGuard.IncompleteBatchHadSuccess,
+            ProgressFailureUnits = loopGuard.ProgressFailureUnits,
+            ProgressStage = (int)loopGuard.ProgressStage,
+            IncompleteBatchHadFailure = loopGuard.IncompleteBatchHadFailure
         };
         if (loopGuard.LastBlockedAction is { } blocked)
             proto.LastBlockedAction = blocked.Value;
@@ -474,7 +477,18 @@ internal static partial class NetclawProtoMapper
             static episode => new ToolRecurrenceEpisode(episode.Outcome, episode.EqualRounds, episode.Corrected, episode.PendingJob)),
         proto.RefusedRepeatCount,
         proto.CallsSinceProgress,
-        proto.IncompleteBatchHadSuccess);
+        proto.IncompleteBatchHadSuccess)
+    {
+        // Older parks used the capped count as their score and stage. Preserve that decision on upgrade.
+        ProgressFailureUnits = proto.HasProgressFailureUnits ? proto.ProgressFailureUnits
+            : (int)Math.Min(int.MaxValue, (long)proto.CallsSinceProgress * 2),
+        ProgressStage = proto.HasProgressStage ? (RefusedRepeatAction)proto.ProgressStage
+            : proto.CallsSinceProgress >= TurnStateTracker.ProgressEndTurnAt ? RefusedRepeatAction.EndTurn
+            : proto.CallsSinceProgress >= TurnStateTracker.ProgressEscalateAt ? RefusedRepeatAction.EscalatedNudge
+            : proto.CallsSinceProgress >= TurnStateTracker.ProgressNudgeAt ? RefusedRepeatAction.Nudge
+            : RefusedRepeatAction.None,
+        IncompleteBatchHadFailure = proto.IncompleteBatchHadFailure
+    };
 
     private static Proto.BackgroundChildRunV2Proto ToProto(BackgroundChildRun run)
     {
