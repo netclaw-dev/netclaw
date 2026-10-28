@@ -128,12 +128,30 @@ def fixture_paths(environment, assets):
             for context, filename in [('broad', 'netclaw.json'), ('bounded', 'netclaw-bounded.json')]}
 
 
+def child_run_id(log):
+    headers = re.findall(r'^Run ID:    ([0-9a-f-]{36})$', log, re.MULTILINE)
+    archives = re.findall(r'^Archived: (.+)$', log, re.MULTILINE)
+    if len(headers) > 1 or len(archives) > 1:
+        raise ValueError('The child repeats an identity record.')
+    identities = [str(uuid.UUID(value)) for value in headers]
+    for value in archives:
+        path = Path(value).resolve()
+        if path.parent != (ROOT / 'evals/runs').resolve():
+            raise ValueError('The child archive path is outside its run root.')
+        identities.append(str(uuid.UUID(path.name)))
+    if not identities:
+        raise ValueError('The child did not report a run ID or archive identity.')
+    if len(set(identities)) != 1:
+        raise ValueError('The child header and archive contain conflicting run IDs.')
+    return identities[0]
+
+
 def child_receipt(log, name, runs, threshold):
-    run_ids = re.findall(r'^Run ID:    ([0-9a-f-]{36})$', log, re.MULTILINE)
-    if len(run_ids) != 1:
-        raise ValueError('The child did not report exactly one run ID.')
-    run_id = str(uuid.UUID(run_ids[0]))
+    run_id = child_run_id(log)
     directory = ROOT / 'evals/runs' / run_id / 'trials'
+    if not directory.is_dir():
+        return {'run_id': run_id, 'trials': [], 'result': None,
+                'error': 'The child archive contains no trial evidence.'}
     if {path.name for path in directory.iterdir()} != {name}:
         raise ValueError('The child archive contains a different case inventory.')
     trials = sorted((directory / name).iterdir())
@@ -173,7 +191,8 @@ def main():
     if args.route:
         if not case_filter and (not category_filter or mixed):
             fixture_paths(environment, assets)
-            print('main')
+            needs_observer = any(case['name'] in ('coordination_independent_synthesis', 'coordination_artifact_review') for case in cases)
+            print('main-observer' if needs_observer else 'main')
         elif case_filter == BOUNDED_CASE:
             path = environment.get('NETCLAW_EVAL_CONFIG_FILE') or environment.get('NETCLAW_EVAL_MAIN_BOUNDED_CONFIG_FILE')
             validate_fixture(path or assets / 'evals/fixtures/config/netclaw-bounded.json', 'bounded')
@@ -261,7 +280,9 @@ def main():
         state['children'].append(child)
         save()
         try:
-            child.update(child_receipt(log_path.read_text(), case['name'], runs, threshold))
+            log = log_path.read_text()
+            child['run_id'] = child_run_id(log)
+            child.update(child_receipt(log, case['name'], runs, threshold))
         except (ValueError, OSError, KeyError, json.JSONDecodeError) as error:
             child['error'] = str(error)
             state['status'] = 'stopped'

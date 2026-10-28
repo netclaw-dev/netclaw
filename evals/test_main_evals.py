@@ -35,6 +35,10 @@ class MainEntrypointTests(unittest.TestCase):
                             self.root / 'evals/fixtures/config' / filename)
         self.bin = self.root / 'bin'
         self.bin.mkdir()
+        self.observer = self.root / 'evals/coordination-observer/bin/Debug/net10.0'
+        self.observer.mkdir(parents=True)
+        for extension in ('dll', 'deps.json', 'runtimeconfig.json'):
+            (self.observer / ('coordination-observer.' + extension)).write_text('prepared:' + extension)
         self.calls = self.root / 'calls.jsonl'
         self.tool_calls = self.root / 'tools.jsonl'
         self.executable('docker', '''
@@ -50,7 +54,8 @@ with open(os.environ['TEST_TOOLS'], 'a') as log: log.write(json.dumps(['dotnet',
 if sys.argv[1] != 'build': raise SystemExit('No model observer is allowed')
 compiled=Path(sys.argv[2]).parent/'bin/Debug/net10.0'
 compiled.mkdir(parents=True,exist_ok=True)
-(compiled/'coordination-observer.dll').write_text('fixture-observer')
+for extension in ('dll','deps.json','runtimeconfig.json'):
+    (compiled/('coordination-observer.'+extension)).write_text('fixture-observer:'+extension)
 ''')
         self.executable('netclaw', "import sys\nassert sys.argv[1:] == ['--version']\nprint('fixture-version')\n")
         self.executable('bash', '''
@@ -71,6 +76,12 @@ with open(os.environ['TEST_CALLS'],'a') as log: log.write(json.dumps(call)+'\\n'
 if name==os.environ.get('TEST_ABORT_CASE'): raise SystemExit(2)
 run_id=str(uuid.uuid4())
 root=Path(sys.argv[1]).resolve().parent/'runs'/run_id/'trials'/name
+if os.environ.get('TEST_WARMUP_FAILURE'):
+    archive=root.parent.parent
+    archive.mkdir(parents=True)
+    (archive/'run-info.txt').write_text('run_id: '+run_id)
+    print('Archived: '+str(archive))
+    raise SystemExit(2)
 fails=int(os.environ.get('TEST_FAILURE_TRIALS','0')) if name=='identity_name' else 0
 for number in range(1,int(call['runs'])+1):
     trial=root/f'{number:02d}'
@@ -83,6 +94,8 @@ for number in range(1,int(call['runs'])+1):
 if os.environ.get('TEST_DRIFT')=='1' or (os.environ.get('TEST_DRIFT')=='last' and name=='cli_control_daemon_status'):
     config.write_text(config.read_text()+' ')
 print('Run ID:    '+run_id)
+if os.environ.get('TEST_CONFLICTING_ID'):
+    print('Archived: '+str(root.parent.parent.with_name(str(uuid.uuid4()))))
 raise SystemExit(1 if fails>1 else 0)
 ''')
         self.environment = {key: value for key, value in os.environ.items() if not key.startswith('NETCLAW')}
@@ -117,6 +130,7 @@ raise SystemExit(1 if fails>1 else 0)
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def test_default_entrypoint_runs_every_case_once_with_fixed_contexts_and_target(self):
+        frozen = {path.name:path.read_bytes() for path in self.observer.iterdir()}
         result = self.run_default()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         calls = self.records(self.calls)
@@ -137,8 +151,9 @@ raise SystemExit(1 if fails>1 else 0)
         self.assertEqual(3, sum(case['timeout_seconds'] == 300 for case in receipt['cases']))
         self.assertEqual(self.case_count - 3, sum(case['timeout_seconds'] == 600 for case in receipt['cases']))
         tools = self.records(self.tool_calls)
-        self.assertEqual(1, sum(tool[0] == 'dotnet' for tool in tools))
+        self.assertEqual(0, sum(tool[0] == 'dotnet' for tool in tools))
         self.assertEqual(1, sum(tool[0] == 'docker' for tool in tools))
+        self.assertEqual(frozen, {path.name:path.read_bytes() for path in self.observer.iterdir()})
         for path in (self.root / 'evals/main-runs').rglob('*'):
             if path.is_file():
                 self.assertNotIn('private-test-credential', path.read_text())
@@ -149,6 +164,69 @@ raise SystemExit(1 if fails>1 else 0)
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertEqual(['identity_name'], [call['name'] for call in self.records(self.calls)])
         self.assertEqual('stopped', self.receipt()['status'])
+
+    def test_early_warmup_failure_keeps_its_archive_identity_without_trial_success(self):
+        self.environment['TEST_WARMUP_FAILURE'] = '1'
+        result = self.run_default()
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        receipt = self.receipt()
+        child = receipt['children'][0]
+        metadata = (self.root / 'evals/runs' / child['run_id'] / 'run-info.txt').read_text()
+        self.assertEqual('run_id: ' + child['run_id'], metadata)
+        self.assertEqual((0, 0), tuple(receipt[key] for key in ('stored_slots', 'completed_trials')))
+        self.assertIsNone(child['result'])
+        self.assertIn('no trial evidence', child['error'])
+        self.assertEqual(1, len(self.records(self.calls)))
+
+    def test_conflicting_header_and_archive_ids_stop_before_another_child(self):
+        self.environment['TEST_CONFLICTING_ID'] = '1'
+        result = self.run_default()
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        receipt = self.receipt()
+        self.assertIn('conflicting run IDs', receipt['children'][0]['error'])
+        self.assertEqual(1, len(self.records(self.calls)))
+
+    def test_no_build_requires_a_prepared_observer_before_any_child(self):
+        for extension in ('dll', 'deps.json', 'runtimeconfig.json'):
+            with self.subTest(extension=extension):
+                path = self.observer / ('coordination-observer.' + extension)
+                original = path.read_bytes()
+                path.unlink()
+                result = self.run_default()
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn('requires the prepared Main observer', result.stderr)
+                self.assertFalse(self.calls.exists())
+                self.assertFalse(self.tool_calls.exists())
+                path.write_bytes(original)
+
+    def test_build_enabled_main_prepares_the_image_and_observer_once(self):
+        self.environment['NETCLAW_EVAL_NO_BUILD'] = '0'
+        for path in self.observer.iterdir():
+            path.unlink()
+        script = self.root / 'scripts/docker/build-image.sh'
+        script.parent.mkdir(parents=True)
+        script.write_text('#!' + sys.executable + '''
+import json,os
+with open(os.environ['TEST_TOOLS'],'a') as log: log.write(json.dumps(['image-build'])+'\\n')
+''')
+        script.chmod(0o755)
+        result = self.run_default()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        tools = self.records(self.tool_calls)
+        self.assertEqual(1, sum(tool[0]=='image-build' for tool in tools))
+        self.assertEqual(1, sum(tool[0]=='dotnet' for tool in tools))
+        self.assertEqual(self.case_count, len(self.records(self.calls)))
+
+    def test_filtered_observer_builds_but_a_prepared_child_reuses_it(self):
+        self.environment['NETCLAW_EVAL_CASE'] = 'coordination_independent_synthesis'
+        result = self.run_single_context()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(1, sum(tool[0]=='dotnet' for tool in self.records(self.tool_calls)))
+        self.tool_calls.unlink()
+        self.environment['NETCLAW_EVAL_MAIN_PREPARED'] = '1'
+        result = self.run_single_context()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertFalse(self.tool_calls.exists())
 
     def test_conclusive_case_failure_retains_all_samples_and_later_cases(self):
         self.environment['TEST_FAILURE_TRIALS'] = '2'

@@ -29,6 +29,7 @@
 #
 #   Build:
 #     NETCLAW_EVAL_NO_BUILD      Set to 1 to skip `dotnet publish` + `docker build`
+#                               Full Main also requires and reuses a prepared observer
 #                                (reuse existing ./publish output and image)
 #     NETCLAW_BIN                Path to netclaw CLI (default: ./publish/cli/netclaw)
 #     NETCLAW_EVAL_ASSET_ROOT    Checkout that supplies identity, skills, and fixtures
@@ -4673,7 +4674,22 @@ main() {
     check_prerequisites
     build_local_image
     if [[ "${NETCLAW_EVAL_MAIN_PREPARED:-0}" != "1" ]]; then
-        build_coordination_observer
+        if [[ "$main_route" == main-observer ]]; then
+            if [[ "$NO_BUILD" == "1" ]]; then
+                local observer_output="$REPO_ROOT/evals/coordination-observer/bin/Debug/net10.0/coordination-observer"
+                local extension
+                for extension in dll deps.json runtimeconfig.json; do
+                    if [[ ! -f "$observer_output.$extension" ]]; then
+                        echo "ERROR: NO_BUILD=1 requires the prepared Main observer: $observer_output.$extension" >&2
+                        exit 2
+                    fi
+                done
+            else
+                FILTER_CATEGORY="" build_coordination_observer
+            fi
+        elif [[ "$main_route" != main ]]; then
+            build_coordination_observer
+        fi
     fi
 
     # Verify CLI binary exists (may have just been built by build_local_image).
@@ -4685,7 +4701,7 @@ main() {
     NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
 
     # Full Main uses two fixed contexts. Each child retains the stock case and trial code.
-    if [[ "$main_route" == main ]]; then
+    if [[ "$main_route" == main || "$main_route" == main-observer ]]; then
         local image_id
         image_id=$(docker image inspect --format '{{.Id}}' "$NETCLAW_IMAGE")
         NETCLAW_IMAGE="$image_id" NETCLAW_BIN="$NETCLAW_BIN" \

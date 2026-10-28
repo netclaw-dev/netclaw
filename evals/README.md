@@ -103,10 +103,17 @@ An attended call then requires approval; a headless call returns `approval_requi
 The normal unfiltered `./evals/run-evals.sh` entrypoint selects both contexts through `main_evals.py`.
 A category that contains both contexts uses the same driver for its selected subset.
 The parent resolves the provider, prepares the image and observer, and freezes the actual image ID once.
+With `NETCLAW_EVAL_NO_BUILD=1`, a Main selection that needs the observer requires its prepared output.
+The harness checks the DLL, dependency manifest, and runtime config before any model call.
+It reuses these files and never falls back to a rebuild.
+Prepare the observer with `dotnet build evals/coordination-observer/coordination-observer.csproj` before a frozen run.
+Build-enabled Main prepares it once. Direct single-context observer runs retain their existing build step.
 Each child uses one exact case filter, one shared seed, and the original trial code.
 The driver derives every case from the current `run_all` declarations.
 It rejects duplicate names, unknown declaration helpers, missing critical cases, and declarations without assertions.
 It records the selected inventory, the planned trial count, and each child run ID in `evals/main-runs/<id>/main.json`.
+The driver retains the archived UUID if startup stops before the normal run header.
+Archive identity cannot replace trial evidence. Conflicting identity records stop the protocol.
 The trial slot count equals the declared case count times the trials per case.
 Category receipts identify only their selected subset and do not imply full-suite acceptance.
 The driver preserves conclusive failures and stops before another case after a containment or harness error.
