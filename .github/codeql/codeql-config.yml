@@ -10,10 +10,12 @@
 name: "Netclaw CodeQL config"
 
 paths-ignore:
-  # The eval suite holds deliberate fixtures: fake secrets, deliberately broken code
-  # samples, and marker strings. Findings there are not product defects, and dismissing
-  # them on every new fixture costs review attention that the real findings need.
-  # Both forms are listed: the directory entry covers the folder, and the glob covers
-  # every file beneath it.
-  - evals
-  - evals/**
+  # Fixture data only. These files hold deliberately secret-shaped values and broken
+  # config, so a finding against them says nothing about the product.
+  #
+  # Do NOT exclude the eval scripts themselves. evals/ holds real tooling that forwards
+  # provider API keys (background_fixture.py) and enforces file boundaries before it
+  # copies session evidence (trial_evidence.py). Excluding that code would remove
+  # security analysis from the paths that most need it.
+  - evals/fixtures
+  - evals/runs
