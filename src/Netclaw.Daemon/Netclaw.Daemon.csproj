@@ -70,6 +70,7 @@
         <ProjectReference Include="..\Netclaw.Channels.Slack\Netclaw.Channels.Slack.csproj"/>
         <ProjectReference Include="..\Netclaw.Providers\Netclaw.Providers.csproj"/>
         <ProjectReference Include="..\Netclaw.Search\Netclaw.Search.csproj"/>
+        <ProjectReference Include="..\Netclaw.Security\Netclaw.Security.csproj"/>
         <ProjectReference Include="..\Netclaw.Tools.Abstractions\Netclaw.Tools.Abstractions.csproj"/>
     </ItemGroup>
 

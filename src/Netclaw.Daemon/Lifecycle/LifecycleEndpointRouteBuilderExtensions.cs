@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
+using Netclaw.Security;
 
 namespace Netclaw.Daemon.Lifecycle;
 
@@ -53,7 +54,7 @@ public static class LifecycleEndpointRouteBuilderExtensions
             if (pid != Environment.ProcessId || !HomeIdentity.Same(request.Home, paths.BasePath))
             {
                 // The home comes from the query string: strip line breaks before it reaches the log.
-                var noticeHome = DaemonLifecycleNotifier.SanitizeForLog(request.Home);
+                var noticeHome = LogSafe.Text(request.Home);
                 var message = $"This daemon is PID {Environment.ProcessId} for home {paths.BasePath}; the notice is for PID {pid} and home {noticeHome}.";
                 logger.LogWarning("Refused a shutdown notice. {Detail}", message);
                 return TypedResults.Conflict(new LifecycleErrorResponse(message));
