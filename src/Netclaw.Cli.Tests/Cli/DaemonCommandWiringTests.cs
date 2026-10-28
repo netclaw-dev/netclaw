@@ -784,15 +784,45 @@ public sealed class DaemonCommandWiringTests : IDisposable
         Assert.Contains($"Daemon already running (PID {daemon.Pid}).", output, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task Daemon_help_names_the_refusal_and_its_recovery()
+    private async Task<(int ExitCode, string Stdout, string Stderr)> RunDaemonUsageWithoutServiceActionAsync(string subcommand)
     {
-        var (_, output) = await RunAsync(ScratchHome, ["daemon", "--help"]);
+        WriteDaemonConfig(ScratchHome, FreePort());
+        InstallUnit();
+        var configPath = Path.Combine(ScratchHome, "config", "netclaw.json");
+        var unitPath = Path.Combine(_home, ".config", "systemd", "user", "netclaw.service");
+        var configBefore = File.ReadAllText(configPath);
+        var unitBefore = File.ReadAllText(unitPath);
 
-        Assert.Contains("is not shown to serve", output, StringComparison.Ordinal);
-        Assert.Contains("netclaw.pid", output, StringComparison.Ordinal);
-        Assert.Contains("kill", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("pkill", output, StringComparison.Ordinal);
+        var result = await RunWithStreamsAsync(ScratchHome, ["daemon", subcommand]);
+
+        Assert.Equal(string.Empty, SystemctlCalls);
+        Assert.Equal(configBefore, File.ReadAllText(configPath));
+        Assert.Equal(unitBefore, File.ReadAllText(unitPath));
+        Assert.False(File.Exists(Path.Combine(ScratchHome, "netclaw.pid")));
+        Assert.False(File.Exists(Path.Combine(ScratchHome, "netclaw.lock")));
+        Assert.False(Directory.Exists(DefaultNetclawHome));
+        return result;
+    }
+
+    [Theory]
+    [InlineData("--help", true)]
+    [InlineData("-h", true)]
+    [InlineData("help", true)]
+    [InlineData("unknown-subcommand", false)]
+    public async Task Daemon_usage_returns_the_expected_exit_code_without_service_action(string subcommand, bool succeeds)
+    {
+        var (exitCode, stdout, stderr) = await RunDaemonUsageWithoutServiceActionAsync(subcommand);
+
+        Assert.Contains("Usage: netclaw daemon <subcommand>", stdout, StringComparison.Ordinal);
+        Assert.Contains("is not shown to serve", stdout, StringComparison.Ordinal);
+        Assert.Contains("netclaw.pid", stdout, StringComparison.Ordinal);
+        Assert.Contains("kill", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("pkill", stdout, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, stderr);
+        if (succeeds)
+            Assert.Equal(0, exitCode);
+        else
+            Assert.NotEqual(0, exitCode);
     }
 
     [SlopwatchSuppress("SW001", "Uses a copy of /bin/sleep as the stand-in daemon process.")]

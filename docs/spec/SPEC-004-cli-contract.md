@@ -201,6 +201,9 @@ Download failures do not create security alerts. This change does not alter the 
 
 ## Output and Exit Codes
 
+`netclaw daemon --help`, `netclaw daemon -h`, and `netclaw daemon help` print help and exit with code `0`.
+These commands do not start, stop, or modify the daemon service.
+
 - default output: human readable text
 - optional output: JSON for automation
 - exit code `0` for success

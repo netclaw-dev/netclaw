@@ -528,7 +528,10 @@ static async Task RunAsync(string[] args)
     {
         var subcommand = args.Length > 1 ? args[1] : "help";
         if (IsHelpToken(subcommand))
-            subcommand = "help";
+        {
+            WriteDaemonHelp();
+            return;
+        }
 
         // See DaemonCommandDispatch remarks: `pair`/`devices` guard their own trailing --help
         // below; the remaining lifecycle verbs previously executed for real on a trailing help
