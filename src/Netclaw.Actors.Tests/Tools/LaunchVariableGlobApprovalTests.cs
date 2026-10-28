@@ -15,7 +15,8 @@ namespace Netclaw.Actors.Tests.Tools;
 [Collection(ShellApprovalMatrixCollection.Name)]
 public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture fixture)
 {
-    [Theory]
+    [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "Launch facts apply to the POSIX Bash host.")]
     [InlineData("\"$HOME\"")]
     [InlineData("$HOME")]
     [InlineData("${HOME}")]
@@ -37,7 +38,8 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
         Assert.Equal(twin.AllowReason, result.AllowReason);
     }
 
-    [Theory]
+    [SlopwatchSuppress("SW001", "The launch facts and folder grants require POSIX Bash paths.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "Launch facts and folder grants require POSIX Bash paths.")]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Home_glob_outside_a_folder_grant_needs_consent(bool anywhere)
@@ -57,7 +59,6 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
     }
 
     [Theory]
-    [InlineData("cat \"$HOME\"/.netclaw/k*/*.xml")]
     [InlineData("cat ${HOME}/.netclaw/*/secrets.json")]
     [InlineData("sudo ls \"$HOME\"/*")]
     public async Task A_global_grant_preserves_protected_path_and_hard_deny_rules(string command)
@@ -65,6 +66,19 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
         await using var harness = await CreateAsync(Approvals.PersistentAnywhere("cat", "ls", "sudo"));
 
         var result = await harness.EvaluateShellAsync(command,
+            TestContext.Current.CancellationToken, workingDirectory: harness.ProjectDirectory);
+
+        Assert.Equal(ApprovalOutcome.Denied, result.Outcome);
+        Assert.Equal(0, result.ApprovalChecks);
+    }
+
+    [SlopwatchSuppress("SW001", "The protected key path requires the POSIX Bash HOME fact.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The protected key path requires the POSIX Bash HOME fact.")]
+    public async Task A_global_grant_preserves_the_protected_home_key_boundary()
+    {
+        await using var harness = await CreateAsync(Approvals.PersistentAnywhere("cat", "ls", "sudo"));
+
+        var result = await harness.EvaluateShellAsync("cat \"$HOME\"/.netclaw/k*/*.xml",
             TestContext.Current.CancellationToken, workingDirectory: harness.ProjectDirectory);
 
         Assert.Equal(ApprovalOutcome.Denied, result.Outcome);
@@ -83,7 +97,8 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
         Assert.Equal(ApprovalCorrection.ShellWordQuote, result.AgentCorrection);
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "The producer needs proved HOME facts from the POSIX Bash host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The producer needs POSIX Bash launch facts.")]
     public async Task A_shell_consumer_keeps_its_own_consent_requirement()
     {
         await using var harness = await CreateAsync(Approvals.None);
@@ -96,7 +111,8 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
         Assert.Equal(["sh"], result.Prompt!.CandidateVerbs);
     }
 
-    [Theory]
+    [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "Launch facts apply to the POSIX Bash host.")]
     [InlineData("$HOME")]
     [InlineData("${HOME}")]
     [InlineData("\"$HOME\"")]
@@ -131,7 +147,8 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
         Assert.Equal(["rm"], result.Prompt!.CandidateVerbs);
     }
 
-    [Theory]
+    [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "Launch facts apply to the POSIX Bash host.")]
     [InlineData("$TMPDIR")]
     [InlineData("${TMPDIR}")]
     [InlineData("\"$TMPDIR\"")]
@@ -202,10 +219,16 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
         Assert.Equal(0, result.ApprovalChecks);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Auto_consent_keeps_launch_variable_path_protection(bool protect)
+    [Fact]
+    public Task Auto_consent_allows_an_ordinary_launch_variable_operand()
+        => AssertAutoConsentAsync(protect: false);
+
+    [SlopwatchSuppress("SW001", "Protected HOME paths require the POSIX Bash launch facts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Protected HOME paths require POSIX Bash launch facts.")]
+    public Task Auto_consent_keeps_protected_launch_variable_paths()
+        => AssertAutoConsentAsync(protect: true);
+
+    private async Task AssertAutoConsentAsync(bool protect)
     {
         await using var harness = await ShellApprovalHarness.CreateAsync("launch-variable-auto",
             new ShellApprovalInvocation("true", Host: ShellApprovalHost.Bash52), Approvals.None,
@@ -221,7 +244,8 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
         Assert.Equal(0, result.ApprovalChecks);
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "The scalar twin requires a POSIX Bash working directory.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The scalar twin requires a POSIX Bash working directory.")]
     public async Task An_exact_scalar_option_matches_its_literal_twin()
     {
         await using var harness = await CreateAsync(Approvals.PersistentAnywhere("git"));
@@ -233,7 +257,7 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
         Assert.Equal(literal.AllowReason, variable.AllowReason);
     }
 
-    public static bool IsPosix => !OperatingSystem.IsWindows();
+    public static bool IsPosix => TestPlatform.IsPosix;
 
     [SlopwatchSuppress("SW001", "The fixture requires POSIX directory aliases.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The fixture requires POSIX directory aliases.")]
