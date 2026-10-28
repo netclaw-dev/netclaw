@@ -15,11 +15,12 @@ using Netclaw.Configuration;
 namespace Netclaw.Cli.Skills;
 
 /// <summary>
-/// Handles <c>netclaw skill &lt;subcommand&gt;</c> CLI subcommands. Most are offline
-/// filesystem operations; <c>list</c> requires the running daemon, because only the
-/// daemon's live registry includes the dynamic MCP prompt skills that never exist
-/// on disk. When the daemon is unavailable, <c>list</c> reports that and exits
-/// non-zero — it never degrades to a disk scan (AGENTS.md: no silent fallbacks).
+/// Handles <c>netclaw skill &lt;subcommand&gt;</c> CLI subcommands. <c>list</c> and
+/// <c>show</c> are served by the daemon's live registry, because only that view includes
+/// server-fed skills and the dynamic MCP prompt skills that never exist on disk.
+/// <c>remove</c> consults it for classification. When the daemon is unavailable they
+/// report that and exit non-zero — they never degrade to a disk scan (AGENTS.md: no
+/// silent fallbacks, since a disk scan silently drops entire skill tiers).
 /// </summary>
 internal static class SkillCommand
 {
@@ -64,11 +65,15 @@ internal static class SkillCommand
         if (subcommand is "sync")
             return RunSyncAsync(daemonApi, writer);
 
+        if (subcommand is "show")
+            return RunShowAsync(daemonApi, args, writer);
+
+        if (subcommand is "remove")
+            return RunRemoveAsync(daemonApi, args, paths, writer);
+
         return Task.FromResult(subcommand switch
         {
-            "show" => RunShow(args, paths),
             "validate" => RunValidate(args),
-            "remove" => RunRemove(args, paths),
             "issues" => RunIssues(paths),
             "search" => RunSearch(args, paths),
             _ => WriteHelp(writer)
@@ -268,7 +273,14 @@ internal static class SkillCommand
 
     // ── Subcommand implementations ──
 
-    private static int RunShow(string[] args, NetclawPaths paths)
+    /// <summary>
+    /// Serves <c>skill show</c> from the daemon's live registry. A disk scan cannot
+    /// see server-fed skills (they live three levels deep under
+    /// <c>.server-feeds/&lt;feed&gt;/&lt;skill&gt;/</c>) or MCP prompt skills, so the
+    /// daemon is the only complete answer. No disk fallback: a partial view here
+    /// would report a real skill as missing.
+    /// </summary>
+    private static async Task<int> RunShowAsync(DaemonApi? daemonApi, string[] args, TextWriter output)
     {
         if (args.Length < 3)
         {
@@ -277,38 +289,73 @@ internal static class SkillCommand
         }
 
         var name = args[2].ToLowerInvariant();
-        var result = ScanAll(paths);
-        var skill = result.AcceptedSkills.FirstOrDefault(
-            s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
 
-        if (skill is null)
+        if (daemonApi is null)
+        {
+            output.WriteLine("Skill show unavailable: the daemon API is not configured.");
+            output.WriteLine("Start it with `netclaw daemon start`.");
+            return 1;
+        }
+
+        SkillInventory.Detail? detail;
+        var hint = "Start it with `netclaw daemon start`.";
+
+        try
+        {
+            detail = await daemonApi.GetSkillAsync(name);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            // The daemon is up but predates the detail route.
+            output.WriteLine($"Skill show unavailable: the daemon at {daemonApi.Endpoint} does not serve /api/skills/{{name}} yet.");
+            output.WriteLine("Restart the daemon so it matches this CLI version.");
+            return 1;
+        }
+        catch (HttpRequestException ex)
+        {
+            output.WriteLine($"Skill show unavailable: could not reach the daemon at {daemonApi.Endpoint} ({ex.Message}).");
+            output.WriteLine(hint);
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            output.WriteLine($"Skill show unavailable: the daemon at {daemonApi.Endpoint} timed out.");
+            output.WriteLine(hint);
+            return 1;
+        }
+        catch (JsonException)
+        {
+            output.WriteLine($"Skill show failed: the daemon at {daemonApi.Endpoint} returned an unreadable skill.");
+            return 1;
+        }
+
+        if (detail is null)
         {
             Console.Error.WriteLine($"[FAIL] skill '{name}' not found.");
             return 1;
         }
 
-        Console.WriteLine($"Name:        {skill.Name}");
-        Console.WriteLine($"Display:     {skill.DisplayName}");
-        Console.WriteLine($"Source:      {ClassifySource(skill, paths)}");
-        Console.WriteLine($"Version:     {skill.Version ?? "-"}");
-        Console.WriteLine($"Category:    {skill.Category ?? "-"}");
-        Console.WriteLine($"License:     {skill.License ?? "-"}");
-        Console.WriteLine($"Path:        {skill.FilePath}");
-        Console.WriteLine($"Flat file:   {skill.IsFlatFile}");
+        var skill = detail.Skill;
+        output.WriteLine($"Name:        {skill.Name}");
+        output.WriteLine($"Display:     {skill.DisplayName}");
+        output.WriteLine($"Source:      {skill.Source}");
+        output.WriteLine($"Version:     {skill.Version ?? "-"}");
+        output.WriteLine($"Category:    {skill.Category ?? "-"}");
+        output.WriteLine($"Path:        {detail.FilePath ?? "-"}");
+        output.WriteLine($"Invocable:   {skill.UserInvocable}");
 
-        if (skill.AllowedTools is not null)
-            Console.WriteLine($"Tools:       {skill.AllowedTools}");
-        if (skill.ResourcePaths is { Count: > 0 })
-            Console.WriteLine($"Resources:   {string.Join(", ", skill.ResourcePaths)}");
+        if (detail.AllowedTools is not null)
+            output.WriteLine($"Tools:       {detail.AllowedTools}");
+        if (detail.Resources is { Count: > 0 })
+            output.WriteLine($"Resources:   {string.Join(", ", detail.Resources)}");
 
-        Console.WriteLine($"Description: {skill.Description}");
-        Console.WriteLine();
+        output.WriteLine($"Description: {skill.Description}");
+        output.WriteLine();
 
-        // Print full SKILL.md content
-        if (File.Exists(skill.FilePath))
+        if (detail.Content is not null)
         {
-            Console.WriteLine("--- content ---");
-            Console.WriteLine(File.ReadAllText(skill.FilePath));
+            output.WriteLine("--- content ---");
+            output.WriteLine(detail.Content);
         }
 
         return 0;
@@ -378,7 +425,12 @@ internal static class SkillCommand
         return 1;
     }
 
-    private static int RunRemove(string[] args, NetclawPaths paths)
+    /// <summary>
+    /// Resolves the skill through the daemon so classification matches what the agent
+    /// actually sees, then deletes only local, user-owned files. System, external, and
+    /// server-feed skills are refused: the daemon or their source owns them.
+    /// </summary>
+    private static async Task<int> RunRemoveAsync(DaemonApi? daemonApi, string[] args, NetclawPaths paths, TextWriter output)
     {
         if (args.Length < 3)
         {
@@ -387,49 +439,97 @@ internal static class SkillCommand
         }
 
         var name = args[2].ToLowerInvariant();
-        var result = ScanAll(paths);
-        var skill = result.AcceptedSkills.FirstOrDefault(
-            s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
 
-        if (skill is null)
+        if (daemonApi is null)
+        {
+            output.WriteLine("Skill remove unavailable: the daemon API is not configured.");
+            output.WriteLine("Start it with `netclaw daemon start`.");
+            return 1;
+        }
+
+        SkillInventory.Detail? detail;
+        try
+        {
+            detail = await daemonApi.GetSkillAsync(name);
+        }
+        catch (HttpRequestException ex)
+        {
+            output.WriteLine($"Skill remove unavailable: could not reach the daemon at {daemonApi.Endpoint} ({ex.Message}).");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            output.WriteLine($"Skill remove unavailable: the daemon at {daemonApi.Endpoint} timed out.");
+            return 1;
+        }
+        catch (JsonException)
+        {
+            output.WriteLine($"Skill remove failed: the daemon at {daemonApi.Endpoint} returned an unreadable skill.");
+            return 1;
+        }
+
+        if (detail is null)
         {
             Console.Error.WriteLine($"[FAIL] skill '{name}' not found.");
             return 1;
         }
 
-        var source = ClassifySource(skill, paths);
-        if (source is "system")
+        var skill = detail.Skill;
+        if (skill.Source is "system")
         {
-            Console.Error.WriteLine($"[FAIL] cannot remove system skill '{name}'. System skills are managed by the daemon.");
+            output.WriteLine($"[FAIL] cannot remove system skill '{name}'. System skills are managed by the daemon.");
             return 1;
         }
 
-        if (source is "external")
+        if (skill.Source is "server-feed")
         {
-            Console.Error.WriteLine($"[FAIL] cannot remove external skill '{name}'. Manage it in its source directory.");
+            output.WriteLine($"[FAIL] cannot remove server-fed skill '{name}'. Its skill server owns it; it returns on the next sync.");
             return 1;
         }
 
-        if (skill.IsFlatFile)
+        if (skill.Source is "external")
         {
-            File.Delete(skill.FilePath);
-            Console.WriteLine($"Removed flat skill file: {skill.FilePath}");
-        }
-        else
-        {
-            Directory.Delete(skill.SkillDirectory, recursive: true);
-
-            // Clean empty parent category directories (consistent with SkillManageTool)
-            var parent = Path.GetDirectoryName(skill.SkillDirectory);
-            if (parent is not null && parent != paths.SkillsDirectory
-                && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
-            {
-                Directory.Delete(parent);
-            }
-
-            Console.WriteLine($"Removed skill directory: {skill.SkillDirectory}");
+            output.WriteLine($"[FAIL] cannot remove external skill '{name}'. Manage it in its source directory.");
+            return 1;
         }
 
+        if (detail.FilePath is null || detail.SkillDirectory is null)
+        {
+            output.WriteLine($"[FAIL] skill '{name}' has no local files to remove.");
+            return 1;
+        }
+
+        var skillDirectory = detail.SkillDirectory;
+        var skillsRoot = Path.GetFullPath(paths.SkillsDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar);
+        if (Path.GetFullPath(skillDirectory).TrimEnd(Path.DirectorySeparatorChar)
+            .Equals(skillsRoot, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine($"[FAIL] refusing to remove '{skillDirectory}' because it is the skills root.");
+            return 1;
+        }
+
+        var isFlatFile = !string.Equals(
+            Path.GetFileName(detail.FilePath), "SKILL.md", StringComparison.OrdinalIgnoreCase);
+
+        if (isFlatFile)
+        {
+            File.Delete(detail.FilePath);
+            output.WriteLine($"Removed flat skill file: {detail.FilePath}");
+            return 0;
+        }
+
+        Directory.Delete(skillDirectory, recursive: true);
+
+        // Clean empty parent category directories (consistent with SkillManageTool)
+        var parent = Path.GetDirectoryName(skillDirectory);
+        if (parent is not null && !string.Equals(parent, skillsRoot, StringComparison.Ordinal)
+            && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
+        {
+            Directory.Delete(parent);
+        }
+
+        output.WriteLine($"Removed skill directory: {skillDirectory}");
         return 0;
     }
 
@@ -686,7 +786,27 @@ internal static class SkillCommand
     {
         var config = LoadExternalSkillsConfig(paths);
         var externalSources = config.ResolveEnabledSources();
-        return SkillScanner.ScanAndMerge(paths.SkillsDirectory, externalSources);
+        var feedsConfig = LoadSkillFeedsConfig(paths);
+        return SkillScanner.ScanAndMerge(
+            paths.SkillsDirectory,
+            feedsConfig.ResolveEnabledSources(paths),
+            externalSources);
+    }
+
+    /// <summary>
+    /// Load the SkillFeeds section from netclaw.json. Server-fed skills live under
+    /// <c>.server-feeds/&lt;feed&gt;/&lt;skill&gt;/</c>, which the native scan cannot reach:
+    /// only a feed directory used as a scan root exposes them as top-level skills.
+    /// Without this tier, offline commands cannot see any server-fed skill.
+    /// </summary>
+    private static SkillFeedsConfig LoadSkillFeedsConfig(NetclawPaths paths)
+    {
+        var configBuilder = new ConfigurationBuilder();
+        if (File.Exists(paths.NetclawConfigPath))
+            configBuilder.AddJsonFile(paths.NetclawConfigPath, optional: true);
+        var configuration = configBuilder.Build();
+        return configuration.GetSection("SkillFeeds").Get<SkillFeedsConfig>()
+            ?? new SkillFeedsConfig();
     }
 
     /// <summary>
@@ -725,6 +845,13 @@ internal static class SkillCommand
         if (skill.FilePath.StartsWith(systemPrefix, StringComparison.OrdinalIgnoreCase))
             return "system";
 
+        // Checked before the native prefix: a feed skill is still inside the skills
+        // directory, but the daemon owns it. Reporting it as native would let
+        // `skill remove` delete managed feed state.
+        var serverFeedPrefix = paths.ServerFeedsDirectory + Path.DirectorySeparatorChar;
+        if (skill.FilePath.StartsWith(serverFeedPrefix, StringComparison.OrdinalIgnoreCase))
+            return "server-feed";
+
         var nativePrefix = paths.SkillsDirectory + Path.DirectorySeparatorChar;
         if (skill.FilePath.StartsWith(nativePrefix, StringComparison.OrdinalIgnoreCase))
             return "native";
@@ -751,8 +878,9 @@ internal static class SkillCommand
         writer.WriteLine("  source enable <name>                          Enable an external source");
         writer.WriteLine("  source disable <name>                         Disable an external source");
         writer.WriteLine();
-        writer.WriteLine("`list` and `sync` need the running daemon (list includes live MCP prompt skills);");
-        writer.WriteLine("every other subcommand is offline — no daemon required.");
+        writer.WriteLine("`list`, `show`, and `sync` need the running daemon (list and show read the");
+        writer.WriteLine("daemon's live registry, which includes server-fed and MCP prompt skills);");
+        writer.WriteLine("`remove` also needs it to classify the skill. Other subcommands are offline.");
         return 0;
     }
 

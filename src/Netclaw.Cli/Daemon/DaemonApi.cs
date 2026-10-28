@@ -242,6 +242,27 @@ public sealed class DaemonApi
     }
 
     /// <summary>
+    /// Fetches one skill's detail from the daemon's live registry. Returns null when
+    /// the daemon does not know the name. Throws <see cref="HttpRequestException"/>
+    /// (or a timeout) when the daemon is unreachable; callers report that rather than
+    /// degrading to a disk scan.
+    /// </summary>
+    public async Task<SkillInventory.Detail?> GetSkillAsync(string name, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        using var response = await client.GetAsync(
+            $"{_endpoint}/api/skills/{Uri.EscapeDataString(name)}", cts.Token);
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        return await JsonSerializer.DeserializeAsync<SkillInventory.Detail>(stream, JsonDefaults.Api, cts.Token);
+    }
+
+    /// <summary>
     /// Runs the daemon-owned skill sync pass. This request has no client timeout.
     /// A source pass can exceed normal status request limits. The caller controls
     /// only its wait through <paramref name="ct"/>.

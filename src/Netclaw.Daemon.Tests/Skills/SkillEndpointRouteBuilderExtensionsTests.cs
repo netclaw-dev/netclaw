@@ -96,6 +96,22 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
     }
 
     [Fact]
+    public async Task SkillDetail_requires_authorization_for_an_unauthenticated_request()
+    {
+        // The detail route returns skill content and absolute filesystem paths, so it
+        // must not be reachable anonymously. There is no fallback authorization
+        // policy in this app — an endpoint that omits RequireAuthorization is public.
+        var ct = TestContext.Current.CancellationToken;
+        var paths = new NetclawPaths(_dir.Path);
+        await using var app = await CreateAppAsync(spoofLoopback: false, new SkillRegistry(), paths);
+        var client = app.GetTestClient();
+
+        var response = await client.GetAsync("/api/skills/git", ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Sync_requires_authorization_for_an_unauthenticated_post()
     {
         var paths = new NetclawPaths(_dir.Path);
@@ -247,6 +263,77 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         var file = Assert.Single(inventory.Skills, s => s.Name == "demo-file");
         Assert.Equal("native", file.Source);
         Assert.Null(file.ServerName);
+    }
+
+    [Fact]
+    public async Task Classifies_a_server_fed_skill_as_server_feed_not_native()
+    {
+        // A feed skill lives under SkillsDirectory but the daemon owns it. Reporting it
+        // as "native" would invite a client to treat it as user-editable local state.
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+
+        var skillDirectory = Path.Combine(paths.ServerFeedDirectory("team"), "git");
+        var skillFilePath = Path.Combine(skillDirectory, "SKILL.md");
+        Directory.CreateDirectory(skillDirectory);
+
+        var entry = new SkillEntry(
+            "git",
+            "Git Hygiene",
+            "Git hygiene.",
+            new FileSkillSource(skillFilePath, skillDirectory),
+            Category: ".server-feeds")
+        {
+            Version = "1.3.1",
+        };
+
+        var inventory = SkillInventory.From([entry], paths);
+
+        var skill = Assert.Single(inventory.Skills);
+        Assert.Equal("server-feed", skill.Source);
+        Assert.Equal("1.3.1", skill.Version);
+    }
+
+    [Fact]
+    public void Detail_projection_returns_content_and_paths_for_a_server_fed_skill()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+
+        var skillDirectory = Path.Combine(paths.ServerFeedDirectory("team"), "git");
+        var skillFilePath = Path.Combine(skillDirectory, "SKILL.md");
+        Directory.CreateDirectory(skillDirectory);
+        File.WriteAllText(skillFilePath, "---\nname: git\nversion: 1.3.1\n---\n\n# Git Hygiene\n");
+
+        var entry = new SkillEntry(
+            "git",
+            "Git Hygiene",
+            "Git hygiene.",
+            new FileSkillSource(skillFilePath, skillDirectory),
+            Category: ".server-feeds")
+        {
+            Version = "1.3.1",
+        };
+
+        var detail = SkillInventory.DetailView(entry, paths);
+
+        Assert.Equal("git", detail.Skill.Name);
+        Assert.Equal("server-feed", detail.Skill.Source);
+        Assert.Equal("1.3.1", detail.Skill.Version);
+        Assert.Equal(skillFilePath, detail.FilePath);
+        Assert.Contains("# Git Hygiene", detail.Content);
+    }
+
+    [Fact]
+    public async Task SkillDetail_returns_404_for_an_unknown_name()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var paths = new NetclawPaths(_dir.Path);
+        await using var app = await CreateAppAsync(spoofLoopback: true, new SkillRegistry(), paths);
+
+        var response = await app.GetTestClient().GetAsync("/api/skills/does-not-exist", ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     private static ServerFeedSkillSyncService CreateSyncService(SkillRegistry registry, NetclawPaths paths)

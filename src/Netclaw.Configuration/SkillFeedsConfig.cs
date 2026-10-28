@@ -25,6 +25,36 @@ public sealed class SkillFeedsConfig
     /// and only sync at daemon startup.
     /// </summary>
     public int SyncIntervalMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// Resolves enabled feeds to their on-disk sync roots, in list order, so a
+    /// caller can scan them as the server-feed tier of a skill merge. A feed
+    /// whose directory does not exist yet has never synced and is skipped.
+    /// </summary>
+    /// <remarks>
+    /// Both the daemon's inventory refresh and the CLI's offline scan call this.
+    /// Keeping one resolution path prevents the two from disagreeing about which
+    /// tiers a skill inventory contains.
+    /// </remarks>
+    public IReadOnlyList<ResolvedExternalSource> ResolveEnabledSources(NetclawPaths paths)
+    {
+        var sources = new List<ResolvedExternalSource>();
+
+        foreach (var feed in Feeds)
+        {
+            if (!feed.Enabled)
+                continue;
+
+            var directory = paths.ServerFeedDirectory(feed.Name);
+            if (!Directory.Exists(directory))
+                continue;
+
+            sources.Add(new ResolvedExternalSource(
+                $"server-feed:{feed.Name}", [directory], AllowSymlinks: false));
+        }
+
+        return sources;
+    }
 }
 
 /// <summary>

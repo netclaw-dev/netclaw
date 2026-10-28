@@ -571,8 +571,13 @@ public static partial class SkillScanner
             ? headingMatch.Groups[1].Value.Trim()
             : TitleCase(name);
 
+        // Two conventions exist. Skill servers publish a top-level `version:`; NetClaw's
+        // system skills use `metadata.version`. Top-level wins so a server-published
+        // version is never shadowed by nested metadata.
         string? version = null;
-        if (fm.Metadata is not null && fm.Metadata.TryGetValue("version", out var versionValue))
+        if (!string.IsNullOrWhiteSpace(fm.Version))
+            version = fm.Version.Trim();
+        else if (fm.Metadata is not null && fm.Metadata.TryGetValue("version", out var versionValue))
             version = versionValue?.ToString();
 
         return new SkillEntry(
@@ -822,6 +827,13 @@ public sealed class SkillFrontmatter
     public string? Description { get; set; }
     public string? License { get; set; }
     public string? Compatibility { get; set; }
+
+    /// <summary>
+    /// Top-level <c>version</c>. This is the convention skill servers publish.
+    /// NetClaw's own system skills instead use <c>metadata.version</c>; see
+    /// <see cref="Metadata"/>. Both are read, top-level first.
+    /// </summary>
+    public string? Version { get; set; }
 
     [YamlMember(Alias = "allowed-tools")]
     public string? AllowedTools { get; set; }

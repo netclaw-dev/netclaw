@@ -366,7 +366,10 @@ internal sealed class SkillFeedFixture
     private static string GetVersion(string phase) => phase == "A" ? "1.0.0" : "2.0.0";
 
     private static string GetSkill(string phase) =>
-        $"---\nname: smoke-feed-skill\ndescription: Native skill sync phase {phase}.\nmetadata:\n  version: \"{GetVersion(phase)}\"\n---\n\n# Native skill sync phase {phase}\n";
+        // Top-level `version:` matches what real skill servers publish. Using
+        // `metadata.version` here would let this scenario pass even if the scanner
+        // only understood NetClaw's own nested convention.
+        $"---\nname: smoke-feed-skill\nversion: \"{GetVersion(phase)}\"\ndescription: Native skill sync phase {phase}.\n---\n\n# Native skill sync phase {phase}\n";
 
     private static string GetResource(string phase) => $"native skill sync resource phase {phase}\n";
 

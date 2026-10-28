@@ -40,28 +40,12 @@ public sealed class SkillInventoryRefresher
         {
             var result = SkillScanner.ScanAndMerge(
                 _paths.SkillsDirectory,
-                ResolveServerFeedSources(),
+                _feedsConfig.ResolveEnabledSources(_paths),
                 _externalSources);
 
             _registry.ReplaceAll(result.AcceptedSkills, result.Issues);
             _indexPublisher.Publish();
             return result;
         }
-    }
-
-    private IReadOnlyList<ResolvedExternalSource> ResolveServerFeedSources()
-    {
-        var sources = new List<ResolvedExternalSource>();
-        foreach (var feed in _feedsConfig.Feeds.Where(static feed => feed.Enabled))
-        {
-            var directory = _paths.ServerFeedDirectory(feed.Name);
-            if (Directory.Exists(directory))
-            {
-                sources.Add(new ResolvedExternalSource(
-                    $"server-feed:{feed.Name}", [directory], AllowSymlinks: false));
-            }
-        }
-
-        return sources;
     }
 }

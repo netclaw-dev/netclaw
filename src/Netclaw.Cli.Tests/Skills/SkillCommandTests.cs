@@ -339,4 +339,147 @@ public sealed class SkillCommandTests : IDisposable
         Assert.Equal(1, exit);
         Assert.Contains(UnavailableMarker, _output.ToString());
     }
+
+    // ── show ──────────────────────────────────────────────────────────
+
+    private Task<int> RunShowAsync(DaemonApi? daemonApi, string name)
+        => SkillCommand.RunAsync(["skill", "show", name], _paths, daemonApi, output: _output);
+
+    private static object ServerFedSkillDetail(string name, string version, string content, string feedDirectory)
+        => new
+        {
+            skill = new
+            {
+                name,
+                displayName = name,
+                description = "A server-fed skill.",
+                source = "server-feed",
+                category = "server-feed",
+                version,
+                userInvocable = true,
+                modelInvocable = true,
+            },
+            filePath = Path.Combine(feedDirectory, name, "SKILL.md"),
+            skillDirectory = Path.Combine(feedDirectory, name),
+            content,
+            allowedTools = (string?)null,
+            resources = (object?)null,
+        };
+
+    [Fact]
+    public async Task Show_renders_a_server_fed_skill_from_the_daemon()
+    {
+        // A server-fed skill lives three levels below the skills root, so no offline
+        // scan can see it. The daemon is the only complete source.
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(
+            ServerFedSkillDetail("git", "1.3.1", "---\nname: git\n---\n# Git Hygiene\n", "/feed")));
+
+        var exit = await RunShowAsync(daemonApi, "git");
+
+        var text = _output.ToString();
+        Assert.Equal(0, exit);
+        Assert.Contains("Name:        git", text);
+        Assert.Contains("Source:      server-feed", text);
+        Assert.Contains("Version:     1.3.1", text);
+        Assert.Contains("# Git Hygiene", text);
+    }
+
+    [Fact]
+    public async Task Show_queries_the_daemon_detail_route_for_the_requested_name()
+    {
+        Uri? requested = null;
+        var daemonApi = CreateDaemonApi(request =>
+        {
+            requested = request.RequestUri;
+            return FakeHttpMessageHandler.JsonResponse(
+                ServerFedSkillDetail("git", "1.3.1", "body", "/feed"));
+        });
+
+        await RunShowAsync(daemonApi, "git");
+
+        Assert.NotNull(requested);
+        Assert.Equal("/api/skills/git", requested!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task Show_reports_a_name_the_daemon_does_not_know()
+    {
+        var daemonApi = CreateDaemonApi(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
+
+        var exit = await RunShowAsync(daemonApi, "nope");
+
+        Assert.Equal(1, exit);
+        // Not-found is written to stderr; stdout must stay clean so scripts can parse it.
+        Assert.Equal(string.Empty, _output.ToString());
+    }
+
+    [Fact]
+    public async Task Show_reports_daemon_unavailable_without_falling_back_to_disk()
+    {
+        var daemonApi = CreateDaemonApi(_ => throw new HttpRequestException("connection refused"));
+
+        var exit = await RunShowAsync(daemonApi, "git");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("unavailable", _output.ToString());
+    }
+
+    // ── remove ────────────────────────────────────────────────────────
+
+    private Task<int> RunRemoveAsync(DaemonApi? daemonApi, string name)
+        => SkillCommand.RunAsync(["skill", "remove", name], _paths, daemonApi, output: _output);
+
+    [Fact]
+    public async Task Remove_refuses_a_server_fed_skill_and_leaves_it_on_disk()
+    {
+        // Feed directories are daemon-managed. Deleting one would look like a pruning
+        // event to the sync actor, so remove must refuse.
+        var feedDirectory = Path.Combine(_paths.ServerFeedsDirectory, "team");
+        var skillDirectory = Path.Combine(feedDirectory, "git");
+        Directory.CreateDirectory(skillDirectory);
+        File.WriteAllText(Path.Combine(skillDirectory, "SKILL.md"), "---\nname: git\n---\n# Git\n");
+
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(
+            ServerFedSkillDetail("git", "1.3.1", "body", feedDirectory)));
+
+        var exit = await RunRemoveAsync(daemonApi, "git");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("server-fed", _output.ToString());
+        Assert.True(Directory.Exists(skillDirectory));
+        Assert.True(Directory.Exists(feedDirectory));
+    }
+
+    [Fact]
+    public async Task Remove_deletes_a_native_skill_directory()
+    {
+        var skillDirectory = Path.Combine(_paths.SkillsDirectory, "local-skill");
+        Directory.CreateDirectory(skillDirectory);
+        File.WriteAllText(Path.Combine(skillDirectory, "SKILL.md"), "---\nname: local-skill\n---\n# Local\n");
+
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            skill = new
+            {
+                name = "local-skill",
+                displayName = "local-skill",
+                description = "A native skill.",
+                source = "native",
+                category = (string?)null,
+                version = (string?)null,
+                userInvocable = true,
+                modelInvocable = true,
+            },
+            filePath = Path.Combine(skillDirectory, "SKILL.md"),
+            skillDirectory,
+            content = "# Local",
+            allowedTools = (string?)null,
+            resources = (object?)null,
+        }));
+
+        var exit = await RunRemoveAsync(daemonApi, "local-skill");
+
+        Assert.Equal(0, exit);
+        Assert.False(Directory.Exists(skillDirectory));
+    }
 }

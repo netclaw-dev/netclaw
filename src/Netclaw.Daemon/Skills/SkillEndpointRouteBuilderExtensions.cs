@@ -33,6 +33,21 @@ public static class SkillEndpointRouteBuilderExtensions
             .WithTags("Skills")
             .RequireAuthorization();
 
+        app.MapGet("/api/skills/{name}", (string name, SkillRegistry registry, NetclawPaths paths) =>
+            {
+                var skill = registry.GetAll()
+                    .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+
+                if (skill is null)
+                    return (IResult)TypedResults.NotFound();
+
+                return TypedResults.Ok(SkillInventory.DetailView(skill, paths));
+            })
+            .WithName("GetSkill")
+            .WithSummary("Get one skill's metadata and content from the daemon's live registry.")
+            .WithTags("Skills")
+            .RequireAuthorization();
+
         app.MapPost("/api/skills/sync", async Task<IResult> (
                 IRequiredActor<ServerFeedSkillSyncActorKey> syncActor,
                 CancellationToken cancellationToken) =>

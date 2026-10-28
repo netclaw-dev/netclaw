@@ -68,6 +68,48 @@ public class SkillScannerTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Extracts_top_level_version_used_by_skill_servers()
+    {
+        // Skill servers publish a top-level `version:` (petabridge-skills does).
+        // NetClaw system skills use `metadata.version`. Both must resolve.
+        WriteSkill("git", """
+            ---
+            name: git
+            version: 1.3.1
+            description: Git workflow hygiene.
+            ---
+
+            # Git Hygiene
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("1.3.1", result.AcceptedSkills[0].Version);
+    }
+
+    [Fact]
+    public void Prefers_top_level_version_over_nested_metadata_version()
+    {
+        WriteSkill("dual", """
+            ---
+            name: dual
+            version: 2.0.0
+            description: Declares both version forms.
+            metadata:
+              version: "1.0.0"
+            ---
+
+            # Dual
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("2.0.0", result.AcceptedSkills[0].Version);
+    }
+
+    [Fact]
     public void Extracts_optional_fields_from_frontmatter()
     {
         WriteSkill("pdf-processing", """
@@ -615,6 +657,43 @@ public class SkillScannerTests : IAsyncLifetime
         Assert.Empty(result.AcceptedSkills);
         var issue = Assert.Single(result.Issues);
         Assert.Equal(SkillScanIssueKind.FlatFileNoDescription, issue.Kind);
+    }
+
+    [Fact]
+    public void ScanAndMerge_finds_a_server_fed_skill_only_through_the_feed_tier()
+    {
+        // Server-fed skills sit three levels below the skills root:
+        //   skills/.server-feeds/<feed>/<skill>/SKILL.md
+        // The native scan descends one level below an allowed hidden directory, so it
+        // probes .server-feeds/<feed>/SKILL.md and can never see the skill. Only a feed
+        // directory passed as its own scan root exposes it as a top-level skill. This
+        // is the invariant the CLI violated by passing an empty feed tier.
+        var feedDir = Path.Combine(_skillsDir, ".server-feeds", "team");
+        var skillDir = Path.Combine(feedDir, "git");
+        Directory.CreateDirectory(skillDir);
+        File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), """
+            ---
+            name: git
+            version: 1.3.1
+            description: Git workflow hygiene.
+            ---
+
+            # Git Hygiene
+            """);
+
+        // Native-only scan cannot reach it.
+        var nativeOnly = SkillScanner.Scan(_skillsDir);
+        Assert.Empty(nativeOnly.AcceptedSkills);
+
+        // With the feed directory as a scan root it is found, with its version intact.
+        var merged = SkillScanner.ScanAndMerge(
+            nativeSkillsDirectory: _skillsDir,
+            serverFeedSources: [new ResolvedExternalSource("server-feed:team", [feedDir], false)],
+            externalSources: []);
+
+        var skill = Assert.Single(merged.AcceptedSkills);
+        Assert.Equal("git", skill.Name);
+        Assert.Equal("1.3.1", skill.Version);
     }
 
     [Fact]
