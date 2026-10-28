@@ -468,16 +468,18 @@ Done when:
 **Surface area:** shell authorization, approval matching, security corpus
 **Verification:** L2
 
-#### Active delivery: contained glob directory aliases
+#### Verified implementation: contained glob directory aliases
 
 N1 keeps contained directory aliases within the existing shell authority model.
-`openspec/changes/allow-contained-glob-directory-aliases/` defines target protection,
+`openspec/changes/archive/2026-10-28-allow-contained-glob-directory-aliases/` defines target protection,
 source and target scopes, incomplete reach, and the 4096-unit work bound.
 Each intermediate directory visit and each link hop consumes one unit.
 The implementation carries known targets even when another branch remains unresolved.
 Only complete reach can support reusable approval.
 The final proof includes independent authorizer cases, focused mutants, and the maintained corpus.
 The coordinator owns the corpus audit and publication decisions.
+The changed skill guidance passes its retained targeted case, five of five trials.
+Broader model attempts remain incomplete or canceled at the user's request.
 
 #### Active delivery: complete compound scopes
 
