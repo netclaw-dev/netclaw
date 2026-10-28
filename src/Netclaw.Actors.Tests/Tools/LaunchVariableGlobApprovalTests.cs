@@ -131,15 +131,23 @@ public sealed class LaunchVariableGlobApprovalTests(ShellApprovalMatrixFixture f
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The fixture requires POSIX paths and the git CLI.")]
     public async Task A_repository_grant_does_not_cover_an_external_home_operand()
     {
-        using var directory = new DisposableTempDir();
-        await ApprovalTestGit.CreateRepositoryAsync(directory.Path);
+        // Repository identity rejects link ancestors. The owner supplies a canonical project root.
+        await using var repositoryOwner = await CreateAsync(Approvals.None);
+        var repository = repositoryOwner.ProjectDirectory;
+        await ApprovalTestGit.CreateRepositoryAsync(repository);
+        Directory.CreateDirectory(Path.Combine(repository, "proof", "entry"));
         await using var harness = await ShellApprovalHarness.CreateAsync("launch-variable-repository",
             new ShellApprovalInvocation("true", Host: ShellApprovalHost.Bash52),
             Approvals.PersistentRepository("rm"), fixture.ActorSystem, TestContext.Current.CancellationToken,
-            scope: new ShellApprovalHarnessScope(directory.Path, directory.Path, "signalr/variable-repository", [])
+            scope: new ShellApprovalHarnessScope(repository, repository, "signalr/variable-repository", [])
             {
-                RepositoryGrantWorktree = directory.Path
+                RepositoryGrantWorktree = repository
             });
+        var inside = await harness.EvaluateShellAsync($"rm '{repository}'/proof/*/",
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ApprovalOutcome.Allowed, inside.Outcome);
+        Assert.Equal(ApprovalAllowReason.StoredApproval, inside.AllowReason);
+
         var result = await harness.EvaluateShellAsync($"rm {UniqueHomePath(harness, "$HOME")}/*/",
             TestContext.Current.CancellationToken);
 
