@@ -8,7 +8,7 @@
     <AkkaRemindersVersion>1.5.73.3</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.20.1</OpenTelemetryVersion>
     <SlackNetVersion>0.18.0</SlackNetVersion>
-    <DiscordNetVersion>3.20.1</DiscordNetVersion>
+    <DiscordNetVersion>3.20.2</DiscordNetVersion>
     <MattermostNetVersion>5.0.12</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.8.3</MicrosoftExtensionsAIVersion>
     <!-- Microsoft.Extensions.TimeProvider.Testing ships on the dotnet/extensions minor
