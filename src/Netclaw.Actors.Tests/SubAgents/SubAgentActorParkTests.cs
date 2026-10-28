@@ -171,6 +171,10 @@ public sealed class SubAgentActorParkTests(ITestOutputHelper output) : SubAgentA
         var (_, park, requests) = await ExpectParkAsync(owner, []);
         owner.Send(child, new ChildTerminalCommitted());
         park = park with { LoopGuard = park.LoopGuard with { CallsSinceProgress = siblingSucceeded ? 0 : 6,
+            // The stage drives the nudge, so a park must carry a score and stage that agree with the count:
+            // six strong failures are twelve half-units, which is the escalation rung.
+            ProgressFailureUnits = siblingSucceeded ? 0 : 12,
+            ProgressStage = siblingSucceeded ? RefusedRepeatAction.None : RefusedRepeatAction.EscalatedNudge,
             IncompleteBatchHadSuccess = siblingSucceeded } };
         var request = Assert.Single(requests);
         var answer = approve

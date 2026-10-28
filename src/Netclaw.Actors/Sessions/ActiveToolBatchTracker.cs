@@ -148,12 +148,20 @@ internal sealed class ActiveToolBatchTracker
         // Use the completed outcomes, so a success cannot receive a stale progress nudge.
         var nudge = ToolCycleMessages.AfterResults(_repeatNudge, turn.EvaluateProgress(),
             turn.CallsSinceProgress, childRun: false);
-        var history = updated.History.RemoveAll(static message => message.Role == Protocol.ChatRole.User
-            && ToolCycleMessages.IsLoopNudge(message.Content));
-        if (!ReferenceEquals(history, updated.History))
-            updated = updated with { History = history };
+        // A new nudge replaces the earlier one: equal nudges in a stack give the model no new information.
+        // With nothing new to say, keep what history already holds. Removing it unconditionally dropped the
+        // advice given on the previous batch, and the model lost its correction on the following request.
         if (nudge is not null)
+        {
+            updated = RemoveLoopNudges(updated, ToolCycleMessages.IsLoopNudge);
             updated = updated.AddSystemNudge(nudge);
+        }
+        else if (turn.CallsSinceProgress == 0)
+        {
+            // The turn is making progress again, so no-progress advice is stale. Repeat advice still names an
+            // action to avoid, so it stays until a new nudge replaces it.
+            updated = RemoveLoopNudges(updated, ToolCycleMessages.IsProgressNudge);
+        }
         _repeatNudge = null;
 
         ExecutionTaskCompleted = false;
@@ -162,6 +170,13 @@ internal sealed class ActiveToolBatchTracker
     }
 
     public void DiscardPendingMedia() => _pendingMedia.Clear();
+
+    private static SessionState RemoveLoopNudges(SessionState state, Func<string, bool> matches)
+    {
+        var history = state.History.RemoveAll(message => message.Role == Protocol.ChatRole.User
+            && matches(message.Content));
+        return ReferenceEquals(history, state.History) ? state : state with { History = history };
+    }
 
     // Start clears this value, so a nudge belongs only to the batch that started before it.
     public void AddNudgeAfterResults(string nudge) => _repeatNudge = nudge;

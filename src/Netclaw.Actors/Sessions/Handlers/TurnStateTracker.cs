@@ -629,8 +629,13 @@ internal static class ToolCycleMessages
     internal const string ProgressNudgeStart = "Netclaw observed no tool progress. ";
 
     public static bool IsLoopNudge(string text)
-        => text.StartsWith($"{SessionState.SystemNudgePrefix} {RepeatNudgeStart}", StringComparison.Ordinal)
-            || text.StartsWith($"{SessionState.SystemNudgePrefix} {ProgressNudgeStart}", StringComparison.Ordinal);
+        => IsRepeatNudge(text) || IsProgressNudge(text);
+
+    public static bool IsRepeatNudge(string text)
+        => text.StartsWith($"{SessionState.SystemNudgePrefix} {RepeatNudgeStart}", StringComparison.Ordinal);
+
+    public static bool IsProgressNudge(string text)
+        => text.StartsWith($"{SessionState.SystemNudgePrefix} {ProgressNudgeStart}", StringComparison.Ordinal);
 
     // Results already explain each refusal. An escalation takes priority over advice to try another action.
     public static string? AfterResults(string? repeatNudge, RefusedRepeatAction progress, int failedCalls, bool childRun)

@@ -646,12 +646,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 .ToArray());
             var nudge = ToolCycleMessages.AfterResults(_activeRepeatNudge, _turnState.EvaluateProgress(),
                 _turnState.CallsSinceProgress, childRun: true);
-            _history.RemoveAll(static message => message.Role == Microsoft.Extensions.AI.ChatRole.User
-                && ToolCycleMessages.IsLoopNudge(message.Text));
-            _transcript.RemoveAll(static message => message.Role == Protocol.ChatRole.User
-                && ToolCycleMessages.IsLoopNudge(message.Content));
+            // A new nudge replaces the earlier one. With nothing new to say, keep what the transcript holds; a
+            // progress reset clears only the no-progress advice, because repeat advice still names an action.
             if (nudge is not null)
+            {
+                RemoveLoopNudges(ToolCycleMessages.IsLoopNudge);
                 AddSystemNudge(nudge);
+            }
+            else if (_turnState.CallsSinceProgress == 0)
+                RemoveLoopNudges(ToolCycleMessages.IsProgressNudge);
             _activeRepeatNudge = null;
 
             _turnState.RecordToolCompletion(msg.Results.Length);
@@ -1236,6 +1239,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void AddSystemNudge(string nudge)
         => AddMessage(new SerializableChatMessage { Role = Protocol.ChatRole.User, Content = $"[system: {nudge}]" });
+
+    private void RemoveLoopNudges(Func<string, bool> matches)
+    {
+        _history.RemoveAll(message => message.Role == Microsoft.Extensions.AI.ChatRole.User
+            && matches(message.Text));
+        _transcript.RemoveAll(message => message.Role == Protocol.ChatRole.User
+            && matches(message.Content));
+    }
 
     private void AddMessage(SerializableChatMessage message)
     {
