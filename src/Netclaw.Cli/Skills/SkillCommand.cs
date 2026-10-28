@@ -502,21 +502,37 @@ internal static class SkillCommand
         var skillDirectory = detail.SkillDirectory;
         var skillsRoot = Path.GetFullPath(paths.SkillsDirectory)
             .TrimEnd(Path.DirectorySeparatorChar);
-        if (Path.GetFullPath(skillDirectory).TrimEnd(Path.DirectorySeparatorChar)
-            .Equals(skillsRoot, StringComparison.Ordinal))
+
+        // The daemon is trusted infrastructure, but a delete path must never depend on a
+        // remote response alone: a stale daemon, a compromised one, or a future wire bug
+        // must not turn `skill remove` into recursive deletion of an arbitrary directory.
+        // Containment is checked for both the file and the directory, and symlinks are
+        // resolved first so a link inside the root cannot point outside it.
+        if (!IsContainedInSkillsRoot(detail.FilePath, skillsRoot))
         {
-            Console.Error.WriteLine($"[FAIL] refusing to remove '{skillDirectory}' because it is the skills root.");
+            output.WriteLine($"[FAIL] refusing to remove '{detail.FilePath}' because it is outside the skills root.");
             return 1;
         }
 
-        var isFlatFile = !string.Equals(
-            Path.GetFileName(detail.FilePath), "SKILL.md", StringComparison.OrdinalIgnoreCase);
-
-        if (isFlatFile)
+        if (!IsContainedInSkillsRoot(skillDirectory, skillsRoot))
         {
+            output.WriteLine($"[FAIL] refusing to remove '{skillDirectory}' because it is outside the skills root.");
+            return 1;
+        }
+
+        if (detail.IsFlatFile)
+        {
+            // A flat skill's "directory" is the scan root, so only the file may be deleted.
             File.Delete(detail.FilePath);
             output.WriteLine($"Removed flat skill file: {detail.FilePath}");
             return 0;
+        }
+
+        if (Path.GetFullPath(skillDirectory).TrimEnd(Path.DirectorySeparatorChar)
+            .Equals(skillsRoot, StringComparison.Ordinal))
+        {
+            output.WriteLine($"[FAIL] refusing to remove '{skillDirectory}' because it is the skills root.");
+            return 1;
         }
 
         Directory.Delete(skillDirectory, recursive: true);
@@ -524,6 +540,7 @@ internal static class SkillCommand
         // Clean empty parent category directories (consistent with SkillManageTool)
         var parent = Path.GetDirectoryName(skillDirectory);
         if (parent is not null && !string.Equals(parent, skillsRoot, StringComparison.Ordinal)
+            && IsContainedInSkillsRoot(parent, skillsRoot)
             && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
         {
             Directory.Delete(parent);
@@ -531,6 +548,65 @@ internal static class SkillCommand
 
         output.WriteLine($"Removed skill directory: {skillDirectory}");
         return 0;
+    }
+
+    /// <summary>
+    /// True when <paramref name="candidate"/> resolves to a path inside
+    /// <paramref name="skillsRoot"/>, with symlinks resolved first. The root itself
+    /// counts as contained; callers that must not delete the root check equality
+    /// separately.
+    /// </summary>
+    private static bool IsContainedInSkillsRoot(string candidate, string skillsRoot)
+    {
+        var resolved = ResolvePathChain(candidate);
+        if (resolved is null)
+            return false;
+
+        if (resolved.Equals(skillsRoot, StringComparison.Ordinal))
+            return true;
+
+        // Trailing separator prevents "/skills-evil" from matching root "/skills".
+        return resolved.StartsWith(
+            skillsRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Resolves every symlink along a path, including links that do not yet exist for
+    /// the final segment. Returns null when the path cannot be resolved.
+    /// </summary>
+    private static string? ResolvePathChain(string path)
+    {
+        try
+        {
+            var full = Path.GetFullPath(path);
+            var root = Path.GetPathRoot(full);
+            if (string.IsNullOrEmpty(root))
+                return null;
+
+            var current = root;
+            foreach (var segment in full[root.Length..]
+                         .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = Path.Combine(current, segment);
+                FileSystemInfo info = Directory.Exists(current)
+                    ? new DirectoryInfo(current)
+                    : new FileInfo(current);
+
+                if (info.Exists && info.LinkTarget is not null)
+                {
+                    var target = info.ResolveLinkTarget(returnFinalTarget: true);
+                    if (target is null)
+                        return null;
+                    current = Path.GetFullPath(target.FullName);
+                }
+            }
+
+            return Path.GetFullPath(current).TrimEnd(Path.DirectorySeparatorChar);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     private static int RunIssues(NetclawPaths paths)

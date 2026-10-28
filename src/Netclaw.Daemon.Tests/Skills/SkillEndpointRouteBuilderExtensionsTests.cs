@@ -325,8 +325,11 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
     }
 
     [Fact]
-    public async Task SkillDetail_returns_404_for_an_unknown_name()
+    public async Task SkillDetail_returns_404_with_a_body_for_an_unknown_name()
     {
+        // The body is what lets the CLI tell "unknown skill" from "daemon predates this
+        // route" — both are 404, and collapsing them re-creates the original false
+        // "skill not found" report.
         var ct = TestContext.Current.CancellationToken;
         var paths = new NetclawPaths(_dir.Path);
         await using var app = await CreateAppAsync(spoofLoopback: true, new SkillRegistry(), paths);
@@ -334,6 +337,8 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         var response = await app.GetTestClient().GetAsync("/api/skills/does-not-exist", ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        Assert.False(string.IsNullOrWhiteSpace(body));
     }
 
     private static ServerFeedSkillSyncService CreateSyncService(SkillRegistry registry, NetclawPaths paths)

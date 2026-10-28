@@ -84,6 +84,14 @@ public static class SkillInventory
         /// <summary>Absolute path of the skill directory. Null for MCP prompt skills.</summary>
         public string? SkillDirectory { get; init; }
 
+        /// <summary>
+        /// True when the skill is a bare <c>.md</c> file rather than a
+        /// <c>&lt;skill&gt;/SKILL.md</c> directory. A client cannot infer this from the
+        /// filename: a root-level file may legitimately be named <c>SKILL.md</c>, and a
+        /// flat file's directory is the scan root itself.
+        /// </summary>
+        public bool IsFlatFile { get; init; }
+
         /// <summary>The skill body, or null when the file could not be read.</summary>
         public string? Content { get; init; }
 
@@ -171,6 +179,7 @@ public static class SkillInventory
             Skill = ToRow(skill, paths),
             FilePath = isFileSkill ? skill.FilePath : null,
             SkillDirectory = isFileSkill ? skill.SkillDirectory : null,
+            IsFlatFile = isFileSkill && skill.IsFlatFile,
             Content = content,
             AllowedTools = skill.AllowedTools,
             Resources = skill.ResourcePaths?.ToList(),

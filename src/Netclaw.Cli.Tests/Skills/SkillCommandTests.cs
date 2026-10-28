@@ -361,6 +361,7 @@ public sealed class SkillCommandTests : IDisposable
             },
             filePath = Path.Combine(feedDirectory, name, "SKILL.md"),
             skillDirectory = Path.Combine(feedDirectory, name),
+            isFlatFile = false,
             content,
             allowedTools = (string?)null,
             resources = (object?)null,
@@ -404,13 +405,39 @@ public sealed class SkillCommandTests : IDisposable
     [Fact]
     public async Task Show_reports_a_name_the_daemon_does_not_know()
     {
-        var daemonApi = CreateDaemonApi(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        // The route answers an unknown name with a problem body; the CLI must read that
+        // as "not found", not as a missing route.
+        var daemonApi = CreateDaemonApi(_ => new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent(
+                """{"title":"Skill not found","status":404}""",
+                Encoding.UTF8,
+                "application/problem+json"),
+        });
 
         var exit = await RunShowAsync(daemonApi, "nope");
 
         Assert.Equal(1, exit);
-        // Not-found is written to stderr; stdout must stay clean so scripts can parse it.
+        // "[FAIL] skill not found" goes to stderr, which this harness does not capture.
+        // What matters is the distinction: this is NOT reported as a version mismatch,
+        // and stdout stays clean so scripts can parse it.
+        Assert.DoesNotContain("does not serve", _output.ToString());
         Assert.Equal(string.Empty, _output.ToString());
+    }
+
+    [Fact]
+    public async Task Show_reports_a_daemon_that_predates_the_detail_route()
+    {
+        // A bare 404 with no body means the route does not exist on this daemon. That is
+        // a version mismatch, not a missing skill, and must say so.
+        var daemonApi = CreateDaemonApi(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
+
+        var exit = await RunShowAsync(daemonApi, "git");
+
+        Assert.Equal(1, exit);
+        var text = _output.ToString();
+        Assert.Contains("does not serve", text);
+        Assert.DoesNotContain("'git' not found", text);
     }
 
     [Fact]
@@ -448,6 +475,121 @@ public sealed class SkillCommandTests : IDisposable
         Assert.Contains("server-fed", _output.ToString());
         Assert.True(Directory.Exists(skillDirectory));
         Assert.True(Directory.Exists(feedDirectory));
+    }
+
+    [Fact]
+    public async Task Remove_refuses_a_native_skill_whose_path_is_outside_the_skills_root()
+    {
+        // A daemon response is remote input. If it points outside the skills root, or is
+        // stale or compromised, `remove` must not recursively delete that directory.
+        var outside = Path.Combine(_dir.Path, "outside-root");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "SKILL.md"), "---\nname: evil\n---\n# Evil\n");
+
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            skill = new
+            {
+                name = "evil",
+                displayName = "evil",
+                description = "A skill outside the root.",
+                source = "native",
+                category = (string?)null,
+                version = (string?)null,
+                userInvocable = true,
+                modelInvocable = true,
+            },
+            filePath = Path.Combine(outside, "SKILL.md"),
+            skillDirectory = outside,
+            isFlatFile = false,
+            content = "# Evil",
+            allowedTools = (string?)null,
+            resources = (object?)null,
+        }));
+
+        var exit = await RunRemoveAsync(daemonApi, "evil");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("outside the skills root", _output.ToString());
+        Assert.True(Directory.Exists(outside));
+    }
+
+    [Fact]
+    public async Task Remove_refuses_a_sibling_directory_that_shares_the_skills_root_prefix()
+    {
+        // "/tmp/x/skills-evil" must not be treated as inside "/tmp/x/skills".
+        var sibling = Path.GetFullPath(_paths.SkillsDirectory) + "-evil";
+        Directory.CreateDirectory(sibling);
+        File.WriteAllText(Path.Combine(sibling, "SKILL.md"), "---\nname: sibling\n---\n# Sibling\n");
+
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            skill = new
+            {
+                name = "sibling",
+                displayName = "sibling",
+                description = "A prefix-sharing sibling.",
+                source = "native",
+                category = (string?)null,
+                version = (string?)null,
+                userInvocable = true,
+                modelInvocable = true,
+            },
+            filePath = Path.Combine(sibling, "SKILL.md"),
+            skillDirectory = sibling,
+            isFlatFile = false,
+            content = "# Sibling",
+            allowedTools = (string?)null,
+            resources = (object?)null,
+        }));
+
+        try
+        {
+            var exit = await RunRemoveAsync(daemonApi, "sibling");
+
+            Assert.Equal(1, exit);
+            Assert.True(Directory.Exists(sibling));
+        }
+        finally
+        {
+            Directory.Delete(sibling, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Remove_deletes_a_native_flat_skill_file()
+    {
+        // A flat skill's SkillDirectory is the scan root, so the root guard must not
+        // block removing the file itself.
+        var flatFile = Path.Combine(_paths.SkillsDirectory, "flat-skill.md");
+        File.WriteAllText(flatFile, "---\nname: flat-skill\ndescription: A flat skill.\n---\n\n# Flat\n");
+
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            skill = new
+            {
+                name = "flat-skill",
+                displayName = "flat-skill",
+                description = "A flat skill.",
+                source = "native",
+                category = (string?)null,
+                version = (string?)null,
+                userInvocable = true,
+                modelInvocable = true,
+            },
+            filePath = flatFile,
+            skillDirectory = _paths.SkillsDirectory,
+            isFlatFile = true,
+            content = "# Flat",
+            allowedTools = (string?)null,
+            resources = (object?)null,
+        }));
+
+        var exit = await RunRemoveAsync(daemonApi, "flat-skill");
+
+        Assert.Equal(0, exit);
+        Assert.False(File.Exists(flatFile));
+        Assert.True(Directory.Exists(_paths.SkillsDirectory));
     }
 
     [Fact]

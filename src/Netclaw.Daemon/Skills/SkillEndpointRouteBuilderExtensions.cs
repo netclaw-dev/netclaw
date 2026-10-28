@@ -39,7 +39,15 @@ public static class SkillEndpointRouteBuilderExtensions
                     .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
 
                 if (skill is null)
-                    return (IResult)TypedResults.NotFound();
+                {
+                    // Carries a body on purpose. The CLI distinguishes "unknown name"
+                    // from "daemon predates this route" by the presence of a body,
+                    // because both are otherwise a bare 404.
+                    return (IResult)TypedResults.Problem(
+                        statusCode: StatusCodes.Status404NotFound,
+                        title: "Skill not found",
+                        detail: $"The daemon has no skill named '{name}'.");
+                }
 
                 return TypedResults.Ok(SkillInventory.DetailView(skill, paths));
             })

@@ -255,7 +255,20 @@ public sealed class DaemonApi
             $"{_endpoint}/api/skills/{Uri.EscapeDataString(name)}", cts.Token);
 
         if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            // Two different failures share 404. A daemon that predates this route
+            // returns an empty 404; the route itself answers an unknown name with a
+            // problem body. Collapsing both into null would report a missing route as
+            // "skill not found" — the exact false negative this endpoint exists to fix.
+            var body = await response.Content.ReadAsStringAsync(cts.Token);
+            if (string.IsNullOrWhiteSpace(body))
+                throw new HttpRequestException(
+                    "the daemon does not serve /api/skills/{name} yet",
+                    inner: null,
+                    response.StatusCode);
+
             return null;
+        }
 
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
