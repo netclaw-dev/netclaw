@@ -357,6 +357,13 @@ internal sealed class TurnStateTracker
     /// </remarks>
     public RefusedRepeatAction EvaluateProgress() => _progressStage;
 
+    /// <summary>
+    /// The reason for the current post-results intervention. The budget is the only post-results detector today;
+    /// Prompt 3 adds failure-cause recurrence, which takes priority over it.
+    /// </summary>
+    public LoopInterventionReason EvaluateProgressReason()
+        => _progressStage != RefusedRepeatAction.None ? LoopInterventionReason.FailureBudget : LoopInterventionReason.None;
+
     private bool HasEqualCycleCopies(int start, int period)
     {
         for (var offset = 0; offset < period; offset++)
@@ -533,6 +540,17 @@ internal sealed record CompletedToolCycleIteration(
 }
 
 internal readonly record struct ToolRecurrenceKey(ToolName ToolName, string ArgumentsHash);
+
+/// <summary>
+/// A stable identity for the underlying failure, independent of the tool name and its arguments. The
+/// <c>invalid_rationale</c> front-door rejection recurs across every tool because its source and code are
+/// fixed and it has no scope. A resource-specific failure carries a stable scope, so two unrelated missing
+/// paths stay two causes. The key never holds raw, possibly secret-bearing error text.
+/// </summary>
+internal readonly record struct ToolFailureKey(
+    string Source,
+    string Code,
+    string? Scope = null);
 internal sealed record ToolRecurrenceEpisode(string Outcome, int EqualRounds, bool Corrected, bool PendingJob);
 internal sealed record CompletedToolRecurrenceGroup(ToolRecurrenceKey Key, string Outcome, bool PendingJob);
 internal sealed record ToolCycleBatchDecision(ToolCycleDecisionKind Kind,
@@ -552,6 +570,16 @@ internal sealed record ToolCycleBatchDecision(ToolCycleDecisionKind Kind,
 
     /// <summary>The failed-call count since the last success, for the progress nudge text.</summary>
     public int FailedCallsSinceProgress { get; init; }
+
+    /// <summary>
+    /// The single consolidated reason for this decision. Action recurrence wins over failure-cause recurrence,
+    /// which wins over the failure budget. Prompt 3 adds the <see cref="LoopInterventionReason.FailureCauseRecurrence"/>
+    /// branch; until then a no-progress run reports <see cref="LoopInterventionReason.FailureBudget"/>.
+    /// </summary>
+    public LoopInterventionReason Reason =>
+        Kind == ToolCycleDecisionKind.Correct ? LoopInterventionReason.ActionRecurrence
+        : Progress != RefusedRepeatAction.None ? LoopInterventionReason.FailureBudget
+        : LoopInterventionReason.None;
 }
 
 /// <summary>The response of the turn owner to a refused repeat. See <see cref="TurnStateTracker.EscalatedRefusedRepeat"/>.</summary>
@@ -571,6 +599,19 @@ internal enum RefusedRepeatAction
     /// turn quietly with the text of the model. No error reaches the person.
     /// </summary>
     EndTurn
+}
+
+/// <summary>
+/// Which detector produced an intervention. Tests and telemetry read this to tell a repeated cause from a
+/// generic failure streak. Priority when more than one fires: action recurrence, then failure-cause
+/// recurrence, then the failure budget.
+/// </summary>
+internal enum LoopInterventionReason
+{
+    None,
+    ActionRecurrence,
+    FailureCauseRecurrence,
+    FailureBudget
 }
 
 internal sealed record PreparedToolCycleCall(
@@ -602,6 +643,9 @@ internal readonly record struct ToolCycleResult(
 {
     public bool PendingJob { get; init; }
     public bool Synthetic { get; init; }
+
+    /// <summary>The structured failure cause when the outcome failed. Null means no known cause.</summary>
+    public ToolFailureKey? FailureKey { get; init; }
 
     // A missing path can guide discovery. Give NotFound one half-unit and other failures two half-units.
     // InvalidInput and AccessDenied thus reach advice after four calls; distinct misses need eight.
