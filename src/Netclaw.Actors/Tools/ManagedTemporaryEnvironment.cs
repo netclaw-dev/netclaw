@@ -165,14 +165,16 @@ internal static class ManagedTemporaryEnvironment
     /// link, owned by the daemon user, no group or other bit). The daemon calls it at startup.
     /// </summary>
     /// <returns><c>null</c> when the shell launch would accept the base; otherwise its reason.</returns>
-    internal static string? CheckBase(ManagedTemporaryBase privateBase)
+    internal static ManagedTemporaryBaseRefusal? CheckBase(ManagedTemporaryBase privateBase)
     {
         if (OperatingSystem.IsWindows())
             return null;
 
         try
         {
-            return CreateAndCheckFolder(privateBase.Value, HostManagedTemporaryFolderInspector.Instance);
+            return CreateAndCheckFolder(privateBase.Value, HostManagedTemporaryFolderInspector.Instance) is { } refusal
+                ? new ManagedTemporaryBaseRefusal(refusal, CouldNotUseFilesystem: false)
+                : null;
         }
         catch (Exception ex) when (ex is ArgumentException
                                    or IOException
@@ -180,7 +182,9 @@ internal static class ManagedTemporaryEnvironment
                                    or UnauthorizedAccessException
                                    or System.Security.SecurityException)
         {
-            return $"Error preparing managed temporary directory: {ex.Message}";
+            return new ManagedTemporaryBaseRefusal(
+                $"Error preparing managed temporary directory: {ex.Message}",
+                CouldNotUseFilesystem: true);
         }
     }
 
@@ -205,6 +209,12 @@ internal static class ManagedTemporaryEnvironment
         return null; // the folder passed every check
     }
 }
+
+/// <summary>Why <see cref="ManagedTemporaryEnvironment.CheckBase"/> refused the base.</summary>
+/// <param name="Reason">The refusal text the shell launch would report.</param>
+/// <param name="CouldNotUseFilesystem">True when creating or reaching the folder failed (for example a read-only
+/// filesystem); false when the folder exists but is a link, has another owner, or allows group or other access.</param>
+internal sealed record ManagedTemporaryBaseRefusal(string Reason, bool CouldNotUseFilesystem);
 
 /// <summary>
 /// Reads the facts of one folder without following a link at the final path segment

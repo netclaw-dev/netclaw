@@ -45,6 +45,9 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
         Assert.NotNull(state.Problem);
         Assert.Contains(folder, state.Problem);
         Assert.Contains("tmpfs", state.Problem);
+        // One sentence for the reason, then the hint; the path appears once.
+        Assert.Contains(". Mount a writable tmpfs", state.Problem);
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Count(state.Problem, System.Text.RegularExpressions.Regex.Escape(folder)));
     }
 
     [Fact]
@@ -117,18 +120,21 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
     }
 
     [Fact]
-    public void Probe_agrees_with_the_shell_checks_and_never_writes_through_a_planted_link()
+    public void Probe_refuses_a_world_writable_base_so_a_planted_link_inside_it_is_never_reached()
     {
         if (OperatingSystem.IsWindows())
             return;
 
         var folder = Path.Combine(_root, "netclaw-1000");
-        Directory.CreateDirectory(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Directory.CreateDirectory(folder);
+        File.SetUnixFileMode(folder, (UnixFileMode)0x1FF);
         var victim = Path.Combine(_root, "victim.txt");
         File.WriteAllText(victim, "precious");
         File.CreateSymbolicLink(Path.Combine(folder, $".probe-{Environment.ProcessId}"), victim);
 
-        AssertParity(folder, expected: true);
+        // The shell refuses a base that others can write to, so the probe stops at the base check
+        // before it creates anything; the link planted in it is not followed.
+        AssertParity(folder, expected: false);
 
         Assert.Equal("precious", File.ReadAllText(victim));
     }

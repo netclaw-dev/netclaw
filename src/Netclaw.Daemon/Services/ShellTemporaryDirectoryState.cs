@@ -28,11 +28,10 @@ internal sealed record ShellTemporaryDirectoryState(string? Problem)
         // passes only where the shell would.
         if (ManagedTemporaryEnvironment.CheckBase(privateBase.Base) is { } refusal)
         {
-            // Only a failed create is a filesystem problem a tmpfs fixes; a link, owner or mode refusal is not.
-            var hint = refusal.StartsWith("Error preparing", StringComparison.Ordinal)
-                ? " Mount a writable tmpfs at /tmp (docker run --tmpfs /tmp)."
-                : string.Empty;
-            return new ShellTemporaryDirectoryState($"Shell commands cannot use their temporary folder '{folder}'. {refusal}{hint}");
+            // A tmpfs only fixes a filesystem that cannot be used; a link, owner or mode refusal is not that.
+            return new ShellTemporaryDirectoryState(
+                $"Shell commands cannot use their temporary folder. {WithPeriod(refusal.Reason)}"
+                + (refusal.CouldNotUseFilesystem ? TmpfsHint : string.Empty));
         }
 
         try
@@ -50,8 +49,11 @@ internal sealed record ShellTemporaryDirectoryState(string? Problem)
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
             return new ShellTemporaryDirectoryState(
-                $"Shell commands cannot create temporary files in '{folder}': {ex.Message}. "
-                + "Mount a writable tmpfs at /tmp (docker run --tmpfs /tmp).");
+                $"Shell commands cannot create temporary files in '{folder}': {WithPeriod(ex.Message)}{TmpfsHint}");
         }
     }
+
+    private const string TmpfsHint = " Mount a writable tmpfs at /tmp (docker run --tmpfs /tmp).";
+
+    private static string WithPeriod(string text) => text.EndsWith('.') ? text : text + ".";
 }
