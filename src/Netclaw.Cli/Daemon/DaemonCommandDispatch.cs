@@ -52,7 +52,7 @@ internal static class DaemonCommandDispatch
             ? $" (PID {pid}{(status.Uptime is { } uptime ? $", uptime {uptime}" : "")})"
             : "";
         var cause = string.IsNullOrEmpty(reason)
-            ? "The local configuration (netclaw.json or NETCLAW_* settings) is unreadable or invalid. Repair it and retry."
+            ? "The local configuration (netclaw.json, secrets.json or NETCLAW_* settings) is unreadable or invalid. Repair it and retry."
             : $"{reason} {fix}".TrimEnd();
         return $"Daemon process is running{who}, but its address cannot be determined, so readiness was not checked. {cause}"
                + (status.Pid is null ? " The PID file is missing; the daemon will self-terminate shortly." : "");
