@@ -96,7 +96,11 @@ public sealed class LongCommandCorrectionTests(ShellApprovalMatrixFixture fixtur
             corrected ? ApprovalOutcome.RequiresAgentCorrection : ApprovalOutcome.RequiresApproval,
             observed.Outcome);
         if (!corrected)
+        {
             Assert.Equal(WriteNote(length), observed.Prompt!.DisplayText);
+            // The command fills the limit, so the command keeps priority and the notes drop.
+            Assert.Null(observed.Prompt.Notes);
+        }
     }
 
     // The agent moved the body to a file. The short command gets a normal prompt.
@@ -109,8 +113,8 @@ public sealed class LongCommandCorrectionTests(ShellApprovalMatrixFixture fixtur
         var observed = await harness.EvaluateShellAsync("cat body.txt > " + Note, Ct);
 
         Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
-        Assert.Equal("cat body.txt > " + Note
-            + "\n\nReusable grants cover the command words shown above within the selected scope.", observed.Prompt!.DisplayText);
+        Assert.Equal("cat body.txt > " + Note, observed.Prompt!.DisplayText);
+        Assert.Equal("Reusable grants cover the command words shown above within the selected scope.", observed.Prompt.Notes);
     }
 
     // The threshold must not add friction to a call that needs no prompt.

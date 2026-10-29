@@ -273,7 +273,8 @@ public partial class ChatViewModel : ReactiveViewModel
             : string.Empty;
 
         var prefix = interaction.ToolName.IsMcp ? "Invocation: " : string.Empty;
-        var fullBody = $"{prefix}{interaction.DisplayText}{patterns}";
+        var notes = string.IsNullOrEmpty(interaction.Notes) ? string.Empty : "\n\n" + interaction.Notes;
+        var fullBody = $"{prefix}{interaction.DisplayText}{notes}{patterns}";
 
         if (IsApprovalDetailVisible.Value)
             return Netclaw.Channels.ApprovalDisplayTextFormatter.Truncate(fullBody, MaxExpandedApprovalBodyChars);

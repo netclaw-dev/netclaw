@@ -83,6 +83,9 @@ internal sealed record ApprovalPromptObservation(
     /// <summary>The command text that a channel shows to the operator.</summary>
     public string DisplayText { get; init; } = string.Empty;
 
+    /// <summary>The grant-scope notes that a channel shows beside the command, outside its code span.</summary>
+    public string? Notes { get; init; }
+
     /// <summary>The patterns that a channel lists when the prompt has no candidate verb.</summary>
     public IReadOnlyList<string> Patterns { get; init; } = [];
 
@@ -797,6 +800,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             approvalContext.Options.Select(option => option.Key.Value).ToList())
         {
             DisplayText = approvalContext.DisplayText,
+            Notes = approvalContext.Notes,
             Patterns = approvalContext.Patterns,
             OptionLabels = approvalContext.Options.Select(option => option.Label).ToList(),
             CandidateDirectories = approvalContext.Candidates?

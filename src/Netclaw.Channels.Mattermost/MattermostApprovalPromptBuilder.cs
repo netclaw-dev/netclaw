@@ -213,6 +213,11 @@ internal static class MattermostApprovalPromptBuilder
         sb.Append(request.ToolName.IsMcp ? "**Invocation:** `" : "**Action:** `")
             .Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
 
+        // The notes help the decision, so only the open prompt shows them. They sit on their own
+        // lines, outside the code span that holds the command.
+        if (includeApprovalQuestion && !string.IsNullOrEmpty(request.Notes))
+            sb.AppendLine(request.Notes);
+
         if (request.ToolName.IsMcp && includeApprovalQuestion)
         {
             sb.AppendLine("**Allow this MCP tool invocation?**");

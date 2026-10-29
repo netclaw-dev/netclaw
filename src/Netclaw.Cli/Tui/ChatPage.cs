@@ -466,6 +466,12 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 _chatHistory.AppendLine(
                     msg.ToolName.IsMcp ? $"  Invocation: {msg.DisplayText}" : $"  {msg.DisplayText}",
                     Color.White);
+                if (!string.IsNullOrEmpty(msg.Notes))
+                {
+                    foreach (var note in msg.Notes.Split('\n'))
+                        _chatHistory.AppendLine($"  {note}", Color.BrightBlack);
+                }
+
                 if (!msg.ToolName.IsMcp && msg.Patterns.Count > 0)
                     _chatHistory.AppendLine($"  Patterns: {string.Join(", ", msg.Patterns)}", Color.BrightBlack);
                 _chatHistory.AppendLine($"  Options: {string.Join(", ", msg.Options.Select(o => o.Label))}", Color.Yellow);

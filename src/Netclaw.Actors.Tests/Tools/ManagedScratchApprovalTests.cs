@@ -160,9 +160,10 @@ public sealed class ManagedScratchApprovalTests(ShellApprovalMatrixFixture fixtu
         var project = InitializeRepository(root.Path);
         await using var harness = await CreateHarnessAsync(root.Path, project, "reach", ToolApprovalMode.Auto, ToolApprovalMode.Approval);
         var bare = await harness.EvaluateShellDecisionAsync("uv --version", Ct);
-        Assert.Contains("does not cover subcommands", bare.ApprovalContext!.DisplayText, StringComparison.Ordinal);
+        Assert.Contains("does not cover subcommands", bare.ApprovalContext!.Notes, StringComparison.Ordinal);
+        Assert.Equal("uv --version", bare.ApprovalContext!.DisplayText);
         var mismatch = await harness.EvaluateShellDecisionAsync("uv run pytest", Ct);
-        Assert.Contains("different command words", mismatch.ApprovalContext!.DisplayText, StringComparison.Ordinal);
+        Assert.Contains("different command words", mismatch.ApprovalContext!.Notes, StringComparison.Ordinal);
         Assert.Equal(["uv", "run", "pytest"], Assert.Single(mismatch.ApprovalContext!.Candidates!).VerbTokens);
     }
 

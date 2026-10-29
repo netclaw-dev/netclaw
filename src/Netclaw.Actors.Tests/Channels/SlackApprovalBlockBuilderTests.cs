@@ -499,4 +499,42 @@ public sealed class SlackApprovalBlockBuilderTests
         Assert.Contains(sections, section => section.Contains("You can also reply with", StringComparison.Ordinal));
         Assert.Contains(blocks, block => block is ActionsBlock);
     }
+
+    private const string ScopeNote = "Reusable grants cover the command words shown above within the selected scope.";
+
+    private static ToolInteractionRequest ShellRequestWithNotes()
+        => new()
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId("call-notes"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+            DisplayText = "git push origin main",
+            Notes = ScopeNote,
+            Patterns = ["git push origin main"],
+            CandidateVerbs = ["git push origin main"],
+            Options = [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+
+    [Fact]
+    public void Approval_text_keeps_the_command_in_its_own_code_span_and_the_notes_outside_it()
+    {
+        var text = SlackApprovalBlockBuilder.BuildApprovalText(ShellRequestWithNotes());
+
+        Assert.Contains("> `shell_execute`: `git push origin main`\n" + ScopeNote + "\n", text);
+    }
+
+    [Fact]
+    public void Approval_blocks_put_the_notes_in_their_own_section_after_the_command()
+    {
+        var blocks = SlackApprovalBlockBuilder.BuildApprovalBlocks(ShellRequestWithNotes());
+
+        var sections = blocks.OfType<SectionBlock>().Select(static block => ((Markdown)block.Text).Text).ToList();
+        Assert.Contains("*Tool:* `shell_execute`\n*Request:* `git push origin main`", sections);
+        Assert.Equal(ScopeNote, sections[sections.IndexOf("*Tool:* `shell_execute`\n*Request:* `git push origin main`") + 1]);
+    }
 }

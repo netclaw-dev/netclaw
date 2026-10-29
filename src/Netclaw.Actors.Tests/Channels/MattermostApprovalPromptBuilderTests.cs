@@ -583,4 +583,55 @@ public sealed class MattermostApprovalPromptBuilderTests
         Assert.Contains("reply with", attachment.Fallback ?? string.Empty, StringComparison.Ordinal);
         Assert.True(attachment.Actions is { Count: > 0 });
     }
+
+    private const string ScopeNote = "Reusable grants cover the command words shown above within the selected scope.";
+
+    private static ToolInteractionRequest ShellRequestWithNotes()
+        => new()
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId("call-notes"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+            DisplayText = "git push origin main",
+            Notes = ScopeNote,
+            Patterns = ["git push origin main"],
+            CandidateVerbs = ["git push origin main"],
+            Options = [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+
+    [Fact]
+    public void Button_prompt_keeps_the_command_in_its_own_code_span_and_the_notes_outside_it()
+    {
+        var (text, _) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            ShellRequestWithNotes(), "https://cb", "chan", "root", "corr");
+
+        Assert.Contains(
+            "**Action:** `git push origin main`\n" + ScopeNote + "\n**Pattern:** `git push origin main`",
+            text.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void Text_prompt_keeps_the_command_in_its_own_code_span_and_the_notes_outside_it()
+    {
+        var text = MattermostApprovalPromptBuilder.BuildTextPrompt(ShellRequestWithNotes());
+
+        Assert.Contains(
+            "**Action:** `git push origin main`\n" + ScopeNote + "\n**Pattern:** `git push origin main`",
+            text.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void Resolved_post_shows_the_command_without_the_notes()
+    {
+        var text = MattermostApprovalPromptBuilder.BuildResolvedPromptText(
+            ShellRequestWithNotes(), ApprovalOptionKeys.ApproveOnce, "alice");
+
+        Assert.Contains("**Action:** `git push origin main`", text);
+        Assert.DoesNotContain(ScopeNote, text);
+    }
 }

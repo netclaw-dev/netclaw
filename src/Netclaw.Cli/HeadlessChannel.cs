@@ -487,6 +487,8 @@ public sealed class HeadlessChannel : IChannel
                 _shownPrompts.Add(msg.CallId);
                 if (!_jsonOutput)
                     Console.WriteLine($"[approval:waiting] {msg.ToolName}: {SingleLine(msg.DisplayText)}");
+                if (!_jsonOutput && !string.IsNullOrEmpty(msg.Notes))
+                    Console.WriteLine($"[approval:note] {SingleLine(msg.Notes)}");
                 Log(log, $"APPROVAL_WAITING: tool={msg.ToolName}");
                 break;
 

@@ -45,9 +45,14 @@ internal static class SlackApprovalBlockBuilder
         var lines = new List<string>
         {
             $":lock: *{ApprovalTitle(request.ToolName)}*",
-            $"> `{request.ToolName}`: `{ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)}`",
-            BuildApproveHeader(request)
+            $"> `{request.ToolName}`: `{ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)}`"
         };
+
+        // Plain text on its own lines, outside the code span that holds the command.
+        if (!string.IsNullOrEmpty(request.Notes))
+            lines.Add(EscapeMarkdown(request.Notes));
+
+        lines.Add(BuildApproveHeader(request));
 
         var verbs = ResolveDisplayVerbs(request);
         if (!request.ToolName.IsMcp && verbs.Count > 1)
@@ -82,9 +87,13 @@ internal static class SlackApprovalBlockBuilder
             Section(
                 $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
                 + $"*{RequestLabel(request.ToolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`",
-                expand: true),
-            Section($"*{EscapeMarkdown(BuildApproveHeader(request))}*")
+                expand: true)
         };
+
+        if (!string.IsNullOrEmpty(request.Notes))
+            blocks.Add(Section(EscapeMarkdown(request.Notes)));
+
+        blocks.Add(Section($"*{EscapeMarkdown(BuildApproveHeader(request))}*"));
 
         var verbs = ResolveDisplayVerbs(request);
         if (!request.ToolName.IsMcp && verbs.Count > 1)

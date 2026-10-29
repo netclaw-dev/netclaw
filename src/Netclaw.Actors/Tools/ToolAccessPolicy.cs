@@ -1796,6 +1796,12 @@ public sealed record ToolApprovalContext(
 {
     internal string? ShellSourceKey { get; init; }
 
+    /// <summary>
+    /// Grant-scope and near-miss notes for the prompt, one per line. Shown beside the command, never
+    /// inside it: <see cref="DisplayText"/> stays the command. Null when there is nothing to add.
+    /// </summary>
+    internal string? Notes { get; init; }
+
     internal bool IsManagedTemporaryRetry { get; init; }
 
     internal string? ManagedTemporaryDirectory { get; init; }

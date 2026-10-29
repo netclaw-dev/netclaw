@@ -121,6 +121,7 @@ public sealed record SessionOutputDto
     // Tool Interaction
     public string? InteractionKind { get; init; }
     public string? InteractionDisplayText { get; init; }
+    public string? InteractionNotes { get; init; }
     public string? RequesterSenderId { get; init; }
     public List<string>? InteractionPatterns { get; init; }
     public List<string>? InteractionCandidateVerbs { get; init; }

@@ -456,9 +456,12 @@ internal sealed class ShellPolicyCoordinator(
         // The full command keeps priority over annotations at the existing channel limit.
         while (notes.Count > 0)
         {
-            var display = request.DisplayText + "\n\n" + string.Join("\n", notes);
-            if (display.Length <= ApprovalOptionKeys.MaxCommandTextChars)
-                return request with { DisplayText = display };
+            // The notes travel in Notes, never in DisplayText: the command stays the command
+            // everywhere it is shown or matched. Count the separator the surfaces that print
+            // both put between them, so the budget stays the one that sized the prompts.
+            var joined = string.Join("\n", notes);
+            if (request.DisplayText.Length + 2 + joined.Length <= ApprovalOptionKeys.MaxCommandTextChars)
+                return request with { Notes = joined };
             notes.RemoveAt(notes.Count - 1);
         }
 

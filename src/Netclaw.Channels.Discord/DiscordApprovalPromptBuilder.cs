@@ -48,6 +48,8 @@ internal static class DiscordApprovalPromptBuilder
         sb.Append("Tool: ").AppendLine(ToolNameText(request.ToolName.Value));
         sb.Append(request.ToolName.IsMcp ? "Invocation: " : "Action: ")
             .AppendLine(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars));
+        if (!string.IsNullOrEmpty(request.Notes))
+            sb.AppendLine(request.Notes);
         sb.AppendLine(BuildApproveHeader(request));
 
         var verbs = ResolveDisplayVerbs(request);
@@ -201,6 +203,9 @@ internal static class DiscordApprovalPromptBuilder
         sb.Append("**Tool:** `").Append(ToolNameText(request.ToolName.Value)).AppendLine("`");
         sb.Append(request.ToolName.IsMcp ? "**Invocation:** `" : "**Action:** `")
             .Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
+        // Plain text on its own lines, outside the code span that holds the command.
+        if (!string.IsNullOrEmpty(request.Notes))
+            sb.AppendLine(request.Notes);
         sb.Append("**").Append(BuildApproveHeader(request)).AppendLine("**");
 
         var verbs = ResolveDisplayVerbs(request);

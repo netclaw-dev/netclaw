@@ -194,6 +194,7 @@ internal sealed class ApprovalRequestBuilder
             AuthorizationAttemptId = request.AuthorizationAttemptId.Value,
             ToolName = new ToolName(approval.ToolName),
             DisplayText = approval.DisplayText,
+            Notes = approval.Notes,
             RequesterSenderId = _requesterSenderId,
             RequesterPrincipal = _requesterPrincipal,
             HasAdoptedContext = _hasAdoptedContext,

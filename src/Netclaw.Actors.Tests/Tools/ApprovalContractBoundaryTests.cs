@@ -500,8 +500,8 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
             Ct);
 
         Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
-        Assert.Equal("freshdesk ticket reply 605 --message (2 lines, 42 chars)\n\n"
-            + "Reusable grants cover the command words shown above within the selected scope.", observed.Prompt!.DisplayText);
+        Assert.Equal("freshdesk ticket reply 605 --message (2 lines, 42 chars)", observed.Prompt!.DisplayText);
+        Assert.Equal("Reusable grants cover the command words shown above within the selected scope.", observed.Prompt.Notes);
     }
 
     // ── 3 (continued). Home expansion, custom workspaces, and no trusted roots ──

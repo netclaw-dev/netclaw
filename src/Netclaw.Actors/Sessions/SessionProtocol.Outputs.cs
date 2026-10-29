@@ -416,6 +416,13 @@ public static partial class SessionProtocol
         public required string DisplayText { get; init; }
 
         /// <summary>
+        /// Plain-text notes about the request (for shell, what a reusable grant covers and why an
+        /// existing grant missed), one per line. Renderers show them outside the code span that holds
+        /// <see cref="DisplayText"/>. Null when there are none.
+        /// </summary>
+        public string? Notes { get; init; }
+
+        /// <summary>
         /// Identity of the user who initiated the turn that triggered this request.
         /// Channels can use this to ensure responses are routed for the correct user.
         /// </summary>

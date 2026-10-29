@@ -43,9 +43,9 @@ public sealed class QuotedProgramWordApprovalTests(ShellApprovalMatrixFixture fi
         Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
         var prompt = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);
         Assert.Equal([shownVerb], prompt.CandidateVerbs);
-        Assert.Equal(command
-            + "\n\nReusable grants cover the command words shown above within the selected scope."
-            + "\nA one-word program grant covers that program word only. It does not cover subcommands.", prompt.DisplayText);
+        Assert.Equal(command, prompt.DisplayText);
+        Assert.Equal("Reusable grants cover the command words shown above within the selected scope."
+            + "\nA one-word program grant covers that program word only. It does not cover subcommands.", prompt.Notes);
         Assert.False(prompt.IsMessy);
         Assert.Contains(ObservedOptionKeys.ApproveEverywhere, prompt.OptionKeys);
     }

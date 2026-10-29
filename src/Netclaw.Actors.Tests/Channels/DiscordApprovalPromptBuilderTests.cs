@@ -627,4 +627,52 @@ public sealed class DiscordApprovalPromptBuilderTests
         Assert.Contains("You can also reply with", text, StringComparison.Ordinal);
         Assert.NotEmpty(buttons);
     }
+
+    private const string ScopeNote = "Reusable grants cover the command words shown above within the selected scope.";
+
+    private static ToolInteractionRequest ShellRequestWithNotes()
+        => new()
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId("call-notes"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+            DisplayText = "git push origin main",
+            Notes = ScopeNote,
+            Patterns = ["git push origin main"],
+            CandidateVerbs = ["git push origin main"],
+            Options = [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+
+    [Fact]
+    public void Button_prompt_keeps_the_command_in_its_own_code_span_and_the_notes_outside_it()
+    {
+        var (text, _) = DiscordApprovalPromptBuilder.BuildButtonPrompt(ShellRequestWithNotes());
+
+        Assert.Contains(
+            "**Action:** `git push origin main`\n" + ScopeNote + "\n**",
+            text.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void Text_prompt_shows_the_notes_on_their_own_line_after_the_command()
+    {
+        var text = DiscordApprovalPromptBuilder.BuildTextPrompt(ShellRequestWithNotes());
+
+        Assert.Contains("Action: git push origin main\n" + ScopeNote + "\n", text.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void Resolved_post_shows_the_command_without_the_notes()
+    {
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
+            ShellRequestWithNotes(), ApprovalOptionKeys.ApproveOnce, "123");
+
+        Assert.Contains("**Action:** `git push origin main`", text);
+        Assert.DoesNotContain(ScopeNote, text);
+    }
 }
