@@ -24,6 +24,7 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
 
     [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
         Skip = "The private temporary base exists only on POSIX hosts")]
+    [SlopwatchSuppress("SW001", "The private temporary base exists only on POSIX hosts.")]
     public void Writable_base_reports_no_problem_and_leaves_no_probe_file()
     {
         var folder = Path.Combine(_root, "netclaw-1000");
@@ -36,6 +37,7 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
 
     [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
         Skip = "The private temporary base exists only on POSIX hosts")]
+    [SlopwatchSuppress("SW001", "The private temporary base exists only on POSIX hosts.")]
     public void Unwritable_base_names_the_path_and_the_fix()
     {
         // A regular file in the way makes directory creation fail on any filesystem, including as root.
@@ -57,6 +59,7 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
 
     [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsWindows),
         Skip = "Windows-only: the POSIX base is not used there")]
+    [SlopwatchSuppress("SW001", "The POSIX temporary base is not used on Windows, so this runs only there.")]
     public void Windows_reports_no_problem_and_creates_no_folder()
     {
         var folder = Path.Combine(_root, "netclaw-1000");

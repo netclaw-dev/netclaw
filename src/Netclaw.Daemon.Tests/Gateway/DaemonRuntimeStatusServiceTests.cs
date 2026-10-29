@@ -156,6 +156,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
 
     [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
         Skip = "The private temporary base exists only on POSIX hosts")]
+    [SlopwatchSuppress("SW001", "The private temporary base exists only on POSIX hosts.")]
     public async Task ShellTemporaryDirectory_IsDegradedWhileUnwritableAndHealthyOnceFixedWithoutRestart()
     {
         // A regular file in the way stops the base from being created, even as root.
