@@ -247,11 +247,11 @@ public sealed class ToolConfig
         profile.AllowedTools = [.. ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(audience)];
     }
 
+    internal const string EmptyListWarningSuffix = "is null or an empty object; treating it as an empty list.";
+
     // Every list in ToolConfig that has default items. Each one is an allow list, so null and
     // {} can safely mean "empty". ToolConfigBindingTests fails when a new list with default
     // items appears, which forces a review of that list and a new row here.
-    internal const string EmptyListWarningSuffix = "is null or an empty object; treating it as an empty list.";
-
     internal static IReadOnlyList<IDefaultedList> DefaultedLists { get; } =
     [
         new DefaultedList<string>("AudienceProfiles:Public:AllowedTools", c => c.AudienceProfiles.Public.AllowedTools, (c, v) => c.AudienceProfiles.Public.AllowedTools = v),
