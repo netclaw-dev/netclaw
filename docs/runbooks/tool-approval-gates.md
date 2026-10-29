@@ -202,15 +202,13 @@ A subagent (child) prompt is different:
 - A text reply such as "A" answers nothing while a child prompt is among two or
   more prompts that you can answer. Netclaw replies "N approval prompts are
   open. Use the buttons on the prompt you mean."
-- A cancel, the end of the child, a lost child, a restart before the child
-  parks, or a channel that cannot show the prompt withdraws it. The prompt then shows the reason, for
-  example "This approval request was withdrawn because the task that asked
+- A cancel, the end of the child, a lost child, or a channel that cannot show
+  the prompt withdraws it. The prompt then shows the reason, for example "This approval request was withdrawn because the task that asked
   for it was cancelled. Nothing ran." A later click gets the same text.
 - When you answer it in one client, the prompt in every other client shows
   "This approval request has an answer."
-- A parked child's prompt survives a restart, and the child resumes after the
-  last answer. A restart withdraws only the prompt of a child that had not
-  parked yet.
+- It survives a restart, and the child resumes after the last answer. A prompt
+  that an earlier version left open is withdrawn at the upgrade restart.
 
 ## What runs without a prompt
 
@@ -582,8 +580,7 @@ A: Yes. Add the tool to `ToolOverrides`:
 
 **Q: What happens if I do not answer a prompt?**
 A: The call waits. No timer denies it. Your answer still works after a daemon
-restart, except for a subagent prompt. A restart withdraws a subagent prompt,
-and the prompt shows the reason.
+restart, also for a subagent prompt.
 
 **Q: Can I approve common commands in advance?**
 A: Yes. Use `netclaw approvals trust-verb`, or choose a saved-grant option in a

@@ -361,16 +361,17 @@ Counterexample: The parent does not search a global log tree for the child.
 
 If a subagent hits an approval-gated tool, the prompt is routed through the
 parent session's approval channel and requester context. Human approval time does
-not count as subagent inactivity; the watchdogs resume after the approval wait
-settles. If no parent approval bridge
-is available (an unattended parent), the authorizer denies the gated tool with
+not count as subagent inactivity: the child parks and stops while it waits. If
+no parent approval bridge is available (an unattended parent), the authorizer denies the gated tool with
 `approval_required_unattended`. The tool does not run, and the subagent gets the
 denial as a tool result (decision D2). If the bridge has no requester
 authority context, the gated tool fails closed as a failed subagent run and is
-not executed. A parked child survives a daemon restart, a crash, or passivation of the
-parent session: its prompts stay live, and the child resumes after the last
-answer. A restart withdraws the prompt of a run that had not parked yet, with
-"Netclaw restarted before the task finished."
+not executed. A parked child survives a daemon restart, a crash, or passivation
+of the parent session: its prompts stay live, and the child resumes after the
+last answer. A child prompt shows only after the park is in the run record, so a
+restart does not withdraw it. A prompt that an earlier version left open is
+withdrawn at the upgrade restart: "This approval request was withdrawn because
+Netclaw restarted before the task finished. Nothing ran."
 
 ## Built-in agents
 
