@@ -202,13 +202,15 @@ A subagent (child) prompt is different:
 - A text reply such as "A" answers nothing while a child prompt is among two or
   more prompts that you can answer. Netclaw replies "N approval prompts are
   open. Use the buttons on the prompt you mean."
-- A cancel, the end of the child, a lost child, a restart, or a channel that
-  cannot show the prompt withdraws it. The prompt then shows the reason, for
+- A cancel, the end of the child, a lost child, a restart before the child
+  parks, or a channel that cannot show the prompt withdraws it. The prompt then shows the reason, for
   example "This approval request was withdrawn because the task that asked
   for it was cancelled. Nothing ran." A later click gets the same text.
 - When you answer it in one client, the prompt in every other client shows
   "This approval request has an answer."
-- It does not survive a restart. Netclaw withdraws it.
+- A parked child's prompt survives a restart, and the child resumes after the
+  last answer. A restart withdraws only the prompt of a child that had not
+  parked yet.
 
 ## What runs without a prompt
 
