@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -48,21 +49,59 @@ public sealed class SkillCommandProcessTests : IDisposable
         await app.StartAsync(TestContext.Current.CancellationToken);
         var endpoint = app.Urls.Single();
 
-        var shown = await RunAsync(paths, endpoint, "show");
+        var shown = await RunAsync(paths, endpoint, ["show", "local-proof"]);
 
         Assert.Equal(0, shown.ExitCode);
         Assert.Contains("# Process proof", shown.Output);
         Assert.Equal(1, Volatile.Read(ref requests));
         Assert.True(Directory.Exists(skillDirectory));
 
-        var removed = await RunAsync(paths, endpoint, "remove");
+        var removed = await RunAsync(paths, endpoint, ["remove", "local-proof"]);
 
         Assert.Equal(0, removed.ExitCode);
         Assert.Equal(2, Volatile.Read(ref requests));
         Assert.False(Directory.Exists(skillDirectory));
     }
 
-    private async Task<(int ExitCode, string Output)> RunAsync(NetclawPaths paths, string endpoint, string verb)
+    [Fact]
+    public async Task Offline_search_uses_both_config_sections_and_the_shared_source_labels()
+    {
+        var paths = new NetclawPaths(_directory.Path);
+        paths.EnsureDirectoriesExist();
+        var externalRoot = Path.Combine(_directory.Path, "external");
+        WriteSkill(paths.SkillsDirectory, "local-proof");
+        WriteSkill(paths.SystemSkillsDirectory, "system-proof");
+        WriteSkill(paths.ServerFeedDirectory("team"), "feed-proof");
+        WriteSkill(externalRoot, "external-proof");
+        File.WriteAllText(paths.NetclawConfigPath, JsonSerializer.Serialize(new
+        {
+            SkillFeeds = new SkillFeedsConfig
+            {
+                Feeds = [new SkillFeedSource { Name = "team", Url = "https://skills.example" }],
+            },
+            ExternalSkills = new ExternalSkillsConfig
+            {
+                Sources = [new ExternalSkillSource { Name = "external", Path = externalRoot }],
+            },
+        }));
+
+        var result = await RunAsync(paths, "http://127.0.0.1:1", ["search", "proof"]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Matches(@"(?m)^local-proof\s+native\s+", result.Output);
+        Assert.Matches(@"(?m)^system-proof\s+system\s+", result.Output);
+        Assert.Matches(@"(?m)^feed-proof\s+server-feed\s+", result.Output);
+        Assert.Matches(@"(?m)^external-proof\s+external\s+", result.Output);
+    }
+
+    private static void WriteSkill(string parent, string name)
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(parent, name)).FullName;
+        File.WriteAllText(Path.Combine(directory, "SKILL.md"),
+            $"---\nname: {name}\ndescription: A source discovery proof.\nversion: 1.0.0\n---\n# Proof\n");
+    }
+
+    private async Task<(int ExitCode, string Output)> RunAsync(NetclawPaths paths, string endpoint, string[] arguments)
     {
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
@@ -72,7 +111,7 @@ public sealed class SkillCommandProcessTests : IDisposable
             WorkingDirectory = _directory.Path,
         };
         start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "netclaw.dll"));
-        foreach (var arg in new[] { "skill", verb, "local-proof" })
+        foreach (var arg in new[] { "skill" }.Concat(arguments))
             start.ArgumentList.Add(arg);
         foreach (var name in start.Environment.Keys.Where(name => name.StartsWith("NETCLAW_", StringComparison.OrdinalIgnoreCase)).ToArray())
             start.Environment.Remove(name);

@@ -298,43 +298,9 @@ internal static class SkillCommand
             return 1;
         }
 
-        SkillInventory.Detail? detail;
-        var hint = "Start it with `netclaw daemon start`.";
-
-        try
-        {
-            detail = await daemonApi.GetSkillAsync(name);
-        }
-        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
-        {
-            // The daemon is up but predates the detail route.
-            output.WriteLine($"Skill show unavailable: the daemon at {daemonApi.Endpoint} does not serve /api/skills/{{name}} yet.");
-            output.WriteLine("Restart the daemon so it matches this CLI version.");
-            return 1;
-        }
-        catch (HttpRequestException ex)
-        {
-            output.WriteLine($"Skill show unavailable: could not reach the daemon at {daemonApi.Endpoint} ({ex.Message}).");
-            output.WriteLine(hint);
-            return 1;
-        }
-        catch (OperationCanceledException)
-        {
-            output.WriteLine($"Skill show unavailable: the daemon at {daemonApi.Endpoint} timed out.");
-            output.WriteLine(hint);
-            return 1;
-        }
-        catch (JsonException)
-        {
-            output.WriteLine($"Skill show failed: the daemon at {daemonApi.Endpoint} returned an unreadable skill.");
-            return 1;
-        }
-
+        var detail = await GetSkillOrReportAsync(daemonApi, name, "show", output);
         if (detail is null)
-        {
-            Console.Error.WriteLine($"[FAIL] skill '{name}' not found.");
             return 1;
-        }
 
         var skill = detail.Skill;
         output.WriteLine($"Name:        {skill.Name}");
@@ -448,65 +414,31 @@ internal static class SkillCommand
             return 1;
         }
 
-        SkillInventory.Detail? detail;
-        try
+        // A remote registry owns remote paths. It cannot authorize a local delete.
+        var localEndpoint = daemonApi.LocalControlEndpoint;
+        if (!Uri.TryCreate(localEndpoint, UriKind.Absolute, out var localUri) || !localUri.IsLoopback
+            || !string.Equals(daemonApi.Endpoint, localEndpoint, StringComparison.OrdinalIgnoreCase))
         {
-            // A remote registry owns remote paths. It cannot authorize a local delete.
-            var localEndpoint = daemonApi.LocalControlEndpoint;
-            if (!Uri.TryCreate(localEndpoint, UriKind.Absolute, out var localUri) || !localUri.IsLoopback
-                || !string.Equals(daemonApi.Endpoint, localEndpoint, StringComparison.OrdinalIgnoreCase))
-            {
-                output.WriteLine($"Skill remove requires the local daemon at {localEndpoint}.");
-                output.WriteLine("Run this command on the daemon host or select the local daemon endpoint.");
-                return 1;
-            }
-
-            detail = await daemonApi.GetSkillAsync(name);
-        }
-        catch (HttpRequestException ex)
-        {
-            output.WriteLine($"Skill remove unavailable: could not reach the daemon at {daemonApi.Endpoint} ({ex.Message}).");
-            return 1;
-        }
-        catch (OperationCanceledException)
-        {
-            output.WriteLine($"Skill remove unavailable: the daemon at {daemonApi.Endpoint} timed out.");
-            return 1;
-        }
-        catch (JsonException)
-        {
-            output.WriteLine($"Skill remove failed: the daemon at {daemonApi.Endpoint} returned an unreadable skill.");
+            output.WriteLine($"Skill remove requires the local daemon at {localEndpoint}.");
+            output.WriteLine("Run this command on the daemon host or select the local daemon endpoint.");
             return 1;
         }
 
+        var detail = await GetSkillOrReportAsync(daemonApi, name, "remove", output);
         if (detail is null)
-        {
-            Console.Error.WriteLine($"[FAIL] skill '{name}' not found.");
             return 1;
-        }
 
         var skill = detail.Skill;
-        if (skill.Source is "system")
-        {
-            output.WriteLine($"[FAIL] cannot remove system skill '{name}'. System skills are managed by the daemon.");
-            return 1;
-        }
-
-        if (skill.Source is "server-feed")
-        {
-            output.WriteLine($"[FAIL] cannot remove server-fed skill '{name}'. Its skill server owns it; it returns on the next sync.");
-            return 1;
-        }
-
-        if (skill.Source is "external")
-        {
-            output.WriteLine($"[FAIL] cannot remove external skill '{name}'. Manage it in its source directory.");
-            return 1;
-        }
-
         if (skill.Source is not "native")
         {
-            output.WriteLine($"[FAIL] cannot remove skill '{name}' from source '{skill.Source}'. Only native skills can be removed.");
+            var message = skill.Source switch
+            {
+                "system" => $"cannot remove system skill '{name}'. System skills are managed by the daemon.",
+                "server-feed" => $"cannot remove server-fed skill '{name}'. Its skill server owns it; it returns on the next sync.",
+                "external" => $"cannot remove external skill '{name}'. Manage it in its source directory.",
+                _ => $"cannot remove skill '{name}' from source '{skill.Source}'. Only native skills can be removed.",
+            };
+            output.WriteLine($"[FAIL] {message}");
             return 1;
         }
 
@@ -626,7 +558,7 @@ internal static class SkillCommand
 
         foreach (var skill in matches)
         {
-            var source = ClassifySource(skill, paths);
+            var source = SkillInventory.ToRow(skill, paths).Source;
             var version = skill.Version ?? "-";
             var desc = skill.Description.Length > 60
                 ? skill.Description[..57] + "..."
@@ -810,34 +742,59 @@ internal static class SkillCommand
 
     // ── Helpers ──
 
+    private static async Task<SkillInventory.Detail?> GetSkillOrReportAsync(
+        DaemonApi daemonApi, string name, string operation, TextWriter output)
+    {
+        try
+        {
+            var detail = await daemonApi.GetSkillAsync(name);
+            if (detail is null)
+                Console.Error.WriteLine($"[FAIL] skill '{name}' not found.");
+            return detail;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            output.WriteLine($"Skill {operation} unavailable: the daemon at {daemonApi.Endpoint} does not serve /api/skills/{{name}} yet.");
+            output.WriteLine("Restart the daemon so it matches this CLI version.");
+        }
+        catch (HttpRequestException ex)
+        {
+            output.WriteLine($"Skill {operation} unavailable: could not reach the daemon at {daemonApi.Endpoint} ({ex.Message}).");
+            output.WriteLine("Start it with `netclaw daemon start`.");
+        }
+        catch (OperationCanceledException)
+        {
+            output.WriteLine($"Skill {operation} unavailable: the daemon at {daemonApi.Endpoint} timed out.");
+            output.WriteLine("Start it with `netclaw daemon start`.");
+        }
+        catch (JsonException)
+        {
+            output.WriteLine($"Skill {operation} failed: the daemon at {daemonApi.Endpoint} returned an unreadable skill.");
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Run the full scan (native + external sources) using config from netclaw.json.
     /// </summary>
     private static MergedSkillScanResult ScanAll(NetclawPaths paths)
     {
-        var config = LoadExternalSkillsConfig(paths);
-        var externalSources = config.ResolveEnabledSources();
-        var feedsConfig = LoadSkillFeedsConfig(paths);
+        var configuration = LoadConfiguration(paths);
+        var externalConfig = configuration.GetSection("ExternalSkills").Get<ExternalSkillsConfig>() ?? new ExternalSkillsConfig();
+        var feedsConfig = configuration.GetSection("SkillFeeds").Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
         return SkillScanner.ScanAndMerge(
             paths.SkillsDirectory,
             feedsConfig.ResolveEnabledSources(paths),
-            externalSources);
+            externalConfig.ResolveEnabledSources());
     }
 
-    /// <summary>
-    /// Load the SkillFeeds section from netclaw.json. Server-fed skills live under
-    /// <c>.server-feeds/&lt;feed&gt;/&lt;skill&gt;/</c>, which the native scan cannot reach:
-    /// only a feed directory used as a scan root exposes them as top-level skills.
-    /// Without this tier, offline commands cannot see any server-fed skill.
-    /// </summary>
-    private static SkillFeedsConfig LoadSkillFeedsConfig(NetclawPaths paths)
+    private static IConfigurationRoot LoadConfiguration(NetclawPaths paths)
     {
         var configBuilder = new ConfigurationBuilder();
         if (File.Exists(paths.NetclawConfigPath))
             configBuilder.AddJsonFile(paths.NetclawConfigPath, optional: true);
-        var configuration = configBuilder.Build();
-        return configuration.GetSection("SkillFeeds").Get<SkillFeedsConfig>()
-            ?? new SkillFeedsConfig();
+        return configBuilder.Build();
     }
 
     /// <summary>
@@ -845,10 +802,7 @@ internal static class SkillCommand
     /// </summary>
     private static ExternalSkillsConfig LoadExternalSkillsConfig(NetclawPaths paths)
     {
-        var configBuilder = new ConfigurationBuilder();
-        if (File.Exists(paths.NetclawConfigPath))
-            configBuilder.AddJsonFile(paths.NetclawConfigPath, optional: true);
-        var configuration = configBuilder.Build();
+        var configuration = LoadConfiguration(paths);
         return configuration.GetSection("ExternalSkills").Get<ExternalSkillsConfig>()
             ?? new ExternalSkillsConfig();
     }
@@ -865,29 +819,6 @@ internal static class SkillCommand
         dict["ExternalSkills"] = serialized;
 
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, dict);
-    }
-
-    /// <summary>
-    /// Classify a skill's source for display purposes.
-    /// </summary>
-    private static string ClassifySource(SkillEntry skill, NetclawPaths paths)
-    {
-        var systemPrefix = paths.SkillsDirectory + Path.DirectorySeparatorChar + ".system" + Path.DirectorySeparatorChar;
-        if (skill.FilePath.StartsWith(systemPrefix, StringComparison.OrdinalIgnoreCase))
-            return "system";
-
-        // Checked before the native prefix: a feed skill is still inside the skills
-        // directory, but the daemon owns it. Reporting it as native would let
-        // `skill remove` delete managed feed state.
-        var serverFeedPrefix = paths.ServerFeedsDirectory + Path.DirectorySeparatorChar;
-        if (skill.FilePath.StartsWith(serverFeedPrefix, StringComparison.OrdinalIgnoreCase))
-            return "server-feed";
-
-        var nativePrefix = paths.SkillsDirectory + Path.DirectorySeparatorChar;
-        if (skill.FilePath.StartsWith(nativePrefix, StringComparison.OrdinalIgnoreCase))
-            return "native";
-
-        return "external";
     }
 
     private static int WriteHelp(TextWriter writer)

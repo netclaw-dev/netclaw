@@ -402,8 +402,10 @@ public sealed class SkillCommandTests : IDisposable
         Assert.Equal("/api/skills/git", requested!.AbsolutePath);
     }
 
-    [Fact]
-    public async Task Show_reports_a_name_the_daemon_does_not_know()
+    [Theory]
+    [InlineData("show")]
+    [InlineData("remove")]
+    public async Task Detail_reports_a_name_the_daemon_does_not_know(string operation)
     {
         // The route answers an unknown name with a problem body; the CLI must read that
         // as "not found", not as a missing route.
@@ -415,7 +417,7 @@ public sealed class SkillCommandTests : IDisposable
                 "application/problem+json"),
         });
 
-        var exit = await RunShowAsync(daemonApi, "nope");
+        var exit = await SkillCommand.RunAsync(["skill", operation, "nope"], _paths, daemonApi, _output);
 
         Assert.Equal(1, exit);
         // "[FAIL] skill not found" goes to stderr, which this harness does not capture.
@@ -425,30 +427,57 @@ public sealed class SkillCommandTests : IDisposable
         Assert.Equal(string.Empty, _output.ToString());
     }
 
-    [Fact]
-    public async Task Show_reports_a_daemon_that_predates_the_detail_route()
+    [Theory]
+    [InlineData("show")]
+    [InlineData("remove")]
+    public async Task Detail_reports_a_daemon_that_predates_the_detail_route(string operation)
     {
         // A bare 404 with no body means the route does not exist on this daemon. That is
         // a version mismatch, not a missing skill, and must say so.
         var daemonApi = CreateDaemonApi(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
 
-        var exit = await RunShowAsync(daemonApi, "git");
+        var exit = await SkillCommand.RunAsync(["skill", operation, "git"], _paths, daemonApi, _output);
 
         Assert.Equal(1, exit);
         var text = _output.ToString();
         Assert.Contains("does not serve", text);
+        Assert.Contains("Restart the daemon", text);
+        Assert.DoesNotContain("could not reach", text);
         Assert.DoesNotContain("'git' not found", text);
     }
 
-    [Fact]
-    public async Task Show_reports_daemon_unavailable_without_falling_back_to_disk()
+    [Theory]
+    [InlineData("show")]
+    [InlineData("remove")]
+    public async Task Detail_reports_daemon_unavailable_without_falling_back_to_disk(string operation)
     {
         var daemonApi = CreateDaemonApi(_ => throw new HttpRequestException("connection refused"));
 
-        var exit = await RunShowAsync(daemonApi, "git");
+        var exit = await SkillCommand.RunAsync(["skill", operation, "git"], _paths, daemonApi, _output);
 
         Assert.Equal(1, exit);
         Assert.Contains("unavailable", _output.ToString());
+    }
+
+    [Theory]
+    [InlineData("show", true)]
+    [InlineData("show", false)]
+    [InlineData("remove", true)]
+    [InlineData("remove", false)]
+    public async Task Detail_reports_a_timeout_or_invalid_json_and_preserves_local_files(string operation, bool timeout)
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(_paths.SkillsDirectory, "git")).FullName;
+        var file = Path.Combine(directory, "SKILL.md");
+        File.WriteAllText(file, "# Sentinel");
+        var daemonApi = CreateDaemonApi(_ => timeout
+            ? throw new OperationCanceledException()
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{") });
+
+        var exit = await SkillCommand.RunAsync(["skill", operation, "git"], _paths, daemonApi, _output);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(timeout ? "timed out" : "unreadable skill", _output.ToString());
+        Assert.Equal("# Sentinel", File.ReadAllText(file));
     }
 
     // ── remove ────────────────────────────────────────────────────────
