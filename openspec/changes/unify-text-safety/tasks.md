@@ -22,7 +22,7 @@
 - [x] 2.12 Add the cross-fork regression test (design D5): an MCP result with a presigned URL reaches the model intact, and the same URL is masked in `session.log`. Verify that it passes.
 - [ ] 2.13 Run the benchmark from 2.2 again. Verify that the added cost is within the threshold, and record both results in the PR.
 - [ ] 2.14 Swap in a local daemon build, and exercise an OAuth callback, an MCP failure, and a crash path. Verify that `daemon.log`, `session.log`, and a crash log contain no secrets, and that every line starts with a header or the continuation prefix.
-- [ ] 2.15 Review the focused mutation scope for the wrapper registration. Add a narrow Stryker target if a test kills a specific unsafe mutant. Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify`, and verify that both pass.
+- [x] 2.15 Review the focused mutation scope for the wrapper registration. Add a narrow Stryker target if a test kills a specific unsafe mutant. Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify`, and verify that both pass.
 
 ## 3. Documentation and cleanup
 

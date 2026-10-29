@@ -72,6 +72,7 @@ public static class LoggingRegistrationExtensions
         builder.Services.AddHostedService<SessionLogDispatcherWiringService>();
 
         builder.Logging.SetMinimumLevel(level);
+        // log-redaction-registration:begin
         builder.Services.AddNetclawLogRedaction();
         return level;
     }
@@ -89,6 +90,7 @@ public static class LoggingRegistrationExtensions
                 sp.GetRequiredService<IOptionsMonitor<LoggerFilterOptions>>(),
                 sp.GetService<IOptions<LoggerFactoryOptions>>(),
                 sp.GetService<IExternalScopeProvider>()))));
+        // log-redaction-registration:end
         return services;
     }
 
