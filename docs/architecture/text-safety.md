@@ -158,6 +158,15 @@ no pattern matches.
   as `SessionLogActor.Clip` and `OAuthRefreshGrantHandler` do.
 - Breaks: `SecretOutputRedactor.Redact(TextTruncation.EllipsisAppend(text, 1000))`.
 
+**Redact before you reshape.** The stage finds a secret by its shape, such as
+`password=hunter2`. Text that a call site has already cut into words, joined, or
+reordered no longer has that shape, so the stage cannot find the secret.
+
+- Follows: `SQLiteMemoryRecallCoordinator` logs only the plan words that survive
+  redaction of the text they came from.
+- Breaks: logging `string.Join("|", tokens)` built from user text. A live check
+  found `lexicalTerms=use|password|hunter2` in `daemon.log` this way.
+
 **Do not redact a value that a receiver uses.** Give the receiver the original,
 and give the log its own masked copy.
 
