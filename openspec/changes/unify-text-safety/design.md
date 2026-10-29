@@ -105,8 +105,9 @@ The stage scans the full formatted message, so name-aware patterns such as
 scans each string value and keeps every name. It does not call `IsSecretKey`
 on names.
 
-- Positive example: an attribute `Body` with the value `Bearer abc123` becomes
-  `Bearer ***REDACTED***`.
+- Positive example: an attribute `Body` with the value
+  `Authorization: Bearer abc123` becomes
+  `Authorization: Bearer ***REDACTED***`.
 - Negative example: an attribute `InputTokens` with the value `1234` stays
   `1234`. `IsSecretKey("InputTokens")` returns true, so name-based masking
   would hide usage metrics.
@@ -156,9 +157,10 @@ Alternatives:
 The stage renders `exception.ToString()` and runs `Redact`. If nothing
 changes, it passes the original exception. If something changes, it passes a
 stand-in exception whose message names the original type and contains the
-redacted text. This is today's `RedactForLogging` logic, moved into the
-stage. Then `RedactForLogging` and `RedactedLoggingException` are removed, and
-their 14 call sites log the exception directly.
+redacted text. The stage calls `SecretOutputRedactor.RedactForLogging` for
+this, so the logic stays in one place in `Netclaw.Security`, with its tests.
+Its 14 call sites log the exception directly, because the stage now applies it
+to every record.
 
 ### D8. Text sinks own their record framing
 
@@ -319,7 +321,7 @@ The work ships in two PRs:
 
 Close #2729 and #2731 with a link when PR 2 opens.
 
-Rollback: revert PR 2. The revert restores `RedactForLogging` and its call
+Rollback: revert PR 2. The revert restores the 14 `RedactForLogging` call
 sites. PR 1 changes no behavior, so it can stay.
 
 ## Open Questions

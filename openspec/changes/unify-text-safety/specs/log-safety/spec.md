@@ -78,8 +78,8 @@ through unchanged.
 
 #### Scenario: A secret value in a structured field
 
-- **WHEN** a log record has a structured field `Body` with the value `Bearer abc123`
-- **THEN** the exported field `Body` has the value `Bearer ***REDACTED***`
+- **WHEN** a log record has a structured field `Body` with the value `Authorization: Bearer abc123`
+- **THEN** the exported field `Body` has the value `Authorization: Bearer ***REDACTED***`
 
 #### Scenario: A usage count keeps its value
 
