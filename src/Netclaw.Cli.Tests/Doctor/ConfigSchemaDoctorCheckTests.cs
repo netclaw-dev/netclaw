@@ -940,22 +940,64 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
     }
 
     [Theory]
-    [InlineData("ToolOverrides", "shell_execute")]
-    [InlineData("McpServerDefaults", "notion")]
-    public async Task ReturnsPass_WhenApprovalPolicyMapHasNullValue(string map, string key)
+    [InlineData("ToolOverrides", "shell_execute", "null")]
+    [InlineData("ToolOverrides", "shell_execute", "{}")]
+    [InlineData("ToolOverrides", "shell_execute", "[]")]
+    [InlineData("ToolOverrides", "shell_execute", "\"\"")]
+    [InlineData("McpServerDefaults", "notion", "null")]
+    [InlineData("McpServerDefaults", "notion", "{}")]
+    [InlineData("McpServerDefaults", "notion", "[]")]
+    [InlineData("McpServerDefaults", "notion", "\"\"")]
+    public async Task ReturnsPass_WhenApprovalPolicyMapHasValuelessEntry(string map, string key, string value)
     {
-        // The config loader drops a null entry with a warning, so the schema check must not fail it.
-        var paths = new NetclawPaths(CreateTempBasePath());
-        paths.EnsureDirectoriesExist();
-
-        await File.WriteAllTextAsync(paths.NetclawConfigPath,
-            $$"""
-            { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "{{map}}": { "{{key}}": null } } } } } }
-            """, TestContext.Current.CancellationToken);
-
-        var result = await new ConfigSchemaDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
+        // The config loader drops a null, "", {} or [] entry with a warning, so the schema check must not fail it.
+        var result = await RunSchemaCheck($$"""
+            { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "{{map}}": { "{{key}}": {{value}} } } } } } }
+            """);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Theory]
+    [InlineData("ToolOverrides")]
+    [InlineData("McpServerDefaults")]
+    public async Task ReturnsPass_WhenApprovalPolicyMapIsNull(string map)
+    {
+        var result = await RunSchemaCheck($$"""
+            { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "{{map}}": null } } } } }
+            """);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Theory]
+    [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"AllowedTools\": VALUE } } }")]
+    [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"ReadFiles\": { \"Roots\": VALUE } } } }")]
+    [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"WriteFiles\": { \"Roots\": VALUE } } } }")]
+    [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"AttachFiles\": { \"Roots\": VALUE } } } }")]
+    [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"ChannelAttachments\": { \"AllowedCategories\": VALUE } } } }")]
+    [InlineData("{ \"AudienceProfiles\": { \"GlobalReadRoots\": VALUE } }")]
+    [InlineData("{ \"WebFetch\": { \"HttpAllowList\": VALUE } }")]
+    public async Task ListsTheLoaderDefaults_AcceptNullEmptyObjectAndEmptyString_ButNotAScalar(string toolsTemplate)
+    {
+        foreach (var value in new[] { "null", "{}", "[]", "\"\"" })
+        {
+            var result = await RunSchemaCheck(
+                "{ \"configVersion\": 1, \"Tools\": " + toolsTemplate.Replace("VALUE", value, StringComparison.Ordinal) + " }");
+            Assert.True(result.Severity == DoctorSeverity.Pass, $"{value} in {toolsTemplate}: {result.Message}");
+        }
+
+        var scalar = await RunSchemaCheck(
+            "{ \"configVersion\": 1, \"Tools\": " + toolsTemplate.Replace("VALUE", "\"file_read\"", StringComparison.Ordinal) + " }");
+        Assert.Equal(DoctorSeverity.Error, scalar.Severity);
+    }
+
+    private async Task<DoctorCheckResult> RunSchemaCheck(string json)
+    {
+        var paths = new NetclawPaths(CreateTempBasePath());
+        paths.EnsureDirectoriesExist();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, json, TestContext.Current.CancellationToken);
+        return await new ConfigSchemaDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]

@@ -417,7 +417,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         return found;
     }
 
-    // A key with a null, {} or [] value carries no mode and is ignored. A key that contains a colon
+    // A key with a null, "", {} or [] value carries no mode and is ignored. A key that contains a colon
     // is reported by FindColonOverrideKeys.
     private static List<string> FindValuelessOverrideKeys(JsonObject root)
     {
@@ -432,7 +432,8 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
                 foreach (var (key, value) in entries.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
                 {
-                    var valueless = value is null or JsonArray { Count: 0 } or JsonObject { Count: 0 };
+                    var valueless = value is null or JsonArray { Count: 0 } or JsonObject { Count: 0 }
+                        || value is JsonValue text && text.TryGetValue<string>(out var str) && str.Length == 0;
                     if (valueless && !key.Contains(':', StringComparison.Ordinal))
                     {
                         found.Add(

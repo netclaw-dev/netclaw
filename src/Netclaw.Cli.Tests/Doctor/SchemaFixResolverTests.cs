@@ -55,6 +55,37 @@ public sealed class SchemaFixResolverTests
         Assert.Equal("High", config["Servers"]!["alpha"]!["Level"]!.GetValue<string>());
     }
 
+    private const string ModeMapSchema = """
+        {
+          "type": "object",
+          "properties": {
+            "Overrides": {
+              "type": "object",
+              "additionalProperties": {
+                "type": ["string", "null", "array", "object"],
+                "enum": ["Auto", "Approval", "Deny", "", null, [], {}]
+              }
+            }
+          }
+        }
+        """;
+
+    [Theory]
+    [InlineData(1, "Approval")]
+    [InlineData(3, null)]
+    [InlineData(5, null)]
+    public void IntegerModeInAMapThatAlsoListsIgnoredValues_IsFixedOnlyToAMode(int value, string? expected)
+    {
+        var (schema, schemaJson) = ParseSchema(ModeMapSchema);
+        var config = JsonNode.Parse($$"""{ "Overrides": { "shell_execute": {{value}} } }""")!.AsObject();
+
+        var result = SchemaFixResolver.TryApplySchemaFixes(schema, schemaJson, config, out _);
+
+        Assert.Equal(expected is not null, result);
+        if (expected is not null)
+            Assert.Equal(expected, config["Overrides"]!["shell_execute"]!.GetValue<string>());
+    }
+
     [Fact]
     public void SkipsAlreadyCorrectStringEnum()
     {

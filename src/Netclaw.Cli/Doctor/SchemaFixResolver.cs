@@ -135,8 +135,10 @@ public static class SchemaFixResolver
             if (intValue < 0 || intValue >= enumArray.Count)
                 continue;
 
-            var enumStr = enumArray[intValue]?.GetValue<string>();
-            if (enumStr is null)
+            // An enum can also list null, "", [] and {} for values the loader ignores. None is a mode.
+            if (enumArray[intValue] is not JsonValue enumValue
+                || !enumValue.TryGetValue<string>(out var enumStr)
+                || enumStr.Length == 0)
                 continue;
 
             if (SetConfigValue(config, segments, JsonValue.Create(enumStr)))

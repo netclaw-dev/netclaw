@@ -978,6 +978,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
     [InlineData("null")]
     [InlineData("{}")]
     [InlineData("[]")]
+    [InlineData("\"\"")]
     public async Task OverrideKeyWithNoValue_IsReportedAsIgnored(string value)
     {
         WriteConfig(
