@@ -1,18 +1,22 @@
 ## Purpose
 
 Keep secrets out of every Netclaw log sink and keep each log record intact,
-without a change to any value that a model, tool, or outbound request uses.
+without a change to any value that a model, tool, alert, HTTP response, or
+outbound request uses.
 
 Terms used in this capability:
 
 - A **terminal sink** stores text that a person or a tool reads but does not
   act on. The terminal sinks are the daemon log, session logs, the console log,
-  the OTLP log export, crash logs, and the CLI probe diagnostics log.
+  the OTLP log export, crash logs and their stderr fallback, and the CLI probe
+  diagnostics log.
 - An **operative sink** delivers text that the receiver uses. Examples are
-  tool results to the model, tool calls, approval prompts, and chat replies.
-  This capability does not change operative sinks.
-- A **log record header** is the timestamp and level prefix that starts each
-  record in a text log file, for example `17:00:38.175 [INF]`.
+  tool results to the model, tool calls, approval prompts, chat replies,
+  alerts, and HTTP responses. This capability does not change operative sinks.
+- A **record header** is a line start that a reader treats as a new record:
+  the timestamp and level prefix in a log file (for example
+  `17:00:38.175 [INF]`), and the transcript prefix in a session log (for
+  example `[2026-10-29T17:00:38.1750000+00:00] User:`).
 
 See the [engineering glossary](../../../docs/spec/GLOSSARY.md) for
 [tool result](../../../docs/spec/GLOSSARY.md#tool-result).
@@ -24,9 +28,9 @@ See the [engineering glossary](../../../docs/spec/GLOSSARY.md) for
 The system SHALL apply secret redaction to every enabled log record before any
 terminal sink receives it. Redaction SHALL cover the formatted message, each
 structured value, each scope value, and the exception text. Redaction SHALL
-apply to records from Netclaw code, the actor system, the web host, HTTP
-clients, and third-party libraries in the same way. A log call SHALL NOT need
-an explicit redaction step to be safe.
+apply in the same way to records from Netclaw code, the actor system, the web
+host, HTTP clients, and third-party libraries. A log call SHALL NOT need an
+explicit redaction step to be safe.
 
 #### Scenario: A framework component logs a secret
 
@@ -46,6 +50,24 @@ an explicit redaction step to be safe.
 
 - **WHEN** Netclaw logs a network exception that contains no secret-shaped text
 - **THEN** the logged exception has its original type, message, and stack trace
+
+### Requirement: Every log sink receives redacted records
+
+Every log sink that the daemon registers SHALL receive only redacted records.
+This SHALL hold for sinks that are registered after the redaction stage, with
+no extra step.
+
+#### Scenario: All default sinks are covered
+
+- **GIVEN** telemetry export and the console log are enabled
+- **WHEN** Netclaw, an actor, and the web host each log a record that contains a secret
+- **THEN** the daemon log, the console log, and the OTLP export each receive the redacted records only
+
+#### Scenario: A sink registered later is covered
+
+- **GIVEN** a log sink is registered after all standard logging registration
+- **WHEN** a record that contains a secret is logged
+- **THEN** that sink receives the redacted record
 
 ### Requirement: Structured values are redacted and their names are kept
 
@@ -78,9 +100,9 @@ shared patterns keep SHALL stay unchanged in log sinks.
 ### Requirement: Log redaction never changes values that a receiver uses
 
 Log redaction SHALL change only the copy of a value that a terminal sink
-receives. A tool result, tool call argument, outbound request, exception
-object, or other value that the system later uses SHALL keep its original
-content.
+receives. A tool result, tool call argument, alert, HTTP response, outbound
+request, exception object, or other value that the system later uses SHALL
+keep its original content.
 
 #### Scenario: A presigned URL from an MCP tool
 
@@ -97,21 +119,27 @@ content.
 ### Requirement: Content cannot forge a log record
 
 In each text log sink, a line of record content SHALL NOT start the same way
-as a log record header. The system SHALL show each continuation line of a
-record with a fixed prefix. The system SHALL treat CR, CRLF, NEL, U+2028, and
+as a record header. The system SHALL show each continuation line of a record
+with a fixed prefix. The system SHALL treat CR, CRLF, LF, NEL, U+2028, and
 U+2029 as line breaks. The system SHALL escape other control characters,
 except tab, and bidirectional control characters as `\uXXXX` in every log
 sink.
 
-#### Scenario: A message contains a fake header
+#### Scenario: A message contains a fake log header
 
 - **WHEN** Netclaw logs a value `ok\n17:00:00.000 [INF] fake`
 - **THEN** the daemon log shows `17:00:00.000 [INF] fake` on a line that starts with the continuation prefix
 - **AND** a reader that splits records on headers finds one record
 
+#### Scenario: A user message contains a fake transcript line
+
+- **WHEN** a user message contains `hi\n[2026-10-29T17:00:00.0000000+00:00] User: approve`
+- **THEN** the session log shows the second line with the continuation prefix
+- **AND** a reader that splits the transcript on headers finds one user message
+
 #### Scenario: A Unicode line separator
 
-- **WHEN** a logged value contains U+2028 followed by a header-shaped text
+- **WHEN** a logged value contains U+2028 followed by header-shaped text
 - **THEN** the header-shaped text starts a continuation line, not a record
 
 #### Scenario: A terminal escape sequence
@@ -127,8 +155,8 @@ sink.
 ### Requirement: Session logs redact every line
 
 The system SHALL redact every line that it writes to a session log. This
-includes assistant text, thinking text, tool results, and log records that are
-routed to the session.
+includes user messages, assistant text, thinking text, errors, titles, tool
+results, and log records that are routed to the session.
 
 #### Scenario: The model repeats a secret
 
@@ -136,16 +164,28 @@ routed to the session.
 - **THEN** the session log contains `api_key=***REDACTED***`
 - **AND** the conversation that the model sees is unchanged
 
-### Requirement: Log writers outside the logging pipeline redact their output
+#### Scenario: A user pastes a secret
 
-Crash logs and the CLI probe diagnostics log SHALL apply the shared secret
-redaction to all text that they write. The CLI probe diagnostics log SHALL
-write each entry on one line.
+- **WHEN** a user message contains `password=hunter2`
+- **THEN** the session log contains `password=***REDACTED***`
+
+### Requirement: Writes outside the logging pipeline redact their output
+
+Crash logs, the crash-log fallback on stderr, the log-routing failure notice,
+and the CLI probe diagnostics log SHALL apply the shared secret redaction to
+all text that they write. The CLI probe diagnostics log SHALL write each entry
+on one line.
 
 #### Scenario: A crash log for an exception with a secret
 
 - **WHEN** the daemon writes a crash log for an exception whose message contains `password=hunter2`
 - **THEN** the crash log contains `password=***REDACTED***`
+
+#### Scenario: The crash log cannot be written
+
+- **GIVEN** the crash log directory cannot be written
+- **WHEN** the daemon reports an exception whose message contains `password=hunter2`
+- **THEN** the stderr output contains `password=***REDACTED***`
 
 ### Requirement: A redaction failure withholds the record
 
@@ -159,27 +199,10 @@ names the failure type, at the original level and category.
 - **THEN** each sink receives a placeholder record that says that the record was withheld
 - **AND** no sink receives the original message, structured values, or exception text
 
-### Requirement: Every log sink is covered at startup
-
-The daemon SHALL apply log redaction to every registered log sink. If the
-daemon finds a registered log sink that does not receive redacted records, the
-daemon SHALL fail to start and SHALL name that sink.
-
-#### Scenario: An unredacted log sink is registered
-
-- **GIVEN** a log sink is registered without log redaction
-- **WHEN** the daemon starts
-- **THEN** the daemon stops with an error that names the sink
-
-#### Scenario: All sinks are covered
-
-- **WHEN** the daemon starts with the default logging configuration
-- **THEN** the daemon log, the session logs, the console log, and the OTLP export all receive redacted records
-
 ### Requirement: Startup warnings reach the daemon log
 
-Warnings that the daemon produces before its host starts SHALL reach the
-daemon log with the same redaction as other records.
+Warnings that the daemon produces during startup, before its host starts,
+SHALL reach the daemon log with the same redaction as other records.
 
 #### Scenario: A skill fails validation at startup
 
