@@ -367,8 +367,9 @@ is available (an unattended parent), the authorizer denies the gated tool with
 `approval_required_unattended`. The tool does not run, and the subagent gets the
 denial as a tool result (decision D2). If the bridge has no requester
 authority context, the gated tool fails closed as a failed subagent run and is
-not executed. Subagent approval waits are live-only: if the
-daemon or parent session restarts before the user responds, the stale prompt is
+not executed. A child that has parked survives a daemon or parent session
+restart: the prompt stays live, and one answer resumes the child. A run that
+had not parked yet when the restart came loses its prompt. The stale prompt is
 expired and the interrupted parent `spawn_agent` call is closed before the next
 turn continues.
 
