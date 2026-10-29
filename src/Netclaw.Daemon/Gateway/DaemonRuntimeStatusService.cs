@@ -40,7 +40,8 @@ internal sealed class DaemonRuntimeStatusService(
     SQLiteMemoryStore? sqliteMemoryStore = null,
     MemoryEmbedderHolder? memoryEmbedderHolder = null,
     MemoryConfig? memoryConfig = null,
-    IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
+    IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null,
+    ShellTemporaryDirectoryState? shellTemporary = null)
 {
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -52,6 +53,17 @@ internal sealed class DaemonRuntimeStatusService(
 
         connectors.AddRange(BuildMcpStatuses());
         connectors.AddRange(oauthRefresh.GetAuthFailures().Select(ToConnector));
+        if (shellTemporary?.Problem is { } shellTemporaryProblem)
+        {
+            connectors.Add(new DaemonRuntimeStatus.Connector
+            {
+                Key = "shell:temp",
+                DisplayName = "Shell/temp",
+                Enabled = true,
+                Status = "degraded",
+                Message = shellTemporaryProblem
+            });
+        }
 
         var degraded = chatClientProvider.IsDegraded;
         var configNotApplied = rejectedConfig.Reason;

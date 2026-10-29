@@ -60,7 +60,8 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         RejectedConfigState? rejectedConfig = null,
         MemoryEmbedderHolder? memoryEmbedderHolder = null,
         MemoryConfig? memoryConfig = null,
-        ProviderOAuthTokenRefreshService? oauthRefresh = null)
+        ProviderOAuthTokenRefreshService? oauthRefresh = null,
+        ShellTemporaryDirectoryState? shellTemporary = null)
     {
         return new DaemonRuntimeStatusService(
             new DaemonStartClock(TimeProvider.System),
@@ -78,7 +79,8 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             mcpClientManager,
             sqliteMemoryStore,
             memoryEmbedderHolder,
-            memoryConfig);
+            memoryConfig,
+            shellTemporary: shellTemporary);
     }
 
     private static IChannelRegistry CreateRegistry(
@@ -150,6 +152,30 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             paths,
             new DeviceFlowServiceFactory(new OAuthDeviceFlowService(http), new OpenAiDeviceFlowService(http)),
             NullLogger<ProviderOAuthTokenRefreshService>.Instance);
+    }
+
+    [Fact]
+    public async Task UnwritableShellTemporaryDirectory_IsReportedAsDegradedConnector()
+    {
+        var service = CreateService(shellTemporary: new ShellTemporaryDirectoryState("cannot write '/tmp/netclaw-1000'"));
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("degraded", status.Overall);
+        var connector = Assert.Single(status.Connectors, c => c.Key == "shell:temp");
+        Assert.Equal("degraded", connector.Status);
+        Assert.Contains("/tmp/netclaw-1000", connector.Message);
+    }
+
+    [Fact]
+    public async Task WritableShellTemporaryDirectory_LeavesStatusHealthy()
+    {
+        var service = CreateService(shellTemporary: new ShellTemporaryDirectoryState((string?)null));
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("healthy", status.Overall);
+        Assert.DoesNotContain(status.Connectors, c => c.Key == "shell:temp");
     }
 
     [Fact]
