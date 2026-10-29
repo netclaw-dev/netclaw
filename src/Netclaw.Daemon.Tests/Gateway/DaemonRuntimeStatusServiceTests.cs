@@ -76,11 +76,11 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             providerValidation ?? new ProviderRuntimeValidation(ProviderRuntimeStatus.Valid, null, []),
             rejectedConfig ?? new RejectedConfigState(),
             oauthRefresh ?? CreateOAuthRefresh(paths ?? CreatePaths(), _ => throw new InvalidOperationException("no refresh expected")),
+            shellTemporary ?? new ShellTemporaryDirectoryState((string?)null),
             mcpClientManager,
             sqliteMemoryStore,
             memoryEmbedderHolder,
-            memoryConfig,
-            shellTemporary: shellTemporary);
+            memoryConfig);
     }
 
     private static IChannelRegistry CreateRegistry(
@@ -165,6 +165,16 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         var connector = Assert.Single(status.Connectors, c => c.Key == "shell:temp");
         Assert.Equal("degraded", connector.Status);
         Assert.Contains("/tmp/netclaw-1000", connector.Message);
+    }
+
+    [Fact]
+    public void ShellTemporaryDirectoryState_IsARequiredDependency()
+    {
+        // Optional would let a dropped DI registration silently hide the degraded signal.
+        var parameter = Assert.Single(
+            typeof(DaemonRuntimeStatusService).GetConstructors().Single().GetParameters(),
+            p => p.ParameterType == typeof(ShellTemporaryDirectoryState));
+        Assert.False(parameter.HasDefaultValue);
     }
 
     [Fact]

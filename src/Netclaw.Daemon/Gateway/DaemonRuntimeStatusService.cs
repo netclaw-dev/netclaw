@@ -36,12 +36,12 @@ internal sealed class DaemonRuntimeStatusService(
     ProviderRuntimeValidation providerValidation,
     RejectedConfigState rejectedConfig,
     ProviderOAuthTokenRefreshService oauthRefresh,
+    ShellTemporaryDirectoryState shellTemporary,
     McpClientManager? mcpClientManager = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     MemoryEmbedderHolder? memoryEmbedderHolder = null,
     MemoryConfig? memoryConfig = null,
-    IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null,
-    ShellTemporaryDirectoryState? shellTemporary = null)
+    IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -53,7 +53,7 @@ internal sealed class DaemonRuntimeStatusService(
 
         connectors.AddRange(BuildMcpStatuses());
         connectors.AddRange(oauthRefresh.GetAuthFailures().Select(ToConnector));
-        if (shellTemporary?.Problem is { } shellTemporaryProblem)
+        if (shellTemporary.Problem is { } shellTemporaryProblem)
         {
             connectors.Add(new DaemonRuntimeStatus.Connector
             {

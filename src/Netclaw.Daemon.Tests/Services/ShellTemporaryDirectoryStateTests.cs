@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Tools;
 using Netclaw.Daemon.Services;
 using Netclaw.Tools;
 using Xunit;
@@ -44,7 +45,6 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
         Assert.NotNull(state.Problem);
         Assert.Contains(folder, state.Problem);
         Assert.Contains("tmpfs", state.Problem);
-        Assert.Contains("TMPDIR", state.Problem);
     }
 
     [Fact]
@@ -53,5 +53,83 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
         var state = ShellTemporaryDirectoryState.Probe(ManagedTemporaryLayout.InsideSessionStorage.Instance);
 
         Assert.Null(state.Problem);
+    }
+
+    private static bool ShellAccepts(string folder)
+        => ManagedTemporaryEnvironment.EnsureFolders(
+            ManagedTemporaryLocation.CreatePrivateParent(new ManagedTemporaryBase(folder), "parity-key")) is null;
+
+    private void AssertParity(string folder, bool expected)
+    {
+        var shell = ShellAccepts(folder);
+        var probe = ShellTemporaryDirectoryState.Probe(Layout(folder)).Problem is null;
+        Assert.Equal(expected, shell);
+        Assert.Equal(shell, probe);
+    }
+
+    [Fact]
+    public void Probe_agrees_with_the_shell_checks_for_a_writable_base()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        AssertParity(Path.Combine(_root, "netclaw-1000"), expected: true);
+    }
+
+    [Fact]
+    public void Probe_agrees_with_the_shell_checks_when_the_base_is_blocked_by_a_file()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var blocker = Path.Combine(_root, "blocker");
+        File.WriteAllText(blocker, string.Empty);
+        AssertParity(Path.Combine(blocker, "netclaw-1000"), expected: false);
+    }
+
+    [Fact]
+    public void Probe_agrees_with_the_shell_checks_for_an_existing_world_writable_base()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var folder = Path.Combine(_root, "netclaw-1000");
+        Directory.CreateDirectory(folder);
+        File.SetUnixFileMode(folder, (UnixFileMode)0x1FF);
+        AssertParity(folder, expected: false);
+
+        var problem = ShellTemporaryDirectoryState.Probe(Layout(folder)).Problem;
+        Assert.Contains("group or other access", problem);
+        Assert.DoesNotContain("tmpfs", problem);
+    }
+
+    [Fact]
+    public void Probe_agrees_with_the_shell_checks_for_a_symlinked_base()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var real = Path.Combine(_root, "real");
+        Directory.CreateDirectory(real, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var link = Path.Combine(_root, "netclaw-1000");
+        Directory.CreateSymbolicLink(link, real);
+        AssertParity(link, expected: false);
+    }
+
+    [Fact]
+    public void Probe_agrees_with_the_shell_checks_and_never_writes_through_a_planted_link()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var folder = Path.Combine(_root, "netclaw-1000");
+        Directory.CreateDirectory(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var victim = Path.Combine(_root, "victim.txt");
+        File.WriteAllText(victim, "precious");
+        File.CreateSymbolicLink(Path.Combine(folder, $".probe-{Environment.ProcessId}"), victim);
+
+        AssertParity(folder, expected: true);
+
+        Assert.Equal("precious", File.ReadAllText(victim));
     }
 }

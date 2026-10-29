@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Tools;
 using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Services;
@@ -22,20 +23,35 @@ internal sealed record ShellTemporaryDirectoryState(string? Problem)
             return new ShellTemporaryDirectoryState((string?)null);
 
         var folder = privateBase.Base.Value;
+
+        // The shell launch's own folder checks first (link, owner, group/other bits), so the probe
+        // passes only where the shell would.
+        if (ManagedTemporaryEnvironment.CheckBase(privateBase.Base) is { } refusal)
+        {
+            // Only a failed create is a filesystem problem a tmpfs fixes; a link, owner or mode refusal is not.
+            var hint = refusal.StartsWith("Error preparing", StringComparison.Ordinal)
+                ? " Mount a writable tmpfs at /tmp (docker run --tmpfs /tmp)."
+                : string.Empty;
+            return new ShellTemporaryDirectoryState($"Shell commands cannot use their temporary folder '{folder}'. {refusal}{hint}");
+        }
+
         try
         {
-            // Same mode the shell launch uses, so the probe cannot widen access to the folder.
-            Directory.CreateDirectory(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            var probeFile = Path.Combine(folder, $".probe-{Environment.ProcessId}");
-            File.WriteAllText(probeFile, string.Empty);
-            File.Delete(probeFile);
+            // CreateNew refuses an existing name or link, so the probe cannot write through a planted link.
+            using var probe = new FileStream(
+                Path.Combine(folder, $".probe-{Guid.NewGuid():N}"),
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                1,
+                FileOptions.DeleteOnClose);
             return new ShellTemporaryDirectoryState((string?)null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
             return new ShellTemporaryDirectoryState(
                 $"Shell commands cannot create temporary files in '{folder}': {ex.Message}. "
-                + "Mount a tmpfs at /tmp (docker run --tmpfs /tmp) or point TMPDIR at a writable path.");
+                + "Mount a writable tmpfs at /tmp (docker run --tmpfs /tmp).");
         }
     }
 }
