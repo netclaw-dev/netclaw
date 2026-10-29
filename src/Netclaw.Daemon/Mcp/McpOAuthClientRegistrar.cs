@@ -171,16 +171,37 @@ internal sealed class McpOAuthClientRegistrar(
             if (issuer is null)
                 continue;
 
-            var metadataUrl = $"{issuer.TrimEnd('/')}/.well-known/oauth-authorization-server";
-            JsonElement metadata;
-            try
+            // RFC 8414 §3 inserts the well-known segment between the host and the issuer
+            // path, so GitHub's issuer https://github.com/login/oauth publishes at
+            // https://github.com/.well-known/oauth-authorization-server/login/oauth. Some
+            // servers publish under the issuer path instead, so that form is tried second.
+            var issuerUri = new Uri(issuer);
+            var issuerPath = issuerUri.AbsolutePath.TrimEnd('/');
+            var appendedUrl = $"{issuer.TrimEnd('/')}/.well-known/oauth-authorization-server";
+            var metadataUrls = string.IsNullOrEmpty(issuerPath)
+                ? new[] { appendedUrl }
+                : [$"{issuerUri.GetLeftPart(UriPartial.Authority)}/.well-known/oauth-authorization-server{issuerPath}", appendedUrl];
+
+            JsonElement? discovered = null;
+            Exception? lastError = null;
+            foreach (var metadataUrl in metadataUrls)
             {
-                metadata = await httpClient.GetFromJsonAsync<JsonElement>(metadataUrl, cancellationToken);
+                try
+                {
+                    discovered = await httpClient.GetFromJsonAsync<JsonElement>(metadataUrl, cancellationToken);
+                    break;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or JsonException or NotSupportedException)
+                {
+                    lastError = ex;
+                }
             }
-            catch (Exception ex) when (ex is HttpRequestException or JsonException or NotSupportedException)
+
+            if (discovered is not { } metadata)
             {
                 throw new McpOAuthRegistrationException(
-                    $"Authorization server '{issuer}' did not return usable metadata at {metadataUrl}.", ex);
+                    $"Authorization server '{issuer}' did not return usable metadata at {string.Join(" or ", metadataUrls)}.",
+                    lastError);
             }
 
             var registrationEndpoint = metadata.TryGetProperty("registration_endpoint", out var registration)
