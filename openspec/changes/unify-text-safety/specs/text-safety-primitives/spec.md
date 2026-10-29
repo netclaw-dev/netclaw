@@ -37,12 +37,12 @@ separator, byte-order mark, and backtick as `\uXXXX`.
 #### Scenario: A right-to-left override in a command
 
 - **WHEN** an approval prompt shows a command that contains U+202E
-- **THEN** the prompt shows `‮` in place of the character
+- **THEN** the prompt shows `\u202E` in place of the character
 
 #### Scenario: A line separator in an argument
 
 - **WHEN** an approval prompt shows an argument that contains U+2028
-- **THEN** the prompt shows ` ` and the argument stays on one line
+- **THEN** the prompt shows `\u2028` and the argument stays on one line
 
 ### Requirement: The shell policy decision trace escapes unsafe text
 
