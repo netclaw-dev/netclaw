@@ -9,7 +9,7 @@ using Netclaw.Tools;
 namespace Netclaw.Daemon.Services;
 
 /// <summary>
-/// Startup result of probing the directory that shell commands use for temporary files.
+/// Result of probing the directory that shell commands use for temporary files.
 /// A read-only root filesystem without a tmpfs on <c>/tmp</c> leaves the daemon healthy while
 /// every shell call fails, so the status endpoint reports it as degraded.
 /// </summary>
@@ -30,7 +30,7 @@ internal sealed record ShellTemporaryDirectoryState(string? Problem)
         {
             // A tmpfs only fixes a filesystem that cannot be used; a link, owner or mode refusal is not that.
             return new ShellTemporaryDirectoryState(
-                $"Shell commands cannot use their temporary folder. {WithPeriod(refusal.Reason)}"
+                $"Shell commands cannot use their temporary folder: {WithPeriod(StripPrefix(refusal.Reason))}"
                 + (refusal.CouldNotUseFilesystem ? TmpfsHint : string.Empty));
         }
 
@@ -54,6 +54,18 @@ internal sealed record ShellTemporaryDirectoryState(string? Problem)
     }
 
     private const string TmpfsHint = " Mount a writable tmpfs at /tmp (docker run --tmpfs /tmp).";
+
+    // The shell's refusal text starts with a label that reads badly inside a sentence.
+    private static string StripPrefix(string reason)
+    {
+        foreach (var prefix in new[] { "Error preparing managed temporary directory: ", "Error: " })
+        {
+            if (reason.StartsWith(prefix, StringComparison.Ordinal))
+                return reason[prefix.Length..];
+        }
+
+        return reason;
+    }
 
     private static string WithPeriod(string text) => text.EndsWith('.') ? text : text + ".";
 }

@@ -248,10 +248,6 @@ static async Task RunDaemonAsync(
     var managedTemporaryLayout = ManagedTemporaryLayout.ForHost();
     builder.Services.AddSingleton(managedTemporaryLayout);
 
-    // A read-only root filesystem with no tmpfs on /tmp leaves the daemon healthy while every shell
-    // call fails. Say so now and in the status endpoint; readiness stays green so a supervisor does
-    // not restart-loop a daemon that is otherwise working.
-    builder.Services.AddSingleton(ShellTemporaryDirectoryState.Probe(managedTemporaryLayout));
     builder.Services.AddSingleton<ISessionStorageResolver, SqliteSessionStorageResolver>();
     builder.Services.AddSingleton<RestartManifestStore>();
     builder.Services.AddSingleton<RejectedConfigState>();
@@ -259,10 +255,6 @@ static async Task RunDaemonAsync(
     builder.Services.AddSingleton<IDaemonRestartCoordinator>(sp => sp.GetRequiredService<DaemonRestartCoordinator>());
 
     var app = builder.Build();
-
-    // Logged from the built host: LoggerFactory.Create with no providers writes nowhere.
-    if (app.Services.GetRequiredService<ShellTemporaryDirectoryState>().Problem is { } shellTemporaryProblem)
-        app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Netclaw.Startup").LogError("{Problem}", shellTemporaryProblem);
 
     // Part of the same Models check as ConfigureConfigServices: the plugin and its credentials.
     if (app.Services.GetService<ProviderPluginFactory>()?.Validate(models) is { } providerError)
@@ -272,6 +264,13 @@ static async Task RunDaemonAsync(
     var startupLogger = app.Services
         .GetRequiredService<ILoggerFactory>()
         .CreateLogger("Netclaw.Startup");
+
+    // A read-only root filesystem with no tmpfs on /tmp leaves the daemon healthy while every shell
+    // call fails. Log it once here and report it from the status endpoint, which probes again per
+    // request; readiness stays green so a supervisor does not restart-loop a working daemon.
+    if (ShellTemporaryDirectoryState.Probe(managedTemporaryLayout).Problem is { } shellTemporaryProblem)
+        startupLogger.LogError("{Problem}", shellTemporaryProblem);
+
     startupLogger.LogInformation(
         "Selected native shell {Executable} at {ExecutablePath} with {Grammar} grammar and {Dialect} dialect.",
         shellResolution.Environment.ExecutableName,

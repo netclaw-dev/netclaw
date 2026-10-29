@@ -61,7 +61,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         MemoryEmbedderHolder? memoryEmbedderHolder = null,
         MemoryConfig? memoryConfig = null,
         ProviderOAuthTokenRefreshService? oauthRefresh = null,
-        ShellTemporaryDirectoryState? shellTemporary = null)
+        ManagedTemporaryLayout? temporaryLayout = null)
     {
         return new DaemonRuntimeStatusService(
             new DaemonStartClock(TimeProvider.System),
@@ -76,7 +76,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             providerValidation ?? new ProviderRuntimeValidation(ProviderRuntimeStatus.Valid, null, []),
             rejectedConfig ?? new RejectedConfigState(),
             oauthRefresh ?? CreateOAuthRefresh(paths ?? CreatePaths(), _ => throw new InvalidOperationException("no refresh expected")),
-            shellTemporary ?? new ShellTemporaryDirectoryState((string?)null),
+            temporaryLayout ?? ManagedTemporaryLayout.InsideSessionStorage.Instance,
             mcpClientManager,
             sqliteMemoryStore,
             memoryEmbedderHolder,
@@ -154,38 +154,30 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             NullLogger<ProviderOAuthTokenRefreshService>.Instance);
     }
 
-    [Fact]
-    public async Task UnwritableShellTemporaryDirectory_IsReportedAsDegradedConnector()
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "The private temporary base exists only on POSIX hosts")]
+    public async Task ShellTemporaryDirectory_IsDegradedWhileUnwritableAndHealthyOnceFixedWithoutRestart()
     {
-        var service = CreateService(shellTemporary: new ShellTemporaryDirectoryState("cannot write '/tmp/netclaw-1000'"));
+        // A regular file in the way stops the base from being created, even as root.
+        var blocker = Path.Combine(_tempBase, "blocker");
+        Directory.CreateDirectory(_tempBase);
+        File.WriteAllText(blocker, string.Empty);
+        var baseFolder = Path.Combine(blocker, "netclaw-1000");
+        var service = CreateService(temporaryLayout: new ManagedTemporaryLayout.PrivateBase(new ManagedTemporaryBase(baseFolder)));
 
-        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+        var before = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("degraded", status.Overall);
-        var connector = Assert.Single(status.Connectors, c => c.Key == "shell:temp");
+        Assert.Equal("degraded", before.Overall);
+        var connector = Assert.Single(before.Connectors, c => c.Key == "shell:temp");
         Assert.Equal("degraded", connector.Status);
-        Assert.Contains("/tmp/netclaw-1000", connector.Message);
-    }
+        Assert.Contains(baseFolder, connector.Message);
 
-    [Fact]
-    public void ShellTemporaryDirectoryState_IsARequiredDependency()
-    {
-        // Optional would let a dropped DI registration silently hide the degraded signal.
-        var parameter = Assert.Single(
-            typeof(DaemonRuntimeStatusService).GetConstructors().Single().GetParameters(),
-            p => p.ParameterType == typeof(ShellTemporaryDirectoryState));
-        Assert.False(parameter.HasDefaultValue);
-    }
+        File.Delete(blocker);
 
-    [Fact]
-    public async Task WritableShellTemporaryDirectory_LeavesStatusHealthy()
-    {
-        var service = CreateService(shellTemporary: new ShellTemporaryDirectoryState((string?)null));
+        var after = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
-        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal("healthy", status.Overall);
-        Assert.DoesNotContain(status.Connectors, c => c.Key == "shell:temp");
+        Assert.Equal("healthy", after.Overall);
+        Assert.DoesNotContain(after.Connectors, c => c.Key == "shell:temp");
     }
 
     [Fact]

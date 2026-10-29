@@ -36,7 +36,7 @@ internal sealed class DaemonRuntimeStatusService(
     ProviderRuntimeValidation providerValidation,
     RejectedConfigState rejectedConfig,
     ProviderOAuthTokenRefreshService oauthRefresh,
-    ShellTemporaryDirectoryState shellTemporary,
+    ManagedTemporaryLayout temporaryLayout,
     McpClientManager? mcpClientManager = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     MemoryEmbedderHolder? memoryEmbedderHolder = null,
@@ -53,7 +53,9 @@ internal sealed class DaemonRuntimeStatusService(
 
         connectors.AddRange(BuildMcpStatuses());
         connectors.AddRange(oauthRefresh.GetAuthFailures().Select(ToConnector));
-        if (shellTemporary.Problem is { } shellTemporaryProblem)
+        // Probed per request: the shell checks the folder on every launch, so a fix such as chmod 700
+        // must clear the degraded state without a restart.
+        if (ShellTemporaryDirectoryState.Probe(temporaryLayout).Problem is { } shellTemporaryProblem)
         {
             connectors.Add(new DaemonRuntimeStatus.Connector
             {

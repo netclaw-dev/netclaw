@@ -61,12 +61,20 @@ fits the socket limit (107 characters on Linux, 103 on macOS; issue #2554):
 - On Windows, `temp_dir` stays `<session-envelope>/tmp/parent` for a parent and
   `<session-envelope>/subagents/<run-id>/tmp` for a child.
 
-Before each shell launch, and before each `file_write` or `file_edit` below
+The daemon runs these checks on `/tmp/netclaw-<uid>` at startup. Before each
+shell launch, and before each `file_write` or `file_edit` below
 `/tmp/netclaw-<uid>`, Netclaw creates `/tmp/netclaw-<uid>` and the
 key folder with mode 0700. It checks that each folder is not a symbolic link,
 that the daemon user owns it, and that it has no group or other permission
 bits. The checks assume that `/tmp` has the sticky bit (mode 1777), as on each
 supported host.
+
+If the daemon cannot use the folder at startup, it logs an error to the daemon
+log and reports a degraded `Shell/temp` connector (`shell:temp`) in
+`netclaw status`, which also exits 2. The check runs again on each status
+request, so a fix clears it without a restart. The daemon stays ready, so a
+container supervisor does not restart it. A container with a read-only root
+filesystem needs a writable `/tmp`: `docker run --read-only --tmpfs /tmp ...`.
 
 Caution: if a check fails, the shell call or the write fails, and Netclaw does
 not use another folder. The error names the folder and the cause. To recover:

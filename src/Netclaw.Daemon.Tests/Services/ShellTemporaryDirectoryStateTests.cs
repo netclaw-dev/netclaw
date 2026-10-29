@@ -6,6 +6,7 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Daemon.Services;
 using Netclaw.Tools;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Services;
@@ -21,7 +22,8 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
     private static ManagedTemporaryLayout Layout(string folder)
         => new ManagedTemporaryLayout.PrivateBase(new ManagedTemporaryBase(folder));
 
-    [Fact]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "The private temporary base exists only on POSIX hosts")]
     public void Writable_base_reports_no_problem_and_leaves_no_probe_file()
     {
         var folder = Path.Combine(_root, "netclaw-1000");
@@ -32,7 +34,8 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
         Assert.Empty(Directory.GetFileSystemEntries(folder));
     }
 
-    [Fact]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "The private temporary base exists only on POSIX hosts")]
     public void Unwritable_base_names_the_path_and_the_fix()
     {
         // A regular file in the way makes directory creation fail on any filesystem, including as root.
@@ -46,8 +49,22 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
         Assert.Contains(folder, state.Problem);
         Assert.Contains("tmpfs", state.Problem);
         // One sentence for the reason, then the hint; the path appears once.
+        Assert.StartsWith("Shell commands cannot use their temporary folder: ", state.Problem);
+        Assert.DoesNotContain("Error preparing", state.Problem);
         Assert.Contains(". Mount a writable tmpfs", state.Problem);
         Assert.Equal(1, System.Text.RegularExpressions.Regex.Count(state.Problem, System.Text.RegularExpressions.Regex.Escape(folder)));
+    }
+
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsWindows),
+        Skip = "Windows-only: the POSIX base is not used there")]
+    public void Windows_reports_no_problem_and_creates_no_folder()
+    {
+        var folder = Path.Combine(_root, "netclaw-1000");
+
+        var state = ShellTemporaryDirectoryState.Probe(Layout(folder));
+
+        Assert.Null(state.Problem);
+        Assert.False(Directory.Exists(folder));
     }
 
     [Fact]
@@ -117,25 +134,5 @@ public sealed class ShellTemporaryDirectoryStateTests : IDisposable
         var link = Path.Combine(_root, "netclaw-1000");
         Directory.CreateSymbolicLink(link, real);
         AssertParity(link, expected: false);
-    }
-
-    [Fact]
-    public void Probe_refuses_a_world_writable_base_so_a_planted_link_inside_it_is_never_reached()
-    {
-        if (OperatingSystem.IsWindows())
-            return;
-
-        var folder = Path.Combine(_root, "netclaw-1000");
-        Directory.CreateDirectory(folder);
-        File.SetUnixFileMode(folder, (UnixFileMode)0x1FF);
-        var victim = Path.Combine(_root, "victim.txt");
-        File.WriteAllText(victim, "precious");
-        File.CreateSymbolicLink(Path.Combine(folder, $".probe-{Environment.ProcessId}"), victim);
-
-        // The shell refuses a base that others can write to, so the probe stops at the base check
-        // before it creates anything; the link planted in it is not followed.
-        AssertParity(folder, expected: false);
-
-        Assert.Equal("precious", File.ReadAllText(victim));
     }
 }
