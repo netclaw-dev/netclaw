@@ -389,7 +389,7 @@ A list in `Tools` that has default items replaces its default list. It does not 
   `"GlobalReadRoots": ["{skills_dir}", "{identity_dir}", "{workspaces_dir}", "/srv/docs"]`.
 - `[]` or an empty `NETCLAW_*` variable gives an empty list.
 - JSON `null` or `{}` gives an empty list, and the daemon logs a startup warning that names
-  the key. These lists are all allow lists, so an empty list grants less.
+  the key. `netclaw doctor` reports the same warning. These lists are all allow lists, so an empty list grants less.
 - These shapes stop daemon startup with an error that names the key, and they do not print
   the value: a scalar value; an empty `NETCLAW_*` variable when `netclaw.json` or
   `secrets.json` sets items for the same key; an attachment category that is not one defined

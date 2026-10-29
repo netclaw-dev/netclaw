@@ -8,6 +8,8 @@ using Netclaw.Cli;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Netclaw.Cli.Json;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
@@ -972,6 +974,7 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
 
     [Theory]
     [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"AllowedTools\": VALUE } } }")]
+    [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"AllowedMcpServers\": VALUE } } }")]
     [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"ReadFiles\": { \"Roots\": VALUE } } } }")]
     [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"WriteFiles\": { \"Roots\": VALUE } } } }")]
     [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"AttachFiles\": { \"Roots\": VALUE } } } }")]
@@ -990,6 +993,54 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
         var scalar = await RunSchemaCheck(
             "{ \"configVersion\": 1, \"Tools\": " + toolsTemplate.Replace("VALUE", "\"file_read\"", StringComparison.Ordinal) + " }");
         Assert.Equal(DoctorSeverity.Error, scalar.Severity);
+        Assert.Contains("array", scalar.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("ToolOverrides", "[]")]
+    [InlineData("ToolOverrides", "\"\"")]
+    [InlineData("McpServerDefaults", "[]")]
+    [InlineData("McpServerDefaults", "\"\"")]
+    public async Task ReturnsPass_WhenApprovalPolicyMapIsEmptyArrayOrString(string map, string value)
+    {
+        var result = await RunSchemaCheck($$"""
+            { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "{{map}}": {{value}} } } } } }
+            """);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public void IntegerApprovalModes_AreFixedAgainstTheEmbeddedSchema()
+    {
+        // The fix maps an integer to the enum entry at that index, so Auto, Approval and Deny must
+        // stay first in the approval mode enums, in the order of ToolApprovalMode.
+        var schemaText = EmbeddedSchemaLoader.LoadConfigSchema(EmbeddedSchemaLoader.CurrentSchemaVersion)!;
+        var schema = global::Json.Schema.JsonSchema.FromText(schemaText);
+        var schemaJson = JsonNode.Parse(schemaText)!.AsObject();
+        var config = JsonNode.Parse("""
+            { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": {
+              "DefaultMode": 1,
+              "ToolOverrides": { "a": 0, "b": 1, "c": 2, "d": 3, "e": -1 },
+              "McpServerDefaults": { "s": 2 } } } } } }
+            """)!.AsObject();
+
+        Assert.Equal(["Auto", "Approval", "Deny"], Enum.GetNames<ToolApprovalMode>());
+        Assert.True(SchemaFixResolver.TryApplySchemaFixes(schema, schemaJson, config, out _));
+
+        var policy = config["Tools"]!["AudienceProfiles"]!["Team"]!["ApprovalPolicy"]!;
+        Assert.Equal("Approval", policy["DefaultMode"]!.GetValue<string>());
+        Assert.Equal("Auto", policy["ToolOverrides"]!["a"]!.GetValue<string>());
+        Assert.Equal("Approval", policy["ToolOverrides"]!["b"]!.GetValue<string>());
+        Assert.Equal("Deny", policy["ToolOverrides"]!["c"]!.GetValue<string>());
+        Assert.Equal(3, policy["ToolOverrides"]!["d"]!.GetValue<int>());
+        Assert.Equal(-1, policy["ToolOverrides"]!["e"]!.GetValue<int>());
+        Assert.Equal("Deny", policy["McpServerDefaults"]!["s"]!.GetValue<string>());
+
+        // Without the two values that the fix leaves alone, the fixed config is valid.
+        policy["ToolOverrides"]!.AsObject().Remove("d");
+        policy["ToolOverrides"]!.AsObject().Remove("e");
+        Assert.True(schema.Evaluate(config).IsValid);
     }
 
     private async Task<DoctorCheckResult> RunSchemaCheck(string json)

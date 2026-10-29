@@ -377,10 +377,10 @@
               "description": "When true, web_fetch rejects plain HTTP URLs unless the host is in HttpAllowList."
             },
             "HttpAllowList": {
-              "type": ["array", "null", "object", "string"],
-              "maxProperties": 0,
-              "maxLength": 0,
-              "items": { "type": "string" },
+              "anyOf": [
+                { "type": "array", "items": { "type": "string" } },
+                { "enum": [null, {}, ""] }
+              ],
               "default": ["localhost", "127.0.0.1", "::1", "[::1]"],
               "description": "Hosts allowed to use plain HTTP when RequireHttps is true. Default includes loopback addresses. A null, {} or \"\" value gives an empty list; only an absent key gives the default."
             }
@@ -985,10 +985,10 @@
       "properties": {
         "Mode": { "$ref": "#/$defs/ToolFilesystemMode" },
         "Roots": {
-          "type": ["array", "null", "object", "string"],
-          "maxProperties": 0,
-          "maxLength": 0,
-          "items": { "type": "string" }
+          "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "enum": [null, {}, ""] }
+          ]
         }
       },
       "additionalProperties": false
@@ -998,15 +998,17 @@
       "properties": {
         "ToolsMode": { "$ref": "#/$defs/ToolProfileMode" },
         "AllowedTools": {
-          "type": ["array", "null", "object", "string"],
-          "maxProperties": 0,
-          "maxLength": 0,
-          "items": { "type": "string" }
+          "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "enum": [null, {}, ""] }
+          ]
         },
         "McpServersMode": { "$ref": "#/$defs/ToolProfileMode" },
         "AllowedMcpServers": {
-          "type": "array",
-          "items": { "type": "string" }
+          "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "enum": [null, {}, ""] }
+          ]
         },
         "McpServerToolGrants": {
           "type": ["object", "null"],
@@ -1034,10 +1036,10 @@
       "description": "Per-audience inbound channel attachment policy. Channel adapters query this before downloading or delivering any user-uploaded file.",
       "properties": {
         "AllowedCategories": {
-          "type": ["array", "null", "object", "string"],
-          "maxProperties": 0,
-          "maxLength": 0,
-          "items": { "$ref": "#/$defs/AttachmentCategory" },
+          "anyOf": [
+            { "type": "array", "items": { "$ref": "#/$defs/AttachmentCategory" } },
+            { "enum": [null, {}, ""] }
+          ],
           "description": "Attachment categories permitted for this audience. Empty (including null, {} or \"\") rejects all inbound attachments. When the key is absent, Public allows Image, Team allows everything except Other, and Personal allows every category."
         },
         "MaxFileBytes": {
@@ -1066,7 +1068,9 @@
           "description": "Default approval mode for tools not explicitly overridden."
         },
         "ToolOverrides": {
-          "type": ["object", "null"],
+          "type": ["object", "null", "array", "string"],
+          "maxItems": 0,
+          "maxLength": 0,
           "default": {},
           "description": "Per-tool approval mode overrides. Keys are tool names, matched without regard to case (e.g., shell_execute, file_write), or MCP tool keys of the form {serverName}/{toolName} (e.g., notion/create-pages). A null, empty-string, [] or {} value carries no mode and is ignored.",
           "additionalProperties": {
@@ -1075,7 +1079,9 @@
           }
         },
         "McpServerDefaults": {
-          "type": ["object", "null"],
+          "type": ["object", "null", "array", "string"],
+          "maxItems": 0,
+          "maxLength": 0,
           "default": {},
           "description": "Per-MCP-server approval mode defaults. Keys are MCP server names (e.g., notion). Applies to all tools exposed by that server unless an exact entry in ToolOverrides takes precedence. Tools discovered on the server after config was written inherit this default automatically. A null, empty-string, [] or {} value carries no mode and is ignored.",
           "additionalProperties": {
@@ -1093,11 +1099,11 @@
         "Team": { "$ref": "#/$defs/ToolAudienceProfile" },
         "Personal": { "$ref": "#/$defs/ToolAudienceProfile" },
         "GlobalReadRoots": {
-          "type": ["array", "null", "object", "string"],
-          "maxProperties": 0,
-          "maxLength": 0,
-          "description": "Filesystem roots readable by all audiences. Supports tokens: {skills_dir}, {identity_dir}, {workspaces_dir}. A null, {} or \"\" value gives an empty list; only an absent key gives the default.",
-          "items": { "type": "string" }
+          "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "enum": [null, {}, ""] }
+          ],
+          "description": "Filesystem roots readable by all audiences. Supports tokens: {skills_dir}, {identity_dir}, {workspaces_dir}. A null, {} or \"\" value gives an empty list; only an absent key gives the default."
         }
       },
       "additionalProperties": false

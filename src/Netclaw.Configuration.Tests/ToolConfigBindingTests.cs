@@ -93,6 +93,37 @@ public sealed class ToolConfigBindingTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("\"\"")]
+    public void AllowedMcpServers_with_no_value_binds_as_an_empty_list(string value)
+    {
+        var toolConfig = Bind("AudienceProfiles:Team:AllowedMcpServers", value, "NETCLAW_TEST_UNUSED_", out var warnings);
+
+        Assert.Empty(toolConfig.AudienceProfiles.Team.AllowedMcpServers);
+        Assert.Empty(warnings);
+    }
+
+    [Theory]
+    [InlineData("ToolOverrides", "null")]
+    [InlineData("ToolOverrides", "[]")]
+    [InlineData("ToolOverrides", "\"\"")]
+    [InlineData("McpServerDefaults", "null")]
+    [InlineData("McpServerDefaults", "[]")]
+    [InlineData("McpServerDefaults", "\"\"")]
+    public void An_approval_map_with_no_value_keeps_the_posture_defaults(string map, string value)
+    {
+        var baseline = Bind("AudienceProfiles:Team:ApprovalPolicy:" + map, "{}", "NETCLAW_TEST_UNUSED_", out _);
+        var toolConfig = Bind("AudienceProfiles:Team:ApprovalPolicy:" + map, value, "NETCLAW_TEST_UNUSED_", out var warnings);
+
+        var expected = baseline.AudienceProfiles.Team.ApprovalPolicy!;
+        var actual = toolConfig.AudienceProfiles.Team.ApprovalPolicy!;
+        Assert.Equal(expected.ToolOverrides, actual.ToolOverrides);
+        Assert.Equal(expected.McpServerDefaults, actual.McpServerDefaults);
+        Assert.Empty(warnings);
+    }
+
     public static TheoryData<TrustAudience, string[], bool> LegacyAllowLists()
     {
         string[] team0254 = [.. ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools[1]];
