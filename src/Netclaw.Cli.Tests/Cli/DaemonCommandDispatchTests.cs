@@ -82,6 +82,7 @@ public sealed class DaemonCommandDispatchTests
         Assert.Contains("PID 4242", message);
         Assert.Contains("address cannot be determined", message);
         Assert.Contains("readiness was not checked", message);
+        Assert.Contains("NETCLAW_* settings", message);
     }
 
     [Fact]
@@ -90,6 +91,7 @@ public sealed class DaemonCommandDispatchTests
         var message = DaemonCommandDispatch.FormatAddressUnknown(
             new DaemonStatus(IsRunning: true, Pid: null, Message: "Daemon is running (PID file missing)."));
 
-        Assert.DoesNotContain("PID", message);
+        Assert.DoesNotContain("(PID", message);
+        Assert.Contains("PID file is missing", message);
     }
 }

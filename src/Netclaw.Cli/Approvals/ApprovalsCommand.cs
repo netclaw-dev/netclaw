@@ -60,7 +60,7 @@ internal static class ApprovalsCommand
         };
     }
 
-    // Matches `netclaw daemon <unknown>`: usage, then exit 1, as the help's exit-code line promises.
+    // Exit 1 like `netclaw daemon <unknown>`, with the error and usage on stderr, as the help's exit-code line promises.
     private static int RunUnknown(string subcommand, NetclawPaths paths, TextWriter diagnostics, TimeProvider clock)
     {
         diagnostics.WriteLine($"Unknown subcommand '{subcommand}'.");

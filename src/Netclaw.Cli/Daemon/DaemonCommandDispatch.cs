@@ -47,6 +47,7 @@ internal static class DaemonCommandDispatch
     /// </summary>
     public static string FormatAddressUnknown(DaemonStatus status)
         => $"Daemon process is running{(status.Pid is { } pid ? $" (PID {pid})" : "")}, but its address cannot be "
-           + "determined from the local configuration (netclaw.json unreadable or invalid), so readiness was not checked. "
-           + "Repair the local configuration and retry.";
+           + "determined from the local configuration (netclaw.json or NETCLAW_* settings unreadable or invalid), "
+           + "so readiness was not checked. Repair the local configuration and retry."
+           + (status.Pid is null ? " The PID file is missing; the daemon will self-terminate shortly." : "");
 }
