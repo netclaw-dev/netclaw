@@ -58,7 +58,7 @@ public static class SchemaFixResolver
         return changed;
     }
 
-    private static bool HasValidAncestor(
+    internal static bool HasValidAncestor(
         EvaluationResults detail,
         IReadOnlyList<EvaluationResults> evaluationDetails)
     {

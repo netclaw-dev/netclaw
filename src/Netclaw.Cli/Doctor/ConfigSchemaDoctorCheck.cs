@@ -107,8 +107,11 @@ public sealed class ConfigSchemaDoctorCheck(NetclawPaths paths) : IDoctorCheck
             var errorDetails = string.Empty;
             if (evaluation.Details is not null)
             {
-                var failures = evaluation.Details
-                    .Where(d => !d.IsValid && d.Errors is not null)
+                // List output also holds failures from anyOf/oneOf branches that did not match
+                // while another branch did. Those are not errors in the file.
+                var details = evaluation.Details.ToList();
+                var failures = details
+                    .Where(d => !d.IsValid && d.Errors is not null && !SchemaFixResolver.HasValidAncestor(d, details))
                     .Take(5)
                     .Select(d => $"  {d.InstanceLocation}: {string.Join("; ", d.Errors!.Select(e => $"{e.Key}: {e.Value}"))}")
                     .ToList();

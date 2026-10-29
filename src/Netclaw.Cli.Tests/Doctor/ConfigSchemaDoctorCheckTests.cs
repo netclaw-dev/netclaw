@@ -1043,6 +1043,40 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
         Assert.True(schema.Evaluate(config).IsValid);
     }
 
+    [Fact]
+    public async Task ValidListsAreNotReportedAsErrors_WhenAnotherFieldIsInvalid()
+    {
+        // The list schemas use anyOf. A valid array must not leave a failed branch in the report,
+        // or the real errors fall out of the first five lines and the lists look wrong.
+        var result = await RunSchemaCheck("""
+            {
+              "configVersion": 1,
+              "Slack": { "Enabled": "yes" },
+              "Tools": {
+                "WebFetch": { "HttpAllowList": ["localhost"] },
+                "AudienceProfiles": {
+                  "GlobalReadRoots": ["{skills_dir}"],
+                  "Team": {
+                    "AllowedTools": ["file_read"],
+                    "AllowedMcpServers": ["notion"],
+                    "ReadFiles": { "Roots": ["/srv/a"] },
+                    "WriteFiles": { "Roots": ["/srv/a"] },
+                    "AttachFiles": { "Roots": ["/srv/a"] },
+                    "ChannelAttachments": { "AllowedCategories": ["Image"] },
+                    "ApprovalPolicy": { "ToolOverrides": { "shell_execute": "Sometimes" } }
+                  }
+                }
+              }
+            }
+            """);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("/Slack/Enabled", result.Message, StringComparison.Ordinal);
+        Assert.Contains("/ToolOverrides/shell_execute", result.Message, StringComparison.Ordinal);
+        foreach (var list in new[] { "HttpAllowList", "GlobalReadRoots", "AllowedTools", "AllowedMcpServers", "Roots", "AllowedCategories" })
+            Assert.DoesNotContain(list, result.Message, StringComparison.Ordinal);
+    }
+
     private async Task<DoctorCheckResult> RunSchemaCheck(string json)
     {
         var paths = new NetclawPaths(CreateTempBasePath());
