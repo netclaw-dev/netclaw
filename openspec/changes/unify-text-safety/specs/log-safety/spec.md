@@ -122,8 +122,9 @@ In each text log sink, a line of record content SHALL NOT start the same way
 as a record header. The system SHALL show each continuation line of a record
 with a fixed prefix. The system SHALL treat CR, CRLF, LF, NEL, U+2028, and
 U+2029 as line breaks. The system SHALL escape other control characters,
-except tab, and bidirectional control characters as `\uXXXX` in every log
-sink.
+except tab, and bidirectional control characters as `\uXXXX` in the
+message, structured values, and scope values of every log sink, and in the
+exception text of every text log sink.
 
 #### Scenario: A message contains a fake log header
 

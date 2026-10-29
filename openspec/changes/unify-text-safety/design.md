@@ -181,6 +181,12 @@ sink, including OTLP viewers.
 
 `RollingFileLoggerProvider` and `SessionLogActor` put a fixed continuation
 prefix at the start of every physical line after the first line of a record.
+A text sink renders the exception text itself, so it normalizes that text
+with the same rule before it frames it. OTLP receives a non-secret exception
+as the original object, so its raw text is not escaped there. OTLP is
+structured, and a stand-in copy for every such exception would lose its type
+and native stack trace. `LogTextFraming` in `Netclaw.Configuration` holds the
+normalization and the prefix, so the stage and both text sinks share one rule.
 
 - Owner: each text sink. The file provider owns provider-local formatting;
   `SessionLogActor` owns actor-local writer state. Data: durable log files,

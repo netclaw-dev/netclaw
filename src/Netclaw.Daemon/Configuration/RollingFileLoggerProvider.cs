@@ -9,6 +9,7 @@ using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Configuration;
@@ -333,10 +334,10 @@ internal sealed class RollingFileLogger : ILogger
         };
 
         var source = logSource ?? _category;
+        // The record body is framed here, because this sink renders the exception text itself.
         var message = formatter(state, exception);
-        var line = $"{timestamp} [{level}] {source}: {message}";
-        if (exception is not null)
-            line += Environment.NewLine + exception;
+        var body = exception is null ? message : message + Environment.NewLine + exception;
+        var line = $"{timestamp} [{level}] {source}: {LogTextFraming.Frame(body)}";
 
         // A session id found in the message STATE is a routing trigger only when it rode in on an
         // Akka actor context: the Akka→MEL bridge's AkkaLogState carries a LogSource alongside the
