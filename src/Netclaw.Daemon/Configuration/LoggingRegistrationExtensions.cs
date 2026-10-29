@@ -15,6 +15,8 @@ namespace Netclaw.Daemon.Configuration;
 /// <summary>Registers the daemon's console and partitioned file logging providers.</summary>
 public static class LoggingRegistrationExtensions
 {
+    internal const string HostingDiagnosticsCategory = "Microsoft.AspNetCore.Hosting.Diagnostics";
+
     internal static AkkaConfigurationBuilder WithNetclawActorLogging(
         this AkkaConfigurationBuilder builder, LogLevel level)
         => builder.ConfigureLoggers(setup =>
@@ -43,6 +45,14 @@ public static class LoggingRegistrationExtensions
 
         builder.Logging.ClearProviders();
         builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
+
+        // ASP.NET Core logs each request URL with its query string at Information. The OAuth
+        // callbacks carry the authorization code and state in the query, and the SignalR hub
+        // carries its connection token, so these lines would reach daemon.log and the OTLP
+        // exporter. This rule has no provider, so it covers every provider. It is added after
+        // the configuration rules, so a general Logging:LogLevel setting cannot re-enable it.
+        builder.Logging.AddFilter(HostingDiagnosticsCategory, LogLevel.Warning);
+
         if (consoleEnabled)
             builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
 
