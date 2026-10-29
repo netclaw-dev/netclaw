@@ -569,9 +569,9 @@ static async Task RunAsync(string[] args)
             case "status":
             {
                 var status = manager.GetStatus();
-                Console.WriteLine(status.Message);
                 if (!status.IsRunning || !status.ServesThisHome)
                 {
+                    Console.WriteLine(status.Message);
                     Environment.ExitCode = 1;
                     return;
                 }
@@ -581,11 +581,18 @@ static async Task RunAsync(string[] args)
                 // port baked into the image.
                 var (ready, readyEndpoint) = await DaemonApi.ProbeLocalReadinessAsync(paths);
 
+                if (readyEndpoint is null)
+                {
+                    // One message: "Daemon running" followed by "address unknown" read as a contradiction.
+                    Console.WriteLine(DaemonCommandDispatch.FormatAddressUnknown(status));
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                Console.WriteLine(status.Message);
                 if (!ready)
                 {
-                    Console.WriteLine(readyEndpoint is null
-                        ? "The local daemon address is unknown. No readiness probe was sent. Repair the local configuration and retry."
-                        : $"Daemon process is running but {readyEndpoint}/api/health/ready did not answer.");
+                    Console.WriteLine($"Daemon process is running but {readyEndpoint}/api/health/ready did not answer.");
                     Environment.ExitCode = 1;
                     return;
                 }

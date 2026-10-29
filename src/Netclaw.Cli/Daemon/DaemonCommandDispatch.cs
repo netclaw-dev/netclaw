@@ -39,4 +39,14 @@ internal static class DaemonCommandDispatch
     public static bool ShouldShowDevicesHelp(string[] args)
         => CliArgsParser.IsHelpToken(args.Length > 2 ? args[2] : "list")
            || CliArgsParser.HasTrailingHelpToken(args, startIndex: 3, includeBareHelp: false);
+
+    /// <summary>
+    /// The one line <c>daemon status</c> prints when the process runs but the local config
+    /// gives no address to probe. Status deliberately skips the probe then, so it does not
+    /// reach whatever daemon holds the default port.
+    /// </summary>
+    public static string FormatAddressUnknown(DaemonStatus status)
+        => $"Daemon process is running{(status.Pid is { } pid ? $" (PID {pid})" : "")}, but its address cannot be "
+           + "determined from the local configuration (netclaw.json unreadable or invalid), so readiness was not checked. "
+           + "Repair the local configuration and retry.";
 }

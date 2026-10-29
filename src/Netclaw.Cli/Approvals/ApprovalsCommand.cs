@@ -56,8 +56,16 @@ internal static class ApprovalsCommand
             "revoke" => Task.FromResult(RunRevoke(args, paths, writer, diagnosticWriter, clock)),
             "trust-verb" => Task.FromResult(RunTrustVerb(args, paths, writer, diagnosticWriter, clock)),
             "help" or "-h" or "--help" => Task.FromResult(WriteHelp(paths, writer, clock)),
-            _ => Task.FromResult(WriteHelp(paths, writer, clock)),
+            _ => Task.FromResult(RunUnknown(subcommand, paths, diagnosticWriter, clock)),
         };
+    }
+
+    // Matches `netclaw daemon <unknown>`: usage, then exit 1, as the help's exit-code line promises.
+    private static int RunUnknown(string subcommand, NetclawPaths paths, TextWriter diagnostics, TimeProvider clock)
+    {
+        diagnostics.WriteLine($"Unknown subcommand '{subcommand}'.");
+        WriteHelp(paths, diagnostics, clock);
+        return 1;
     }
 
     private static int RunList(

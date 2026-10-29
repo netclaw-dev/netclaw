@@ -71,4 +71,25 @@ public sealed class DaemonCommandDispatchTests
         // itself is normalized away before this check runs — none should be double-guarded here.
         Assert.False(DaemonCommandDispatch.ShouldShowHelpInsteadOfExecuting(verb, ["daemon", verb, "--help"]));
     }
+
+    [Fact]
+    public void FormatAddressUnknown_is_one_coherent_line_with_the_pid()
+    {
+        var message = DaemonCommandDispatch.FormatAddressUnknown(
+            new DaemonStatus(IsRunning: true, Pid: 4242, Message: "Daemon running (PID 4242, uptime 5m)."));
+
+        Assert.DoesNotContain("\n", message);
+        Assert.Contains("PID 4242", message);
+        Assert.Contains("address cannot be determined", message);
+        Assert.Contains("readiness was not checked", message);
+    }
+
+    [Fact]
+    public void FormatAddressUnknown_omits_the_pid_when_the_pid_file_is_missing()
+    {
+        var message = DaemonCommandDispatch.FormatAddressUnknown(
+            new DaemonStatus(IsRunning: true, Pid: null, Message: "Daemon is running (PID file missing)."));
+
+        Assert.DoesNotContain("PID", message);
+    }
 }

@@ -346,6 +346,19 @@ public sealed class ApprovalsCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Unknown_subcommand_exits_one_and_prints_usage_on_stderr()
+    {
+        var diagnostics = new StringWriter();
+
+        var exit = await ApprovalsCommand.RunAsync(_cli with { Error = diagnostics }, ["approvals", "bogus"]);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Unknown subcommand 'bogus'", diagnostics.ToString());
+        Assert.Contains("Usage: netclaw approvals", diagnostics.ToString());
+        Assert.DoesNotContain("Usage: netclaw approvals", _output.ToString());
+    }
+
+    [Fact]
     public async Task Revoke_old_unscoped_form_rejects_cross_audience_ambiguity()
     {
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("ls"));
