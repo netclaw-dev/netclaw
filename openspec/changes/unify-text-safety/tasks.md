@@ -1,10 +1,10 @@
 ## 1. PR 1: Shared character definitions and session helper merge
 
-- [ ] 1.1 Add tests that pin current behavior: approval display escaping, shell policy decision trace escaping, approval entry validation (including U+2028 in a field that allows whitespace, and U+202E rejected), `SanitizeForLog` output, and `SanitizeSessionId` output for empty, all-invalid, and non-ASCII input. Verify that all of them pass on the current code before any refactor.
-- [ ] 1.2 Add `IsBidiControl`, `IsUnicodeLineSeparator`, `IsByteOrderMark`, and `EscapeAsUnicode` in `Netclaw.Configuration` (design D11). Verify set membership and the escape function with unit tests.
-- [ ] 1.3 Move approval display, the shell policy decision trace, approval entry validation, and `SanitizeForLog` to the shared definitions, and delete their private member lists. Verify that the tests from 1.1 pass with no edits to those tests.
-- [ ] 1.4 Make `SanitizeSessionId` call `SanitizePathSegment`, and delete its loop (design D12). Verify that the tests from 1.1 pass with no edits.
-- [ ] 1.5 Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify`, and verify that both pass. Review the focused mutation scope for approval display escaping, and record the result in the PR.
+- [x] 1.1 Add tests that pin current behavior: approval display escaping, shell policy decision trace escaping, approval entry validation (including U+2028 in a field that allows whitespace, and U+202E rejected), `SanitizeForLog` output, and `SanitizeSessionId` output for empty, all-invalid, and non-ASCII input. Verify that all of them pass on the current code before any refactor.
+- [x] 1.2 Add `IsBidiControl`, `IsUnicodeLineSeparator`, `IsByteOrderMark`, and `EscapeAsUnicode` in `Netclaw.Configuration` (design D11). Verify set membership and the escape function with unit tests.
+- [x] 1.3 Move approval display, the shell policy decision trace, approval entry validation, and `SanitizeForLog` to the shared definitions, and delete their private member lists. Verify that the tests from 1.1 pass with no edits to those tests.
+- [x] 1.4 Make `SanitizeSessionId` call `SanitizePathSegment`, and delete its loop (design D12). Verify that the tests from 1.1 pass with no edits.
+- [x] 1.5 Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify`, and verify that both pass. Review the focused mutation scope for approval display escaping, and record the result in the PR.
 
 ## 2. PR 2: Log safety (depends on PR 1)
 

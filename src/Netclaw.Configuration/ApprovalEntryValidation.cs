@@ -220,16 +220,11 @@ internal static class ApprovalEntryValidation
                 throw new JsonException($"The {fieldName} has invalid Unicode.");
             }
 
-            if (char.IsControl(character) || IsBidiControl(character) ||
+            if (char.IsControl(character) || TextControlCharacters.IsBidiControl(character) ||
                 !allowWhitespace && char.IsWhiteSpace(character))
             {
                 throw new JsonException($"The {fieldName} has a prohibited character.");
             }
         }
     }
-
-    private static bool IsBidiControl(char character) =>
-        character is '\u061c' or '\u200e' or '\u200f' or
-            >= '\u202a' and <= '\u202e' or
-            >= '\u2066' and <= '\u2069';
 }

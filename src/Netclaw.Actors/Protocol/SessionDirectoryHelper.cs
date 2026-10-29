@@ -87,11 +87,5 @@ public static class SessionDirectoryHelper
     /// Session IDs may contain slashes (e.g. "C123/1234567890.123456").
     /// </summary>
     public static string SanitizeSessionId(SessionId sessionId)
-    {
-        var value = sessionId.Value;
-        Span<char> buf = stackalloc char[value.Length];
-        for (var i = 0; i < value.Length; i++)
-            buf[i] = char.IsLetterOrDigit(value[i]) || value[i] == '-' ? value[i] : '_';
-        return new string(buf);
-    }
+        => SessionStoragePaths.SanitizePathSegment(sessionId.Value);
 }
