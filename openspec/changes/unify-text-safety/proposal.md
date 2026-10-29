@@ -39,7 +39,7 @@ misconfiguration"), PRD-006 (MCP OAuth credential handling).
 code under the stage and are removed or simplified:
 
 - 14 `RedactForLogging(ex)` call sites log `ex` directly. `RedactForLogging`
-  and `RedactedLoggingException` are removed.
+  stays as the one implementation that the stage calls.
 - 2 `Redact` calls whose only output is a log record are removed
   (`McpClientManager` tool-failure detail, `OAuthRefreshGrantHandler` error
   fields).
@@ -117,7 +117,7 @@ rules.
   `SessionLogActor`; the character-set copies in `IToolApprovalMatcher`,
   `ShellPolicyDecisionTrace`, `ApprovalEntryValidation`, and
   `DaemonLifecycleNotifier`; the two session storage helpers.
-- Size (estimate): about 80 to 100 lines of existing code removed, and about
+- Size (estimate): about 50 to 70 lines of existing code removed, and about
   100 to 140 lines of new code. Three new constructs: the factory wrapper,
   sink framing, and the shared character definitions. PR #2729 and PR #2731
   (about 350 lines) do not merge.
