@@ -455,8 +455,9 @@ public sealed partial class DaemonManager
             TryReadPidFile(out _, out var pidFileStartedAt);
             var startedAt = pidFileStartedAt ?? new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
             var uptime = _timeProvider.GetUtcNow() - startedAt;
+            var formattedUptime = FormatUptime(uptime);
             return new DaemonStatus(IsRunning: true, Pid: pid,
-                Message: $"Daemon running (PID {pid}, uptime {FormatUptime(uptime)}).");
+                Message: $"Daemon running (PID {pid}, uptime {formattedUptime}).", Uptime: formattedUptime);
         }
         catch (ArgumentException)
         {
@@ -978,4 +979,4 @@ public sealed partial class DaemonManager
 
 public sealed record DaemonResult(bool Success, string Message, string? CrashLogPath = null, bool IsRefusal = false);
 
-public sealed record DaemonStatus(bool IsRunning, int? Pid, string Message, bool ServesThisHome = true);
+public sealed record DaemonStatus(bool IsRunning, int? Pid, string Message, bool ServesThisHome = true, string? Uptime = null);

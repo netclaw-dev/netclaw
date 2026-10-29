@@ -935,6 +935,22 @@ public sealed class DaemonCommandWiringTests : IDisposable
     }
 
     [Fact]
+    public async Task Status_NamesSecretsJson_WhenThatFileCannotBeRead()
+    {
+        Directory.CreateDirectory(Path.Combine(ScratchHome, "config"));
+        File.WriteAllText(Path.Combine(ScratchHome, "config", "netclaw.json"), "{}");
+        File.WriteAllText(Path.Combine(ScratchHome, "config", "secrets.json"), "{not json");
+        using var lockHolder = HoldDaemonLock(ScratchHome);
+
+        var (exitCode, stdout, _) = await RunWithStreamsAsync(ScratchHome, ["daemon", "status"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("address cannot be determined", stdout);
+        Assert.Contains("secrets.json", stdout);
+        Assert.DoesNotContain("netclaw.json", stdout);
+    }
+
+    [Fact]
     public async Task Status_ExitsZero_WhenTheProcessRunsAndReadinessAnswers()
     {
         var port = FreePort();

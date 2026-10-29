@@ -94,4 +94,16 @@ public sealed class DaemonCommandDispatchTests
         Assert.DoesNotContain("(PID", message);
         Assert.Contains("PID file is missing", message);
     }
+
+    [Fact]
+    public void FormatAddressUnknown_includes_uptime_and_the_given_reason_and_fix()
+    {
+        var message = DaemonCommandDispatch.FormatAddressUnknown(
+            new DaemonStatus(IsRunning: true, Pid: 7, Message: "m", Uptime: "5m"),
+            "Couldn't read secrets.json: bad.", "Fix the JSON in secrets.json.");
+
+        Assert.Contains("(PID 7, uptime 5m)", message);
+        Assert.Contains("Couldn't read secrets.json: bad. Fix the JSON in secrets.json.", message);
+        Assert.DoesNotContain("NETCLAW_*", message);
+    }
 }

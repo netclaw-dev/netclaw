@@ -584,7 +584,8 @@ static async Task RunAsync(string[] args)
                 if (readyEndpoint is null)
                 {
                     // One message: "Daemon running" followed by "address unknown" read as a contradiction.
-                    Console.WriteLine(DaemonCommandDispatch.FormatAddressUnknown(status));
+                    CliConfigPreflight.TryDescribeUnreadableConfig(paths, out var unreadable, out var unreadableFix);
+                    Console.WriteLine(DaemonCommandDispatch.FormatAddressUnknown(status, unreadable, unreadableFix));
                     Environment.ExitCode = 1;
                     return;
                 }

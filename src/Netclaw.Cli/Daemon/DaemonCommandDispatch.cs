@@ -43,11 +43,18 @@ internal static class DaemonCommandDispatch
     /// <summary>
     /// The one line <c>daemon status</c> prints when the process runs but the local config
     /// gives no address to probe. Status deliberately skips the probe then, so it does not
-    /// reach whatever daemon holds the default port.
+    /// reach whatever daemon holds the default port. <paramref name="reason"/> names the
+    /// failing file when one can be found; a bad NETCLAW_* setting has no file to name.
     /// </summary>
-    public static string FormatAddressUnknown(DaemonStatus status)
-        => $"Daemon process is running{(status.Pid is { } pid ? $" (PID {pid})" : "")}, but its address cannot be "
-           + "determined from the local configuration (netclaw.json or NETCLAW_* settings unreadable or invalid), "
-           + "so readiness was not checked. Repair the local configuration and retry."
-           + (status.Pid is null ? " The PID file is missing; the daemon will self-terminate shortly." : "");
+    public static string FormatAddressUnknown(DaemonStatus status, string? reason = null, string? fix = null)
+    {
+        var who = status.Pid is { } pid
+            ? $" (PID {pid}{(status.Uptime is { } uptime ? $", uptime {uptime}" : "")})"
+            : "";
+        var cause = string.IsNullOrEmpty(reason)
+            ? "The local configuration (netclaw.json or NETCLAW_* settings) is unreadable or invalid. Repair it and retry."
+            : $"{reason} {fix}".TrimEnd();
+        return $"Daemon process is running{who}, but its address cannot be determined, so readiness was not checked. {cause}"
+               + (status.Pid is null ? " The PID file is missing; the daemon will self-terminate shortly." : "");
+    }
 }
