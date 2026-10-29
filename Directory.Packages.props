@@ -23,7 +23,7 @@
          9.x pulls a vulnerable KubernetesClient 17.0.4 (GHSA-w7r3-mgwf-4mqq)
          that trips NU1902 under our TreatWarningsAsErrors policy. -->
     <AspireHostingVersion>13.6.4</AspireHostingVersion>
-    <CommunityToolkitAspireVersion>13.5.0</CommunityToolkitAspireVersion>
+    <CommunityToolkitAspireVersion>13.6.1</CommunityToolkitAspireVersion>
     <ModelContextProtocolVersion>2.2.0</ModelContextProtocolVersion>
   </PropertyGroup>
   <!-- App dependencies -->
