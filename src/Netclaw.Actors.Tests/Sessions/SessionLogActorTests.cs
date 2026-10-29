@@ -11,6 +11,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Routing;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
@@ -409,6 +410,52 @@ public sealed class SessionLogActorTests : TestKit
                 var text = await ReadLogAsync(GetLegacyLogPath(sessionId, basePath), TestContext.Current.CancellationToken);
                 Assert.Contains("Assistant: xxx", text, StringComparison.Ordinal);
                 Assert.DoesNotContain("ghp_1", text, StringComparison.Ordinal);
+            }, cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            await TryDeleteDirectoryAsync(basePath);
+        }
+    }
+    /// <summary>
+    /// One presigned URL, two copies (design D5 of unify-text-safety). The model must get the
+    /// usable URL, because redaction once broke uploads this way (#1992). The log gets a masked
+    /// copy. If redaction ever moves onto the model path, or off the log path, this test fails.
+    /// </summary>
+    [Fact]
+    public async Task A_presigned_url_reaches_the_model_intact_and_the_log_masked()
+    {
+        const string presignedUrl =
+            "https://acct.r2.cloudflarestorage.com/bucket/x.png?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+            "&X-Amz-Credential=abc123def456ghijklmnop%2F20260818%2Fauto%2Fs3%2Faws4_request" +
+            "&X-Amz-Signature=deadbeefcafe0123456789abcdef";
+        var basePath = Path.Combine(Path.GetTempPath(), $"netclaw-session-log-tests-{Guid.NewGuid():N}");
+        var sessionId = new SessionId("channel/presigned");
+
+        // Model path: MCP output skips output redaction, so the model gets the URL unchanged.
+        var adapter = new McpToolAdapter(
+            Microsoft.Extensions.AI.AIFunctionFactory.Create(() => presignedUrl, "create_upload"),
+            "assetbridge",
+            "create_upload");
+        Assert.True(adapter.SuppressOutputRedaction);
+
+        try
+        {
+            // Log path: the same result in session.log is masked.
+            var dispatcher = SpawnDispatcher(Sys, basePath, new FakeTimeProvider(DateTimeOffset.Parse("2026-10-29T17:00:00Z")));
+            dispatcher.Tell(new ToolResultOutput
+            {
+                SessionId = sessionId,
+                CallId = new ToolCallId("call-1"),
+                ToolName = new ToolName(adapter.Name),
+                Result = presignedUrl,
+            }, ActorRefs.NoSender);
+
+            await AwaitAssertAsync(async () =>
+            {
+                var text = await ReadLogAsync(GetLegacyLogPath(sessionId, basePath), TestContext.Current.CancellationToken);
+                Assert.Contains("Tool result: ", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("abc123def456ghijklmnop", text, StringComparison.Ordinal);
             }, cancellationToken: TestContext.Current.CancellationToken);
         }
         finally

@@ -10,6 +10,7 @@ change the area safely.
 | --- | --- |
 | [chat-client.md](chat-client.md) | Local client control, text admission, and normal quit. |
 | [tool-authorization.md](tool-authorization.md) | Every tool call from the model to process launch: admission, shell facts, filesystem authority, prohibition, consent, and consent delivery. |
+| [text-safety.md](text-safety.md) | Where untrusted text leaves Netclaw: log redaction and framing, the operative sinks, shared character sets, and identifier helpers. |
 
 ## What a document here contains
 

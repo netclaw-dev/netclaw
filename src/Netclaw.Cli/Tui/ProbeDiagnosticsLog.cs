@@ -6,6 +6,7 @@
 using System.Text;
 using System.Diagnostics;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Cli.Tui;
 
@@ -70,6 +71,8 @@ internal static class ProbeDiagnosticsLog
             : "invalid";
     }
 
+    // This file bypasses the logging pipeline, so it redacts here. Each entry is one line:
+    // every kind of line break (including NEL, U+2028, and U+2029) becomes a space.
     private static string Sanitize(string input)
-        => input.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        => SecretOutputRedactor.Redact(input).ReplaceLineEndings(" ").Trim();
 }

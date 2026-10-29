@@ -15,20 +15,20 @@
 - [x] 2.5 Implement line-break normalization, control and bidi escaping, and the continuation prefix in `RollingFileLoggerProvider` (design D8). Verify the spec scenarios: a fake log header, U+2028, ESC, and a stack trace.
 - [x] 2.6 Make `SessionLogActor` redact and frame every line that it writes directly, and remove its per-case `Redact` call (design D9). Verify that a secret in a user message and in assistant text is masked, that a fake transcript line gets the continuation prefix, and that the conversation that the model sees is unchanged.
 - [x] 2.7 Check the console sink's single-line output against the framing scenarios with a test. If a scenario fails, add a Netclaw console formatter with the same prefix, and verify that the test passes.
-- [ ] 2.8 Add the required redactor parameter to `CrashLogWriter`, apply it to the stderr fallback, and update its three callers (design D10). Verify that a crash log and the stderr fallback both mask `password=hunter2`.
-- [ ] 2.9 Redact the session-dispatcher failure beacon and the `ProbeDiagnosticsLog` entries (design D10). Verify each with a test that a secret is masked.
-- [ ] 2.10 Return the startup skill-scan issues and log them through the existing `Netclaw.Startup` logger, and remove the empty `LoggerFactory.Create` call (design D10). Verify that a rejected skill at startup produces a warning in the daemon log.
-- [ ] 2.11 Make the 14 `RedactForLogging` call sites log the exception directly. `RedactForLogging` stays as the one implementation that the stage calls (design D7). Remove the log-only `Redact` calls in `McpClientManager` and `OAuthRefreshGrantHandler`, and the comments that justify redact-before-logging. Verify that the solution builds and that all tests pass.
-- [ ] 2.12 Add the cross-fork regression test (design D5): an MCP result with a presigned URL reaches the model intact, and the same URL is masked in `daemon.log`. Verify that it passes.
+- [x] 2.8 Add the required redactor parameter to `CrashLogWriter`, apply it to the stderr fallback, and update its three callers (design D10). Verify that a crash log and the stderr fallback both mask `password=hunter2`.
+- [x] 2.9 Redact the session-dispatcher failure beacon and the `ProbeDiagnosticsLog` entries (design D10). Verify each with a test that a secret is masked.
+- [x] 2.10 Return the startup skill-scan issues and log them through the existing `Netclaw.Startup` logger, and remove the empty `LoggerFactory.Create` call (design D10). Verify that a rejected skill at startup produces a warning in the daemon log.
+- [x] 2.11 Make the 14 `RedactForLogging` call sites log the exception directly. `RedactForLogging` stays as the one implementation that the stage calls (design D7). Remove the log-only `Redact` call in `McpClientManager`, and reword the comments that justify redact-before-logging. Keep the `OAuthRefreshGrantHandler` call, because it redacts before a truncation. Verify that the solution builds and that all tests pass.
+- [x] 2.12 Add the cross-fork regression test (design D5): an MCP result with a presigned URL reaches the model intact, and the same URL is masked in `session.log`. Verify that it passes.
 - [ ] 2.13 Run the benchmark from 2.2 again. Verify that the added cost is within the threshold, and record both results in the PR.
 - [ ] 2.14 Swap in a local daemon build, and exercise an OAuth callback, an MCP failure, and a crash path. Verify that `daemon.log`, `session.log`, and a crash log contain no secrets, and that every line starts with a header or the continuation prefix.
 - [ ] 2.15 Review the focused mutation scope for the wrapper registration. Add a narrow Stryker target if a test kills a specific unsafe mutant. Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify`, and verify that both pass.
 
 ## 3. Documentation and cleanup
 
-- [ ] 3.1 Write `docs/architecture/text-safety.md`. Include every text sink with its owner and rule, the operative sinks that this change keeps, the four identifier helpers kept separate and why, and the known follow-ups. Verify that every sink in the proposal appears in it.
-- [ ] 3.2 Add a PRD-002 requirement that diagnostics and log exports exclude secrets, with a revision note. Verify that the proposal's Source PRDs line names it.
-- [ ] 3.3 Check whether the `netclaw-operations` skill describes the log line format, log redaction, or crash logs. If it does, update it and bump `metadata.version`. Record the result in the PR description.
-- [ ] 3.4 File a follow-up issue for non-ASCII route names in webhook execution actor names, and link it from the sink map. Verify that the issue exists.
+- [x] 3.1 Write `docs/architecture/text-safety.md`. Include every text sink with its owner and rule, the operative sinks that this change keeps, the four identifier helpers kept separate and why, and the known follow-ups. Verify that every sink in the proposal appears in it.
+- [x] 3.2 Add a PRD-002 requirement that diagnostics and log exports exclude secrets, with a revision note. Verify that the proposal's Source PRDs line names it.
+- [x] 3.3 Check whether the `netclaw-operations` skill describes the log line format, log redaction, or crash logs. If it does, update it and bump `metadata.version`. Record the result in the PR description.
+- [x] 3.4 File a follow-up issue for non-ASCII route names in webhook execution actor names, and link it from the sink map. Verify that the issue exists.
 - [ ] 3.5 Dismiss each remaining `cs/log-forging` alert with a reference to the stage and its framing tests, not to structured logging. Verify that no such alert stays open without a rationale.
 - [ ] 3.6 When PR 2 opens, close PR #2729 and PR #2731 with a link to PR 2. Verify that both are closed.

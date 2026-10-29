@@ -6,6 +6,7 @@
 - Owner: Netclaw engineering
 - Date: 2026-02-21
 - Revised: 2026-02-21 (expanded for tool execution, self-config safety)
+- Revised: 2026-10-29 (SEC-010 diagnostics exclude secrets)
 - Depends on: `PRD-001`
 
 ## Goal
@@ -108,6 +109,18 @@ Shell execution (when granted) operates under these constraints:
 - No interactive commands (stdin is closed).
 - Working directory is the registered project path or a configured scratch dir.
 
+### SEC-010 Diagnostics Exclude Secrets
+
+Diagnostics must not expose credentials, even when a component or a library logs
+them by mistake:
+
+- Every log record is redacted before it reaches a log file, the console, or a
+  log export. This includes records from framework code and libraries.
+- Log content cannot forge a record in a text log.
+- Crash logs and other diagnostic files redact what they write.
+- Redaction applies only to diagnostics. A value that a model, tool, or
+  outbound request uses keeps its original content.
+
 ## Threat Model Scope (MVP)
 
 In scope:
@@ -136,6 +149,7 @@ Out of scope (deferred):
 7. Shell execution respects timeout and output limits.
 8. Agent cannot modify ACL or security config through conversation.
 9. Tool invocation audit trail is available in diagnostics.
+10. A secret that any component logs does not appear in a log file, the console, a log export, or a crash log.
 
 ## Cross-References
 
