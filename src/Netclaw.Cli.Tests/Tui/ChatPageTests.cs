@@ -296,6 +296,46 @@ public sealed class ChatPageTests
         Assert.False(vm.IsApprovalDetailVisible.Value);
     }
 
+    // Shell grant-scope notes travel in Notes, beside the command and never inside it (#2746).
+    // Planted bug: the approval body drops the notes, or folds them into the command text.
+    [Fact]
+    public void ApprovalBody_ShowsNotesAfterTheUnchangedCommand()
+    {
+        var vm = new TestChatViewModel(seed: null);
+        vm.SeedPendingInteractionForTesting(BuildApproval("git push origin main") with
+        {
+            Notes = "Approve repository covers git commands in this repo."
+        });
+        vm.ToggleApprovalDetail();
+
+        var body = vm.GetApprovalBody(maxLineWidth: 120);
+
+        Assert.Equal("git push origin main", body.Split('\n')[0]);
+        Assert.Contains("\n\nApprove repository covers git commands in this repo.", body, StringComparison.Ordinal);
+    }
+
+    // The chat history prints the notes on their own lines under the command.
+    // Planted bug: the history line for an approval prints the command only.
+    [Fact]
+    public async Task ApprovalHistory_PrintsNotesOnTheirOwnLinesAfterTheCommand()
+    {
+        var (terminal, app, _) = CreateHeadlessApp(seed: null, out var input, replay:
+        [
+            BuildApproval("git push origin main") with { Notes = "NOTE_LINE_ONE\nNOTE_LINE_TWO" }
+        ]);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var frame = terminal.ToString();
+        var lines = frame.Split('\n');
+        Assert.Contains(lines, line => line.Contains("  git push origin main", StringComparison.Ordinal)
+                                       && !line.Contains("NOTE_LINE", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.Contains("  NOTE_LINE_ONE", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.Contains("  NOTE_LINE_TWO", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void ErrorOutput_EndsGenerationAndShowsRetryReadyState()
     {

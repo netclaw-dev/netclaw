@@ -290,6 +290,29 @@ public sealed class ParentSessionApprovalBridgeTests
     }
 
     /// <summary>
+    /// The grant-scope notes of an approval context travel to the prompt in their own field, so a channel can show
+    /// them beside the command (#2746). The command text stays the display text.
+    /// </summary>
+    [Fact]
+    public void A_prompt_carries_the_approval_notes_apart_from_the_command()
+    {
+        var builder = new ApprovalRequestBuilder(
+            new SessionId("signalr/thread-notes"),
+            requesterSenderId: new SenderId("user-123"),
+            requesterPrincipal: PrincipalClassification.Operator,
+            hasAdoptedContext: false,
+            hasThirdPartyAdoptedContext: false,
+            adoptedSpeakerIds: []);
+        var request = ShellRequest(new ToolCallId("call-notes"), "git push origin main", "/home/user/repos/foo", "/home/user/repos/foo");
+        request = request with { Approval = request.Approval with { Notes = "Approve repository covers git commands." } };
+
+        var emitted = builder.ForChildCall(ChildApprovalPrompt.CreateCallId("spawn-call-notes", 1), request);
+
+        Assert.Equal("Approve repository covers git commands.", emitted.Request.Notes);
+        Assert.Equal("git push origin main", emitted.Request.DisplayText);
+    }
+
+    /// <summary>
     /// durable-child-consent-wait, task 2.1. A characterization of the option filter before the move to the shared
     /// prompt builder. A repository option needs a repository directory: without one, the prompt drops each
     /// repository variant and keeps the other options in order. A session prompt has no child call ID.

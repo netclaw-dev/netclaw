@@ -98,5 +98,47 @@ public sealed class HeadlessChildPromptTests : IAsyncDisposable
         Assert.DoesNotContain("[error]", printed, StringComparison.Ordinal);
     }
 
+    // Planted bug: the channel prints the command but drops the notes, so the reader never sees the grant scope.
+    [Fact]
+    public async Task The_channel_prints_the_approval_notes_on_a_separate_note_line()
+    {
+        const string Note = "Approve repository covers git commands in this repo.";
+        var callId = new ToolCallId("call-notes");
+
+        var run = await HeadlessRunHarness.RunAsync(
+            _client, _directory, json: false, TestContext.Current.CancellationToken,
+            drive: async _ =>
+            {
+                await _promptSent.Task;
+                Push(SessionOutputDtoMapper.ToDto(new ToolInteractionRequest
+                {
+                    SessionId = new SessionId(Session),
+                    Kind = "approval",
+                    CallId = callId,
+                    ToolName = new ToolName("shell_execute"),
+                    DisplayText = Command,
+                    Notes = Note,
+                    RequesterSenderId = new SenderId("alice"),
+                    Options =
+                    [
+                        new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                        new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                    ]
+                }));
+                Push(SessionOutputDtoMapper.ToDto(new TextOutput("Done.") { SessionId = new SessionId(Session) }));
+                Push(SessionOutputDtoMapper.ToDto(new TurnCompleted
+                {
+                    SessionId = new SessionId(Session),
+                    TurnNumber = new TurnNumber(1),
+                    Outcome = TurnOutcome.Completed,
+                    OpenChildRunIds = []
+                }));
+            });
+
+        var lines = run.Stdout.Split('\n', StringSplitOptions.TrimEntries);
+        Assert.Contains($"[approval:waiting] shell_execute: {Command}", lines);
+        Assert.Contains($"[approval:note] {Note}", lines);
+    }
+
     private void Push(SessionOutputDto output) => _transport.PushOutput(output);
 }
