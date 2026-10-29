@@ -996,6 +996,25 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         Assert.DoesNotContain("':'", result.Message);
     }
 
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{}")]
+    public async Task NullOrEmptyObjectGrantList_IsReportedAsEmptyList(string value)
+    {
+        WriteConfig(
+            $$"""
+            {
+              "configVersion": 1,
+              "Tools": { "AudienceProfiles": { "Team": { "AllowedTools": {{value}} } } }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Tools.AudienceProfiles.Team.AllowedTools is null or an empty object", result.Message);
+    }
+
     [Fact]
     public async Task ControlPlaneOverrideKey_PassesSchemaValidation()
     {

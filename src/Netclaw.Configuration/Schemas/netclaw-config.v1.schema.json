@@ -382,7 +382,7 @@
               "maxLength": 0,
               "items": { "type": "string" },
               "default": ["localhost", "127.0.0.1", "::1", "[::1]"],
-              "description": "Hosts allowed to use plain HTTP when RequireHttps is true. Default includes loopback addresses."
+              "description": "Hosts allowed to use plain HTTP when RequireHttps is true. Default includes loopback addresses. A null, {} or \"\" value gives an empty list; only an absent key gives the default."
             }
           },
           "additionalProperties": false
@@ -1038,7 +1038,7 @@
           "maxProperties": 0,
           "maxLength": 0,
           "items": { "$ref": "#/$defs/AttachmentCategory" },
-          "description": "Attachment categories permitted for this audience. Empty rejects all inbound attachments. When the key is absent, Public allows Image, Team allows everything except Other, and Personal allows every category."
+          "description": "Attachment categories permitted for this audience. Empty (including null, {} or \"\") rejects all inbound attachments. When the key is absent, Public allows Image, Team allows everything except Other, and Personal allows every category."
         },
         "MaxFileBytes": {
           "type": "integer",
@@ -1096,7 +1096,7 @@
           "type": ["array", "null", "object", "string"],
           "maxProperties": 0,
           "maxLength": 0,
-          "description": "Filesystem roots readable by all audiences. Supports tokens: {skills_dir}, {identity_dir}, {workspaces_dir}.",
+          "description": "Filesystem roots readable by all audiences. Supports tokens: {skills_dir}, {identity_dir}, {workspaces_dir}. A null, {} or \"\" value gives an empty list; only an absent key gives the default.",
           "items": { "type": "string" }
         }
       },

@@ -978,7 +978,7 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
     [InlineData("{ \"AudienceProfiles\": { \"Team\": { \"ChannelAttachments\": { \"AllowedCategories\": VALUE } } } }")]
     [InlineData("{ \"AudienceProfiles\": { \"GlobalReadRoots\": VALUE } }")]
     [InlineData("{ \"WebFetch\": { \"HttpAllowList\": VALUE } }")]
-    public async Task ListsTheLoaderDefaults_AcceptNullEmptyObjectAndEmptyString_ButNotAScalar(string toolsTemplate)
+    public async Task DefaultedLists_AcceptNullEmptyObjectEmptyArrayAndEmptyString_ButNotAScalar(string toolsTemplate)
     {
         foreach (var value in new[] { "null", "{}", "[]", "\"\"" })
         {

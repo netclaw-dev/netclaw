@@ -88,6 +88,9 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         CheckUnusableOverrideKeys(toolConfig.AudienceProfiles, warnings);
         warnings.AddRange(FindValuelessOverrideKeys(root));
+        // A null or {} grant list binds as an empty list, which removes every grant. Only the daemon
+        // reads the other loader warnings, so doctor repeats this one.
+        warnings.AddRange(policyConfiguration.ToolWarnings.Where(static w => w.EndsWith(ToolConfig.EmptyListWarningSuffix, StringComparison.Ordinal)));
         warnings.AddRange(policyConfiguration.ToolNotices);
         CheckExplicitPersonalShellAuto(toolConfig, policyConfiguration.Defaults, warnings);
         CheckMissingToolOutputRead(toolConfig.AudienceProfiles, warnings);
