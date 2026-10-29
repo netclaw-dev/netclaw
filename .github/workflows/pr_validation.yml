@@ -185,7 +185,7 @@ jobs:
           - group: shell-consent
             gates: shell-once-identity compound-redirect thinking-settings
           - group: guard-and-authority
-            gates: skill-manage-guard no-program input-one-authority
+            gates: skill-manage-guard no-program input-one-authority skill-remove
           - group: stop-proof
             gates: stop-proof secrets-plaintext-leaf local-daemon-address
           - group: daemon-log-retention

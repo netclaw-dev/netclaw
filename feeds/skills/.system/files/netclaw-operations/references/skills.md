@@ -4,10 +4,17 @@
 ## Skill Management
 
 
-The `netclaw skill` CLI manages skills and skill sources. `netclaw skill list`
-needs the running daemon, because it lists the daemon's live registry — the
-only view that includes dynamic MCP prompt skills. `netclaw skill sync` also
-needs the daemon. Other subcommands are offline.
+The `netclaw skill` CLI manages skills and skill sources.
+`netclaw skill list` and `netclaw skill show` use the daemon's live registry.
+This registry includes feed skills and dynamic MCP prompt skills.
+`netclaw skill sync` also needs the daemon.
+`netclaw skill remove` needs the configured local daemon endpoint and refuses remote endpoints.
+Other subcommands are offline.
+
+Removal permits only native skills. System, feed, external, MCP, and unknown sources are refused.
+Removal refuses paths outside the skills root and links below that root.
+A link in the trusted home path is permitted.
+If the daemon lacks the detail endpoint, restart it to match the CLI version.
 
 During an agent session, use `skill_load(name)` to activate guidance,
 `skill_read_resource(name, path)` for bundled files, and `skill_manage` to create,
@@ -22,7 +29,7 @@ does the operation (`sync`, `validate`, `issues`, `source`) or the operator asks
 | `netclaw skill sync` | Run one external source sync pass and report each source result |
 | `netclaw skill show <name>` | Show skill metadata and full content |
 | `netclaw skill validate <path>` | Validate a SKILL.md file's frontmatter format |
-| `netclaw skill remove <name>` | Remove a native skill (refuses system/external) |
+| `netclaw skill remove <name>` | Remove a native skill through the local daemon registry |
 | `netclaw skill issues` | Show only scanner issues (rejected items with reasons) |
 | `netclaw skill search <query>` | Search skills by name or description |
 

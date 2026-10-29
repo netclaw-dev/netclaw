@@ -31,7 +31,7 @@ public static class SkillInventory
         public required string Description { get; init; }
 
         /// <summary>
-        /// Where the skill came from: <c>system</c>, <c>native</c>, or <c>external</c>
+        /// Where the skill came from: <c>system</c>, <c>native</c>, <c>server-feed</c>, or <c>external</c>
         /// for file skills, or <c>mcp</c> for a skill derived from an MCP server prompt.
         /// </summary>
         public required string Source { get; init; }
@@ -92,7 +92,7 @@ public static class SkillInventory
         /// </summary>
         public bool IsFlatFile { get; init; }
 
-        /// <summary>The skill body, or null when the file could not be read.</summary>
+        /// <summary>The file content, or null for an MCP prompt skill.</summary>
         public string? Content { get; init; }
 
         /// <summary>Pre-approved tools declared by the skill, space-delimited.</summary>
@@ -163,16 +163,11 @@ public static class SkillInventory
     }
 
     /// <summary>
-    /// Projects one skill into a detail response. Content is read from disk only for
-    /// file skills; MCP prompt skills have no file and report null content.
+    /// Projects one skill and its supplied content into a detail response. The caller owns file access.
     /// </summary>
-    public static Detail DetailView(SkillEntry skill, NetclawPaths paths)
+    public static Detail DetailView(SkillEntry skill, NetclawPaths paths, string? content)
     {
         var isFileSkill = skill.Source is FileSkillSource;
-
-        string? content = null;
-        if (isFileSkill && File.Exists(skill.FilePath))
-            content = File.ReadAllText(skill.FilePath);
 
         return new Detail
         {
@@ -180,7 +175,7 @@ public static class SkillInventory
             FilePath = isFileSkill ? skill.FilePath : null,
             SkillDirectory = isFileSkill ? skill.SkillDirectory : null,
             IsFlatFile = isFileSkill && skill.IsFlatFile,
-            Content = content,
+            Content = isFileSkill ? content : null,
             AllowedTools = skill.AllowedTools,
             Resources = skill.ResourcePaths?.ToList(),
         };

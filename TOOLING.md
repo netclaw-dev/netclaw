@@ -66,7 +66,7 @@ The table retains earlier group measurements. Gate notes below describe later ad
 | `verb-chain` | `exact-verb-chain` (seven invocations, 53 mutants, 9 to 17.5) | 9.5 to 18 |
 | `reminder` | `reminder-execution` (4.4), `literal-twin` (2.9), `stream-commit-gate` (2.5), `shutdown-notice-identity` (18 mutants, one invocation, 3.4) | 13.7 (estimate) |
 | `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
-| `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2) | 13.3 |
+| `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2), `skill-remove` (2.0 local; hosted cost pending) | About 15.3 with the local addition |
 | `shell-consent` | `shell-once-identity` (2.3 local), `compound-redirect` (2.2 local), `thinking-settings` (74 mutants, three invocations, 6.8 local) | 11.3 local; hosted time pending |
 | `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9), `secrets-plaintext-leaf` (8 mutants, one invocation, 2 to 3, estimate) | 10 to 11 (estimate) |
 | `shell-command-analysis-a` | 131 Security mutants and 27 Actors mutants | [11m28s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616567) |
@@ -149,6 +149,7 @@ coverage. They do not replace positive and negative behavior tests.
 
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
+| `SkillCommand.RunRemoveAsync` source, local endpoint, file boundary, and directory boundary | Removal requires a known native source, the local daemon, and two paths within the skills root without links below it. | 5 required | `./scripts/run-skill-remove-mutations.sh` |
 | `ChatClientActor.Start` (`// chat-close-dispatch-expiry:begin` to `end`) | Issue #2642, PRD-004: a held bind reply permits text dispatch at 1.5 seconds after Close, but refuses it at two seconds | 2 killed | `./scripts/run-chat-close-dispatch-expiry-mutations.sh` |
 | `PathAccessPolicy.AddSessionRoots`, `PathAccessPolicy.IsReadableByAudience`, `PathAccessPolicy.GetEffectiveAccess`, `PathAccessPolicy.IsInOtherTemporaryKeyFolder`, and `ManagedTemporaryEnvironment.CheckFolder` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected; issue #2554: a Personal read or attach follows the write profile and no other audience, operation, or write mode does (write `All` gives `All`, write `Roots` adds its roots, write `None` adds nothing, and a read profile of mode `All` stays `All`); the managed temporary key folder is a session root and the shared base is not; a Team or Public root over the base does not reach another key folder; the shell launch is refused when the base or the key folder is missing, a link, owned by another user, or open to a group or others | 30 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |

@@ -33,23 +33,39 @@ public static class SkillEndpointRouteBuilderExtensions
             .WithTags("Skills")
             .RequireAuthorization();
 
-        app.MapGet("/api/skills/{name}", (string name, SkillRegistry registry, NetclawPaths paths) =>
+        app.MapGet("/api/skills/{name}", async Task<IResult> (
+            string name, SkillRegistry registry, NetclawPaths paths, CancellationToken cancellationToken) =>
             {
-                var skill = registry.GetAll()
-                    .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+                var skill = registry.GetByName(name);
 
                 if (skill is null)
                 {
                     // Carries a body on purpose. The CLI distinguishes "unknown name"
                     // from "daemon predates this route" by the presence of a body,
                     // because both are otherwise a bare 404.
-                    return (IResult)TypedResults.Problem(
+                    return TypedResults.Problem(
                         statusCode: StatusCodes.Status404NotFound,
                         title: "Skill not found",
                         detail: $"The daemon has no skill named '{name}'.");
                 }
 
-                return TypedResults.Ok(SkillInventory.DetailView(skill, paths));
+                string? content = null;
+                if (skill.Source is FileSkillSource file)
+                {
+                    try
+                    {
+                        content = await File.ReadAllTextAsync(file.FilePath, cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        return TypedResults.Problem(
+                            statusCode: StatusCodes.Status503ServiceUnavailable,
+                            title: "Skill content unavailable",
+                            detail: "The daemon cannot read the registered skill file. Run skill sync and retry.");
+                    }
+                }
+
+                return TypedResults.Ok(SkillInventory.DetailView(skill, paths, content));
             })
             .WithName("GetSkill")
             .WithSummary("Get one skill's metadata and content from the daemon's live registry.")

@@ -97,6 +97,29 @@ else
   fail "live inventory: /api/skills does not report version 2.0.0"
 fi
 
+list_file="${NETCLAW_HOME}/skill-list.txt"
+show_file="${NETCLAW_HOME}/skill-show.txt"
+if nc skill list >"$list_file" \
+    && grep -Eq '^smoke-feed-skill[[:space:]]+server-feed[[:space:]]+2\.0\.0[[:space:]]' "$list_file" \
+    && nc skill show smoke-feed-skill >"$show_file" \
+    && grep -Fxq 'Source:      server-feed' "$show_file" \
+    && grep -Fxq 'Version:     2.0.0' "$show_file" \
+    && grep -Fxq -- '--- content ---' "$show_file"
+then
+  pass "skill list and show: the real CLI reports the same live feed version and source"
+else
+  fail "skill list and show: the real CLI does not expose the synced feed skill"
+fi
+
+if nc skill remove smoke-feed-skill >"${NETCLAW_HOME}/skill-remove.txt" 2>&1; then
+  fail "skill remove: the CLI permits removal of a managed feed skill"
+elif [[ -f "$RESOURCE_FILE" ]] \
+    && grep -Fq 'cannot remove server-fed skill' "${NETCLAW_HOME}/skill-remove.txt"; then
+  pass "skill remove: the CLI refuses the managed feed skill and preserves its resource"
+else
+  fail "skill remove: expected a source refusal with the managed resource intact"
+fi
+
 if cmp -s "$NETCLAW_JSON" "$EXPECTED_CONFIG"; then
   pass "skill sync: the command did not change netclaw.json"
 else

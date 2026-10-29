@@ -26,6 +26,7 @@
     <!-- The same fake transport as Netclaw.Cli.Tests. It has no xUnit dependency. -->
     <Compile Include="../Netclaw.Cli.Tests/Cli/FakeDaemonHubTransport.cs" Link="Cli/FakeDaemonHubTransport.cs" />
     <Compile Include="../Netclaw.Cli.Tests/Cli/ChatClientCloseExpiryScenario.cs" Link="Cli/ChatClientCloseExpiryScenario.cs" />
+    <Compile Include="../Netclaw.Cli.Tests/Skills/SkillRemoveBoundaryTests.cs" Link="Skills/SkillRemoveBoundaryTests.cs" />
   </ItemGroup>
 
 </Project>

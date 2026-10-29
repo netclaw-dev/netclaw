@@ -678,6 +678,14 @@ Leaks today:
 | Data | Call-local. Git repository facts are read from disk at each check. The protected path sets are process-local. |
 | Rules | [TA-6](../../openspec/specs/tool-authorization/spec.md#requirement-ta-6-path-access-decisions-own-file-tool-authority) |
 
+The operator command `netclaw skill remove` also uses the shared filesystem authority.
+`SkillCommand.RunRemoveAsync` checks the local daemon endpoint and requires the exact `native` source label.
+`PathUtility.IsWithinRootWithoutLinks` delegates containment and link checks to `FileSystemAuthority` with `LinkRule.BelowRoot`.
+
+The command checks both the file and directory before deletion. Its data is call-local.
+The trusted skills root and its ancestors may contain links. Links below that root cause refusal.
+This operator path adds no session grant or tool consent. See [the CLI contract](../spec/SPEC-004-cli-contract.md#7-external-skill-sync).
+
 The session accepts a project-directory change through
 [`WorkingContextUpdater.AcceptToolResult`](../../src/Netclaw.Actors/Sessions/WorkingContextUpdater.cs).
 This rule requires a successful `set_working_directory` receipt with a declared project directory.

@@ -143,6 +143,39 @@ Behavior:
 
 ### 7) External Skill Sync
 
+`netclaw skill list` and `netclaw skill show <name>` use the daemon registry.
+The detail endpoint requires the same authentication as the inventory endpoint.
+The daemon owns file reads. Shared wire projections perform no file access.
+An unavailable daemon causes a visible error without a disk fallback.
+
+`netclaw skill remove <name>` requires the configured local daemon endpoint.
+The CLI refuses a remote or different endpoint before an HTTP request or local deletion.
+It permits deletion only for the exact `native` source label.
+Unknown labels fail closed so future source types receive no implicit delete authority.
+
+The CLI checks both the file and directory through the shared filesystem authority.
+Both paths must stay within the trusted skills root and cross no links below it.
+The trusted root and its ancestors may contain links.
+A flat skill deletes only its file. A directory skill cannot delete the skills root.
+
+Positive example: a native skill below a home alias can be removed without removal of the skills root.
+Negative example: a daemon path through nested directory links cannot delete a directory outside the skills root.
+Negative example: a remote daemon with the same path cannot authorize a local deletion.
+
+The CLI owns the call-local deletion checks. The daemon owns the registry snapshot.
+These checks do not provide an OS sandbox against concurrent path replacement.
+
+Schematic flow; HTTP errors and file errors abort the command:
+
+```text
+require the configured local endpoint and a loopback address
+detail = daemon registry lookup(name)
+require detail.source == "native"
+require file and directory paths within the skills root, without links below it
+if detail.isFlatFile: delete only the file
+else: require directory != skills root; delete the directory; prune an empty category
+```
+
 `netclaw skill sync` runs the daemon's configured external source job immediately.
 It does not save configuration or add sources. System skills come from the installed binary.
 See the [engineering glossary](GLOSSARY.md) for shared terms.

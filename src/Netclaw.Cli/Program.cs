@@ -907,15 +907,11 @@ static async Task RunAsync(string[] args)
     if (mode is "skill")
     {
         var skillSubcommand = args.Length > 1 ? args[1] : "list";
-        if (skillSubcommand is "list" or "sync")
+        if (skillSubcommand is "list" or "sync" or "show" or "remove")
         {
-            // `skill list` is served by the daemon's live registry — the only view
-            // that includes dynamic MCP prompt skills. It requires the daemon; when
-            // the daemon is unavailable, SkillCommand reports that and exits non-zero
-            // (no disk fallback). Building the DI host parses local config
-            // (netclaw.json, secrets.json); a corrupt file must produce a readable
-            // error, not a stack trace — the old disk-scan list never read those
-            // files, so this path must not make them a new way to crash.
+            // These commands need the complete daemon registry.
+            // The host reads local configuration before it creates DaemonApi.
+            // Report malformed configuration without a stack trace.
             try
             {
                 var builder = CreateQuietHostBuilder(args);

@@ -77,6 +77,23 @@ public static class PathUtility
         => CanonicalPath.IsWithin(Normalize(candidate), Normalize(root), CanonicalPath.HostStyle, ignoreCase: false);
 
     /// <summary>
+    /// Checks containment and refuses links below the trusted root. The root and its ancestors may contain links.
+    /// </summary>
+    public static bool IsWithinRootWithoutLinks(string candidate, string root)
+    {
+        if (!Path.IsPathFullyQualified(candidate) || !Path.IsPathFullyQualified(root)
+            || FileSystemAuthority.HasParentSegmentAfterLink(candidate, null)
+            || !CanonicalPath.TryCreateHost(candidate, null, out var path)
+            || !CanonicalPath.TryCreateHost(root, null, out var boundary))
+        {
+            return false;
+        }
+
+        return FileSystemAuthority.EvaluateMembership(path, [new PathBoundary.Folder(boundary, LinkRule.BelowRoot)])
+            is PathDecision.Allowed;
+    }
+
+    /// <summary>
     /// Returns true when <paramref name="a"/> and <paramref name="b"/> resolve
     /// to the same canonical filesystem path under the platform's casing
     /// rules. Both inputs are passed through <see cref="Normalize"/> first.

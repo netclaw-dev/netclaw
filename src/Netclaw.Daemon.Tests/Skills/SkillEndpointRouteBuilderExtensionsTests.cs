@@ -266,62 +266,56 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
     }
 
     [Fact]
-    public async Task Classifies_a_server_fed_skill_as_server_feed_not_native()
+    public async Task SkillDetail_reads_the_registered_file_and_reports_a_later_read_failure()
     {
-        // A feed skill lives under SkillsDirectory but the daemon owns it. Reporting it
-        // as "native" would invite a client to treat it as user-editable local state.
+        var ct = TestContext.Current.CancellationToken;
         var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
+        var directory = Directory.CreateDirectory(Path.Combine(paths.SkillsDirectory, "local-proof")).FullName;
+        var file = Path.Combine(directory, "SKILL.md");
+        const string content = "---\nname: local-proof\nversion: 1.3.1\ndescription: HTTP proof.\n---\n\n# HTTP proof\n";
+        await File.WriteAllTextAsync(file, content, ct);
+        var registry = new SkillRegistry();
+        await using var app = await CreateAppAsync(spoofLoopback: true, registry, paths);
+        // The actor reply follows inventory publication. It removes the startup race without a wait or a manual seed.
+        await app.Services.GetRequiredService<IRequiredActor<ServerFeedSkillSyncActorKey>>()
+            .ActorRef.Ask<SkillSyncResult.Response>(ServerFeedSkillSyncActor.Run.Instance, ct);
+        using var client = app.GetTestClient();
 
-        var skillDirectory = Path.Combine(paths.ServerFeedDirectory("team"), "git");
-        var skillFilePath = Path.Combine(skillDirectory, "SKILL.md");
-        Directory.CreateDirectory(skillDirectory);
+        using var response = await client.GetAsync("/api/skills/LOCAL-PROOF", ct);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var detail = await response.Content.ReadFromJsonAsync<SkillInventory.Detail>(ReadOptions, ct);
+        Assert.NotNull(detail);
+        Assert.Equal("native", detail.Skill.Source);
+        Assert.Equal("1.3.1", detail.Skill.Version);
+        Assert.Equal(file, detail.FilePath);
+        Assert.Equal(content, detail.Content);
 
-        var entry = new SkillEntry(
-            "git",
-            "Git Hygiene",
-            "Git hygiene.",
-            new FileSkillSource(skillFilePath, skillDirectory),
-            Category: ".server-feeds")
-        {
-            Version = "1.3.1",
-        };
-
-        var inventory = SkillInventory.From([entry], paths);
-
-        var skill = Assert.Single(inventory.Skills);
-        Assert.Equal("server-feed", skill.Source);
-        Assert.Equal("1.3.1", skill.Version);
+        File.Delete(file);
+        using var unavailable = await client.GetAsync("/api/skills/local-proof", ct);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode);
     }
 
     [Fact]
-    public void Detail_projection_returns_content_and_paths_for_a_server_fed_skill()
+    public async Task SkillDetail_returns_mcp_metadata_without_file_access()
     {
+        var ct = TestContext.Current.CancellationToken;
         var paths = new NetclawPaths(_dir.Path);
-        paths.EnsureDirectoriesExist();
+        var registry = new SkillRegistry();
+        registry.PublishMcpPromptSkills("demo", [new SkillEntry("mcp__demo__hello", "Hello", "A prompt.",
+            new McpPromptSkillSource("demo", "hello", 1, []), "mcp")]);
+        await using var app = await CreateAppAsync(spoofLoopback: true, registry, paths);
 
-        var skillDirectory = Path.Combine(paths.ServerFeedDirectory("team"), "git");
-        var skillFilePath = Path.Combine(skillDirectory, "SKILL.md");
-        Directory.CreateDirectory(skillDirectory);
-        File.WriteAllText(skillFilePath, "---\nname: git\nversion: 1.3.1\n---\n\n# Git Hygiene\n");
+        using var response = await app.GetTestClient().GetAsync("/api/skills/mcp__demo__hello", ct);
 
-        var entry = new SkillEntry(
-            "git",
-            "Git Hygiene",
-            "Git hygiene.",
-            new FileSkillSource(skillFilePath, skillDirectory),
-            Category: ".server-feeds")
-        {
-            Version = "1.3.1",
-        };
-
-        var detail = SkillInventory.DetailView(entry, paths);
-
-        Assert.Equal("git", detail.Skill.Name);
-        Assert.Equal("server-feed", detail.Skill.Source);
-        Assert.Equal("1.3.1", detail.Skill.Version);
-        Assert.Equal(skillFilePath, detail.FilePath);
-        Assert.Contains("# Git Hygiene", detail.Content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var detail = await response.Content.ReadFromJsonAsync<SkillInventory.Detail>(ReadOptions, ct);
+        Assert.NotNull(detail);
+        Assert.Equal("mcp", detail.Skill.Source);
+        Assert.Equal("demo", detail.Skill.ServerName);
+        Assert.Null(detail.FilePath);
+        Assert.Null(detail.SkillDirectory);
+        Assert.Null(detail.Content);
     }
 
     [Fact]
