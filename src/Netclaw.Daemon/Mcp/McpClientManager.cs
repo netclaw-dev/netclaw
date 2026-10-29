@@ -1996,6 +1996,19 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     {
         var status = FindHttpStatus(ex);
         var exceptions = EnumerateExceptionTree(ex).ToArray();
+
+        // The registrar writes its messages for the operator, and each one names the remedy.
+        // The only provider text they carry is the RFC 7591 error and error_description that
+        // the registrar allowlists, and those fields already go to the daemon log. Every other
+        // exception message stays out of the response, because it can hold arbitrary provider data.
+        if (exceptions.OfType<McpOAuthRegistrationException>().FirstOrDefault() is { } registrationFailure)
+        {
+            return new McpErrorResponse(
+                registrationFailure.Message,
+                "dynamic client registration",
+                status is null ? null : (int)status.Value);
+        }
+
         var operation = exceptions.Any(candidate =>
                             candidate is McpOAuthRetiredCredentialWriterException
                                 or IOException

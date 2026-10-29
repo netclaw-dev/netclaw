@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using System.Text.Json;
 using ModelContextProtocol;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
@@ -205,6 +206,21 @@ public sealed class McpClientManagerStatusTests
             "MCP OAuth credential persistence failed. Check daemon logs for details.",
             error.Error);
         Assert.DoesNotContain("prior connection", error.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RegistrationFailureShowsRemedyButNotInnerProviderText()
+    {
+        var registrationFailure = new McpOAuthRegistrationException(
+            "MCP server 'github' returned an unreadable client registration response.",
+            new JsonException("unexpected token near client_secret=provider-secret"));
+        var exception = new InvalidOperationException("SDK connection failed.", registrationFailure);
+
+        var error = McpClientManager.CreateSafeOAuthError(exception, "connection initialization");
+
+        Assert.Equal("dynamic client registration", error.Operation);
+        Assert.Equal(registrationFailure.Message, error.Error);
+        Assert.DoesNotContain("provider-secret", error.Error, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -78,8 +78,7 @@ internal sealed class McpOAuthClientRegistrar(
         {
             throw new McpOAuthRegistrationException(
                 $"MCP server '{serverName.Value}' requires OAuth, but its authorization server " +
-                $"({issuer}) does not support dynamic client registration. Register a client " +
-                $"manually and set OAuthClientId for '{serverName.Value}' in the MCP server config.");
+                $"({issuer}) does not support dynamic client registration. {ManualClientRemedy(serverName)}");
         }
 
         // Register with exactly the method ClientOAuthProvider will later select for the
@@ -112,8 +111,7 @@ internal sealed class McpOAuthClientRegistrar(
             throw new McpOAuthRegistrationException(
                 $"MCP server '{serverName.Value}' rejected dynamic client registration at " +
                 $"{registrationEndpoint}: HTTP {(int)response.StatusCode} {response.StatusCode}" +
-                $"{DescribeOAuthError(body)}. Register a client manually and set OAuthClientId " +
-                $"for '{serverName.Value}' in the MCP server config.");
+                $"{DescribeOAuthError(body)}. {ManualClientRemedy(serverName)}");
         }
 
         string? clientId;
@@ -223,6 +221,13 @@ internal sealed class McpOAuthClientRegistrar(
             return null;
         }
     }
+
+    // GitHub Apps and OAuth Apps both require a client secret, so the remedy names it.
+    // Re-running add keeps the server's grants and approval modes.
+    private static string ManualClientRemedy(McpServerName serverName)
+        => $"Register an OAuth client with the provider, then run `netclaw mcp add` for " +
+           $"'{serverName.Value}' again with `--client-id <id>` to set OAuthClientId. Add `--client-secret <secret>` " +
+           $"if the provider issued a secret.";
 
     private static string DescribeOAuthError(string body)
     {
