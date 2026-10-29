@@ -296,8 +296,11 @@ Dispatcher beacon:           Redact(ex.Message) → daemon.log queue, or stderr
   one decorator per provider (the D6 alternative). That fallback needs a
   design update before implementation continues.
 - [The redactor costs CPU on every enabled record.] → It runs once per record,
-  and disabled levels never reach it. A benchmark measures the added cost
-  before merge against a threshold that a task sets.
+  and disabled levels never reach it. The added CPU must stay at most 0.1% of
+  one core at the observed peak log volume. A per-record ratio was the wrong
+  measure: exception records are rare, so a large ratio on them costs almost
+  nothing. Measured: +4.3 us per record and +60 us per exception record, about
+  0.42 s of CPU per day on the busiest observed day (0.0005% of one core).
 - [Over-redaction hides diagnostic text.] → The operator accepts this cost. D3
   keeps one tested pattern set, and D4 keeps attribute names. New
   false-positive cases for log text join the redactor tests.
@@ -306,6 +309,11 @@ Dispatcher beacon:           Redact(ex.Message) → daemon.log queue, or stderr
 - [A shared predicate changes a caller's output.] → Tests pin each caller's
   current output before the refactor. The refactor must keep them green with
   no edits.
+- [A call site reshapes untrusted text before it logs it, for example by cutting
+  it into words. The pattern that marks a secret is then gone, so the stage
+  cannot find it.] -> The call site redacts the source text first and logs only
+  what survives. The memory recall plan log had this gap. The sink map states
+  the rule as a guideline.
 - [Agents read `session.log` and see `***REDACTED***`.] → This is intended.
   The original text stays in the conversation, and tool arguments in
   `session.log` are already redacted today.

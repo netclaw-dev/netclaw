@@ -20,9 +20,10 @@
 - [x] 2.10 Return the startup skill-scan issues and log them through the existing `Netclaw.Startup` logger, and remove the empty `LoggerFactory.Create` call (design D10). Verify that a rejected skill at startup produces a warning in the daemon log.
 - [x] 2.11 Make the 14 `RedactForLogging` call sites log the exception directly. `RedactForLogging` stays as the one implementation that the stage calls (design D7). Remove the log-only `Redact` call in `McpClientManager`, and reword the comments that justify redact-before-logging. Keep the `OAuthRefreshGrantHandler` call, because it redacts before a truncation. Verify that the solution builds and that all tests pass.
 - [x] 2.12 Add the cross-fork regression test (design D5): an MCP result with a presigned URL reaches the model intact, and the same URL is masked in `session.log`. Verify that it passes.
-- [ ] 2.13 Run the benchmark from 2.2 again. Verify that the added cost is within the threshold, and record both results in the PR.
-- [ ] 2.14 Swap in a local daemon build, and exercise an OAuth callback, an MCP failure, and a crash path. Verify that `daemon.log`, `session.log`, and a crash log contain no secrets, and that every line starts with a header or the continuation prefix.
+- [x] 2.13 Run the benchmark from 2.2 again. Verify that the added cost is within the threshold, and record both results in the PR.
+- [ ] 2.14 Build an image from this branch and run it in a disposable container (not the operator's daemon). Exercise a refused shutdown notice that carries a secret, a chat turn with a secret and a fake transcript line, and a skill that fails the startup scan. Verify that the 409 body keeps the value, that `daemon.log` and `session.log` contain no secret, that every line starts with a header or the continuation prefix, and that the startup warning appears. Unit tests cover the crash path. Remove the container, its volume, and the image afterwards.
 - [x] 2.15 Review the focused mutation scope for the wrapper registration. Add a narrow Stryker target if a test kills a specific unsafe mutant. Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify`, and verify that both pass.
+- [x] 2.16 Filter the memory recall plan log, so it logs only the words that survive redaction of the query, recent user messages, entities, and thread title. Retrieval still uses every word. Verify with a test that a secret in each source is absent from the log line, that an ordinary word stays, and that the test fails without the filter.
 
 ## 3. Documentation and cleanup
 
