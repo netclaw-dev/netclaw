@@ -15,6 +15,7 @@ using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Configuration;
+using Netclaw.Daemon.Tests.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Tests.Mcp;

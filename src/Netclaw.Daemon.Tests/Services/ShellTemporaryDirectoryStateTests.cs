@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
 using Netclaw.Daemon.Services;
+using Netclaw.Daemon.Tests.Configuration;
 using Netclaw.Tools;
 using Netclaw.Tests.Utilities;
 using Xunit;
