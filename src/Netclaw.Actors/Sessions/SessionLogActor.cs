@@ -7,6 +7,7 @@ using Akka.Actor;
 using System.Text.Json;
 using Akka.Event;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Security;
@@ -159,6 +160,17 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         Flush();
     }
 
+    // Every transcript line is redacted and framed here, in one place. The timestamp header is
+    // added after framing, so content can never start a line that reads as a new transcript
+    // entry. Diagnostic lines need neither step: they come from the log pipeline, which has
+    // already redacted and framed them.
+    private void WriteTranscript(string body)
+        => WriteDurable($"[{_timeProvider.GetUtcNow():o}] {LogTextFraming.Frame(SecretOutputRedactor.Redact(body))}");
+
+    // Redact before truncating: a cut can split a secret into a fragment that no pattern matches.
+    private static string Clip(string text)
+        => TextTruncation.EllipsisAppend(SecretOutputRedactor.Redact(text), 1000);
+
     private void Flush()
     {
         // Nothing buffered AND not in a failing state → skip. While failing, fall through so the
@@ -198,9 +210,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
             var mediaNote = msg.MediaReferences.Count > 0
                 ? $" (+{msg.MediaReferences.Count} media)"
                 : string.Empty;
-            var line = $"[{_timeProvider.GetUtcNow():o}] User: {TextTruncation.EllipsisAppend(msg.Content, 1000)}{mediaNote}";
-
-            WriteDurable(line);
+            WriteTranscript($"User: {Clip(msg.Content)}{mediaNote}");
         }
         catch (Exception ex)
         {
@@ -214,11 +224,11 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         {
             var line = output switch
             {
-                TextOutput text => $"Assistant: {TextTruncation.EllipsisAppend(text.Text, 1000)}",
+                TextOutput text => $"Assistant: {Clip(text.Text)}",
                 ToolCallOutput toolCall => FormatToolCall(toolCall),
-                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {TextTruncation.EllipsisAppend(SecretOutputRedactor.Redact(toolResult.Result), 1000)}",
-                ThinkingOutput thinking => $"Thinking: {TextTruncation.EllipsisAppend(thinking.Text, 1000)}",
-                ThinkingDeltaOutput thinkingDelta => $"Thinking delta: {TextTruncation.EllipsisAppend(thinkingDelta.Delta, 1000)}",
+                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {Clip(toolResult.Result)}",
+                ThinkingOutput thinking => $"Thinking: {Clip(thinking.Text)}",
+                ThinkingDeltaOutput thinkingDelta => $"Thinking delta: {Clip(thinkingDelta.Delta)}",
                 UsageOutput usage => $"Usage: in={usage.InputTokens} out={usage.OutputTokens} cached={usage.CachedInputTokens} reasoning={usage.ReasoningTokens} context={usage.UsagePercent:P0}",
                 TurnCompleted tc => $"Turn {tc.TurnNumber} {tc.Outcome.ToString().ToLowerInvariant()}",
                 SessionTitleOutput title => $"Title set: {title.Title}",
@@ -236,7 +246,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
 
             if (line is not null)
             {
-                WriteDurable($"[{_timeProvider.GetUtcNow():o}] {line}");
+                WriteTranscript(line);
             }
         }
         catch (Exception ex)

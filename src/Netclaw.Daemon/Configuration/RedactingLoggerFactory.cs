@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections;
 using Microsoft.Extensions.Logging;
+using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Daemon.Configuration;
@@ -108,7 +109,8 @@ internal sealed class RedactingLogger(ILogger inner) : ILogger
             _ => RedactText(value.ToString() ?? string.Empty),
         };
 
-    private static string RedactText(string text) => SecretOutputRedactor.Redact(text);
+    // Redact first: some secret patterns end at a line break, so they must see the original breaks.
+    private static string RedactText(string text) => LogTextFraming.Normalize(SecretOutputRedactor.Redact(text));
 }
 
 /// <summary>
