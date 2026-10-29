@@ -168,7 +168,7 @@ public sealed class DaemonLifecycleNotifier
     //   in Cc and so are not caught by IsControl, but JSON-line readers, many
     //   log shippers, and pre-ES2019 JSON parsers still split on them.
     private static bool IsLogLineBreak(char c)
-        => char.IsControl(c) || c is '\u2028' or '\u2029';
+        => char.IsControl(c) || TextControlCharacters.IsUnicodeLineSeparator(c);
 
     internal static string SanitizeForLog(string reason)
     {
