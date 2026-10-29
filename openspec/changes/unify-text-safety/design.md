@@ -116,9 +116,11 @@ on names.
 
 ### D5. A regression test crosses the fork
 
-One end-to-end test runs an MCP tool result that contains a presigned URL. It
-asserts that the model receives the full URL and that `daemon.log` contains
-the masked URL.
+One test sends the same presigned URL down both paths. It asserts that the MCP
+adapter skips output redaction, so the model receives the full URL, and that
+`session.log` masks it. A tool result reaches the logs through `session.log`,
+not `daemon.log`. The #1992 test in `DispatchingToolExecutorTests` still proves
+the model path end to end through the dispatcher.
 
 ### D6. The stage wraps the one `ILoggerFactory`
 

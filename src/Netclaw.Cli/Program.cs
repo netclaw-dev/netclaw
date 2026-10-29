@@ -1259,7 +1259,7 @@ static void ConfigureNativeSelection(TerminaBuilder termina)
 
 static void WriteCrashLog(Exception ex)
 {
-    CrashLogWriter.Write(ex, "CLI");
+    CrashLogWriter.Write(ex, "CLI", SecretOutputRedactor.Redact);
 }
 
 // Canonical launch path for CLI hosts. A host that registered a Termina UI (via

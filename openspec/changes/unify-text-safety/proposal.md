@@ -9,9 +9,10 @@ assistant text, thinking, errors, and titles without redaction. Separately,
 three files keep private copies of the bidi and line-separator character
 lists, and the copies already disagree.
 
-Source PRDs: PRD-002 (SEC-007 Auditability; principle 5 "Keep trust boundaries
-simple and inspectable"; threat "accidental over-exposure from
-misconfiguration"), PRD-006 (MCP OAuth credential handling).
+Source PRDs: PRD-002 (SEC-010 Diagnostics Exclude Secrets, added by this
+change; SEC-007 Auditability; principle 5 "Keep trust boundaries simple and
+inspectable"; threat "accidental over-exposure from misconfiguration"),
+PRD-006 (MCP OAuth credential handling).
 
 ## What Changes
 
@@ -35,19 +36,21 @@ misconfiguration"), PRD-006 (MCP OAuth credential handling).
   logger. Today they use a `LoggerFactory.Create` call that has no providers,
   so they reach no sink.
 
-**Call-site cleanup (measured):** of 41 redaction call sites, 17 become dead
+**Call-site cleanup (measured):** of 41 redaction call sites, 16 become dead
 code under the stage and are removed or simplified:
 
 - 14 `RedactForLogging(ex)` call sites log `ex` directly. `RedactForLogging`
   stays as the one implementation that the stage calls.
-- 2 `Redact` calls whose only output is a log record are removed
-  (`McpClientManager` tool-failure detail, `OAuthRefreshGrantHandler` error
-  fields).
+- 1 `Redact` call whose only output is a log record is removed
+  (`McpClientManager` tool-failure detail).
 - 1 per-case `Redact` call in `SessionLogActor` moves into its writer.
 - About 5 comments that justify redact-before-logging are removed or reworded.
 
-The other 24 sites stay, because their output goes to an operative sink or to
-a writer outside the logging pipeline.
+The other 25 sites stay, because their output goes to an operative sink or to
+a writer outside the logging pipeline, or because they redact before a
+truncation. `OAuthRefreshGrantHandler` is an example: it redacts each OAuth
+error field before it truncates the field, so a cut cannot leave a fragment of a
+secret that the stage could no longer match.
 
 **Shared character handling:**
 
@@ -112,9 +115,8 @@ rules.
 - Code: `Netclaw.Daemon` logging registration and `RollingFileLoggerProvider`;
   `SessionLogActor`; `CrashLogWriter` and its three callers; `Program.cs`
   startup warnings; `Netclaw.Cli` `ProbeDiagnosticsLog`; `SecretOutputRedactor`;
-  17 call sites in `McpClientManager`, `McpOAuthCredentialStore`,
-  `WebhookNotificationService`, `OAuthRefreshGrantHandler`, and
-  `SessionLogActor`; the character-set copies in `IToolApprovalMatcher`,
+  16 call sites in `McpClientManager`, `McpOAuthCredentialStore`,
+  `WebhookNotificationService`, and `SessionLogActor`; the character-set copies in `IToolApprovalMatcher`,
   `ShellPolicyDecisionTrace`, `ApprovalEntryValidation`, and
   `DaemonLifecycleNotifier`; the two session storage helpers.
 - Size (estimate): about 50 to 70 lines of existing code removed, and about
@@ -136,6 +138,5 @@ rules.
   false-positive tests, so the loss stays narrow.
 - The model, tools, alerts, HTTP responses, and outbound requests get their
   current values. Only log copies change.
-- PRD gap: PRD-002 has no explicit requirement that diagnostics exclude
-  secrets. This change adds that requirement to PRD-002 in the same planning
-  cycle.
+- PRD coverage: PRD-002 had no explicit requirement that diagnostics exclude
+  secrets. This change adds SEC-010 for it.

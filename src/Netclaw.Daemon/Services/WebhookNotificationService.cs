@@ -12,7 +12,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Channels.Slack.Webhooks;
 using Netclaw.Configuration;
-using Netclaw.Security;
 
 namespace Netclaw.Daemon.Services;
 
@@ -290,7 +289,7 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex),
+                _logger.LogWarning(ex,
                     "Webhook delivery error: {AlertType} → {Target} (attempt {Attempt}/{Max})",
                     alert.Type, targetName, attempt + 1, _config.MaxRetries + 1);
 

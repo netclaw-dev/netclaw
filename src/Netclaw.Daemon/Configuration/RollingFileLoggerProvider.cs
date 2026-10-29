@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Configuration;
@@ -195,8 +196,9 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
         {
             // Resolution failed: _sessionDispatcher stays null, so session-tagged lines keep
             // falling back to daemon.log. One loud beacon, with a stderr fallback so the single
-            // failure signal survives even a saturated daemon-log queue.
-            var beacon = $"{GetTimestamp()} [ERR] Netclaw.Logging: session log dispatcher resolution failed; per-session routing disabled. {ex.Message}";
+            // failure signal survives even a saturated daemon-log queue. The beacon bypasses the
+            // logging pipeline, so it redacts and frames the exception text itself.
+            var beacon = $"{GetTimestamp()} [ERR] Netclaw.Logging: session log dispatcher resolution failed; per-session routing disabled. {LogTextFraming.Frame(SecretOutputRedactor.Redact(ex.Message))}";
             if (!_queue.TryAdd(beacon))
                 Console.Error.WriteLine(beacon);
         }

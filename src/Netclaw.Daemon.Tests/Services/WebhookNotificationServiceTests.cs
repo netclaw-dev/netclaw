@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Tests.Mcp;
 using Netclaw.Daemon.Services;
 using Xunit;
@@ -300,7 +301,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
             new TestHttpClientFactory(handler),
             TimeProvider.System,
             TestIdentity,
-            logger);
+            ThroughRedactionStage(logger));
         _services.Add(service);
 
         await service.StartAsync(CancellationToken.None);
@@ -340,7 +341,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
             MaxRetries = 0
         };
         var logger = new RecordingLogger<WebhookNotificationService>();
-        var service = CreateService(config, handler, new FakeTimeProvider(), logger: logger);
+        var service = CreateService(config, handler, new FakeTimeProvider(), logger: ThroughRedactionStage(logger));
 
         await service.StartAsync(CancellationToken.None);
         service.Emit(CreateAlert());
@@ -509,4 +510,19 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         int expectedCount,
         int timeoutMs = 5000)
         => WebhookTestInfrastructure.WaitForDeliveryAsync(handler, expectedCount, timeoutMs);
+
+    // The daemon logs through RedactingLoggerFactory, so a delivery exception that echoes the
+    // webhook URL is redacted before any sink. These tests use the same arrangement.
+    private static ILogger<WebhookNotificationService> ThroughRedactionStage(ILogger recorder)
+        => new Logger<WebhookNotificationService>(
+            new RedactingLoggerFactory(new LoggerFactory([new SingleLoggerProvider(recorder)])));
+
+    private sealed class SingleLoggerProvider(ILogger logger) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => logger;
+
+        public void Dispose()
+        {
+        }
+    }
 }

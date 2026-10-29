@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
+using Netclaw.Security;
 
 namespace Netclaw.Daemon.Services;
 
@@ -118,6 +119,7 @@ internal sealed class DaemonCrashMonitor : IDisposable
             var crashLogPath = CrashLogWriter.TryWrite(
                 exception,
                 reason,
+                SecretOutputRedactor.Redact,
                 timeProvider: _timeProvider,
                 logsDirectory: _logsDirectory,
                 context: context);

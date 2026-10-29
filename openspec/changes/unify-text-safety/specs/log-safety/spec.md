@@ -109,7 +109,7 @@ keep its original content.
 - **GIVEN** an MCP tool returns a presigned upload URL that contains `X-Amz-Signature=sig123`
 - **WHEN** the result is delivered to the model and the result is also logged
 - **THEN** the model receives the URL with `X-Amz-Signature=sig123`
-- **AND** the daemon log does not contain `sig123`
+- **AND** the session log does not contain `sig123`
 
 #### Scenario: A logged exception is rethrown
 
