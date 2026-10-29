@@ -939,6 +939,41 @@ public sealed class ConfigSchemaDoctorCheckTests : IDisposable
         Assert.Contains("MaxToolCallsPerTurn", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("ToolOverrides", "shell_execute")]
+    [InlineData("McpServerDefaults", "notion")]
+    public async Task ReturnsPass_WhenApprovalPolicyMapHasNullValue(string map, string key)
+    {
+        // The config loader drops a null entry with a warning, so the schema check must not fail it.
+        var paths = new NetclawPaths(CreateTempBasePath());
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            $$"""
+            { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "{{map}}": { "{{key}}": null } } } } } }
+            """, TestContext.Current.CancellationToken);
+
+        var result = await new ConfigSchemaDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenToolOverridesHasUnknownMode()
+    {
+        var paths = new NetclawPaths(CreateTempBasePath());
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { "ApprovalPolicy": { "ToolOverrides": { "shell_execute": "Sometimes" } } } } } }
+            """, TestContext.Current.CancellationToken);
+
+        var result = await new ConfigSchemaDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+    }
+
     private string CreateTempBasePath()
     {
         var path = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
