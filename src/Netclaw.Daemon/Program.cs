@@ -877,8 +877,6 @@ static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices, MergedSki
 
     // Skill tools are registered post-build so ISkillContentScanner resolves from DI.
     // See SkillToolRegistration call after app.Build().
-    // Skill tools are registered post-build so ISkillContentScanner resolves from DI.
-    // See SkillToolRegistration call after app.Build().
 
     // Memory context layer — status is updated by ToolIndexUpdater after MCP discovery
     var memoryIndexLayer = new MemoryIndexContextLayer(memoryConfig);
