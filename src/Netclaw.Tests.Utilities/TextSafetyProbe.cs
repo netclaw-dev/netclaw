@@ -11,9 +11,10 @@ namespace Netclaw.Tests.Utilities;
 /// <summary>
 /// Inputs and a renderer for tests that pin how a text-safety caller treats unsafe
 /// characters. The probe holds every member of the bidi, line-separator, and byte-order-mark
-/// sets, the code points just outside each range, and the ASCII cases that callers treat
-/// differently. A golden description of the probe fails if a refactor drops or adds one
-/// member for one caller.
+/// sets, the code points just outside each range, other invisible format and space
+/// characters that no set holds, and the ASCII cases that callers treat differently. A
+/// golden description of the probe fails if a refactor drops or adds one member for one
+/// caller.
 /// </summary>
 internal static class TextSafetyProbe
 {
@@ -21,11 +22,13 @@ internal static class TextSafetyProbe
     [
         '\u0000', '\u0009', '\u000A', '\u000D', '\u001B', '\u007F', '\u0085', '\u009F',
         '\u061B', '\u061C', '\u061D',
+        '\u180E', '\u200A', '\u200B', '\u200C',
         '\u200D', '\u200E', '\u200F', '\u2010',
         '\u2027', '\u2028', '\u2029',
         '\u202A', '\u202B', '\u202C', '\u202D', '\u202E', '\u202F',
+        '\u205F', '\u2060', '\u2061', '\u2062', '\u2063', '\u2064',
         '\u2065', '\u2066', '\u2067', '\u2068', '\u2069', '\u206A',
-        '\uFEFE', '\uFEFF',
+        '\uFEFE', '\uFEFF', '\uFFF8', '\uFFF9', '\uFFFA', '\uFFFB', '\uFFFC',
         '`', 'x',
     ];
 
