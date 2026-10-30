@@ -28,6 +28,10 @@ public sealed class LogRedactionRoutingTests : IDisposable
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
+        // The daemon always sets its URL. The host then writes a Microsoft.Hosting.Lifetime
+        // "Now listening on" record, which is the framework record that this test checks.
+        // Without an explicit URL, that record depends on ASPNETCORE_URLS in the environment.
+        builder.WebHost.UseUrls("http://127.0.0.1:5199");
         builder.ConfigureNetclawLogging(new NetclawPaths(_directory.Path));
         // Registered after the stage, as a later sink would be.
         var capture = new CapturingLoggerProvider();
@@ -48,7 +52,8 @@ public sealed class LogRedactionRoutingTests : IDisposable
 
             Assert.Contains(capture.Records, r => r.Message == "typed logger marker DB_PASSWORD=***REDACTED***");
             Assert.DoesNotContain(capture.Records, r => r.Message.Contains("hunter2", StringComparison.Ordinal));
-            Assert.Contains(capture.Records, r => r.Category == "Microsoft.Hosting.Lifetime");
+            Assert.Contains(capture.Records, r => r.Category == "Microsoft.Hosting.Lifetime"
+                && r.Message.Contains("http://127.0.0.1:5199", StringComparison.Ordinal));
         }
         finally
         {
