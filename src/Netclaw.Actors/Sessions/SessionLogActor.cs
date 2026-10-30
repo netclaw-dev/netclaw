@@ -187,9 +187,11 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         if (_thinkingRun.Length == 0)
             return;
 
+        // Not clipped: the log held every delta in full before, and WriteTranscript redacts the
+        // whole run at once.
         var run = _thinkingRun.ToString();
         _thinkingRun.Clear();
-        WriteTranscript($"Thinking (streamed): {Clip(run)}");
+        WriteTranscript($"Thinking (streamed): {run}");
     }
 
     // Redact before truncating: a cut can split a secret into a fragment that no pattern matches.

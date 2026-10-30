@@ -202,6 +202,11 @@ and give the log its own masked copy.
 - The shared patterns miss a key and its value on separate lines
   (`API_KEY=` and then the value on the next line), and a presigned URL
   signature that comes before the credential. See #2770.
+- The stage redacts each structured value alone. When the template holds the
+  words that mark a secret, as in `Authorization: Bearer {Token}`, the message
+  is masked but the `Token` attribute is not. A rule that masked such values
+  also masked real IDs, because the patterns match `authorizationAttemptId=`.
+  See #2770.
 - A crafted MCP argument value makes the approval display throw. See #2771.
 - The headless CLI session log is redacted but not framed. Its eval readers
   rely on verbatim records.
@@ -211,8 +216,8 @@ and give the log its own masked copy.
 ## 8. How we know it works
 
 - `RedactingLoggerFactoryTests`: message, structured values, scopes,
-  exceptions, a value that only the template marks as a secret, false
-  positives such as `max_tokens=4096`, and the fail-closed path.
+  exceptions, exception text that needs escaping, false positives such as
+  `max_tokens=4096`, and the fail-closed path.
 - `LogRedactionRoutingTests`: `ILogger<T>`, framework, and Akka records go
   through the stage, including a provider registered after it.
 - `LogRecordFramingTests` and `ConsoleLogFramingTests`: content cannot forge a

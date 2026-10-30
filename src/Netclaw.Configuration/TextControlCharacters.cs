@@ -11,13 +11,13 @@ namespace Netclaw.Configuration;
 
 /// <summary>
 /// The one definition of the invisible characters that can reorder or split text for a
-/// reader. Approval validation, approval display, the shell trace, and the lifecycle notifier
-/// combine these sets with <see cref="char.IsControl(char)"/> as their output medium
+/// reader. Approval validation, approval display, the shell trace, the lifecycle notifier, and
+/// log framing combine these sets with <see cref="char.IsControl(char)"/> as their output medium
 /// requires. A new caller that escapes or rejects these characters must use this type, not a
 /// private list, because two lists drift apart. Two regex patterns stay separate on purpose:
 /// <c>RegexPromptInjectionDetector</c> matches a wider range of invisible characters, and
 /// <c>HeadlessChannel.SingleLine</c> folds every kind of line break. This assembly holds the
-/// definitions because it is the lowest one that the four callers above reference.
+/// definitions because it is the lowest one that the callers above reference.
 /// </summary>
 public static class TextControlCharacters
 {

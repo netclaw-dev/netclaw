@@ -73,21 +73,13 @@ no extra step.
 
 For structured and scope values, the system SHALL redact each value and SHALL
 keep each name unchanged. The system SHALL NOT mask a value only because its
-name contains a secret word. When redaction of the message masks the text of a
-value, the system SHALL mask that value too, because the template can hold the
-words that mark the secret. Numbers, enums, and other convertible primitive
-values SHALL keep their type unless they are masked. Other values SHALL become
-redacted text.
+name contains a secret word. Numbers, enums, and other convertible primitive
+values SHALL keep their type. Other values SHALL become redacted text.
 
 #### Scenario: A secret value in a structured field
 
 - **WHEN** a log record has a structured field `Body` with the value `Authorization: Bearer abc123`
 - **THEN** the exported field `Body` has the value `Authorization: Bearer ***REDACTED***`
-
-#### Scenario: A value that the template marks as a secret
-
-- **WHEN** a log record has the template `Authorization: Bearer {Token}` and the value `abc123xyz`
-- **THEN** the exported field `Token` has the value `***REDACTED***`
 
 #### Scenario: A usage count keeps its value
 
