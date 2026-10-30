@@ -33,7 +33,8 @@ default provider.
 
 1. `scripts/docker/build-image.sh dev` (or a published release image) builds
    the `netclawd` Docker image.
-2. On every invocation, `run-evals.sh` spins up an ephemeral container
+2. Each selected case of full Main uses a separate ephemeral container.
+   A single-context filtered invocation uses one ephemeral container
    from that image with `docker run --rm --network host`, a throwaway
    `$EVAL_HOME` temp directory, and `NETCLAW_*` env vars that route it at
    your LLM endpoint.
@@ -78,12 +79,73 @@ The verdict helpers can classify preserved evidence offline after an abort.
 A timeout or failed-turn classification remains separate from permission to dispatch another trial.
 Successful calls retain the current session and multi-turn behavior.
 
-The harness preloads `evals/fixtures/config/netclaw.json` into the ephemeral
-home before startup. It auto-approves tools and grants read/write access for the
-Personal audience because headless sessions cannot answer approval prompts or
-edit an interactive trust policy. A companion `tool-approvals.json` trusts Git
-for shell-based coding cases. Tool exposure and command-deny rules still apply,
-and these policies are never copied into an operator's config.
+The harness copies the selected config fixture into its private home before startup.
+The broad fixture explicitly sets Personal `shell_execute` consent to `Auto`.
+Headless sessions cannot answer approval prompts.
+`DefaultMode=Auto` alone retains the posture's `shell_execute=Approval` override.
+A companion `tool-approvals.json` supplies the existing command grants.
+The harness never copies these policies into an operator's config.
+
+| Context | Config fixture | Personal file access | Required scope |
+|---|---|---|---|
+| Broad workflow | `evals/fixtures/config/netclaw.json` | `All` for reads and writes | Every case except `approval_natural_directory_change`. |
+| Bounded negative | `evals/fixtures/config/netclaw-bounded.json` | `Roots` for the session and workspaces | Only `approval_natural_directory_change`. |
+
+Both fixtures use explicit shell `Auto` consent.
+Both retain tool exposure, protected-path, and hard-deny rules.
+The bounded fixture also inherits the standard identity, skill, and workspace read roots.
+Its `/tmp` refusal precedes automatic consent.
+The broad fixture permits `/tmp` through `All`, so it cannot prove that negative boundary.
+The deterministic `EvalFixtureAuthorityTests` bind both committed fixtures through the runtime binder and real authorizer.
+They also remove only the shell override to prove inherited `Approval` consent.
+An attended call then requires approval; a headless call returns `approval_required_unattended`.
+
+The normal unfiltered `./evals/run-evals.sh` entrypoint selects both contexts through `main_evals.py`.
+A category that contains both contexts uses the same driver for its selected subset.
+The parent resolves the provider, prepares the image and observer, and freezes the actual image ID once.
+With `NETCLAW_EVAL_NO_BUILD=1`, a Main selection that needs the observer requires its prepared output.
+The harness checks the DLL, dependency manifest, and runtime config before any model call.
+It reuses these files and never falls back to a rebuild.
+Prepare the observer with `dotnet build evals/coordination-observer/coordination-observer.csproj` before a frozen run.
+Build-enabled Main prepares it once. Direct single-context observer runs retain their existing build step.
+Each child uses one exact case filter, one shared seed, and the original trial code.
+The driver derives every case from the current `run_all` declarations.
+It rejects duplicate names, unknown declaration helpers, missing critical cases, and declarations without assertions.
+It records the selected inventory, the planned trial count, and each child run ID in `evals/main-runs/<id>/main.json`.
+The driver retains the archived UUID if startup stops before the normal run header.
+Archive identity cannot replace trial evidence. Conflicting identity records stop the protocol.
+The trial slot count equals the declared case count times the trials per case.
+Category receipts identify only their selected subset and do not imply full-suite acceptance.
+The driver preserves conclusive failures and stops before another case after a containment or harness error.
+The child stops synchronously after an inconclusive verdict, before another trial or setup step.
+It preserves the original verdict evidence and stores drained session evidence under `raw/post-containment/` after confirmed containment.
+The driver checks source, assets, fixtures, CLI, and observer hashes before and after each child.
+These checks detect file drift; they do not make concurrent filesystem changes atomic.
+The three stock coordination cases retain their 300-second cap.
+The stock long-command floor is 480 seconds. The ordinary Subagents floor is 120 seconds.
+
+Other case and category filters retain the existing single-context behavior, including special suites.
+The exact negative case selects the bounded default before startup.
+A contradictory explicit fixture fails before a build or provider request.
+For an explicit bounded fixture path, use:
+For the bounded case, use:
+
+```bash
+NETCLAW_EVAL_CASE=approval_natural_directory_change \
+NETCLAW_EVAL_CONFIG_FILE="$PWD/evals/fixtures/config/netclaw-bounded.json" \
+./evals/run-evals.sh
+```
+
+A full-suite receipt must include every case with its declared context.
+Full Main and mixed-category selections reject `NETCLAW_EVAL_CONFIG_FILE` because one fixture cannot supply both contexts.
+Use `NETCLAW_EVAL_MAIN_BROAD_CONFIG_FILE` and `NETCLAW_EVAL_MAIN_BOUNDED_CONFIG_FILE` for explicit context overrides.
+The driver validates both fixture shapes and fails if either context is absent or contradictory.
+`NETCLAW_EVAL_ASSET_ROOT` supplies both default fixture paths and the existing identity and skill assets.
+The driver does not substitute repository defaults when a custom asset root lacks a fixture.
+Separate invocations reset the daemon, sessions, and shared fixture state between cases.
+They preserve each case's internal multi-turn flow, but do not prove cross-case state behavior.
+Each fresh daemon can need an ungraded model call before the memory seed.
+These initialization calls do not count as trial slots.
 
 ### Behavioral eval preflight
 

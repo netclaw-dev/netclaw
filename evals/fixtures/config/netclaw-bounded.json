@@ -1,0 +1,57 @@
+{
+  "configVersion": 1,
+  "Webhooks": {
+    "Enabled": true
+  },
+  "Session": {
+    "IdleTimeout": "00:00:00",
+    "MemoryObserverIdleSeconds": 86400,
+    "Tuning": {
+      "MemoryDistillationTurnInterval": 0
+    }
+  },
+  "McpServers": {
+    "eval_analytics": {
+      "Transport": "stdio",
+      "Command": "python3",
+      "Arguments": [
+        "/home/netclaw/.netclaw/evals/prompt_server.py"
+      ],
+      "Enabled": true
+    },
+    "eval_workspace": {
+      "Transport": "stdio",
+      "Command": "python3",
+      "Arguments": [
+        "/home/netclaw/.netclaw/evals/catalog_server.py"
+      ],
+      "Enabled": true
+    }
+  },
+  "Tools": {
+    "AudienceProfiles": {
+      "Personal": {
+        "ReadFiles": {
+          "Mode": "Roots",
+          "Roots": [
+            "{session_dir}",
+            "{workspaces_dir}"
+          ]
+        },
+        "WriteFiles": {
+          "Mode": "Roots",
+          "Roots": [
+            "{session_dir}",
+            "{workspaces_dir}"
+          ]
+        },
+        "ApprovalPolicy": {
+          "DefaultMode": "Auto",
+          "ToolOverrides": {
+            "shell_execute": "Auto"
+          }
+        }
+      }
+    }
+  }
+}
