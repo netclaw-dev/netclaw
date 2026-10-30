@@ -18,8 +18,9 @@ public sealed class SystemdUserServiceTests : IDisposable
     private static DaemonStatus RunningAs(int pid) => new(true, pid, $"Daemon running (PID {pid}).");
 
     // environ == null means the process environment is unreadable. Never reads the real /proc.
-    private SystemdUserService ServiceFor(FakeSystemCommandRunner runner, string homePath, string? environ = null)
-        => new(homePath, WriteUnit(), runner, enabledOnThisPlatform: true, environReader: _ => environ);
+    // unitHome == null writes a unit with no NETCLAW_HOME, which serves the default home.
+    private SystemdUserService ServiceFor(FakeSystemCommandRunner runner, string homePath, string? environ = null, string? unitHome = null)
+        => new(homePath, WriteUnit(unitHome), runner, enabledOnThisPlatform: true, environReader: _ => environ);
 
     // A process with no NETCLAW_HOME serves $HOME/.netclaw, with the HOME of its own environment. The default
     // home of the test process is the one that the process names here.
@@ -343,6 +344,58 @@ public sealed class SystemdUserServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_ReturnsManaged_ForACustomHomeTheUnitServes()
+    {
+        var runner = new FakeSystemCommandRunner();
+        runner.Enqueue(State("active"));
+
+        AssertKind(SystemdUserServiceOwnershipKind.Managed,
+            await ServiceFor(runner, ScratchHome, unitHome: ScratchHome + "/").GetStartOwnershipAsync());
+    }
+
+    [Fact]
+    public async Task Start_ReturnsUnmanaged_ForTheDefaultHomeWhenTheUnitServesACustomHome()
+    {
+        var runner = new FakeSystemCommandRunner();
+
+        var ownership = await ServiceFor(runner, DefaultHome, unitHome: ScratchHome).GetStartOwnershipAsync();
+
+        AssertKind(SystemdUserServiceOwnershipKind.Unmanaged, ownership);
+        Assert.Empty(runner.Commands);
+    }
+
+    [Fact]
+    public async Task Start_ReturnsUnmanaged_ForACustomHomeWhenTheUnitServesAnotherCustomHome()
+    {
+        var runner = new FakeSystemCommandRunner();
+
+        AssertKind(SystemdUserServiceOwnershipKind.Unmanaged,
+            await ServiceFor(runner, ScratchHome, unitHome: Path.Combine(_dir.Path, "other")).GetStartOwnershipAsync());
+        Assert.Empty(runner.Commands);
+    }
+
+    [Fact]
+    public async Task Stop_ReturnsManaged_ForACustomHomeWhoseUnitIsRestartingWithNoMainProcess()
+    {
+        var runner = new FakeSystemCommandRunner();
+        runner.Enqueue(State("activating"));
+        runner.Enqueue(MainPid("0", $"NETCLAW_HOME={ScratchHome}"));
+
+        AssertKind(SystemdUserServiceOwnershipKind.Managed,
+            await ServiceFor(runner, ScratchHome, unitHome: ScratchHome).GetStopOwnershipAsync(NotRunning));
+    }
+
+    [Fact]
+    public void ReadUnitHome_RoundTripsAQuotedPathWithSpacesQuotesAndPercent()
+    {
+        var home = "/srv/my \"netclaw\" 100%/home";
+        var path = Path.Combine(_dir.Path, "quoted.service");
+        File.WriteAllText(path, $"[Service]\nEnvironment={SystemdUserService.QuoteEnvironmentAssignment("NETCLAW_HOME", home)}\n");
+
+        Assert.Equal(home, SystemdUserService.ReadUnitHome(path));
+    }
+
+    [Fact]
     public async Task Start_ReturnsUnmanaged_WhenTheUnitIsAlreadyStopping()
     {
         var runner = new FakeSystemCommandRunner();
@@ -352,14 +405,14 @@ public sealed class SystemdUserServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Start_ReturnsUnmanaged_ForAHomeOtherThanTheDefault_WithoutAskingSystemd()
+    public async Task Start_ReturnsUnmanaged_ForAHomeTheUnitDoesNotServe_WithoutAskingSystemd()
     {
         var runner = new FakeSystemCommandRunner();
 
         var ownership = await ServiceFor(runner, ScratchHome).GetStartOwnershipAsync();
 
         AssertKind(SystemdUserServiceOwnershipKind.Unmanaged, ownership);
-        Assert.Contains("default home", ownership.Message, StringComparison.Ordinal);
+        Assert.Contains(DefaultHome, ownership.Message, StringComparison.Ordinal);
         Assert.Empty(runner.Commands);
     }
 
@@ -395,10 +448,11 @@ public sealed class SystemdUserServiceTests : IDisposable
             runner.Commands);
     }
 
-    private string WriteUnit()
+    private string WriteUnit(string? unitHome = null)
     {
         var unitPath = Path.Combine(_dir.Path, "netclaw.service");
-        File.WriteAllText(unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n");
+        File.WriteAllText(unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n"
+            + (unitHome is null ? string.Empty : $"Environment={SystemdUserService.QuoteEnvironmentAssignment("NETCLAW_HOME", unitHome)}\n"));
         return unitPath;
     }
 

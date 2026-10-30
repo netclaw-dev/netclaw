@@ -481,6 +481,13 @@ public sealed partial class DaemonManager
                     : "Service installation is currently Linux-only (systemd). " +
                       "See https://github.com/netclaw-dev/netclaw/issues for Windows service support.");
 
+        // There is one unit per user. Repointing it would silently take the daemon away from the home it serves.
+        if (UnitServingAnotherHome() is { } otherHome)
+            return new DaemonResult(false,
+                $"netclaw.service already serves {otherHome}, and there is one unit per user. " +
+                $"Run `netclaw daemon uninstall` for {otherHome} first (NETCLAW_HOME={otherHome} netclaw daemon uninstall), " +
+                $"then run `netclaw daemon install` for {_paths.BasePath}.");
+
         var binaryPath = FindDaemonBinary();
         if (binaryPath is null)
             return new DaemonResult(false,
@@ -522,7 +529,7 @@ public sealed partial class DaemonManager
 
         var unitPath = SystemdUserUnitFilePath;
         var isUpgrade = File.Exists(unitPath);
-        var unitContent = BuildDaemonUnitContent(binaryPath, cliBinaryPath, envFilePath);
+        var unitContent = BuildDaemonUnitContent(binaryPath, cliBinaryPath, envFilePath, _paths.BasePath);
 
         await File.WriteAllTextAsync(unitPath, unitContent);
 
@@ -577,6 +584,16 @@ public sealed partial class DaemonManager
 
     internal static string SystemdUserUnitFilePath => Path.Combine(SystemdUserUnitDirectory, "netclaw.service");
 
+    /// <summary>The home of the installed unit when it is not this home; null when there is no unit or it serves this home.</summary>
+    private string? UnitServingAnotherHome()
+    {
+        if (!File.Exists(SystemdUserUnitFilePath))
+            return null;
+
+        var unitHome = SystemdUserService.ReadUnitHome(SystemdUserUnitFilePath);
+        return HomeIdentity.Same(unitHome, _paths.BasePath) ? null : unitHome;
+    }
+
     /// <summary>
     /// Deletes the netclaw-owned PATH env file written at install so uninstall leaves no
     /// orphan behind. Idempotent. Separated from <see cref="UninstallAsync"/> (which is
@@ -607,8 +624,13 @@ public sealed partial class DaemonManager
     /// cgroup out from under <c>ExecStop=</c> (<c>netclaw daemon stop</c>) while that command is
     /// still legitimately waiting on the daemon's own shutdown (netclaw-dev/netclaw#1665).
     /// Existing installs only pick this up after re-running <c>netclaw daemon install</c>.
+    ///
+    /// <c>NETCLAW_HOME</c> is always written, so the unit names the home it serves. There is one
+    /// unit per user: <see cref="InstallAsync"/> and <see cref="UninstallAsync"/> refuse to touch a
+    /// unit that serves another home.
     /// </summary>
-    internal static string BuildDaemonUnitContent(string binaryPath, string cliBinaryPath, string environmentFilePath) => $"""
+    internal static string BuildDaemonUnitContent(
+        string binaryPath, string cliBinaryPath, string environmentFilePath, string homePath) => $"""
         [Unit]
         Description=Netclaw Daemon
         After=network.target
@@ -621,6 +643,7 @@ public sealed partial class DaemonManager
         Restart=always
         RestartSec=5
         Environment=DOTNET_ENVIRONMENT=Production
+        Environment={SystemdUserService.QuoteEnvironmentAssignment("NETCLAW_HOME", Path.GetFullPath(homePath))}
         EnvironmentFile=-{environmentFilePath}
 
         [Install]
@@ -640,6 +663,12 @@ public sealed partial class DaemonManager
                       "https://github.com/netclaw-dev/netclaw/issues/1015"
                     : "Service uninstallation is currently Linux-only (systemd). " +
                       "See https://github.com/netclaw-dev/netclaw/issues for Windows service support.");
+
+        // The unit and its start/stop belong to the home it serves. Another home's uninstall must not remove them.
+        if (UnitServingAnotherHome() is { } otherHome)
+            return new DaemonResult(false,
+                $"netclaw.service serves {otherHome}, not {_paths.BasePath}. " +
+                $"Run `NETCLAW_HOME={otherHome} netclaw daemon uninstall` to remove it.");
 
         await RunCommandAsync("systemctl", "--user stop netclaw.service");
         await RunCommandAsync("systemctl", "--user disable netclaw.service");

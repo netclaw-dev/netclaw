@@ -79,7 +79,7 @@ public sealed class DaemonManagerGracefulShutdownTests : IDisposable
     public void BuildDaemonUnitContent_SetsTimeoutStopSec_ConsistentWithGracefulShutdownBudget()
     {
         var unit = DaemonManager.BuildDaemonUnitContent(
-            "/opt/netclaw/netclawd", "/opt/netclaw/netclaw", "/opt/netclaw/daemon.env");
+            "/opt/netclaw/netclawd", "/opt/netclaw/netclaw", "/opt/netclaw/daemon.env", "/home/u/.netclaw");
 
         var expectedTimeoutStopSec = (int)(DaemonConfig.GracefulShutdownBudget + TimeSpan.FromSeconds(30)).TotalSeconds;
 

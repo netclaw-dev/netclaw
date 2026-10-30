@@ -83,8 +83,11 @@ Choose the recovery by cause:
 4. You update from a daemon that is older than this check, on macOS or Windows. The daemon answers 200 with no
    `home`, so the CLI cannot prove it. Stop the old daemon once with `kill <pid>`, then run the update again.
 
-The `systemd` user unit does not set `NETCLAW_HOME`. Its daemon serves `<HOME>/.netclaw`, and on Linux the
-CLI proves that from the `HOME` entry of the daemon environment.
+`netclaw daemon install` writes `Environment="NETCLAW_HOME=<home>"` into the `systemd` user unit, with the home of the
+CLI that ran it. There is one unit per user: to move it to another home, run `netclaw daemon uninstall` for the home it
+serves, then `netclaw daemon install` for the new one. A unit that an older release wrote has no `NETCLAW_HOME` and
+serves `<HOME>/.netclaw`; run `netclaw daemon install` again to refresh it. On Linux the CLI proves which home the
+daemon serves from the `NETCLAW_HOME` (or `HOME`) entry of the daemon environment.
 
 ## Rollback Notes
 

@@ -228,8 +228,8 @@ Start it with: netclaw daemon start
 
 `netclaw daemon start` spawns the daemon as a detached background process.
 The daemon writes its PID to `~/.netclaw/netclaw.pid` for lifecycle management.
-When an installed Linux systemd user unit owns the daemon, `start` runs
-`systemctl --user start netclaw.service` instead, and it reports "Daemon already
+When an installed Linux systemd user unit serves this home (see Service Registration),
+`start` runs `systemctl --user start netclaw.service` instead, and it reports "Daemon already
 running" without touching the unit when a detached daemon already holds the home
 (the unit's daemon would only loop on the singleton lock).
 
@@ -254,8 +254,9 @@ daemon PID counts. When the unit has no main process (the crash-loop window), th
 unit's `Environment` property decides: no `NETCLAW_HOME` means the default home.
 A unit whose `NETCLAW_HOME` comes only from an `EnvironmentFile`, sampled at an
 instant when it has no main process, is therefore treated as serving the default
-home. For a home the unit does not serve, `start` and `stop` act on that home's
-own daemon process and never on the unit.
+home. `start` asks the unit for the home that its unit file names (`NETCLAW_HOME` in an
+`Environment=` line; absent means the default home). For a home the unit does not serve,
+`start` and `stop` act on that home's own daemon process and never on the unit.
 
 A direct `stop` sends a signal only to a PID that is shown to serve the home of
 the command (capability spec `daemon-lifecycle`, change
@@ -371,6 +372,7 @@ ExecStop=/path/to/netclaw daemon stop
 Restart=always
 RestartSec=5
 Environment=DOTNET_ENVIRONMENT=Production
+Environment="NETCLAW_HOME=/home/you/.netclaw"
 EnvironmentFile=-/home/you/.netclaw/config/daemon.env
 
 [Install]
@@ -379,6 +381,14 @@ WantedBy=default.target
 
 No sudo required. Uses `systemctl --user enable netclaw` and
 `loginctl enable-linger $USER` to survive user logout.
+
+**Custom home.** `install` always writes `NETCLAW_HOME` with the absolute home of the CLI that ran
+it (quoted for systemd), so `NETCLAW_HOME=/srv/netclaw netclaw daemon install` installs a unit that
+serves `/srv/netclaw`, and its `daemon.env` lives in that home. There is one unit per user. When the
+installed unit serves another home (a unit with no `NETCLAW_HOME` serves the default home), `install`
+and `uninstall` refuse, write nothing, and name that home: run `daemon uninstall` for it first. A
+reinstall from the home that the unit serves refreshes the unit. `start`, `stop` and `update` use the
+unit for the home it serves and the home's own daemon process for every other home.
 
 **Shell-tool PATH.** A systemd `--user` service starts with a sanitized,
 non-interactive environment that does not inherit the operator's login-shell

@@ -715,7 +715,8 @@ public sealed class DoctorFixServiceTests : IDisposable
         => WriteRawUnit(DaemonManager.BuildDaemonUnitContent(
             $"{InstallDir}/netclawd",
             $"{InstallDir}/netclaw",
-            paths.DaemonEnvironmentFilePath));
+            paths.DaemonEnvironmentFilePath,
+            paths.BasePath));
 
     private string WriteRawUnit(string content)
     {

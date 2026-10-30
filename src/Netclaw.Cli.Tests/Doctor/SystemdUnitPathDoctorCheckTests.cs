@@ -101,7 +101,7 @@ public sealed class SystemdUnitPathDoctorCheckTests : IDisposable
         var (unitPath, dir) = WriteUnitDir();
         var envPath = Path.Combine(dir, "daemon.env"); // referenced but never written
         File.WriteAllText(unitPath, DaemonManager.BuildDaemonUnitContent(
-            "/opt/netclaw/netclawd", "/opt/netclaw/netclaw", envPath));
+            "/opt/netclaw/netclawd", "/opt/netclaw/netclaw", envPath, "/home/u/.netclaw"));
         var check = new SystemdUnitPathDoctorCheck(unitPath, enabledOnThisPlatform: true);
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
@@ -118,7 +118,7 @@ public sealed class SystemdUnitPathDoctorCheckTests : IDisposable
         var envPath = Path.Combine(dir, "daemon.env");
         File.WriteAllText(envPath, "PATH=/usr/local/bin:/usr/bin\n"); // no /opt/netclaw
         File.WriteAllText(unitPath, DaemonManager.BuildDaemonUnitContent(
-            "/opt/netclaw/netclawd", "/opt/netclaw/netclaw", envPath));
+            "/opt/netclaw/netclawd", "/opt/netclaw/netclaw", envPath, "/home/u/.netclaw"));
         var check = new SystemdUnitPathDoctorCheck(unitPath, enabledOnThisPlatform: true);
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
@@ -139,7 +139,7 @@ public sealed class SystemdUnitPathDoctorCheckTests : IDisposable
         var envPath = Path.Combine(dir, "daemon.env");
         File.WriteAllText(envPath, DaemonPathEnvironmentFile.Merge(null, installDir, "/usr/local/bin:/usr/bin"));
         File.WriteAllText(unitPath, DaemonManager.BuildDaemonUnitContent(
-            $"{installDir}/netclawd", $"{installDir}/netclaw", envPath));
+            $"{installDir}/netclawd", $"{installDir}/netclaw", envPath, "/home/u/.netclaw"));
         var check = new SystemdUnitPathDoctorCheck(unitPath, enabledOnThisPlatform: true);
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);

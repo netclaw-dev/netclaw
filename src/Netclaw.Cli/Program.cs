@@ -1429,11 +1429,14 @@ static void WriteDaemonHelp()
     Console.WriteLine("  start                        Start daemon as a background process");
     Console.WriteLine("  stop                         Stop daemon gracefully");
     Console.WriteLine("  status                       Show daemon process status (exit 1 if not running or not ready)");
-    Console.WriteLine("  install                      Install systemd user service (Linux)");
-    Console.WriteLine("  uninstall                    Remove systemd user service (Linux)");
+    Console.WriteLine("  install                      Install systemd user service for this home (Linux)");
+    Console.WriteLine("  uninstall                    Remove the systemd user service (Linux)");
     Console.WriteLine("  pair                         Generate a pairing code for remote device access");
     Console.WriteLine("  devices                      List paired devices");
     Console.WriteLine("  devices revoke <name>        Revoke a paired device by name");
+    Console.WriteLine();
+    Console.WriteLine("The user service serves the home it was installed from (NETCLAW_HOME=/srv/x netclaw daemon install).");
+    Console.WriteLine("There is one service per user: install and uninstall refuse while it serves another home.");
     Console.WriteLine();
     Console.WriteLine("start, stop, and status refuse when the PID in netclaw.pid is not shown to serve this home.");
     Console.WriteLine("If no Netclaw daemon of this home runs, delete <home>/netclaw.pid.");

@@ -115,7 +115,7 @@ public sealed class DaemonManagerInstallTests : IDisposable
     public async Task Uninstall_RemovesUnitLeftByAFailedInstall_WhenSystemdIsMissing()
     {
         Directory.CreateDirectory(DaemonManager.SystemdUserUnitDirectory);
-        File.WriteAllText(_unitPath, "[Service]\nExecStart=/opt/netclaw/netclawd\n");
+        File.WriteAllText(_unitPath, UnitServing(_paths.BasePath));
         File.WriteAllText(_paths.DaemonEnvironmentFilePath, "PATH=/usr/bin\n");
         var runner = new FakeSystemCommandRunner(
             new SystemCommandResult(-1, string.Empty, "No such file or directory"));
@@ -126,6 +126,63 @@ public sealed class DaemonManagerInstallTests : IDisposable
         Assert.True(result.Success, result.Message);
         Assert.False(File.Exists(_unitPath));
         Assert.False(File.Exists(_paths.DaemonEnvironmentFilePath));
+    }
+
+    // A unit as an earlier netclaw wrote it has no NETCLAW_HOME and serves the default home.
+    private static string UnitServing(string? home) =>
+        "[Service]\nExecStart=/opt/netclaw/netclawd\n"
+        + (home is null ? string.Empty : $"Environment={SystemdUserService.QuoteEnvironmentAssignment("NETCLAW_HOME", home)}\n");
+
+    [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Service installation is Linux-only.")]
+    public async Task Install_WritesTheInstallingHomeIntoTheUnit_AndReinstallFromTheSameHomeSucceeds()
+    {
+        var sut = CreateManager(new FakeSystemCommandRunner());
+
+        Assert.True((await sut.InstallAsync()).Success);
+        Assert.True(HomeIdentity.Same(_paths.BasePath, SystemdUserService.ReadUnitHome(_unitPath)));
+        Assert.Contains($"NETCLAW_HOME={_paths.BasePath}", File.ReadAllText(_unitPath), StringComparison.Ordinal);
+
+        Assert.True((await CreateManager(new FakeSystemCommandRunner()).InstallAsync()).Success);
+    }
+
+    [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
+    [Theory(SkipUnless = nameof(IsLinux), Skip = "Service installation is Linux-only.")]
+    [InlineData(null)] // no NETCLAW_HOME: the unit serves the default home, not this one
+    [InlineData("/srv/other-home")]
+    public async Task Install_Refuses_WhenTheUnitServesAnotherHome_AndChangesNothing(string? unitHome)
+    {
+        Directory.CreateDirectory(DaemonManager.SystemdUserUnitDirectory);
+        File.WriteAllText(_unitPath, UnitServing(unitHome));
+        var before = File.ReadAllText(_unitPath);
+        var runner = new FakeSystemCommandRunner();
+
+        var result = await CreateManager(runner).InstallAsync();
+
+        Assert.False(result.Success);
+        Assert.Contains(unitHome ?? HomeIdentity.DefaultHome, result.Message, StringComparison.Ordinal);
+        Assert.Contains("daemon uninstall", result.Message, StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(_unitPath));
+        Assert.False(File.Exists(_paths.DaemonEnvironmentFilePath));
+        Assert.Empty(runner.Commands);
+    }
+
+    [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = "Service installation is Linux-only.")]
+    public async Task Uninstall_Refuses_WhenTheUnitServesAnotherHome_AndLeavesTheUnitAlone()
+    {
+        Directory.CreateDirectory(DaemonManager.SystemdUserUnitDirectory);
+        File.WriteAllText(_unitPath, UnitServing("/srv/other-home"));
+        File.WriteAllText(_paths.DaemonEnvironmentFilePath, "PATH=/usr/bin\n");
+        var runner = new FakeSystemCommandRunner();
+
+        var result = await CreateManager(runner).UninstallAsync();
+
+        Assert.False(result.Success);
+        Assert.Contains("/srv/other-home", result.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(_unitPath));
+        Assert.True(File.Exists(_paths.DaemonEnvironmentFilePath));
+        Assert.Empty(runner.Commands);
     }
 
     [SlopwatchSuppress("SW001", "Service installation is Linux-only.")]
