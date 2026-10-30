@@ -384,8 +384,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
 
     private static bool IsUnsafeTextCodeUnit(char value)
         => char.IsControl(value)
-           || value is '\u061C' or '\u200E' or '\u200F'
-           or >= '\u2028' and <= '\u202E'
-           or >= '\u2066' and <= '\u2069'
-           or '\uFEFF';
+           || TextControlCharacters.IsBidiControl(value)
+           || TextControlCharacters.IsUnicodeLineSeparator(value)
+           || TextControlCharacters.IsByteOrderMark(value);
 }

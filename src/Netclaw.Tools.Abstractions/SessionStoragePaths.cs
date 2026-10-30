@@ -377,7 +377,12 @@ public sealed record SessionStoragePaths
             && string.Equals(Path.GetDirectoryName(runDirectory), runsRoot, comparison);
     }
 
-    private static string SanitizePathSegment(string value)
+    /// <summary>
+    /// Keeps letters, digits, and hyphens, and replaces every other character with an
+    /// underscore. Session folder names on disk come from this output, so a change to it
+    /// stops an upgraded daemon from finding existing session folders.
+    /// </summary>
+    internal static string SanitizePathSegment(string value)
     {
         Span<char> buffer = stackalloc char[value.Length];
         for (var index = 0; index < value.Length; index++)
