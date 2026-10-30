@@ -32,4 +32,4 @@
 - [x] 3.3 Check whether the `netclaw-operations` skill describes the log line format, log redaction, or crash logs. If it does, update it and bump `metadata.version`. Record the result in the PR description.
 - [x] 3.4 File a follow-up issue for non-ASCII route names in webhook execution actor names, and link it from the sink map. Verify that the issue exists.
 - [ ] 3.5 Dismiss each remaining `cs/log-forging` alert with a reference to the stage and its framing tests, not to structured logging. Verify that no such alert stays open without a rationale.
-- [ ] 3.6 When PR 2 opens, close PR #2729 and PR #2731 with a link to PR 2. Verify that both are closed.
+- [x] 3.6 When PR 2 opens, close PR #2729 and PR #2731 with a link to PR 2. Verify that both are closed.
