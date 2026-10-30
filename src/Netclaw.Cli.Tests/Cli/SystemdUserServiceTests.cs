@@ -447,8 +447,6 @@ public sealed class SystemdUserServiceTests : IDisposable
 
     [Theory]
     [InlineData("Environment=NETCLAW_HOME=relative/home\n")]
-    [InlineData("Environment=NETCLAW_HOME=~/netclaw\n")]
-    [InlineData("Environment=NETCLAW_HOME=$HOME/netclaw\n")]
     public void ReadUnitHome_ReportsAProblem_ForAHomeThatIsNotAnAbsolutePath(string text)
     {
         var unit = SystemdUserService.ReadUnitHome(UnitFile(text));
@@ -469,15 +467,74 @@ public sealed class SystemdUserServiceTests : IDisposable
         Assert.NotNull(unit.Problem);
     }
 
-    [Fact]
-    public async Task Start_AndStop_ReturnUnknown_InsteadOfThrowing_ForAnUnreadableUnit()
+    private string DanglingUnit(string name)
     {
-        var link = Path.Combine(_dir.Path, "dangling2.service");
-        File.CreateSymbolicLink(link, Path.Combine(_dir.Path, "gone2.service"));
-        var service = new SystemdUserService(DefaultHome, link, new FakeSystemCommandRunner(), enabledOnThisPlatform: true);
+        var link = Path.Combine(_dir.Path, name);
+        File.CreateSymbolicLink(link, Path.Combine(_dir.Path, "gone-" + name));
+        return link;
+    }
 
-        AssertKind(SystemdUserServiceOwnershipKind.Unknown, await service.GetStartOwnershipAsync());
-        AssertKind(SystemdUserServiceOwnershipKind.Unknown, await service.GetStopOwnershipAsync(NotRunning));
+    [Theory]
+    [InlineData("~/data", "data")]
+    [InlineData("$HOME/data", "data")]
+    public void ReadUnitHome_ExpandsTheValueAsTheDaemonDoes(string declared, string folder)
+    {
+        var env = EnvFile($"NETCLAW_HOME={declared}\n");
+
+        var unit = SystemdUserService.ReadUnitHome(UnitFile($"EnvironmentFile=-{env}\n"));
+
+        Assert.Equal(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), folder), unit.Path);
+    }
+
+    [Fact]
+    public async Task Start_AndStop_ForAnotherHome_AreNotBlockedByAHomeWithATildeInDaemonEnv()
+    {
+        var env = EnvFile("NETCLAW_HOME=~/data\n");
+        var unit = UnitFile($"EnvironmentFile=-{env}\n");
+
+        AssertKind(SystemdUserServiceOwnershipKind.Unmanaged,
+            await new SystemdUserService(ScratchHome, unit, new FakeSystemCommandRunner(), enabledOnThisPlatform: true).GetStartOwnershipAsync());
+        AssertKind(SystemdUserServiceOwnershipKind.Unmanaged,
+            await new SystemdUserService(ScratchHome, unit, new FakeSystemCommandRunner(), enabledOnThisPlatform: true).GetStopOwnershipAsync(NotRunning));
+    }
+
+    [Fact]
+    public void ReadUnitHome_TreatsADanglingEnvironmentFileAsMissing()
+    {
+        var env = Path.Combine(_dir.Path, "dangling.env");
+        File.CreateSymbolicLink(env, Path.Combine(_dir.Path, "gone.env"));
+
+        Assert.Equal(DefaultHome, SystemdUserService.ReadUnitHome(UnitFile($"EnvironmentFile=-{env}\n")).Path);
+    }
+
+    [Fact]
+    public async Task Start_AndStop_ForAnyHome_AreNotBlockedByAnUnreadableUnitThatIsInactive()
+    {
+        var link = DanglingUnit("dangling3.service");
+
+        foreach (var home in new[] { DefaultHome, ScratchHome })
+        {
+            var service = new SystemdUserService(home, link, new FakeSystemCommandRunner(), enabledOnThisPlatform: true);
+
+            AssertKind(SystemdUserServiceOwnershipKind.Unmanaged, await service.GetStartOwnershipAsync());
+            AssertKind(SystemdUserServiceOwnershipKind.Unmanaged, await service.GetStopOwnershipAsync(NotRunning));
+        }
+    }
+
+    [Fact]
+    public async Task Start_AndStop_ReturnUnknown_InsteadOfThrowing_ForAnUnreadableUnitThatIsActive()
+    {
+        var link = DanglingUnit("dangling2.service");
+        var startRunner = new FakeSystemCommandRunner();
+        startRunner.Enqueue(State("active"));
+        var stopRunner = new FakeSystemCommandRunner();
+        stopRunner.Enqueue(State("activating"));
+        stopRunner.Enqueue(MainPid("0"));
+
+        AssertKind(SystemdUserServiceOwnershipKind.Unknown,
+            await new SystemdUserService(DefaultHome, link, startRunner, enabledOnThisPlatform: true).GetStartOwnershipAsync());
+        AssertKind(SystemdUserServiceOwnershipKind.Unknown,
+            await new SystemdUserService(DefaultHome, link, stopRunner, enabledOnThisPlatform: true).GetStopOwnershipAsync(NotRunning));
     }
 
     [Fact]

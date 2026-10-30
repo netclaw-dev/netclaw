@@ -385,9 +385,11 @@ and its `daemon.env` lives in that home. The home that a unit file serves is res
 the last `Environment=` assignment of `NETCLAW_HOME`, overridden by the `NETCLAW_HOME` in the
 `EnvironmentFile=` it references (a missing file is fine); absent or blank means the default home. So a
 unit from an earlier release that has no `NETCLAW_HOME` but whose `daemon.env` sets one serves that home.
-Known limit: drop-ins (`systemctl --user edit`) are not read. A `NETCLAW_HOME` that is not an absolute
-path (relative, `~`, `$`, `%`) or a unit that cannot be read makes `start`/`stop`/`update` report that
-they cannot tell which home the unit serves, and they leave the unit alone. There is one unit per
+Known limit: drop-ins (`systemctl --user edit`) are not read. The `daemon.env` reader also skips systemd's backslash escapes, continuation lines, and
+all but the first `EnvironmentFile=` line. The value is expanded as the daemon expands it (`~`, `$HOME`). A value that is still not an absolute
+path, or a unit that cannot be read, makes `start`/`stop`/`update` report that they cannot tell which
+home the unit serves, and leave the unit alone, but only when the unit's home decides the answer (the
+unit is active or enabled, or has no main process to inspect); an inactive unit never blocks a home. There is one unit per
 user. When the installed unit serves another home, `install` and `uninstall` refuse, write nothing, and
 name that home: run `daemon uninstall` for it first. A reinstall from the home that the unit serves
 refreshes the unit. `install` also refuses, before writing, a home, install directory or

@@ -64,12 +64,11 @@ internal sealed class SystemdUserService(
         if (PlatformOrUnitMissing() is { } skipped)
             return skipped;
 
+        // A unit home that cannot be told only matters where nothing else settles the answer.
         var unit = ReadUnitHome(_unitFilePath);
-        if (unit.Problem is not null)
-            return SystemdUserServiceOwnership.Unknown(unit.Problem);
 
         // Another home with nothing running for it: the unit cannot be what starts it.
-        if (!daemonStatus.IsRunning && !HomeIdentity.Same(unit.Path!, _homePath))
+        if (!daemonStatus.IsRunning && unit.Path is not null && !HomeIdentity.Same(unit.Path, _homePath))
             return SystemdUserServiceOwnership.Unmanaged(
                 $"No daemon is running for {_homePath}, and netclaw.service serves {unit.Path}.");
 
@@ -96,6 +95,9 @@ internal sealed class SystemdUserService(
 
         // No main process to inspect (mid-restart or mid-crash): the unit's configuration says
         // which home it will start. Without a NETCLAW_HOME of its own it starts the default home.
+        if (unit.Problem is not null)
+            return SystemdUserServiceOwnership.Unknown(unit.Problem);
+
         if (HomeIdentity.Same(_homePath, unit.Path!))
             return SystemdUserServiceOwnership.Managed($"netclaw.service is {state} and starts {_homePath}.");
 
@@ -113,11 +115,9 @@ internal sealed class SystemdUserService(
         if (PlatformOrUnitMissing() is { } skipped)
             return skipped;
 
+        // A unit home that cannot be told is only reported once the unit would start something.
         var unit = ReadUnitHome(_unitFilePath);
-        if (unit.Problem is not null)
-            return SystemdUserServiceOwnership.Unknown(unit.Problem);
-
-        if (!HomeIdentity.Same(unit.Path!, _homePath))
+        if (unit.Path is not null && !HomeIdentity.Same(unit.Path, _homePath))
             return SystemdUserServiceOwnership.Unmanaged(
                 $"netclaw.service serves {unit.Path}, not {_homePath}.");
 
@@ -129,11 +129,15 @@ internal sealed class SystemdUserService(
             return SystemdUserServiceOwnership.Unmanaged("netclaw.service is already stopping.");
 
         if (active.Success)
-            return SystemdUserServiceOwnership.Managed("netclaw.service is active.");
+            return unit.Problem is not null
+                ? SystemdUserServiceOwnership.Unknown(unit.Problem)
+                : SystemdUserServiceOwnership.Managed("netclaw.service is active.");
 
         var enabled = await _commandRunner.RunAsync("systemctl", $"--user is-enabled --quiet {ServiceName}");
         if (enabled.Success)
-            return SystemdUserServiceOwnership.Managed("netclaw.service is enabled.");
+            return unit.Problem is not null
+                ? SystemdUserServiceOwnership.Unknown(unit.Problem)
+                : SystemdUserServiceOwnership.Managed("netclaw.service is enabled.");
 
         return StateCheckFailed(active, enabled) ?? SystemdUserServiceOwnership.Unmanaged(
             "netclaw.service is installed but neither active nor enabled.");
@@ -150,9 +154,9 @@ internal sealed class SystemdUserService(
     /// The home that the unit file names, resolved as systemd does: the last <c>NETCLAW_HOME</c> of the
     /// <c>Environment=</c> lines, overridden by the <c>NETCLAW_HOME</c> of the <c>EnvironmentFile=</c> that
     /// the unit references (a missing file is fine). Absent or blank means the default home. Drop-ins
-    /// (<c>systemctl --user edit</c>) are not read. A value that is not an absolute path, or that starts
-    /// with <c>~</c> or holds <c>$</c> or <c>%</c>, and a unit that cannot be read give a
-    /// <see cref="UnitHome.Problem"/> instead of a path.
+    /// (<c>systemctl --user edit</c>) are not read. The value is expanded as the daemon does
+    /// (<see cref="PathExpansion.ExpandHome"/>); one that is still not an absolute path, and a unit that
+    /// cannot be read, give a <see cref="UnitHome.Problem"/> instead of a path.
     /// </summary>
     internal static UnitHome ReadUnitHome(string unitFilePath)
     {
@@ -172,8 +176,8 @@ internal sealed class SystemdUserService(
             }
 
             if (DaemonPathEnvironmentFile.TryGetEnvironmentFilePath(lines, out var envFile)
-                && File.Exists(envFile)
-                && DaemonPathEnvironmentFile.ReadLastValue(File.ReadAllText(envFile), "NETCLAW_HOME") is { } fromFile)
+                && ReadEnvironmentFileOrNull(envFile) is { } envText
+                && DaemonPathEnvironmentFile.ReadLastValue(envText, "NETCLAW_HOME") is { } fromFile)
                 declared = fromFile;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -185,11 +189,26 @@ internal sealed class SystemdUserService(
         if (string.IsNullOrEmpty(declared))
             return new UnitHome(DefaultHomePath, null);
 
-        if (!Path.IsPathFullyQualified(declared) || declared.AsSpan().IndexOfAny("~$%") >= 0)
+        // systemd passes the value through; the daemon expands it as NetclawPaths does.
+        var expanded = PathExpansion.ExpandHome(declared) ?? declared;
+        if (!Path.IsPathFullyQualified(expanded))
             return new UnitHome(null, $"netclaw.service names NETCLAW_HOME={declared}, which is not an absolute path that Netclaw can compare. " +
                 "Edit the unit or its EnvironmentFile to an absolute path.");
 
-        return new UnitHome(declared, null);
+        return new UnitHome(Path.GetFullPath(expanded), null);
+    }
+
+    // systemd ignores a missing `-` environment file, a dangling link included.
+    private static string? ReadEnvironmentFileOrNull(string path)
+    {
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 
     private static string? ShowValue(SystemCommandResult show, string property) =>
