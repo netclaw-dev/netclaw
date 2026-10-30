@@ -482,10 +482,10 @@ public sealed partial class DaemonManager
                       "See https://github.com/netclaw-dev/netclaw/issues for Windows service support.");
 
         // There is one unit per user. Repointing it would silently take the daemon away from the home it serves.
-        if (UnitServingAnotherHome() is { } otherHome)
-            return new DaemonResult(false,
+        if (UnitServingAnotherHome(out var otherHome, out var unitProblem))
+            return new DaemonResult(false, unitProblem ??
                 $"netclaw.service already serves {otherHome}, and there is one unit per user. " +
-                $"Run `netclaw daemon uninstall` for {otherHome} first (NETCLAW_HOME={otherHome} netclaw daemon uninstall), " +
+                $"Run `NETCLAW_HOME=\"{otherHome}\" netclaw daemon uninstall` first, " +
                 $"then run `netclaw daemon install` for {_paths.BasePath}.");
 
         var binaryPath = FindDaemonBinary();
@@ -493,6 +493,14 @@ public sealed partial class DaemonManager
             return new DaemonResult(false,
                 "Cannot find netclawd binary. Set NETCLAW_DAEMON_PATH or ensure it is " +
                 "in the same directory as the CLI.");
+
+        // The unit is written unquoted, and the paths in it are read back as plain text.
+        var cliBinary = Path.Combine(Path.GetDirectoryName(binaryPath)!, "netclaw");
+        var unitPaths = new[] { binaryPath, cliBinary, _paths.DaemonEnvironmentFilePath, Path.GetFullPath(_paths.BasePath) };
+        if (unitPaths.FirstOrDefault(p => p.AsSpan().IndexOfAny(UnitUnsafeChars) >= 0) is { } unsafePath)
+            return new DaemonResult(false,
+                $"Cannot install the service: {unsafePath} contains whitespace, a quote, a backslash or '%', " +
+                "which a systemd unit cannot hold in these paths. Use a home and an install directory without them.");
 
         // Probe before writing anything: a host without a reachable user systemd (a plain
         // container, WSL1, a minimal VM) would otherwise fail at daemon-reload and leave
@@ -584,14 +592,25 @@ public sealed partial class DaemonManager
 
     internal static string SystemdUserUnitFilePath => Path.Combine(SystemdUserUnitDirectory, "netclaw.service");
 
-    /// <summary>The home of the installed unit when it is not this home; null when there is no unit or it serves this home.</summary>
-    private string? UnitServingAnotherHome()
-    {
-        if (!File.Exists(SystemdUserUnitFilePath))
-            return null;
+    private static readonly char[] UnitUnsafeChars = [' ', '\t', '"', '\'', '\\', '%'];
 
-        var unitHome = SystemdUserService.ReadUnitHome(SystemdUserUnitFilePath);
-        return HomeIdentity.Same(unitHome, _paths.BasePath) ? null : unitHome;
+    /// <summary>
+    /// True when an installed unit serves another home (<paramref name="otherHome"/>) or when which home it
+    /// serves cannot be told (<paramref name="problem"/>). False when there is no unit or it serves this home.
+    /// </summary>
+    private bool UnitServingAnotherHome(out string? otherHome, out string? problem)
+    {
+        otherHome = problem = null;
+        if (!File.Exists(SystemdUserUnitFilePath))
+            return false;
+
+        var unit = SystemdUserService.ReadUnitHome(SystemdUserUnitFilePath);
+        problem = unit.Problem;
+        if (problem is not null)
+            return true;
+
+        otherHome = unit.Path;
+        return !HomeIdentity.Same(unit.Path!, _paths.BasePath);
     }
 
     /// <summary>
@@ -627,7 +646,7 @@ public sealed partial class DaemonManager
     ///
     /// <c>NETCLAW_HOME</c> is always written, so the unit names the home it serves. There is one
     /// unit per user: <see cref="InstallAsync"/> and <see cref="UninstallAsync"/> refuse to touch a
-    /// unit that serves another home.
+    /// unit that serves another home. Install refuses paths that need systemd quoting or escaping.
     /// </summary>
     internal static string BuildDaemonUnitContent(
         string binaryPath, string cliBinaryPath, string environmentFilePath, string homePath) => $"""
@@ -643,7 +662,7 @@ public sealed partial class DaemonManager
         Restart=always
         RestartSec=5
         Environment=DOTNET_ENVIRONMENT=Production
-        Environment={SystemdUserService.QuoteEnvironmentAssignment("NETCLAW_HOME", Path.GetFullPath(homePath))}
+        Environment=NETCLAW_HOME={Path.GetFullPath(homePath)}
         EnvironmentFile=-{environmentFilePath}
 
         [Install]
@@ -665,10 +684,10 @@ public sealed partial class DaemonManager
                       "See https://github.com/netclaw-dev/netclaw/issues for Windows service support.");
 
         // The unit and its start/stop belong to the home it serves. Another home's uninstall must not remove them.
-        if (UnitServingAnotherHome() is { } otherHome)
-            return new DaemonResult(false,
+        if (UnitServingAnotherHome(out var otherHome, out var unitProblem))
+            return new DaemonResult(false, unitProblem ??
                 $"netclaw.service serves {otherHome}, not {_paths.BasePath}. " +
-                $"Run `NETCLAW_HOME={otherHome} netclaw daemon uninstall` to remove it.");
+                $"Run `NETCLAW_HOME=\"{otherHome}\" netclaw daemon uninstall` to remove it.");
 
         await RunCommandAsync("systemctl", "--user stop netclaw.service");
         await RunCommandAsync("systemctl", "--user disable netclaw.service");

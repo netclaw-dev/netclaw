@@ -110,7 +110,7 @@ internal static class DaemonPathEnvironmentFile
         var pathWritten = false;
         foreach (var line in lines)
         {
-            if (!TryReadPathAssignment(line, out _))
+            if (!TryReadAssignment(line, "PATH", out _))
             {
                 output.Add(line);
                 continue;
@@ -140,21 +140,38 @@ internal static class DaemonPathEnvironmentFile
     {
         foreach (var raw in fileContent.Split('\n'))
         {
-            if (TryReadPathAssignment(raw, out var value))
+            if (TryReadAssignment(raw, "PATH", out var value))
                 return value;
         }
 
         return null;
     }
 
+    /// <summary>
+    /// The value of the last <paramref name="key"/> assignment in environment-file content (a later
+    /// assignment overrides an earlier one in systemd), or <c>null</c> when there is none. A value in a
+    /// matching pair of quotes is unquoted.
+    /// </summary>
+    internal static string? ReadLastValue(string fileContent, string key)
+    {
+        string? last = null;
+        foreach (var raw in fileContent.Split('\n'))
+        {
+            if (TryReadAssignment(raw, key, out var value))
+                last = value.Length >= 2 && value[0] is '"' or '\'' && value[^1] == value[0] ? value[1..^1] : value;
+        }
+
+        return last;
+    }
+
     // systemd reads the key before the first '=' with its whitespace trimmed, so `PATH = /x` and
     // `PATH<TAB>=/x` assign PATH. `export PATH=/x` assigns a key named `export PATH`, which is
     // not PATH, so it stays an operator line.
-    private static bool TryReadPathAssignment(string line, out string value)
+    private static bool TryReadAssignment(string line, string key, out string value)
     {
         value = string.Empty;
         var equals = line.IndexOf('=', StringComparison.Ordinal);
-        if (equals < 0 || !string.Equals(line[..equals].Trim(), "PATH", StringComparison.Ordinal))
+        if (equals < 0 || !string.Equals(line[..equals].Trim(), key, StringComparison.Ordinal))
             return false;
 
         value = line[(equals + 1)..].Trim();

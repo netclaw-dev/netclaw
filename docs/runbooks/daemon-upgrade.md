@@ -84,9 +84,11 @@ Choose the recovery by cause:
    `home`, so the CLI cannot prove it. Stop the old daemon once with `kill <pid>`, then run the update again.
 
 `netclaw daemon install` writes `Environment="NETCLAW_HOME=<home>"` into the `systemd` user unit, with the home of the
-CLI that ran it. There is one unit per user: to move it to another home, run `netclaw daemon uninstall` for the home it
+CLI that ran it (the path cannot hold whitespace, quotes, backslashes or `%`). Drop-ins from `systemctl --user edit`
+are not read. There is one unit per user: to move it to another home, run `netclaw daemon uninstall` for the home it
 serves, then `netclaw daemon install` for the new one. A unit that an older release wrote has no `NETCLAW_HOME` and
-serves `<HOME>/.netclaw`; run `netclaw daemon install` again to refresh it. On Linux the CLI proves which home the
+serves `<HOME>/.netclaw`, unless its `daemon.env` sets `NETCLAW_HOME`: then it serves that home, and
+`netclaw daemon install` from that home refreshes it. On Linux the CLI proves which home the
 daemon serves from the `NETCLAW_HOME` (or `HOME`) entry of the daemon environment.
 
 ## Rollback Notes

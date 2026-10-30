@@ -251,11 +251,8 @@ The unit serves a home when it has a main process and that process's own
 `EnvironmentFile=` alike; absent means the default home) is that home, links
 resolved. If the environment cannot be read, a `MainPID` equal to the home's
 daemon PID counts. When the unit has no main process (the crash-loop window), the
-unit's `Environment` property decides: no `NETCLAW_HOME` means the default home.
-A unit whose `NETCLAW_HOME` comes only from an `EnvironmentFile`, sampled at an
-instant when it has no main process, is therefore treated as serving the default
-home. `start` asks the unit for the home that its unit file names (`NETCLAW_HOME` in an
-`Environment=` line; absent means the default home). For a home the unit does not serve,
+unit file decides, as `start` does: the home that the file names is the one it serves.
+For a home the unit does not serve,
 `start` and `stop` act on that home's own daemon process and never on the unit.
 
 A direct `stop` sends a signal only to a PID that is shown to serve the home of
@@ -383,11 +380,19 @@ No sudo required. Uses `systemctl --user enable netclaw` and
 `loginctl enable-linger $USER` to survive user logout.
 
 **Custom home.** `install` always writes `NETCLAW_HOME` with the absolute home of the CLI that ran
-it (quoted for systemd), so `NETCLAW_HOME=/srv/netclaw netclaw daemon install` installs a unit that
-serves `/srv/netclaw`, and its `daemon.env` lives in that home. There is one unit per user. When the
-installed unit serves another home (a unit with no `NETCLAW_HOME` serves the default home), `install`
-and `uninstall` refuse, write nothing, and name that home: run `daemon uninstall` for it first. A
-reinstall from the home that the unit serves refreshes the unit. `start`, `stop` and `update` use the
+it, so `NETCLAW_HOME=/srv/netclaw netclaw daemon install` installs a unit that serves `/srv/netclaw`,
+and its `daemon.env` lives in that home. The home that a unit file serves is resolved as systemd does:
+the last `Environment=` assignment of `NETCLAW_HOME`, overridden by the `NETCLAW_HOME` in the
+`EnvironmentFile=` it references (a missing file is fine); absent or blank means the default home. So a
+unit from an earlier release that has no `NETCLAW_HOME` but whose `daemon.env` sets one serves that home.
+Known limit: drop-ins (`systemctl --user edit`) are not read. A `NETCLAW_HOME` that is not an absolute
+path (relative, `~`, `$`, `%`) or a unit that cannot be read makes `start`/`stop`/`update` report that
+they cannot tell which home the unit serves, and they leave the unit alone. There is one unit per
+user. When the installed unit serves another home, `install` and `uninstall` refuse, write nothing, and
+name that home: run `daemon uninstall` for it first. A reinstall from the home that the unit serves
+refreshes the unit. `install` also refuses, before writing, a home, install directory or
+`daemon.env` path that holds whitespace, a quote, a backslash or `%`: the unit holds these paths
+unquoted, and systemd would split or rewrite them. `start`, `stop` and `update` use the
 unit for the home it serves and the home's own daemon process for every other home.
 
 **Shell-tool PATH.** A systemd `--user` service starts with a sanitized,

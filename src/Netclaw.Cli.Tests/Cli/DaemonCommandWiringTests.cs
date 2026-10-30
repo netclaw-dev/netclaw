@@ -84,11 +84,12 @@ public sealed class DaemonCommandWiringTests : IDisposable
             ? File.ReadAllText(Path.Combine(_systemctlState, "calls.log"))
             : string.Empty;
 
-    private void InstallUnit()
+    private void InstallUnit(string? serves = null)
     {
         var unitDir = Path.Combine(_home, ".config", "systemd", "user");
         Directory.CreateDirectory(unitDir);
-        File.WriteAllText(Path.Combine(unitDir, "netclaw.service"), "[Service]\nExecStart=/opt/netclaw/netclawd\n");
+        File.WriteAllText(Path.Combine(unitDir, "netclaw.service"), "[Service]\nExecStart=/opt/netclaw/netclawd\n"
+            + (serves is null ? string.Empty : $"Environment=NETCLAW_HOME={serves}\n"));
     }
 
     private void FakeSystemctl(string file, string content)
@@ -336,11 +337,10 @@ public sealed class DaemonCommandWiringTests : IDisposable
     public async Task Stop_NeverTouchesTheUnit_WhenNoDaemonRunsForThisHomeButTheUnitServesAnotherOne()
     {
         // The default home runs nothing; the unit's daemon belongs to some other home.
-        InstallUnit();
+        InstallUnit("/home/op/data");
         FakeSystemctl("active.code", "0");
         FakeSystemctl("active.out", "active\n");
         FakeSystemctl("mainpid.out", int.MaxValue + "\n"); // no such process: its environment is unreadable
-        FakeSystemctl("environment.out", "NETCLAW_HOME=/home/op/data");
 
         var (exitCode, output) = await RunAsync(DefaultNetclawHome, ["daemon", "stop"]);
 

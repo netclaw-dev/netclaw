@@ -86,7 +86,7 @@ public sealed class UpdateCommandTests : IDisposable
         Assert.Equal(
             [
                 ("systemctl", "--user is-active netclaw.service"),
-                ("systemctl", "--user show netclaw.service -p MainPID -p Environment"),
+                ("systemctl", "--user show netclaw.service -p MainPID"),
                 ("systemctl", "--user stop netclaw.service")
             ],
             runner.Commands);
@@ -113,7 +113,7 @@ public sealed class UpdateCommandTests : IDisposable
         Assert.Equal(
             [
                 ("systemctl", "--user is-active netclaw.service"),
-                ("systemctl", "--user show netclaw.service -p MainPID -p Environment"),
+                ("systemctl", "--user show netclaw.service -p MainPID"),
                 ("systemctl", "--user stop netclaw.service")
             ],
             runner.Commands);

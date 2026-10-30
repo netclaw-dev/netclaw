@@ -126,11 +126,11 @@ public sealed class DaemonPathEnvironmentFileTests : IDisposable
     }
 
     [Fact]
-    public void BuildDaemonUnitContent_NamesTheHome_QuotedForSystemd()
+    public void BuildDaemonUnitContent_NamesTheHome()
     {
-        var unit = DaemonManager.BuildDaemonUnitContent("/opt/netclaw/netclawd", "/opt/netclaw/netclaw", "/x/daemon.env", "/srv/my home/.netclaw");
+        var unit = DaemonManager.BuildDaemonUnitContent("/opt/netclaw/netclawd", "/opt/netclaw/netclaw", "/x/daemon.env", "/srv/netclaw");
 
-        Assert.Contains("Environment=\"NETCLAW_HOME=/srv/my home/.netclaw\"\n", unit, StringComparison.Ordinal);
+        Assert.Contains("Environment=NETCLAW_HOME=/srv/netclaw\n", unit, StringComparison.Ordinal);
     }
 
     [Fact]
