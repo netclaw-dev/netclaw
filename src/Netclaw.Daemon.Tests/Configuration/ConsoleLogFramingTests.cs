@@ -56,6 +56,26 @@ public sealed class ConsoleLogFramingTests
         Assert.Contains("upstream failed", output, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The formatter folds only <see cref="Environment.NewLine"/> in exception text. An exception
+    /// with no secret used to reach it as the original object, so a lone CR or an escape
+    /// sequence in its message reached the terminal.
+    /// </summary>
+    [Theory]
+    [InlineData(13)]
+    [InlineData(0x2028)]
+    [InlineData(0x85)]
+    public void An_exception_message_with_a_line_break_stays_on_one_console_line(int lineBreak)
+    {
+        var exception = new InvalidOperationException(
+            $"bad input{(char)0x1B}[2K{(char)lineBreak}17:00:00.000 [INF] fake");
+
+        var output = FormatThroughStage("parse failed", exception);
+
+        AssertOneLine(output);
+        Assert.DoesNotContain((char)0x1B, output);
+    }
+
     private static string FormatThroughStage(string message, Exception? exception)
     {
         var capture = new CapturingLoggerProvider();

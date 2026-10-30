@@ -30,4 +30,23 @@ public sealed class StartupConfigurationFailureTests : IDisposable
         Assert.Contains("Models:Roles is set but Models:Definitions is missing or empty.", File.ReadAllText(daemonLog));
         Assert.Empty(Directory.GetFiles(paths.LogsDirectory, "crash-*"));
     }
+
+    /// <summary>
+    /// The message can quote a config value or an SDK error. This writer runs before the host
+    /// exists, so it must build the redaction stage itself.
+    /// </summary>
+    [Fact]
+    public void Report_RedactsASecretInTheMessage()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+        using var stderr = new StringWriter();
+
+        StartupConfigurationFailure.Report(paths, "Provider rejected DB_PASSWORD=hunter2 in config.", stderr);
+
+        Assert.DoesNotContain("hunter2", stderr.ToString(), StringComparison.Ordinal);
+        var daemonLog = File.ReadAllText(Directory.GetFiles(paths.LogsDirectory, "daemon*.log").Single());
+        Assert.Contains("DB_PASSWORD=***REDACTED***", daemonLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", daemonLog, StringComparison.Ordinal);
+    }
 }

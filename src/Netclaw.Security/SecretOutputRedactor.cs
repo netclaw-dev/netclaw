@@ -14,7 +14,8 @@ namespace Netclaw.Security;
 public static partial class SecretOutputRedactor
 {
     private const int MaxSecretKeyChars = 512;
-    private const string Redacted = "***REDACTED***";
+    /// <summary>The text that replaces each secret.</summary>
+    public const string Redacted = "***REDACTED***";
 
     private static readonly string[] SecretKeyFragments =
     [

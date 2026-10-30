@@ -6,6 +6,7 @@
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Daemon.Services;
 
@@ -18,12 +19,15 @@ internal static class StartupConfigurationFailure
 {
     public static void Report(NetclawPaths paths, string message, TextWriter stderr)
     {
-        stderr.WriteLine($"error: {message}");
+        // The message can quote a config value or an SDK error, so stderr gets a redacted copy.
+        stderr.WriteLine($"error: {SecretOutputRedactor.Redact(message)}");
 
-        // Logging is not configured this early in startup, so write the line directly. Dispose
-        // drains the writer thread.
+        // Logging is not configured this early in startup, so this builds its own pipeline. It
+        // goes through the redaction stage like every other daemon record. Dispose drains the
+        // writer thread.
         using var provider = new RollingFileLoggerProvider(paths.DaemonLogPath);
-        provider.CreateLogger("Netclaw.Startup").LogError("Daemon startup stopped: {Message}", message);
+        using var loggerFactory = new RedactingLoggerFactory(new LoggerFactory([provider]));
+        loggerFactory.CreateLogger("Netclaw.Startup").LogError("Daemon startup stopped: {Message}", message);
     }
 }
 

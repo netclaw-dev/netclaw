@@ -79,8 +79,12 @@ public sealed class SessionLogActorTests : TestKit
         return await reader.ReadToEndAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// A secret can span two thinking deltas. Each delta alone matches no pattern, so the log
+    /// joins the deltas of one run and redacts the whole run at once.
+    /// </summary>
     [Fact]
-    public async Task ThinkingDeltaOutput_is_written_to_session_log()
+    public async Task A_thinking_run_is_written_as_one_redacted_line_before_the_next_output()
     {
         var basePath = Path.Combine(Path.GetTempPath(), $"netclaw-session-log-tests-{Guid.NewGuid():N}");
         var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-07T13:00:00Z"));
@@ -90,16 +94,22 @@ public sealed class SessionLogActorTests : TestKit
         {
             var dispatcher = SpawnDispatcher(Sys, basePath, timeProvider);
 
-            dispatcher.Tell(new ThinkingDeltaOutput("step by step")
+            foreach (var delta in new[] { "step by step, token ghp_ABCDEFGHIJ", "KLMNOPQRSTUVWXYZ0123456789 found" })
             {
-                SessionId = sessionId
-            }, ActorRefs.NoSender);
+                dispatcher.Tell(new ThinkingDeltaOutput(delta) { SessionId = sessionId }, ActorRefs.NoSender);
+            }
+
+            dispatcher.Tell(new TextOutput("done") { SessionId = sessionId }, ActorRefs.NoSender);
 
             await AwaitAssertAsync(async () =>
             {
                 var logFile = GetLegacyLogPath(sessionId, basePath);
                 var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
-                Assert.Contains("Thinking delta: step by step", text, StringComparison.Ordinal);
+                var thinking = text.IndexOf("Thinking (streamed): step by step, token ", StringComparison.Ordinal);
+                Assert.True(thinking >= 0, text);
+                Assert.True(thinking < text.IndexOf("Assistant: done", StringComparison.Ordinal), text);
+                Assert.DoesNotContain("ghp_ABCDEFGHIJ", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("KLMNOPQRSTUVWXYZ0123456789", text, StringComparison.Ordinal);
             }, cancellationToken: TestContext.Current.CancellationToken);
         }
         finally
@@ -425,6 +435,8 @@ public sealed class SessionLogActorTests : TestKit
     [Fact]
     public async Task A_presigned_url_reaches_the_model_intact_and_the_log_masked()
     {
+        // Only the credential is checked. The signature here is masked only because the credential
+        // value runs to the end of the query; a signature alone matches no pattern (#2770).
         const string presignedUrl =
             "https://acct.r2.cloudflarestorage.com/bucket/x.png?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
             "&X-Amz-Credential=abc123def456ghijklmnop%2F20260818%2Fauto%2Fs3%2Faws4_request" +
