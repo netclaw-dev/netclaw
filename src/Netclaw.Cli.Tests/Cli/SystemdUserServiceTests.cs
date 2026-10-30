@@ -11,6 +11,10 @@ namespace Netclaw.Cli.Tests.Cli;
 
 public sealed class SystemdUserServiceTests : IDisposable
 {
+    public static bool IsLinux => OperatingSystem.IsLinux();
+
+    private const string LinuxOnly = "The unit files hold Unix paths; systemd is Linux-only.";
+
     private readonly DisposableTempDir _dir = new();
 
     private static readonly DaemonStatus NotRunning = new(false, null, "Daemon is not running.");
@@ -182,7 +186,8 @@ public sealed class SystemdUserServiceTests : IDisposable
         AssertKind(SystemdUserServiceOwnershipKind.Managed, await ServiceFor(runner, DefaultHome).GetStopOwnershipAsync(NotRunning));
     }
 
-    [Theory]
+    [SlopwatchSuppress("SW001", LinuxOnly)]
+    [Theory(SkipUnless = nameof(IsLinux), Skip = LinuxOnly)]
     [InlineData("Environment=NETCLAW_HOME=/home/op/data\n")]
     [InlineData("Environment=\"NETCLAW_HOME=/home/op/data\"\n")]
     public async Task Stop_ReturnsUnmanaged_WhenTheUnitIsConfiguredForAnotherHome_WhateverItsState(string unitText)
@@ -412,7 +417,8 @@ public sealed class SystemdUserServiceTests : IDisposable
         Assert.Equal(DefaultHome, unit.Path);
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", LinuxOnly)]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = LinuxOnly)]
     public void ReadUnitHome_TakesTheEnvironmentFilesHome_OverTheEnvironmentLine()
     {
         var env = EnvFile("PATH=/usr/bin\nNETCLAW_HOME=/srv/x\n");
@@ -423,7 +429,8 @@ public sealed class SystemdUserServiceTests : IDisposable
         Assert.Equal("/srv/x", unit.Path);
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", LinuxOnly)]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = LinuxOnly)]
     public void ReadUnitHome_TakesTheHomeOfAnOldUnitWhoseEnvironmentFileNamesIt()
     {
         var env = EnvFile("NETCLAW_HOME=\"/srv/x\"\n");
@@ -431,7 +438,8 @@ public sealed class SystemdUserServiceTests : IDisposable
         Assert.Equal("/srv/x", SystemdUserService.ReadUnitHome(UnitFile($"EnvironmentFile=-{env}\n")).Path);
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", LinuxOnly)]
+    [Fact(SkipUnless = nameof(IsLinux), Skip = LinuxOnly)]
     public void ReadUnitHome_ReadsAQuotedEnvironmentAssignment()
     {
         Assert.Equal("/srv/x", SystemdUserService.ReadUnitHome(UnitFile("Environment=\"NETCLAW_HOME=/srv/x\" FOO=bar\n")).Path);

@@ -130,7 +130,7 @@ public sealed class DaemonPathEnvironmentFileTests : IDisposable
     {
         var unit = DaemonManager.BuildDaemonUnitContent("/opt/netclaw/netclawd", "/opt/netclaw/netclaw", "/x/daemon.env", "/srv/netclaw");
 
-        Assert.Contains("Environment=NETCLAW_HOME=/srv/netclaw\n", unit, StringComparison.Ordinal);
+        Assert.Contains($"Environment=NETCLAW_HOME={Path.GetFullPath("/srv/netclaw")}", unit, StringComparison.Ordinal);
     }
 
     [Fact]
