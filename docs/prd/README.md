@@ -29,6 +29,10 @@ This directory contains product requirements for Netclaw.
   OpenClaw/IronClaw/PicoClaw architectural pattern. Daemon management commands
   added. Commands categorized as offline vs daemon-required.
 
+- **2026-10-29 (diagnostics)**: PRD-002 adds SEC-010. Diagnostics, log
+  exports, and crash logs exclude secrets, and log content cannot forge a
+  record. Source change: OpenSpec `unify-text-safety`.
+
 ## Traceability Rules
 
 - Every engineering spec in `docs/spec/` must reference at least one PRD ID.

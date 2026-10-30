@@ -52,8 +52,8 @@ public sealed class CrashLogWriterTests : IDisposable
         using var errors = new StringWriter();
 
         // The second write in the same second takes the uniqueness-suffix path.
-        var first = CrashLogWriter.TryWrite(new InvalidOperationException("a"), "daemon", new FixedTime(now), errors, home);
-        var second = CrashLogWriter.TryWrite(new InvalidOperationException("b"), "daemon", new FixedTime(now), errors, home);
+        var first = CrashLogWriter.TryWrite(new InvalidOperationException("a"), "daemon", static text => text, new FixedTime(now), errors, home);
+        var second = CrashLogWriter.TryWrite(new InvalidOperationException("b"), "daemon", static text => text, new FixedTime(now), errors, home);
 
         Assert.NotEqual(first, second);
         Assert.True(CrashLogWriter.TryParseFileName(Path.GetFileName(first!), out _));
@@ -74,7 +74,7 @@ public sealed class CrashLogWriterTests : IDisposable
         using var errors = new StringWriter();
 
         var crashPath = CrashLogWriter.TryWrite(
-            new InvalidOperationException("boom"), "CLI", errorWriter: errors);
+            new InvalidOperationException("boom"), "CLI", static text => text, errorWriter: errors);
 
         Assert.NotNull(crashPath);
         Assert.Equal(Path.Join(home, "logs"), Path.GetDirectoryName(crashPath));
@@ -91,7 +91,7 @@ public sealed class CrashLogWriterTests : IDisposable
         using var errors = new StringWriter();
 
         var crashPath = CrashLogWriter.TryWrite(
-            new InvalidOperationException("boom"), "CLI",
+            new InvalidOperationException("boom"), "CLI", static text => text,
             errorWriter: errors, logsDirectory: explicitLogs);
 
         Assert.NotNull(crashPath);

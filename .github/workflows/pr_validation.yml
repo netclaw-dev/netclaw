@@ -189,7 +189,7 @@ jobs:
           - group: stop-proof
             gates: stop-proof secrets-plaintext-leaf local-daemon-address
           - group: daemon-log-retention
-            gates: daemon-log-retention config-startup-reconciliation
+            gates: daemon-log-retention config-startup-reconciliation log-redaction-registration
           - group: session-reliability
             gates: tool-batch-readiness headless-stop-rule open-child-runs local-control-proof stopped-turn-continuation
           - group: child-owner-and-report

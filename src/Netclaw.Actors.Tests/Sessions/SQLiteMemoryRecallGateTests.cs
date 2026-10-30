@@ -412,6 +412,35 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
             vectorIndexHolder: new MemoryVectorIndexHolder(_store),
             relevanceScorerHolder: relevanceScorerHolder);
 
+    /// <summary>
+    /// The plan log holds words cut from user text. Cutting hides a secret from the log stage
+    /// ("password=hunter2" becomes "password" and "hunter2"), so the coordinator must drop
+    /// those words itself, while ordinary words stay for diagnostics.
+    /// </summary>
+    [Fact]
+    public async Task Retrieval_plan_log_drops_words_cut_from_a_secret()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.InitializeAsync(ct);
+        var logger = new RecordingLogger<SQLiteMemoryRecallCoordinator>();
+        var coordinator = BuildCoordinator(
+            relevanceScorerHolder: BuildHolder(ScriptedRelevanceScorer.ReturningConstant(1.0)),
+            logger: logger);
+
+        await coordinator.RecallAsync(new AutomaticRecallRequest(
+            SessionId: (SessionId)"gate/plan-log-secret",
+            Query: "rotate the grafana dashboard with password=hunter2",
+            RecentUserMessages: ["earlier I set DB_PASSWORD=swordfish", "rotate the grafana dashboard with password=hunter2"],
+            MaxItems: 3,
+            ThreadTitle: "Grafana api_key=abc123 rotation"), ct);
+
+        var plan = Assert.Single(logger.Entries, e => e.Message.Contains("memory_retrieval_request_plan", StringComparison.Ordinal));
+        Assert.DoesNotContain("hunter2", plan.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("swordfish", plan.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("abc123", plan.Message, StringComparison.Ordinal);
+        Assert.Contains("grafana", plan.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static AutomaticRecallRequest BuildRequest(string sessionId)
         => new(
             SessionId: (SessionId)sessionId,

@@ -29,6 +29,11 @@
   <ItemGroup>
     <Compile Include="../Netclaw.Daemon.Tests/Configuration/DaemonConfigurationSourcesTests.cs"
              Link="Configuration/DaemonConfigurationSourcesTests.cs" />
+    <!-- unify-text-safety: the log redaction registration (log-redaction-registration gate). -->
+    <Compile Include="../Netclaw.Daemon.Tests/Configuration/LogRedactionRoutingTests.cs"
+             Link="Configuration/LogRedactionRoutingTests.cs" />
+    <Compile Include="../Netclaw.Daemon.Tests/CapturingLoggerProvider.cs"
+             Link="Configuration/CapturingLoggerProvider.cs" />
     <Compile Include="../Netclaw.Security.Tests/ShellPlainFileTargetContractTests.cs"
              Link="Tools/ShellPlainFileTargetContractTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Sessions/LoopFeedbackTests.cs"

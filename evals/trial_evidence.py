@@ -463,6 +463,20 @@ class ParentStdoutError(Exception):
     pass
 
 
+# The CLI redacts each session log record (HeadlessChannel), but stdout prints
+# the raw tool result. A redacted part of a logged result matches any text.
+REDACTED = "***REDACTED***"
+
+
+def find_block(stdout, block, at):
+    """Return the (start, end) of block in stdout from at, or None."""
+    if REDACTED not in block:
+        found = stdout.find(block, at)
+        return None if found < 0 else (found, found + len(block))
+    match = re.compile(r"[\s\S]*?".join(re.escape(part) for part in block.split(REDACTED))).search(stdout, at)
+    return None if match is None else (match.start(), match.end())
+
+
 def parent_stdout(stdout, text):
     """Return the plain-text stdout without the text of each tool result.
 
@@ -476,18 +490,19 @@ def parent_stdout(stdout, text):
 
     The blocks are removed in log order, each after the one before it. A
     block that the stdout does not hold raises an error: its text could then
-    count as parent text.
+    count as parent text. The log masks secrets in a result, so a masked part
+    matches the raw text in stdout.
     """
     at = 0
     for kind, tool, call_id, payload in cli_tool_records(text):
         if kind != "TOOL_RESULT":
             continue
         block = f"[tool:result] {tool} \u2192 {payload}\n"
-        found = stdout.find(block, at)
-        if found < 0:
+        span = find_block(stdout, block, at)
+        if span is None:
             raise ParentStdoutError(f"the stdout does not hold the {tool} result of call {call_id}")
-        stdout = stdout[:found] + stdout[found + len(block):]
-        at = found
+        stdout = stdout[:span[0]] + stdout[span[1]:]
+        at = span[0]
     return stdout
 
 

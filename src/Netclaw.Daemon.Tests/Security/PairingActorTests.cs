@@ -602,7 +602,8 @@ public sealed class PairingActorTests(ITestOutputHelper output) : TestKit(output
             var log = await reader.ReadToEndAsync(cancellationToken);
 
             // Require exception details on this entry, not only on the separate supervision entry.
-            Assert.Contains($"{message}\nCause: {exception.GetType().FullName}: {exception.Message}", log.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+            // The record continues on a prefixed line, so log content cannot start a new record.
+            Assert.Contains($"{message}\n{LogTextFraming.ContinuationPrefix}Cause: {exception.GetType().FullName}: {exception.Message}", log.ReplaceLineEndings("\n"), StringComparison.Ordinal);
             Assert.Contains("[ERR]", log, StringComparison.Ordinal);
             Assert.Contains("at Netclaw.Daemon.Security.PairingActor", log, StringComparison.Ordinal);
             foreach (var value in excludedValues)

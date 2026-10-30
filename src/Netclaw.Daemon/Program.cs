@@ -404,7 +404,7 @@ static async Task RunDaemonAsync(
         }
         catch (Exception ex)
         {
-            CrashLogWriter.Write(ex, "daemon-started-hook");
+            CrashLogWriter.Write(ex, "daemon-started-hook", SecretOutputRedactor.Redact);
         }
     });
 

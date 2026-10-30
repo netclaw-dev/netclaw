@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
+using Netclaw.Security;
 
 namespace Netclaw.Daemon.Services;
 
@@ -118,6 +119,7 @@ internal sealed class DaemonCrashMonitor : IDisposable
             var crashLogPath = CrashLogWriter.TryWrite(
                 exception,
                 reason,
+                SecretOutputRedactor.Redact,
                 timeProvider: _timeProvider,
                 logsDirectory: _logsDirectory,
                 context: context);
@@ -251,9 +253,11 @@ internal sealed class DaemonCrashMonitor : IDisposable
         }
         catch (Exception loggingFailure)
         {
-            Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] Failed to write monitor warning via logger factory: {loggingFailure}");
+            Console.Error.WriteLine(
+                $"[Netclaw.Daemon.CrashMonitor] Failed to write monitor warning via logger factory: {SecretOutputRedactor.Redact(loggingFailure.ToString())}");
         }
 
-        Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] {message} {exception}");
+        // This path skips the log stage, so it redacts its own copy.
+        Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] {SecretOutputRedactor.Redact($"{message} {exception}")}");
     }
 }

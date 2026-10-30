@@ -280,6 +280,14 @@ class ChildResultTests(unittest.TestCase):
         self.assertEqual("Delegated.\nParent one.\nParent two.\nParent three.\n",
                          trial_evidence.parent_stdout(stdout, log))
 
+    def test_parent_stdout_matches_a_result_that_the_log_redacted(self):
+        # The CLI redacts each log record, but stdout prints the raw result.
+        log = (accepted_result()
+               + record("TOOL_RESULT", "shell_execute call_id=s1 result=DB_PASSWORD=***REDACTED*** ok\n"))
+        stdout = (ACCEPTED_LINE + "Delegated.\n"
+                  + "[tool:result] shell_execute \u2192 DB_PASSWORD=hunter2 ok\n\nParent text.\n")
+        self.assertEqual("Delegated.\nParent text.\n", trial_evidence.parent_stdout(stdout, log))
+
     def test_quoted_log_lines_in_a_result_are_part_of_the_result(self):
         # Bug caught: an agent that reads its own CLI session log gets older
         # record lines inside a tool result. The splitter took each quoted line
