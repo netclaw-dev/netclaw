@@ -186,7 +186,7 @@ static async Task RunDaemonAsync(
     builder.WebHost.UseUrls($"http://{daemonConfig.Host}:{daemonConfig.Port}");
     var daemonLogLevel = builder.ConfigureNetclawLogging(paths);
     builder.AddNetclawTelemetry();
-    var (configurationWarnings, configurationNotices) = ConfigureDaemonServices(
+    var (configurationWarnings, configurationNotices, initialSkillScan) = ConfigureDaemonServices(
         builder.Services,
         builder.Configuration,
         paths,
@@ -281,6 +281,7 @@ static async Task RunDaemonAsync(
         startupLogger.LogWarning("Configuration warning: {ConfigurationWarning}", warning);
     foreach (var notice in configurationNotices)
         startupLogger.LogInformation("Configuration notice: {ConfigurationNotice}", notice);
+    SkillScanStartupLogging.Log(startupLogger, initialSkillScan);
 
     if (shellResolution.FallbackReason is { } fallbackReason)
     {
@@ -475,7 +476,7 @@ static (NetclawPaths Paths, ModelSelection Models) ConfigureConfigServices(
 // ═══════════════════════════════════════════════════════════════════════
 
 // Returns configuration warnings. The caller logs them after the host builds its loggers.
-static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices) ConfigureDaemonServices(
+static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices, MergedSkillScanResult InitialSkillScan) ConfigureDaemonServices(
     IServiceCollection services,
     IConfigurationManager configuration,
     NetclawPaths paths,
@@ -876,25 +877,6 @@ static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices) Configure
 
     // Skill tools are registered post-build so ISkillContentScanner resolves from DI.
     // See SkillToolRegistration call after app.Build().
-    if (initialSkillScan.Issues.Count > 0)
-    {
-        using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(daemonLogLevel));
-        var startupLogger = loggerFactory.CreateLogger("Netclaw.Startup");
-        startupLogger.LogWarning(
-            "Skill inventory is degraded at startup: accepted={AcceptedSkillCount} rejected={RejectedIssueCount}",
-            initialSkillScan.AcceptedSkills.Count,
-            initialSkillScan.Issues.Count);
-
-        foreach (var issue in initialSkillScan.Issues)
-        {
-            startupLogger.LogWarning(
-                "Rejected skill item during startup scan: kind={IssueKind} path={Path} message={Message}",
-                issue.Kind,
-                issue.Path,
-                issue.Message);
-        }
-    }
-
     // Skill tools are registered post-build so ISkillContentScanner resolves from DI.
     // See SkillToolRegistration call after app.Build().
 
@@ -1177,7 +1159,7 @@ static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices) Configure
 
     // Expired data is cleared by DataRetentionActor, which runs every RetentionJob registered here.
     var retentionWarnings = services.AddRetentionJobs(configuration, paths);
-    return ([.. toolConfigWarnings, .. retentionWarnings, .. OAuthTokenExpiryStorage.RetiredKeyWarnings(paths)], toolConfigNotices);
+    return ([.. toolConfigWarnings, .. retentionWarnings, .. OAuthTokenExpiryStorage.RetiredKeyWarnings(paths)], toolConfigNotices, initialSkillScan);
 }
 
 static ISearchBackend? CreateSearchBackend(SearchConfig config)
