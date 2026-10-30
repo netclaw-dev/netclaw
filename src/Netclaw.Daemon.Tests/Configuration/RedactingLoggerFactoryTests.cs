@@ -123,6 +123,71 @@ public sealed class RedactingLoggerFactoryTests
         Assert.Equal("Authorization: Bearer ***REDACTED***", scopes[1]);
     }
 
+    /// <summary>
+    /// The template holds the words that mark the secret, so the value alone matches no
+    /// pattern. OTLP exports each value as an attribute, so the value must be masked too.
+    /// </summary>
+    [Theory]
+    [InlineData("Authorization: Bearer {Token}", "abc123xyz")]
+    [InlineData("DB_PASSWORD={Password}", "hunter2")]
+    public void A_value_that_the_template_marks_as_a_secret_is_masked(string template, string secret)
+    {
+        Logger().LogInformation(template, secret);
+
+        var record = Assert.Single(_capture.Records);
+        Assert.DoesNotContain(secret, record.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(record.Values, pair => pair.Value?.ToString()?.Contains(secret, StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void A_numeric_value_that_the_template_marks_as_a_secret_is_masked()
+    {
+        Logger().LogInformation("Connecting with password={Pin} after {Attempts} attempts", 482913, 3);
+
+        var values = Assert.Single(_capture.Records).Values.ToDictionary(pair => pair.Key, pair => pair.Value);
+        Assert.Equal("***REDACTED***", values["Pin"]);
+        Assert.Equal(3, values["Attempts"]);
+    }
+
+    [Fact]
+    public void A_scope_value_that_the_template_marks_as_a_secret_is_masked()
+    {
+        var logger = Logger();
+        using (logger.BeginScope("Authorization: Bearer {ScopeToken}", "abc123xyz"))
+        {
+            logger.LogInformation("inside scope");
+        }
+
+        var scope = Assert.Single(Assert.Single(_capture.Records).Scopes);
+        Assert.DoesNotContain("abc123xyz", scope?.ToString(), StringComparison.Ordinal);
+        var pairs = Assert.IsAssignableFrom<IEnumerable<KeyValuePair<string, object?>>>(scope);
+        Assert.DoesNotContain(pairs, pair => pair.Value?.ToString()?.Contains("abc123xyz", StringComparison.Ordinal) == true);
+    }
+
+    /// <summary>
+    /// The single-line console formatter writes the exception text and folds only
+    /// <see cref="Environment.NewLine"/>. A lone CR or an escape sequence in a message that holds
+    /// no secret must still be escaped before any text sink sees it.
+    /// </summary>
+    [Fact]
+    public void An_exception_whose_text_needs_escaping_is_replaced_by_a_normalized_copy()
+    {
+        var forged = $"bad input{(char)0x1B}[2K{(char)13}17:00:00.000 [INF] forged{(char)0x2028}line";
+        var original = new InvalidOperationException(forged);
+
+        Logger().LogWarning(original, "Parse failed");
+
+        var logged = Assert.Single(_capture.Records).Exception;
+        Assert.NotNull(logged);
+        Assert.NotSame(original, logged);
+        var text = logged.ToString();
+        Assert.StartsWith(typeof(InvalidOperationException).FullName!, text, StringComparison.Ordinal);
+        Assert.Contains("bad input\\u001B[2K", text, StringComparison.Ordinal);
+        Assert.DoesNotContain((char)0x1B, text);
+        Assert.DoesNotContain((char)0x2028, text);
+        Assert.DoesNotContain("\r17:00", text.Replace(Environment.NewLine, "\n"), StringComparison.Ordinal);
+    }
+
     private sealed class ThrowingValue
     {
         public override string ToString() => throw new FormatException("cannot render");

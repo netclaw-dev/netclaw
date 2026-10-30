@@ -81,12 +81,15 @@ flowchart LR
 |---|---|---|---|
 | `daemon.log` | `RedactingLoggerFactory`, then `RollingFileLoggerProvider` | The stage, once per record | The file sink: continuation prefix |
 | `session.log`, routed records | Same as `daemon.log` | The stage | The file sink |
-| `session.log`, transcript lines | `SessionLogActor.WriteTranscript` | At the writer; truncated fields are redacted before the cut | At the writer |
-| Console | `RedactingLoggerFactory`, then the stock single-line formatter | The stage | The stage normalizes line breaks; the formatter keeps one line |
+| `session.log`, transcript lines | `SessionLogActor.WriteTranscript` | At the writer; truncated fields are redacted before the cut, and streamed thinking deltas are joined before redaction | At the writer |
+| Console | `RedactingLoggerFactory`, then the stock single-line formatter | The stage | The stage normalizes line breaks in the message and the exception text; the formatter keeps one line |
 | OTLP log export | `RedactingLoggerFactory`, then OpenTelemetry | The stage, including each structured value and scope value | Not needed: records are structured |
 | `crash-*.log` and its stderr fallback | `CrashLogWriter` | A required redactor parameter | Not needed: one file per crash |
+| Startup configuration failure (`daemon.log` and stderr) | `StartupConfigurationFailure` | Its own instance of the stage, because the host does not exist yet | The file sink |
+| Crash monitor fallback on stderr | `DaemonCrashMonitor` | At the writer | Not needed: one line |
 | Session-dispatcher failure beacon | `RollingFileLoggerProvider` | At the beacon | At the beacon |
 | `provider-probe.log` (CLI) | `ProbeDiagnosticsLog` | At the writer | Each entry on one line |
+| `{session}.log` and `headless-errors.log` (`netclaw chat -p`) | `HeadlessChannel` | At the writer; streamed deltas are joined before redaction | None: the eval scripts read multi-line records verbatim, and they tell a quoted header from a real one by its time |
 
 `RedactingLoggerFactory` wraps the daemon's one `ILoggerFactory`. Every daemon
 logger comes from it, including Akka and framework loggers, so a new log call
@@ -110,8 +113,11 @@ line-break and continuation rule that the stage and both text sinks share.
 
 `TextControlCharacters` in `Netclaw.Configuration` is the one definition of the
 bidi controls, the Unicode line separators (U+2028, U+2029), and the byte-order
-mark (U+FEFF). Callers combine these sets with `char.IsControl`. A caller must
-not keep its own member list.
+mark (U+FEFF). Callers combine these sets with `char.IsControl`. A new caller
+that escapes or rejects these characters must use this type, not a private
+list. Two regex patterns stay separate on purpose:
+`RegexPromptInjectionDetector` matches a wider range of invisible characters,
+and `HeadlessChannel.SingleLine` folds every kind of line break.
 
 ### Identifier and path segments
 
@@ -135,7 +141,7 @@ daemon would not find them. Its tests pin its output.
 | You write text to... | Use |
 |---|---|
 | A log, through `ILogger` | Nothing. The stage redacts and normalizes every record. |
-| A log file, outside `ILogger` | `SecretOutputRedactor.Redact`, then `LogTextFraming.Frame`. Redact before you truncate. |
+| A log file, outside `ILogger` | `SecretOutputRedactor.Redact`, then `LogTextFraming.Frame`. Redact before you truncate. Join streamed deltas before you redact. |
 | A value that the model or a tool will use | Nothing by default. Redaction can break the value. Ask first. |
 | A prompt or text that a person approves | `TextControlCharacters.EscapeAsUnicode` with the sets that the sink needs. |
 | A file name, folder name, or actor name | The helper in the identifier table that matches the name's owner. Do not add a new one. |
@@ -166,6 +172,9 @@ reordered no longer has that shape, so the stage cannot find the secret.
   redaction of the text they came from.
 - Breaks: logging `string.Join("|", tokens)` built from user text. A live check
   found `lexicalTerms=use|password|hunter2` in `daemon.log` this way.
+- Breaks: redacting each streamed delta alone. A token split across two deltas
+  matches no pattern. `SessionLogActor` and `HeadlessChannel` join the deltas
+  of one run and redact the run once.
 
 **Do not redact a value that a receiver uses.** Give the receiver the original,
 and give the log its own masked copy.
@@ -190,23 +199,29 @@ and give the log its own masked copy.
   See #2749.
 - `WebhookExecutionService.Sanitize` can keep non-ASCII letters in an actor
   name. See #2750.
-- OTLP receives a non-secret exception as the original object, so control
-  characters in its text are not escaped there. OTLP records are structured, so
-  this cannot forge a record.
+- The shared patterns miss a key and its value on separate lines
+  (`API_KEY=` and then the value on the next line), and a presigned URL
+  signature that comes before the credential. See #2770.
+- A crafted MCP argument value makes the approval display throw. See #2771.
+- The headless CLI session log is redacted but not framed. Its eval readers
+  rely on verbatim records.
 - CodeQL `cs/log-forging` cannot see the stage. Dismiss its alerts with a
   reference to this document and the framing tests.
 
 ## 8. How we know it works
 
 - `RedactingLoggerFactoryTests`: message, structured values, scopes,
-  exceptions, false positives such as `max_tokens=4096`, and the fail-closed
-  path.
+  exceptions, a value that only the template marks as a secret, false
+  positives such as `max_tokens=4096`, and the fail-closed path.
 - `LogRedactionRoutingTests`: `ILogger<T>`, framework, and Akka records go
   through the stage, including a provider registered after it.
 - `LogRecordFramingTests` and `ConsoleLogFramingTests`: content cannot forge a
   record in the file or on the console.
 - `SessionLogActorTests`: transcript redaction, framing, redaction before
-  truncation, and the presigned-URL fork (design D5).
+  truncation, a secret split across thinking deltas, and the presigned-URL fork
+  (design D5).
+- `HeadlessSessionLogTests`: the headless CLI log masks a split secret and raw
+  tool arguments, and keeps tool results verbatim.
 - `TextSafetyCharacterizationTests`, `ApprovalEntryValidationCharacterTests`,
   and `SanitizeForLogCharacterTests`: golden outputs that pin each caller of the
   shared character sets.

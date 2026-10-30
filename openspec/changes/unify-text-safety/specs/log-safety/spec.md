@@ -73,13 +73,21 @@ no extra step.
 
 For structured and scope values, the system SHALL redact each value and SHALL
 keep each name unchanged. The system SHALL NOT mask a value only because its
-name contains a secret word. Numeric and other non-text values SHALL pass
-through unchanged.
+name contains a secret word. When redaction of the message masks the text of a
+value, the system SHALL mask that value too, because the template can hold the
+words that mark the secret. Numbers, enums, and other convertible primitive
+values SHALL keep their type unless they are masked. Other values SHALL become
+redacted text.
 
 #### Scenario: A secret value in a structured field
 
 - **WHEN** a log record has a structured field `Body` with the value `Authorization: Bearer abc123`
 - **THEN** the exported field `Body` has the value `Authorization: Bearer ***REDACTED***`
+
+#### Scenario: A value that the template marks as a secret
+
+- **WHEN** a log record has the template `Authorization: Bearer {Token}` and the value `abc123xyz`
+- **THEN** the exported field `Token` has the value `***REDACTED***`
 
 #### Scenario: A usage count keeps its value
 
@@ -106,10 +114,10 @@ keep its original content.
 
 #### Scenario: A presigned URL from an MCP tool
 
-- **GIVEN** an MCP tool returns a presigned upload URL that contains `X-Amz-Signature=sig123`
+- **GIVEN** an MCP tool returns a presigned upload URL that contains `X-Amz-Credential=abc123def456`
 - **WHEN** the result is delivered to the model and the result is also logged
-- **THEN** the model receives the URL with `X-Amz-Signature=sig123`
-- **AND** the session log does not contain `sig123`
+- **THEN** the model receives the URL with `X-Amz-Credential=abc123def456`
+- **AND** the session log does not contain `abc123def456`
 
 #### Scenario: A logged exception is rethrown
 
@@ -124,7 +132,9 @@ with a fixed prefix. The system SHALL treat CR, CRLF, LF, NEL, U+2028, and
 U+2029 as line breaks. The system SHALL escape other control characters,
 except tab, and bidirectional control characters as `\uXXXX` in the
 message, structured values, and scope values of every log sink, and in the
-exception text of every text log sink.
+exception text of every text log sink. The headless CLI session log is the one
+exception to the continuation prefix: the eval scripts read its multi-line
+records verbatim.
 
 #### Scenario: A message contains a fake log header
 
@@ -148,6 +158,12 @@ exception text of every text log sink.
 - **WHEN** a logged value contains the ESC character followed by `[31m`
 - **THEN** the log sink contains `\u001B[31m` as literal text
 
+#### Scenario: An exception message with a lone CR on the console
+
+- **GIVEN** console logging is on
+- **WHEN** Netclaw logs an exception whose message holds no secret and contains a CR followed by `17:00:00.000 [INF] fake`
+- **THEN** the console line contains no CR and no unescaped control character
+
 #### Scenario: A stack trace stays readable
 
 - **WHEN** Netclaw logs an exception with a multi-frame stack trace
@@ -157,13 +173,21 @@ exception text of every text log sink.
 
 The system SHALL redact every line that it writes to a session log. This
 includes user messages, assistant text, thinking text, errors, titles, tool
-results, and log records that are routed to the session.
+results, and log records that are routed to the session. A secret can span two
+streamed deltas, so the system SHALL join the deltas of one streamed run and
+redact the run as one text.
 
 #### Scenario: The model repeats a secret
 
 - **WHEN** the assistant reply contains `api_key=abc123`
 - **THEN** the session log contains `api_key=***REDACTED***`
 - **AND** the conversation that the model sees is unchanged
+
+#### Scenario: A secret spans two thinking deltas
+
+- **WHEN** one thinking delta ends with `ghp_ABCDEFGHIJ` and the next one starts with the rest of the token
+- **THEN** the session log has one thinking line for the run
+- **AND** the session log does not contain either part of the token
 
 #### Scenario: A user pastes a secret
 
@@ -172,9 +196,12 @@ results, and log records that are routed to the session.
 
 ### Requirement: Writes outside the logging pipeline redact their output
 
-Crash logs, the crash-log fallback on stderr, the log-routing failure notice,
-and the CLI probe diagnostics log SHALL apply the shared secret redaction to
-all text that they write. The CLI probe diagnostics log SHALL write each entry
+Crash logs, the crash-log fallback on stderr, the crash monitor fallback on
+stderr, the startup configuration failure report, the log-routing failure
+notice, the headless CLI session log and its failure log, and the CLI probe
+diagnostics log SHALL apply the shared secret redaction to all text that they
+write. The headless CLI session log SHALL join streamed deltas the same way as
+the session log. The CLI probe diagnostics log SHALL write each entry
 on one line.
 
 #### Scenario: A crash log for an exception with a secret

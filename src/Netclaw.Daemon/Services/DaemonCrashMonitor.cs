@@ -253,9 +253,11 @@ internal sealed class DaemonCrashMonitor : IDisposable
         }
         catch (Exception loggingFailure)
         {
-            Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] Failed to write monitor warning via logger factory: {loggingFailure}");
+            Console.Error.WriteLine(
+                $"[Netclaw.Daemon.CrashMonitor] Failed to write monitor warning via logger factory: {SecretOutputRedactor.Redact(loggingFailure.ToString())}");
         }
 
-        Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] {message} {exception}");
+        // This path skips the log stage, so it redacts its own copy.
+        Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] {SecretOutputRedactor.Redact($"{message} {exception}")}");
     }
 }
