@@ -21,6 +21,8 @@ namespace Netclaw.Benchmarks;
 [CategoriesColumn]
 public class LogRedactionBenchmarks
 {
+    private ILoggerFactory _directFactory = null!;
+    private ILoggerFactory _redactingFactory = null!;
     private ILogger _direct = null!;
     private ILogger _redacting = null!;
     private Exception _exception = null!;
@@ -28,8 +30,10 @@ public class LogRedactionBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        _direct = new LoggerFactory([new FormattingSink()]).CreateLogger("Netclaw.Benchmarks");
-        _redacting = new RedactingLoggerFactory(new LoggerFactory([new FormattingSink()])).CreateLogger("Netclaw.Benchmarks");
+        _directFactory = new LoggerFactory([new FormattingSink()]);
+        _redactingFactory = new RedactingLoggerFactory(new LoggerFactory([new FormattingSink()]));
+        _direct = _directFactory.CreateLogger("Netclaw.Benchmarks");
+        _redacting = _redactingFactory.CreateLogger("Netclaw.Benchmarks");
         try
         {
             ThrowDeep(6);
@@ -38,6 +42,13 @@ public class LogRedactionBenchmarks
         {
             _exception = ex;
         }
+    }
+
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        _directFactory.Dispose();
+        _redactingFactory.Dispose();
     }
 
     [Benchmark(Baseline = true)]
