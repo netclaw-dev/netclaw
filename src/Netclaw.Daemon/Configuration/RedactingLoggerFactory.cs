@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections;
-using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -36,9 +35,6 @@ internal sealed class RedactingLoggerFactory(ILoggerFactory inner) : ILoggerFact
 /// </summary>
 internal sealed class RedactingLogger(ILogger inner) : ILogger
 {
-    // MEL's key for the message template. The template is not part of the formatted message.
-    private const string OriginalFormatKey = "{OriginalFormat}";
-
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull
         => inner.BeginScope(RedactScope(state));
 
@@ -93,62 +89,26 @@ internal sealed class RedactingLogger(ILogger inner) : ILogger
     }
 
     private static RedactedLogState RedactState(string message, IEnumerable<KeyValuePair<string, object?>>? pairs)
-    {
-        var masked = SecretOutputRedactor.Redact(message);
-        var messageLostText = !string.Equals(masked, message, StringComparison.Ordinal);
-        KeyValuePair<string, object?>[] values = pairs is null
+        => new(RedactText(message), RedactValues(pairs));
+
+    // Each value is redacted alone. A value whose secret marker sits in the template, as in
+    // "Authorization: Bearer {Token}", is masked in the message but not in its attribute (#2770).
+    private static KeyValuePair<string, object?>[] RedactValues(IEnumerable<KeyValuePair<string, object?>>? pairs)
+        => pairs is null
             ? []
-            : [.. pairs.Select(pair => new KeyValuePair<string, object?>(
-                pair.Key,
-                RedactValue(pair, messageLostText ? (message, masked) : null)))];
+            : [.. pairs.Select(static pair => new KeyValuePair<string, object?>(pair.Key, RedactValue(pair.Value)))];
 
-        return new RedactedLogState(LogTextFraming.Normalize(masked), values);
-    }
-
-    // The template can hold the words that mark a secret, so that the value alone matches no
-    // pattern: "Authorization: Bearer {Token}". When redaction removed the value's text from the
-    // message, the value is masked too. The template is not a value in the message, so it is
-    // only redacted as text.
-    private static object? RedactValue(KeyValuePair<string, object?> pair, (string Original, string Masked)? message)
-    {
-        var value = pair.Value;
-        if (value is null)
-            return null;
-
-        // Numbers, enums, and other convertible primitives cannot carry a secret on their own,
-        // and they keep their type for structured sinks. They are rendered only when the
-        // message lost text, so the usual record does not pay for it.
-        if (value is IConvertible and not string)
+    // Numbers, enums, and other convertible primitives cannot carry a secret and keep their
+    // type for structured sinks. Anything else is rendered the way MEL renders it and scanned.
+    private static object? RedactValue(object? value)
+        => value switch
         {
-            return message is { } lost && WasMasked(pair.Key, Convert.ToString(value, CultureInfo.InvariantCulture), lost)
-                ? SecretOutputRedactor.Redacted
-                : value;
-        }
-
-        // Rendered the way MEL renders a value into the message.
-        var rendered = value switch
-        {
-            string text => text,
-            IEnumerable items => string.Join(", ", items.Cast<object?>()),
-            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
-            _ => value.ToString() ?? string.Empty,
+            null => null,
+            string text => RedactText(text),
+            IConvertible => value,
+            IEnumerable items => RedactText(string.Join(", ", items.Cast<object?>())),
+            _ => RedactText(value.ToString() ?? string.Empty),
         };
-
-        // A value that holds its own secret marker keeps its partial mask.
-        var redacted = SecretOutputRedactor.Redact(rendered);
-        if (!string.Equals(redacted, rendered, StringComparison.Ordinal))
-            return LogTextFraming.Normalize(redacted);
-
-        return message is { } changed && WasMasked(pair.Key, rendered, changed)
-            ? SecretOutputRedactor.Redacted
-            : LogTextFraming.Normalize(rendered);
-    }
-
-    private static bool WasMasked(string key, string? rendered, (string Original, string Masked) message)
-        => key != OriginalFormatKey
-            && !string.IsNullOrEmpty(rendered)
-            && message.Original.Contains(rendered, StringComparison.Ordinal)
-            && !message.Masked.Contains(rendered, StringComparison.Ordinal);
 
     // RedactForLogging returns the caller's exception when it holds no secret. A text sink still
     // writes its text, and the single-line console formatter keeps a lone CR, an escape
@@ -161,7 +121,7 @@ internal sealed class RedactingLogger(ILogger inner) : ILogger
         var normalized = LogTextFraming.Normalize(text);
         return string.Equals(text, normalized, StringComparison.Ordinal)
             ? redacted
-            : new NormalizedLogException(normalized);
+            : new NormalizedLogException(LogTextFraming.Normalize(redacted.Message), normalized);
     }
 
     // Redact first: some secret patterns end at a line break, so they must see the original breaks.
@@ -190,10 +150,11 @@ internal sealed class RedactedLogState(string message, KeyValuePair<string, obje
 }
 
 /// <summary>
-/// Stands in for an exception whose text needs escaping for a text log. It carries the
-/// original type, message, and stack trace as normalized text.
+/// Stands in for an exception whose text needs escaping for a text log. Its message is the
+/// normalized original message. Its text, which text sinks write, is the normalized original
+/// text: the original type, message, and stack trace.
 /// </summary>
-internal sealed class NormalizedLogException(string text) : Exception(text)
+internal sealed class NormalizedLogException(string message, string text) : Exception(message)
 {
-    public override string ToString() => Message;
+    public override string ToString() => text;
 }
