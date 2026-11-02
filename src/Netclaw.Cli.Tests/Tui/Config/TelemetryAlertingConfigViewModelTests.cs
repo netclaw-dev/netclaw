@@ -3,9 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -304,6 +306,51 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
         vm.ActivateSelected();
 
         Assert.Equal(beforeSecrets, File.ReadAllText(_paths.SecretsPath));
+    }
+
+    [Fact]
+    public void Adding_a_webhook_keeps_the_url_and_header_value_out_of_netclaw_json_and_encrypts_them_in_secrets_json()
+    {
+        const string url = "https://hooks.slack.com/services/T000/B000/SECRET";
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        vm.BeginAddWebhook();
+        vm.WebhookNameDraft.Value = "ops";
+        vm.WebhookUrlDraft.Value = url;
+        vm.WebhookAuthHeaderDraft.Value = "Authorization: Bearer topsecret";
+        vm.ActivateSelected();
+
+        var netclawJson = File.ReadAllText(_paths.NetclawConfigPath);
+        Assert.DoesNotContain("SECRET", netclawJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("topsecret", netclawJson, StringComparison.Ordinal);
+        using (var config = JsonDocument.Parse(netclawJson))
+        {
+            var entry = config.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+            Assert.Equal("Slack", entry.GetProperty("Format").GetString());
+            Assert.False(entry.TryGetProperty("Url", out _));
+            Assert.False(entry.TryGetProperty("Headers", out _));
+        }
+
+        var rawSecrets = File.ReadAllText(_paths.SecretsPath);
+        Assert.DoesNotContain("SECRET", rawSecrets, StringComparison.Ordinal);
+        Assert.DoesNotContain("topsecret", rawSecrets, StringComparison.Ordinal);
+        using (var raw = JsonDocument.Parse(rawSecrets))
+        {
+            var stored = raw.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+            Assert.StartsWith("ENC:", stored.GetProperty("Url").GetString(), StringComparison.Ordinal);
+            Assert.StartsWith("ENC:", stored.GetProperty("Headers").GetProperty("Authorization").GetString(), StringComparison.Ordinal);
+        }
+
+        var decrypted = SecretsFileWriter.DecryptJsonLeaves(rawSecrets, SecretsProtection.CreateProtector(_paths));
+        using var plain = JsonDocument.Parse(decrypted);
+        var webhook = plain.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+        Assert.Equal(url, webhook.GetProperty("Url").GetString());
+        Assert.Equal("Bearer topsecret", webhook.GetProperty("Headers").GetProperty("Authorization").GetString());
+
+        // The list still shows the webhook although its Url now lives in secrets.json.
+        Assert.Equal("ops", Assert.Single(vm.Webhooks.Value).Name);
+        using var reopened = new TelemetryAlertingConfigViewModel(_paths);
+        Assert.Equal("ops", Assert.Single(reopened.Webhooks.Value).Name);
     }
 
     private T Bind<T>(string sectionName) where T : new()

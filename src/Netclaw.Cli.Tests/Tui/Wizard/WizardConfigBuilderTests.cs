@@ -296,6 +296,35 @@ public sealed class WizardConfigBuilderTests : WizardStepTestBase
     }
 
     [Fact]
+    public void WriteConfigFile_WithNotificationWebhook_KeepsTheUrlOutOfNetclawJsonAndEncryptsItInSecretsJson()
+    {
+        const string url = "https://hooks.slack.com/services/T000/B000/SECRET";
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Notifications = new NotificationsConfigSection { WebhookUrl = url }
+        };
+
+        builder.WriteConfigFile();
+
+        var netclawJson = File.ReadAllText(Context.Paths.NetclawConfigPath);
+        Assert.DoesNotContain("SECRET", netclawJson, StringComparison.Ordinal);
+        using var config = JsonDocument.Parse(netclawJson);
+        var webhooks = config.RootElement.GetProperty("Notifications").GetProperty("Webhooks");
+        Assert.Equal(JsonValueKind.Object, webhooks.ValueKind);
+        var entry = Assert.Single(webhooks.EnumerateObject());
+        Assert.Equal("Slack", entry.Value.GetProperty("Format").GetString());
+        Assert.False(entry.Value.TryGetProperty("Url", out _));
+
+        var rawSecrets = File.ReadAllText(Context.Paths.SecretsPath);
+        Assert.DoesNotContain("SECRET", rawSecrets, StringComparison.Ordinal);
+        using var raw = JsonDocument.Parse(rawSecrets);
+        var storedUrl = raw.RootElement.GetProperty("Notifications").GetProperty("Webhooks")
+            .GetProperty(entry.Name).GetProperty("Url").GetString();
+        Assert.StartsWith("ENC:", storedUrl, StringComparison.Ordinal);
+        Assert.Equal(url, SecretsProtection.CreateProtector(Context.Paths).Unprotect(storedUrl!));
+    }
+
+    [Fact]
     public void BuildConfigDictionary_OmitsNotifications_WhenNoWebhook()
     {
         var builder = new WizardConfigBuilder(Context.Paths)
