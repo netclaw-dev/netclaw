@@ -282,7 +282,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task OmitsUnnamedTargetUrlAndRedactsDeliveryException()
+    public async Task LogsTargetKeyNotUrlAndRedactsDeliveryException()
     {
         const string workspace = "T000TEST";
         const string channel = "B000TEST";
@@ -310,7 +310,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         await service.StopAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(url, Assert.Single(handler.Requests).RequestUri?.ToString());
-        Assert.Contains(logger.Entries, entry => entry.Contains("(unnamed webhook)", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry => entry.Contains("→ hook (", StringComparison.Ordinal));
         Assert.All(logger.Entries, entry =>
         {
             Assert.DoesNotContain(workspace, entry, StringComparison.Ordinal);
@@ -348,14 +348,14 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         await WaitForDeliveryAsync(handler, expectedCount: 1);
 
         // The delivery fails only after the stop request. This is the CI interleaving
-        // that made OmitsUnnamedTargetUrlAndRedactsDeliveryException flaky.
+        // that made LogsTargetKeyNotUrlAndRedactsDeliveryException flaky.
         var stop = service.StopAsync(TestContext.Current.CancellationToken);
         release.SetResult();
         await stop;
 
         Assert.Contains(logger.Entries, entry =>
             entry.Contains("Webhook delivery error", StringComparison.Ordinal)
-            && entry.Contains("(unnamed webhook)", StringComparison.Ordinal));
+            && entry.Contains("→ hook (", StringComparison.Ordinal));
         Assert.DoesNotContain(logger.Entries, entry => entry.Contains("aborted", StringComparison.Ordinal));
         var loggedException = Assert.Single(logger.Exceptions).ToString();
         Assert.DoesNotContain(workspace, loggedException, StringComparison.Ordinal);
@@ -422,7 +422,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
             && entry.Contains("1 queued alert(s)", StringComparison.Ordinal));
         Assert.Contains(logger.Entries, entry =>
             entry.Contains("Webhook delivery aborted by shutdown", StringComparison.Ordinal)
-            && entry.Contains("(unnamed webhook)", StringComparison.Ordinal));
+            && entry.Contains("→ hook (", StringComparison.Ordinal));
         Assert.All(logger.Entries, entry => Assert.DoesNotContain(credential, entry, StringComparison.Ordinal));
         Assert.Empty(logger.Exceptions);
     }
