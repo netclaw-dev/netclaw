@@ -33,9 +33,10 @@ if [[ ! -f "$secrets_path" ]]; then
 fi
 secrets_json="$(cat "$secrets_path")"
 assert_field '(.Notifications.Webhooks["slack-webhook"].Url | startswith("ENC:"))' 'true' "$secrets_json" || :
-assert_field '.Notifications.DeduplicationWindowSeconds' '300' "$config_json" || :
-assert_field '.Notifications.MaxRetries' '2' "$config_json" || :
-assert_field '.Notifications.TimeoutSeconds' '10' "$config_json" || :
+# The editor writes only what the operator chose. The delivery defaults come from code, not from the file.
+assert_field '.Notifications.DeduplicationWindowSeconds' 'null' "$config_json" || :
+assert_field '.Notifications.MaxRetries' 'null' "$config_json" || :
+assert_field '.Notifications.TimeoutSeconds' 'null' "$config_json" || :
 
 if (( assert_fail )); then
   printf -- '--- netclaw.json contents ---\n%s\n' "$config_json" >&2
