@@ -1138,7 +1138,7 @@
         "MaxOutputTokens": {
           "type": "integer",
           "minimum": 1,
-          "description": "Output limit in tokens for every call of this model, unless the call site sets its own. Must be below ContextWindow when ContextWindow is set. When absent, Netclaw sends a default of 32000, clamped per call to the model maximum and to the context window minus the estimated prompt."
+          "description": "Output limit in tokens for every call of this model, unless the call site sets its own. Must be below ContextWindow when ContextWindow is set. When absent, Netclaw sends a default of 32000 capped to the model maximum and to a quarter of the context window. A self-hosted server with an unknown window gets no limit."
         },
         "Thinking": {
           "type": "string",

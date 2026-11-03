@@ -115,8 +115,8 @@ public sealed class ProviderPluginFactory
         var limit = model.MaxOutputTokens is { } configured
             ? $"{configured} (configured)"
             : selfHosted
-                ? $"default {OutputLimitResolver.DefaultLimit} (clamped per call to the endpoint window; none while the window is unknown)"
-                : $"default {OutputLimitResolver.DefaultLimit} (clamped per call to the model max and the window)";
+                ? $"default {OutputLimitResolver.DefaultLimit} (capped to a quarter of the endpoint window; none while the window is unknown)"
+                : $"default {OutputLimitResolver.DefaultLimit} (capped to the model max and a quarter of the window)";
         var thinking = model.Thinking is { } level ? $"{level} (configured)" : "unset";
         _logger.LogInformation(
             "Model client: provider={Provider} model={ModelId} maxOutputTokens={MaxOutputTokens} window={Window} modelMax={ModelMax} thinking={Thinking} dialect={Dialect} capability={Capability}",

@@ -38,9 +38,10 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
     internal static readonly TimeSpan MissCacheDuration = TimeSpan.FromMinutes(10);
 
     /// <param name="selfHosted">
-    /// The default-limit rule of the provider (design D4). A hosted API gets min(32000, its known model
-    /// max) and no window clamp. A self-hosted server gets the window clamp only for a window that its
-    /// own probe or the operator states, and no limit field when the window is unknown.
+    /// The default-limit rule of the provider. A hosted API gets min(32000, its known model max, a
+    /// quarter of its known window). A self-hosted server gets min(32000, a quarter of the window) only
+    /// when its own probe or the operator states the window, and no limit field otherwise. Netclaw never
+    /// sizes the limit from an estimate of the prompt: the server knows the real prompt size.
     /// </param>
     public ModelRequestSettingsChatClient(
         IChatClient innerClient,
@@ -69,9 +70,8 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var list = messages as IReadOnlyCollection<ChatMessage> ?? messages.ToList();
-        var effective = await PrepareAsync(list, options, cancellationToken);
-        return await base.GetResponseAsync(list, effective, cancellationToken);
+        var effective = await PrepareAsync(options, cancellationToken);
+        return await base.GetResponseAsync(messages, effective, cancellationToken);
     }
 
     public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -79,52 +79,42 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var list = messages as IReadOnlyCollection<ChatMessage> ?? messages.ToList();
-        var effective = await PrepareAsync(list, options, cancellationToken);
-        await foreach (var update in base.GetStreamingResponseAsync(list, effective, cancellationToken))
+        var effective = await PrepareAsync(options, cancellationToken);
+        await foreach (var update in base.GetStreamingResponseAsync(messages, effective, cancellationToken))
             yield return update;
     }
 
-    private async Task<ChatOptions> PrepareAsync(
-        IReadOnlyCollection<ChatMessage> messages, ChatOptions? callerOptions, CancellationToken cancellationToken)
+    private async Task<ChatOptions> PrepareAsync(ChatOptions? callerOptions, CancellationToken cancellationToken)
     {
         var options = callerOptions?.Clone() ?? new ChatOptions();
         var capability = await LookupCapabilityAsync().WaitAsync(cancellationToken);
 
         // A self-hosted server: only its own probe or the operator knows its window, and a catalog
         // maximum describes another host. A hosted API: its known model max caps the default, and a
-        // catalog window describes the same hosted model, so it clamps too (a hosted API can reject
-        // input + max_tokens above the window).
+        // catalog window describes the same hosted model.
         var window = _model.ContextWindow ?? (capability is { ContextWindowTokens: > 0 }
                                               && (!_selfHosted || !capability.ContextWindowFromCatalog)
             ? capability.ContextWindowTokens
             : null);
         var modelMax = _selfHosted ? null : capability?.MaxOutputTokens;
-        var prompt = EstimatePromptTokens(messages, options);
         string limitText;
         if (_selfHosted && window is null && options.MaxOutputTokens is null && _model.MaxOutputTokens is null)
         {
-            // A guess could exceed what the server has left for the reply, so the server decides.
+            // Without a known window, a default could exceed what the server has, so the server decides.
             limitText = "none (window unknown)";
         }
         else
         {
-            var limit = OutputLimitResolver.Resolve(options.MaxOutputTokens, _model.MaxOutputTokens, prompt, window, modelMax);
+            var limit = OutputLimitResolver.Resolve(options.MaxOutputTokens, _model.MaxOutputTokens, modelMax, window);
             options.MaxOutputTokens = limit.Value;
             limitText = $"{limit.Value} ({FormatSource(limit.Source)})";
-            if (limit.FloorApplied)
-            {
-                _logger.LogWarning(
-                    "Model {ModelId}: the estimated prompt ({PromptEstimate} tokens) leaves less than {Floor} output tokens in the context window ({Window}). The request sends the floor of {Floor}; the provider can reject it.",
-                    _model.ModelId, prompt, OutputLimitResolver.FloorLimit, window, OutputLimitResolver.FloorLimit);
-            }
         }
 
         var (level, levelSource) = ApplyThinking(options);
 
         _logger.LogDebug(
-            "Model {ModelId} request: maxOutputTokens={MaxOutputTokens} promptEstimate={PromptEstimate} window={Window} thinking={Thinking} ({ThinkingSource}) dialect={Dialect}",
-            _model.ModelId, limitText, prompt, window?.ToString() ?? "unknown",
+            "Model {ModelId} request: maxOutputTokens={MaxOutputTokens} thinking={Thinking} ({ThinkingSource}) dialect={Dialect}",
+            _model.ModelId, limitText,
             level, levelSource, _dialect);
         return options;
     }
@@ -215,36 +205,6 @@ internal sealed class ModelRequestSettingsChatClient : DelegatingChatClient
             _missExpiresAt = _timeProvider.GetUtcNow() + MissCacheDuration;
     }
 
-    // The compaction rule (PromptTokenEstimate): characters / 4, with media at its base64 size. The
-    // tool schemas travel in the same request, so they count too.
-    private static int EstimatePromptTokens(IReadOnlyCollection<ChatMessage> messages, ChatOptions options)
-    {
-        var characters = (long)(options.Instructions?.Length ?? 0);
-        foreach (var tool in options.Tools ?? [])
-        {
-            characters += tool.Name.Length + tool.Description.Length
-                          + (tool is AIFunctionDeclaration function ? function.JsonSchema.GetRawText().Length : 0);
-        }
-
-        foreach (var message in messages)
-        {
-            foreach (var content in message.Contents)
-            {
-                characters += content switch
-                {
-                    TextContent text => text.Text?.Length ?? 0,
-                    TextReasoningContent reasoning => reasoning.Text?.Length ?? 0,
-                    FunctionCallContent call => call.Arguments?.Sum(pair => pair.Key.Length + (pair.Value?.ToString()?.Length ?? 0)) ?? 0,
-                    FunctionResultContent result => result.Result?.ToString()?.Length ?? 0,
-                    DataContent data => PromptTokenEstimate.MediaCharacters(data.Data.Length),
-                    _ => 0,
-                };
-            }
-        }
-
-        return PromptTokenEstimate.FromCharacters(characters);
-    }
-
     internal static string FormatSource(OutputLimitSource source) => source switch
     {
         OutputLimitSource.Call => "call",
@@ -266,46 +226,34 @@ internal enum OutputLimitSource
 
 /// <param name="Value">The limit that the request carries.</param>
 /// <param name="Source">Where the value comes from.</param>
-/// <param name="FloorApplied">True when the clamp reached the 1024-token floor; the client logs a warning.</param>
-internal sealed record OutputLimit(int Value, OutputLimitSource Source, bool FloorApplied);
+internal sealed record OutputLimit(int Value, OutputLimitSource Source);
 
-/// <summary>The per-call output limit decision: call site, then the definition, then the clamped default.</summary>
+/// <summary>The per-call output limit decision: call site, then the definition, then the capped default.</summary>
 internal static class OutputLimitResolver
 {
     public const int DefaultLimit = ModelReference.DefaultMaxOutputTokens;
-    public const int FloorLimit = 1_024;
+
+    /// <summary>The share of a known context window that the default may use.</summary>
+    public const int WindowDivisor = 4;
 
     /// <summary>
-    /// An explicit value is sent as is. The default is min(32000, model max, window - prompt - margin)
-    /// with margin = max(1024, window / 20) and a floor of 1024. The margin covers the error of the
-    /// character estimate. An unknown window or model max does not clamp.
+    /// An explicit value is sent as is. The default is min(32000, model max, window / 4); an unknown
+    /// model max or window does not cap. The window cap is static: a hosted API rejects
+    /// input + max_tokens above its window, so a 32000 default would fail every call on a 32k window.
+    /// A quarter of the window matches compaction, which keeps the prompt below three quarters of it.
+    /// The limit never depends on an estimate of the prompt.
     /// </summary>
-    public static OutputLimit Resolve(
-        int? callValue,
-        int? configuredValue,
-        int promptTokens,
-        int? contextWindow,
-        int? modelMaxOutput)
+    public static OutputLimit Resolve(int? callValue, int? configuredValue, int? modelMaxOutput, int? contextWindow)
     {
         if (callValue is { } call)
-            return new OutputLimit(call, OutputLimitSource.Call, false);
+            return new OutputLimit(call, OutputLimitSource.Call);
         if (configuredValue is { } configured)
-            return new OutputLimit(configured, OutputLimitSource.Configured, false);
+            return new OutputLimit(configured, OutputLimitSource.Configured);
 
         var value = Math.Min(DefaultLimit, modelMaxOutput is > 0 ? modelMaxOutput.Value : DefaultLimit);
-        var floorApplied = false;
-        if (contextWindow is { } window)
-        {
-            var margin = Math.Max(FloorLimit, window / 20);
-            var headroom = (long)window - promptTokens - margin;
-            if (headroom < value)
-            {
-                floorApplied = headroom < FloorLimit && value > FloorLimit;
-                value = (int)Math.Min(value, Math.Max(FloorLimit, headroom));
-            }
-        }
-
+        if (contextWindow is > 0)
+            value = Math.Min(value, Math.Max(1, contextWindow.Value / WindowDivisor));
         return new OutputLimit(
-            value, value == DefaultLimit ? OutputLimitSource.Default : OutputLimitSource.DefaultClamped, floorApplied);
+            value, value == DefaultLimit ? OutputLimitSource.Default : OutputLimitSource.DefaultClamped);
     }
 }

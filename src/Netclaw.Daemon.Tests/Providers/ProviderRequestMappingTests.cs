@@ -43,18 +43,18 @@ public sealed class ProviderRequestMappingTests
         string? VendorOptions = null,
         int? Window = 200_000,
         ResolvedModelCapabilities? Capability = null,
-        int PromptChars = 5);
+        int PromptChars = 5,
+        int ImageBytes = 0);
 
-    // Aaron's default-limit rule (review of PR #2694): a hosted API gets min(32000, its own known
-    // model max) and no window clamp; a self-hosted server gets the window clamp only when the probe
-    // of that endpoint knows the window, and no limit field at all when it does not.
+    // The default-limit rule: a hosted API gets min(32000, its known model max, a quarter of its known
+    // window); a self-hosted server gets no limit field. The prompt never changes the limit.
     private static ResolvedModelCapabilities Probe(int? window = null, int? modelMax = null) =>
         new("m", null, null, window) { MaxOutputTokens = modelMax };
 
     private static readonly Dictionary<string, Row> Rows = new()
     {
-        // The Anthropic SDK sends 1024 when no limit is set; Netclaw sends the D4 default instead.
-        ["anthropic_unset_limit_sends_clamped_default"] = new("anthropic",
+        // The Anthropic SDK sends 1024 when no limit is set; Netclaw sends the default instead.
+        ["anthropic_unset_limit_sends_default"] = new("anthropic",
             b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens"))),
         ["anthropic_limit_64000_sends_64000"] = new("anthropic",
             b => Assert.Equal("64000", WireCapture.Text(b, "max_tokens")), Limit: 64_000),
@@ -124,9 +124,9 @@ public sealed class ProviderRequestMappingTests
 
         ["compat_unknown_window_sends_no_max_tokens"] = new("openai-compatible",
             b => Assert.Null(WireCapture.Text(b, "max_tokens")), Window: null),
-        // 131072 - 110000 - 6553 = 14519
-        ["compat_probe_window_clamps_default"] = new("openai-compatible",
-            b => Assert.Equal("14519", WireCapture.Text(b, "max_tokens")),
+        // A probe window caps the default statically (131072 / 4 = 32768, so 32000), whatever the prompt.
+        ["compat_probe_window_keeps_default_for_large_prompt"] = new("openai-compatible",
+            b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens")),
             Window: null, Capability: Probe(window: 131_072), PromptChars: 440_000),
         // A catalog maximum describes another host, so it does not cap a self-hosted server.
         ["compat_catalog_max_does_not_cap_self_hosted"] = new("openai-compatible",
@@ -136,11 +136,31 @@ public sealed class ProviderRequestMappingTests
         ["hosted_unknown_window_and_max_sends_32000"] = new("openai",
             b => Assert.Equal("32000", WireCapture.Text(b, "max_output_tokens")),
             Window: null, PromptChars: 440_000),
-        // A hosted API rejects input + max_tokens above the window (Anthropic before Claude 4.5), so a
-        // catalog window clamps a hosted default too: 200000 - 170000 - 10000 = 20000.
-        ["hosted_catalog_window_clamps_default"] = new("anthropic",
-            b => Assert.Equal("20000", WireCapture.Text(b, "max_tokens")),
+        // A prompt near a catalog window does not shrink a hosted default: the provider enforces its
+        // own window, and compaction keeps the prompt inside it.
+        ["hosted_prompt_near_catalog_window_sends_32000"] = new("anthropic",
+            b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens")),
             Window: null, Capability: Probe(window: 200_000), PromptChars: 680_000),
+        // A hosted API rejects input + max_tokens above its window, so a known window caps the default
+        // statically: 32768 / 4 = 8192, whatever the prompt.
+        ["hosted_small_window_caps_default_to_a_quarter"] = new("openai",
+            b => Assert.Equal("8192", WireCapture.Text(b, "max_output_tokens")),
+            Window: 32_768),
+        ["hosted_small_catalog_window_caps_default_to_a_quarter"] = new("veniceai",
+            b => Assert.Equal("8192", WireCapture.Text(b, "max_completion_tokens")),
+            Window: null, Capability: Probe(window: 32_768)),
+        // The 0.28.2 regression: a 1 MB inline image counted at its base64 size (about 330000 tokens)
+        // pushed the limit to the 1024 floor. An image no longer changes the limit.
+        ["hosted_inline_image_keeps_default"] = new("anthropic",
+            b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens")),
+            ImageBytes: 1_000_000),
+        ["compat_inline_image_keeps_default"] = new("openai-compatible",
+            b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens")),
+            Window: 401_408, ImageBytes: 1_000_000),
+        ["ollama_unknown_window_sends_no_num_predict"] = new("ollama",
+            b => Assert.Null(WireCapture.Text(b, "options", "num_predict")), Window: null),
+        ["ollama_known_window_sends_capped_num_predict"] = new("ollama",
+            b => Assert.Equal("8192", WireCapture.Text(b, "options", "num_predict")), Window: 32_768),
         ["hosted_known_model_max_caps_default"] = new("anthropic",
             b => Assert.Equal("16384", WireCapture.Text(b, "max_tokens")),
             Capability: Probe(modelMax: 16_384)),
@@ -169,8 +189,11 @@ public sealed class ProviderRequestMappingTests
         });
 
         // The capture handler answers 400, so the SDK throws after it sends the request.
+        List<AIContent> contents = [new TextContent(new string('x', spec.PromptChars))];
+        if (spec.ImageBytes > 0)
+            contents.Add(new DataContent(new byte[spec.ImageBytes], "image/png"));
         var error = await Record.ExceptionAsync(() => client.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, new string('x', spec.PromptChars))],
+            [new ChatMessage(ChatRole.User, contents)],
             cancellationToken: TestContext.Current.CancellationToken));
 
         spec.Expect(capture.SingleBody(error));

@@ -1004,10 +1004,10 @@ Add or switch model providers (including OAuth login) and configure search backe
 Each model definition has a provider-neutral output limit and thinking level:
 `netclaw model set <role> <provider> <model> --max-output-tokens <n>
 --thinking <off|low|medium|high|max>`, or `P` in `netclaw model`. Without a
-limit, each call gets 32000, capped to the known model maximum and clamped to
-the known context window. A self-hosted server (provider type `ollama` or
-`openai-compatible` only) counts only a window from `ContextWindow` or its own
-probe, and gets no limit when the window is unknown. Thinking tokens count
+limit, each call gets 32000, capped to the known model maximum and to a
+quarter of the known context window. A self-hosted server (provider type
+`ollama` or `openai-compatible` only) counts only a window from `ContextWindow`
+or its own probe, and gets no limit when the window is unknown. Thinking tokens count
 inside the limit. Netclaw rejects a level that
 the provider or the model does not offer, and it lists the offered levels. An
 `openai-compatible` provider needs
