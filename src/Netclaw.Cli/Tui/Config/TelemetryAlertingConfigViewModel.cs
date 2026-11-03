@@ -3,10 +3,14 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
+using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using R3;
 using Termina.Reactive;
 
@@ -36,6 +40,9 @@ internal sealed record TelemetryWebhookRow(string Name, string Url, WebhookForma
 /// URL, and one optional Authorization-style header (masked); the payload format
 /// is auto-detected from the URL and shown read-only. Delivery policy
 /// (dedup/retries/timeout) is intentionally out of scope and preserved untouched.
+/// The webhook name is the key in netclaw.json and secrets.json. The entry (Format) goes to
+/// netclaw.json. The URL and header values go to secrets.json, encrypted, because a webhook URL
+/// can be a credential.
 /// </summary>
 internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
 {
@@ -43,7 +50,7 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
 
     private readonly NetclawPaths _paths;
     private string _acceptedOtlpEndpoint;
-    private int? _editingWebhookIndex;
+    private string? _editingWebhookName;
 
     public TelemetryAlertingConfigViewModel(NetclawPaths paths)
     {
@@ -56,10 +63,13 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
         {
             state = LoadState(paths);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
+                                       or InvalidDataException or FormatException or SecretsReadException)
         {
             state = (false, DefaultOtlpEndpoint, []);
-            loadError = $"Could not read netclaw.json: {ex.Message}";
+            loadError = ex is SecretsReadException
+                ? $"Could not read secrets.json: {ex.InnerException?.Message ?? ex.Message}"
+                : $"Could not read netclaw.json: {ex.Message}";
         }
         TelemetryEnabled = new ReactiveProperty<bool>(state.TelemetryEnabled);
         OtlpEndpointDraft = new ReactiveProperty<string>(state.OtlpEndpoint);
@@ -209,7 +219,7 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
 
     public void BeginAddWebhook()
     {
-        _editingWebhookIndex = null;
+        _editingWebhookName = null;
         WebhookNameDraft.Value = string.Empty;
         WebhookUrlDraft.Value = string.Empty;
         WebhookAuthHeaderDraft.Value = string.Empty;
@@ -227,7 +237,7 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             return;
 
         var row = rows[index];
-        _editingWebhookIndex = index;
+        _editingWebhookName = row.Name;
         WebhookNameDraft.Value = row.Name;
         WebhookUrlDraft.Value = row.Url;
         WebhookAuthHeaderDraft.Value = string.Empty;
@@ -245,7 +255,13 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
 
         var index = WebhookIndexFor(SelectedRow.Value);
         var removedName = Webhooks.Value[index].Name;
-        if (PersistWebhooks(webhooks => webhooks.RemoveAt(index), $"Removed {removedName}. Saved."))
+        // Removing the secrets entry with the netclaw.json entry leaves no orphan URL that the binder
+        // would turn back into a webhook.
+        if (PersistWebhooks(
+                _ => new SectionContribution(
+                    [new SectionFieldAction(WebhookPath(removedName), SectionFieldActionKind.Delete)],
+                    [new SectionSecretAction(WebhookPath(removedName), SectionSecretActionKind.Delete)]),
+                $"Removed {removedName}. Saved."))
             SelectedRow.Value = Math.Clamp(SelectedRow.Value, 0, ListRowCount - 1);
     }
 
@@ -292,42 +308,82 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             ? $"{WebhookFormatDetection.InferFromUrl(normalizedUrl!).ToString().ToLowerInvariant()}-webhook"
             : WebhookNameDraft.Value.Trim();
 
-        var editing = _editingWebhookIndex;
+        // The name is a config key and a secrets.json path segment, and both split on these characters.
+        if (name.AsSpan().IndexOfAny('.', ':') >= 0 || (headerName?.Contains('.', StringComparison.Ordinal) ?? false))
+        {
+            Status.Value = new ConfigStatusMessage(
+                "Outbound webhook names and auth header names cannot contain '.' or ':'.", ConfigStatusTone.Error);
+            RequestRedraw();
+            return;
+        }
+
+        var editing = _editingWebhookName;
+        if (Webhooks.Value.Any(row => string.Equals(row.Name, name, StringComparison.OrdinalIgnoreCase)
+                                      && !string.Equals(row.Name, editing, StringComparison.OrdinalIgnoreCase)))
+        {
+            Status.Value = new ConfigStatusMessage($"A webhook named {name} already exists.", ConfigStatusTone.Error);
+            RequestRedraw();
+            return;
+        }
+
         var newAuth = !clearAuth && !string.IsNullOrWhiteSpace(authDraft);
         var verb = editing is null ? "added" : "updated";
-        var saved = PersistWebhooks(webhooks =>
+        var format = WebhookFormatDetection.InferFromUrl(normalizedUrl!);
+        var saved = PersistWebhooks(notifications =>
         {
-            var target = editing is { } index && index < webhooks.Count
-                ? webhooks[index]
-                : new WebhookTarget();
+            // A name change moves the entry: the old key goes, and the headers that the form leaves
+            // untouched follow the entry to the new key.
+            var renamedFrom = editing is not null && !string.Equals(editing, name, StringComparison.OrdinalIgnoreCase)
+                ? editing
+                : null;
+            var key = renamedFrom is null && editing is not null ? editing : name;
+            var path = WebhookPath(key);
 
-            target.Name = name;
-            target.Url = normalizedUrl!;
-            target.Format = WebhookFormatDetection.InferFromUrl(normalizedUrl!);
+            var fieldActions = new List<SectionFieldAction>();
+            var secretActions = new List<SectionSecretAction>();
+            if (renamedFrom is not null)
+            {
+                fieldActions.Add(new SectionFieldAction(WebhookPath(renamedFrom), SectionFieldActionKind.Delete));
+                secretActions.Add(new SectionSecretAction(WebhookPath(renamedFrom), SectionSecretActionKind.Delete));
+            }
+
+            // A plain Url or Headers in netclaw.json (an older release, or a hand edit) leaves the file on every
+            // save: the values move to secrets.json below, or the clear gesture drops them from both files.
+            fieldActions.Add(new SectionFieldAction($"{path}.Url", SectionFieldActionKind.Delete));
+            fieldActions.Add(new SectionFieldAction($"{path}.Headers", SectionFieldActionKind.Delete));
+            fieldActions.Add(new SectionFieldAction($"{path}.Format", SectionFieldActionKind.Set, format.ToString()));
+            secretActions.Add(new SectionSecretAction($"{path}.Url", SectionSecretActionKind.Set, new SensitiveString(normalizedUrl!)));
+
             if (newAuth)
             {
-                target.Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    [headerName!] = headerValue!
-                };
+                // One header per webhook in this editor, so a new header replaces the old one.
+                secretActions.Add(new SectionSecretAction($"{path}.Headers", SectionSecretActionKind.Delete));
+                secretActions.Add(new SectionSecretAction(
+                    $"{path}.Headers.{headerName}", SectionSecretActionKind.Set, new SensitiveString(headerValue!)));
             }
             else if (clearAuth)
             {
-                target.Headers = null;
+                secretActions.Add(new SectionSecretAction($"{path}.Headers", SectionSecretActionKind.Delete));
+            }
+            else if (editing is not null
+                     && notifications.Webhooks.TryGetValue(editing, out var previous)
+                     && previous.Headers is not null)
+            {
+                // The headers that the form leaves untouched follow the entry: to the new key after a rename,
+                // and out of netclaw.json into secrets.json when an older release left them there.
+                foreach (var (headerKey, value) in previous.Headers)
+                    secretActions.Add(new SectionSecretAction($"{path}.Headers.{headerKey}", SectionSecretActionKind.Set, value));
             }
 
-            // Otherwise (blank, no "-"): leave target.Headers untouched so an unedited header is kept.
-
-            if (editing is null)
-                webhooks.Add(target);
+            // Otherwise (blank, no "-"): the secrets entry keeps its headers, so an unedited header stays.
+            return new SectionContribution(fieldActions, secretActions);
         }, $"Webhook {name} {verb}. Saved.");
 
         if (saved)
         {
             Screen.Value = TelemetryConfigScreen.List;
-            SelectedRow.Value = editing is { } idx
-                ? OtlpRowCount + idx
-                : OtlpRowCount + Math.Max(0, WebhookCount - 1);
+            var savedIndex = Webhooks.Value.ToList().FindIndex(row => string.Equals(row.Name, name, StringComparison.OrdinalIgnoreCase));
+            SelectedRow.Value = OtlpRowCount + Math.Max(0, savedIndex);
         }
     }
 
@@ -370,32 +426,33 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
     }
 
     /// <summary>
-    /// Mutates the persisted <see cref="NotificationsConfig.Webhooks"/> list through
-    /// the same section-preserving writer the rest of the editor uses, leaving the
-    /// delivery policy and unrelated sections untouched.
+    /// Applies one webhook change through <see cref="ConfigEditorSession"/>, the writer the other
+    /// editors use for secrets: entry fields to netclaw.json, URL and header values to secrets.json.
+    /// Delivery policy and unrelated sections stay untouched.
     /// </summary>
-    private bool PersistWebhooks(Action<List<WebhookTarget>> mutate, string successMessage)
+    private bool PersistWebhooks(Func<NotificationsConfig, SectionContribution> build, string successMessage)
         => ConfigAutosave.Run(
             () =>
             {
-                var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-                root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
-                var notifications = ConfigFileHelper.LoadSection<NotificationsConfig>(root, "Notifications");
-                mutate(notifications.Webhooks);
-
-                if (notifications.Webhooks.Count > 0
-                    || root.ContainsKey("Notifications"))
+                var session = new ConfigEditorSession(_paths);
+                // The old list shape has no key to join a secrets entry. Doctor converts it.
+                if (ConfigFileHelper.TryGetPathValue(session.Config, "Notifications.Webhooks", out var shape)
+                    && shape is object[])
                 {
-                    root["Notifications"] = BuildNotificationsSection(notifications);
+                    throw new InvalidOperationException(
+                        "Notifications.Webhooks in netclaw.json uses the old list shape. Run `netclaw doctor --fix` first.");
                 }
 
-                ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
+                session.Apply(build(LoadNotifications(_paths)));
+                session.Save();
                 ReloadState(successMessage, resetOtlpDraft: false);
                 return true;
             },
             Status,
             "Telemetry & Alerting autosave failed",
             RequestRedraw);
+
+    private static string WebhookPath(string key) => $"Notifications.Webhooks.{key}";
 
     private void ReloadState(string successMessage, bool resetOtlpDraft)
     {
@@ -534,17 +591,43 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
                 ? endpointText
                 : DefaultOtlpEndpoint;
 
-        var notifications = ConfigFileHelper.LoadSection<NotificationsConfig>(root, "Notifications");
-        var rows = notifications.Webhooks
+        var rows = LoadNotifications(paths).Webhooks
             .Select(static webhook => new TelemetryWebhookRow(
-                string.IsNullOrWhiteSpace(webhook.Name) ? "(unnamed)" : webhook.Name,
-                webhook.Url,
-                webhook.Format,
-                webhook.Headers is { Count: > 0 }))
+                webhook.Key,
+                webhook.Value.Url?.Value ?? string.Empty,
+                webhook.Value.Format,
+                webhook.Value.Headers is { Count: > 0 }))
             .ToArray();
 
         return (enabled, endpoint, rows);
     }
+
+    // Binds the section the way the daemon does: netclaw.json, then secrets.json on top. This editor
+    // decrypts secrets.json itself, so it does not depend on the process-wide SensitiveStringTypeConverter.Protector.
+    private static NotificationsConfig LoadNotifications(NetclawPaths paths)
+    {
+        var builder = new ConfigurationBuilder().AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false);
+        if (File.Exists(paths.SecretsPath))
+        {
+            string decrypted;
+            try
+            {
+                decrypted = SecretsFileWriter.DecryptJsonLeaves(
+                    File.ReadAllText(paths.SecretsPath), SecretsProtection.CreateProtector(paths));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or CryptographicException)
+            {
+                throw new SecretsReadException(ex);
+            }
+
+            builder.AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(decrypted)));
+        }
+
+        return builder.Build().GetSection("Notifications").Get<NotificationsConfig>() ?? new NotificationsConfig();
+    }
+
+    // Lets the constructor name secrets.json, not netclaw.json, when the failure is in secrets.json.
+    private sealed class SecretsReadException(Exception inner) : Exception(inner.Message, inner);
 
     private static Dictionary<string, object> LoadRawSection(Dictionary<string, object> root, string sectionName)
     {
@@ -556,27 +639,4 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
 
         return raw as Dictionary<string, object> ?? [];
     }
-
-    private static Dictionary<string, object> BuildNotificationsSection(NotificationsConfig config)
-        => new()
-        {
-            ["DeduplicationWindowSeconds"] = config.DeduplicationWindowSeconds,
-            ["MaxRetries"] = config.MaxRetries,
-            ["TimeoutSeconds"] = config.TimeoutSeconds,
-            ["Webhooks"] = config.Webhooks.Select(static webhook =>
-            {
-                var item = new Dictionary<string, object>
-                {
-                    ["Url"] = webhook.Url,
-                    ["Format"] = webhook.Format.ToString()
-                };
-
-                if (!string.IsNullOrWhiteSpace(webhook.Name))
-                    item["Name"] = webhook.Name;
-                if (webhook.Headers is { Count: > 0 })
-                    item["Headers"] = webhook.Headers;
-
-                return (object)item;
-            }).ToArray()
-        };
 }

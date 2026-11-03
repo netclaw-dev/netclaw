@@ -220,20 +220,20 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
 
     private async Task DeliverToAllTargetsAsync(OperationalAlert alert, CancellationToken ct)
     {
-        foreach (var target in _config.Webhooks)
+        foreach (var (name, target) in _config.Webhooks)
         {
-            await DeliverToTargetAsync(target, alert, ct);
+            await DeliverToTargetAsync(name, target, alert, ct);
         }
     }
 
     private async Task DeliverToTargetAsync(
+        string targetName,
         WebhookTarget target,
         OperationalAlert alert,
         CancellationToken ct)
     {
-        var targetName = string.IsNullOrWhiteSpace(target.Name)
-            ? "(unnamed webhook)"
-            : target.Name;
+        // NotificationsConfigValidator rejects a missing Url at startup. The log shows the key only, never the URL.
+        var url = target.Url.RequireValid($"Notifications:Webhooks:{targetName}:Url").Value;
 
         for (var attempt = 0; attempt <= _config.MaxRetries; attempt++)
         {
@@ -251,13 +251,13 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
                 using var client = _httpClientFactory.CreateClient("Notifications");
                 client.Timeout = TimeSpan.FromSeconds(_config.TimeoutSeconds);
 
-                using var request = new HttpRequestMessage(HttpMethod.Post, target.Url);
+                using var request = new HttpRequestMessage(HttpMethod.Post, url);
                 request.Content = BuildContent(target, alert);
 
                 if (target.Headers is { Count: > 0 })
                 {
                     foreach (var (key, value) in target.Headers)
-                        request.Headers.TryAddWithoutValidation(key, value);
+                        request.Headers.TryAddWithoutValidation(key, value.Value);
                 }
 
                 using var response = await client.SendAsync(request, ct);

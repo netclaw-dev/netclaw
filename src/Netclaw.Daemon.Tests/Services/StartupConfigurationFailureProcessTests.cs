@@ -34,6 +34,8 @@ public sealed class StartupConfigurationFailureProcessTests : IDisposable
         { "{\"Providers\":{\"p\":{\"Type\":\"openai-compatible\"}},\"Models\":{" + Definitions + ",\"Roles\":{\"Main\":\"d\"}}}", "Set Providers:p:Endpoint to a URL." },
         { "{\"Providers\":{\"p\":{\"Type\":\"openai\"}},\"Models\":{" + Definitions + ",\"Roles\":{\"Main\":\"d\"}}}", "requires authentication" },
         { "{\"Providers\":{\"p\":{\"Type\":\"ollama\",\"AuthMethod\":\"banana\"}},\"Models\":{" + Definitions + ",\"Roles\":{\"Main\":\"d\"}}}", "Providers:p is invalid" },
+        // Notification webhooks: a keyed entry with no Url from any source
+        { "{\"Providers\":{" + Provider + "},\"Models\":{" + Definitions + ",\"Roles\":{\"Main\":\"d\"}},\"Notifications\":{\"Webhooks\":{\"ops\":{\"Format\":\"Slack\"}}}}", "Notifications:Webhooks:ops:Url" },
         // The configuration source cannot read the file
         { "{\"Models\":{\"Roles\":{\"Main\":\"a\"}},\"models\":{\"Roles\":{\"Main\":\"b\"}}}", "Couldn't read netclaw.json:" },
         { "{ broken json", "Couldn't read netclaw.json:" },

@@ -81,10 +81,9 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         Assert.Equal("Alice", builder.Identity.UserName);
         Assert.Equal("America/New_York", builder.Identity.UserTimezone);
 
-        // Workspaces directory and notification webhooks are post-install settings
-        // owned by `netclaw config`; the init Identity step must not contribute them.
+        // The workspaces directory is a post-install setting
+        // owned by `netclaw config`; the init Identity step must not contribute it.
         Assert.Null(builder.Workspaces);
-        Assert.Null(builder.Notifications);
     }
 
     [Fact]

@@ -46,7 +46,6 @@ public sealed class WizardConfigBuilder
     public BrowserAutomationConfigSection? BrowserAutomation { get; set; }
     public IdentityConfigSection? Identity { get; set; }
     public WorkspacesConfigSection? Workspaces { get; set; }
-    public NotificationsConfigSection? Notifications { get; set; }
     public List<ExternalSkillSource>? ExternalSkillSources { get; set; }
     public List<SkillFeedSource>? SkillFeedSources { get; set; }
     public DaemonConfigSection? Daemon { get; set; }
@@ -407,22 +406,6 @@ public sealed class WizardConfigBuilder
             };
         }
 
-        // Notifications
-        if (Notifications is { WebhookUrl: not null })
-        {
-            config["Notifications"] = new Dictionary<string, object>
-            {
-                ["Webhooks"] = new object[]
-                {
-                    new Dictionary<string, object>
-                    {
-                        ["Url"] = Notifications.WebhookUrl,
-                        ["Format"] = WebhookFormatDetection.InferFromUrl(Notifications.WebhookUrl).ToString()
-                    }
-                }
-            };
-        }
-
         // Feature selections — merge Enabled flags into existing or new sections
         if (FeatureSelections is not null)
         {
@@ -625,11 +608,6 @@ public sealed class BrowserAutomationConfigSection
 {
     public bool Enabled { get; init; }
     public required BrowserAutomationBackend Backend { get; init; }
-}
-
-public sealed class NotificationsConfigSection
-{
-    public string? WebhookUrl { get; init; }
 }
 
 public sealed class WorkspacesConfigSection
