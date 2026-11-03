@@ -4,7 +4,7 @@
 
 ### Security
 
-- **Notification webhook URLs and auth header values live in `secrets.json`, encrypted.** A webhook URL can be a credential, and the TUI wrote it to `netclaw.json` in plain text. `Notifications:Webhooks` is now an object keyed by webhook name. The TUI writes only the `Format` to `netclaw.json` and writes the URL and header values to `secrets.json`. The old list shape and a plain `Url` in `netclaw.json` still load. `netclaw doctor` warns about them, and `netclaw doctor --fix` backs up `netclaw.json`, converts the list, and moves the values. A webhook with no URL from any source now stops daemon startup and names the key ([#2777](https://github.com/netclaw-dev/netclaw/issues/2777)).
+- **Notification webhook URLs and auth header values live in `secrets.json`, encrypted.** A webhook URL can be a credential, and the TUI wrote it to `netclaw.json` in plain text. `Notifications:Webhooks` is now an object keyed by webhook name. The TUI writes only the `Format` to `netclaw.json` and writes the URL and header values to `secrets.json`. The old list shape and a plain `Url` in `netclaw.json` still load. `netclaw doctor` warns about them, and `netclaw doctor --fix` backs up `netclaw.json` and `secrets.json`, converts the list, and moves the values. A webhook with no URL from any source now stops daemon startup and names the key ([#2777](https://github.com/netclaw-dev/netclaw/issues/2777)).
 
 ## 0.28.2 (2026-10-28)
 
