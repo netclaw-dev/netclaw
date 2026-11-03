@@ -6,7 +6,7 @@
 #   never maps it to a nearby one, writes the documented wire fields, and offers a level only when
 #   the dialect and the model capability both allow it.
 # - OutputLimitResolver: a call-site value beats the model value, which beats the default; the
-#   default is min(32000, model max, window - prompt - margin) with a 1024 floor and a warning flag.
+#   default is min(32000, model max, window / 4).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -92,17 +92,14 @@ run_gate dialect-map Netclaw.Providers.csproj \
         {
             case ThinkingDialect.Native:" \
   "throw new ArgumentOutOfRangeException(nameof(dialect), dialect, \"Unknown thinking dialect.\");" || failed=1
-# The floor-warning flag (the `if (headroom < value)` block) is outside the spans: `<` and `<=` are
-# equivalent there, and the flag only selects a log level.
 run_gate output-limit Netclaw.Daemon.csproj \
   "$repo_root/src/Netclaw.Daemon/Configuration/ModelRequestSettingsChatClient.cs" \
   "Configuration/ModelRequestSettingsChatClient.cs" \
-  17 \
-  "public static OutputLimit Resolve(" "if (headroom < value)" \
-  "value = (int)Math.Min(value, Math.Max(FloorLimit, headroom));" "" || failed=1
+  15 \
+  "public static OutputLimit Resolve(" "" || failed=1
 # The router reuses a pipeline only for the same provider (without case), model ID, and settings.
-# EstimatePromptTokens and ApplyThinking stay outside the gate: they are private members of the
-# model client that only the wire rows reach, and those rows need the whole provider wire harness.
+# ApplyThinking stays outside the gate: it is a private member of the model client that only the
+# wire rows reach, and those rows need the whole provider wire harness.
 run_gate pipeline-key Netclaw.Daemon.csproj \
   "$repo_root/src/Netclaw.Daemon/Configuration/ChatClientRouter.cs" \
   "Configuration/ChatClientRouter.cs" \

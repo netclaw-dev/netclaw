@@ -50,19 +50,27 @@ A call-site value wins over the definition. Memory curation keeps its own
 
 ### Default output limit
 
-When no value is set, each call sends 32000, capped and clamped per call:
+When no value is set:
 
 ```text
-value  = min(32000, model max output when known)
+value  = min(32000, model max output when known)      // hosted only
 window = hosted:      configured ContextWindow ?? resolved window (a catalog window counts)
          self-hosted: configured ContextWindow ?? window of the endpoint's own probe
                       no window -> no limit field
-margin = max(1024, window / 20)
-value  = min(value, max(1024, window - prompt estimate - margin))   // when the window is known
+value  = min(value, window / 4)                        // when the window is known
 ```
 
-The prompt estimate is the compaction rule (characters / 4) and counts the tool
-schemas. A self-hosted endpoint ignores a catalog model maximum. A self-hosted
+The window cap is static. A hosted API rejects input + `max_tokens` above its
+window, so a flat 32000 would fail every call on a 32k window. A quarter of the
+window matches compaction, which keeps the prompt below three quarters of it.
+The limit never depends on the prompt. Netclaw does not estimate the prompt to
+shrink the reply: the provider knows the real prompt size and enforces its own
+context window, and keeping the prompt inside that window is the job of
+compaction. A per-call clamp from a character estimate counted an inline image
+at its base64 size, so one generated image could push the limit to the floor
+and truncate every later reply in the session.
+
+A self-hosted endpoint ignores a catalog model maximum. A self-hosted
 server must use the `ollama` or `openai-compatible` provider type; a hosted type
 (`deepseek`, `openrouter`, `veniceai`) that points at your own server is treated
 as hosted. An explicit value is sent as is. Each definition resolves its
