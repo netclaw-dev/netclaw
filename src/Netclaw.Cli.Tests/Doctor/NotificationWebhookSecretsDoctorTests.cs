@@ -53,6 +53,8 @@ public sealed class NotificationWebhookSecretsDoctorTests : IDisposable
     [InlineData("""{ "Notifications": { "Webhooks": { "ops": { "Headers": { "Authorization": "Bearer SECRETURL" }, "Format": "Generic" } } } }""", true)]
     [InlineData("""{ "Notifications": { "Webhooks": [ { "Name": "ops", "Url": "https://a.example.test/SECRETURL" } ] } }""", true)]
     [InlineData("""{ "Notifications": { "Webhooks": { "ops": { "Format": "Generic" } } } }""", false)]
+    // The old list shape, with the Url in secrets.json or the environment: the shape alone is the finding.
+    [InlineData("""{ "Notifications": { "Webhooks": [ { "Name": "ops", "Format": "Slack" } ] } }""", true)]
     public async Task The_check_warns_when_a_url_or_header_value_sits_in_netclaw_json_and_is_silent_when_it_does_not(
         string netclawJson, bool expectWarning)
     {
@@ -113,6 +115,51 @@ public sealed class NotificationWebhookSecretsDoctorTests : IDisposable
         var after = await new NotificationWebhookSecretsDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
         Assert.Equal(DoctorSeverity.Pass, after.Severity);
         Assert.Empty((await service.BuildPlanAsync(TestContext.Current.CancellationToken)).Fixes);
+    }
+
+    [Fact]
+    public async Task Fix_converts_a_list_shape_that_holds_no_url_in_netclaw_json_to_the_keyed_shape()
+    {
+        const string listWithoutUrl = """
+            { "configVersion": 1, "Notifications": { "Webhooks": [ { "Name": "ops", "Format": "Slack" } ] } }
+            """;
+        File.WriteAllText(_paths.NetclawConfigPath, listWithoutUrl);
+        var service = ConfigOnlyService();
+
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        Assert.Single(plan.Fixes);
+        var backup = Assert.Single(await service.ApplyAsync(plan, TestContext.Current.CancellationToken));
+
+        Assert.Equal(listWithoutUrl, File.ReadAllText(backup));
+        using var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var webhooks = config.RootElement.GetProperty("Notifications").GetProperty("Webhooks");
+        Assert.Equal(JsonValueKind.Object, webhooks.ValueKind);
+        Assert.Equal("Slack", webhooks.GetProperty("ops").GetProperty("Format").GetString());
+    }
+
+    [Fact]
+    public async Task Fix_keeps_a_value_that_secrets_json_already_holds_for_the_same_key()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+            { "configVersion": 1, "Notifications": { "Webhooks": [
+                { "Name": "ops", "Url": "https://old.example.test/NETCLAWJSONURL",
+                  "Headers": { "Authorization": "Bearer NETCLAWJSONHEADER" }, "Format": "Generic" } ] } }
+            """);
+        SecretsFileWriter.Write(
+            _paths.SecretsPath,
+            """{ "Notifications": { "Webhooks": { "ops": { "Url": "https://kept.example.test/hook", "Headers": { "Authorization": "Bearer kept" } } } } }""",
+            SecretsProtection.CreateProtector(_paths));
+        var service = ConfigOnlyService();
+
+        await service.ApplyAsync(await service.BuildPlanAsync(TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+
+        // secrets.json overrides netclaw.json at bind time, so the fix must not replace the value the operator set there.
+        using var secrets = JsonDocument.Parse(SecretsFileWriter.DecryptJsonLeaves(
+            File.ReadAllText(_paths.SecretsPath), SecretsProtection.CreateProtector(_paths)));
+        var ops = secrets.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+        Assert.Equal("https://kept.example.test/hook", ops.GetProperty("Url").GetString());
+        Assert.Equal("Bearer kept", ops.GetProperty("Headers").GetProperty("Authorization").GetString());
+        Assert.DoesNotContain("NETCLAWJSON", File.ReadAllText(_paths.NetclawConfigPath), StringComparison.Ordinal);
     }
 
     [Fact]

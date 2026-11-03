@@ -282,6 +282,61 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
+    private const string KeyedEntryWithPlainSecrets =
+        "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":{\"ops\":{\"Url\":\"https://old.example.test/OLDURL\",\"Headers\":{\"Authorization\":\"Bearer OLDHEADER\"},\"Format\":\"Generic\"}}}}";
+
+    [Fact]
+    public void Saving_an_edit_moves_a_plain_url_and_headers_out_of_netclaw_json_into_encrypted_secrets_json()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, KeyedEntryWithPlainSecrets);
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        vm.BeginEditWebhook(0);
+        vm.WebhookUrlDraft.Value = "https://new.example.test/NEWURL";
+        vm.ActivateSelected();
+
+        var netclawJson = File.ReadAllText(_paths.NetclawConfigPath);
+        Assert.DoesNotContain("OLDURL", netclawJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("NEWURL", netclawJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("OLDHEADER", netclawJson, StringComparison.Ordinal);
+        using (var config = JsonDocument.Parse(netclawJson))
+        {
+            var entry = config.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+            Assert.False(entry.TryGetProperty("Url", out _));
+            Assert.False(entry.TryGetProperty("Headers", out _));
+            Assert.Equal("Generic", entry.GetProperty("Format").GetString());
+        }
+
+        Assert.DoesNotContain("NEWURL", File.ReadAllText(_paths.SecretsPath), StringComparison.Ordinal);
+        using var secrets = JsonDocument.Parse(DecryptedSecrets());
+        var stored = secrets.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+        Assert.Equal("https://new.example.test/NEWURL", stored.GetProperty("Url").GetString());
+        // A blank header draft keeps the stored header, so it moves with the URL.
+        Assert.Equal("Bearer OLDHEADER", stored.GetProperty("Headers").GetProperty("Authorization").GetString());
+    }
+
+    [Fact]
+    public void Clearing_the_auth_header_leaves_no_header_in_either_file_even_when_it_was_plain_in_netclaw_json()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, KeyedEntryWithPlainSecrets);
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        vm.BeginEditWebhook(0);
+        vm.WebhookAuthHeaderDraft.Value = "-";
+        vm.ActivateSelected();
+
+        Assert.DoesNotContain("OLDHEADER", File.ReadAllText(_paths.NetclawConfigPath), StringComparison.Ordinal);
+        using (var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)))
+        {
+            var entry = config.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+            Assert.False(entry.TryGetProperty("Headers", out _));
+        }
+
+        var secretsText = File.Exists(_paths.SecretsPath) ? DecryptedSecrets() : "{}";
+        Assert.DoesNotContain("OLDHEADER", secretsText, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Headers\"", secretsText, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Removing_a_webhook_drops_only_the_selected_entry()
     {
