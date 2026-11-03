@@ -288,7 +288,7 @@ internal sealed class ConfigDashboardStatusReader
         var otlp = BoolAt(config, "Telemetry.Enabled") ? "on" : "off";
         try
         {
-            var webhooks = ConfigFileHelper.LoadSection<NotificationsConfig>(config, "Notifications").Webhooks.Count;
+            var webhooks = WebhookCount(config);
             return $"OTLP {otlp} · {Pluralize(webhooks, "webhook", "webhooks")}";
         }
         catch (JsonException)
@@ -296,6 +296,23 @@ internal sealed class ConfigDashboardStatusReader
             // A malformed Notifications section must not crash the dashboard layout render.
             return $"OTLP {otlp} · – config error";
         }
+    }
+
+    // The dashboard reads netclaw.json only, so it counts entries of both shapes. A keyed entry keeps
+    // its URL in secrets.json but its Format stays here. The old list shape counts until doctor --fix converts it.
+    private static int WebhookCount(Dictionary<string, object> config)
+    {
+        if (!ConfigFileHelper.TryGetPathValue(config, "Notifications.Webhooks", out var webhooks))
+            return 0;
+
+        return webhooks switch
+        {
+            null => 0,
+            object[] list => list.Length,
+            Dictionary<string, object> map => map.Count,
+            JsonElement { ValueKind: JsonValueKind.Null or JsonValueKind.Undefined } => 0,
+            _ => throw new JsonException("Notifications.Webhooks must be an object or a list.")
+        };
     }
 
     private static string SecuritySummary(Dictionary<string, object> config)

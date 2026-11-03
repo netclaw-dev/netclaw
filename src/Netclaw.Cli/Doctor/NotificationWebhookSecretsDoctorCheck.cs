@@ -1,0 +1,240 @@
+// -----------------------------------------------------------------------
+// <copyright file="NotificationWebhookSecretsDoctorCheck.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
+using System.Text.Json.Nodes;
+using Netclaw.Configuration;
+
+namespace Netclaw.Cli.Doctor;
+
+/// <summary>
+/// Warns when netclaw.json holds a notification webhook URL or header value. A webhook URL can be a
+/// credential (a Slack incoming-webhook URL is one), so Netclaw keeps both in secrets.json.
+/// <c>netclaw doctor --fix</c> moves them, after a backup, and converts the old list shape to the keyed shape.
+/// The message names the webhook and never repeats a value.
+/// </summary>
+public sealed class NotificationWebhookSecretsDoctorCheck(NetclawPaths paths) : IDoctorCheck
+{
+    private const string CheckName = "Notification Webhook Secrets";
+
+    public Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
+    {
+        var (root, readError) = DoctorJsonConfigReader.TryReadConfig(paths);
+        if (readError is not null)
+            return Task.FromResult(DoctorCheckResult.Pass(CheckName, "Skipped (config missing or invalid)."));
+
+        var exposed = NotificationWebhookSecretsMigration.Find(root!);
+        if (exposed.Count == 0)
+            return Task.FromResult(DoctorCheckResult.Pass(CheckName, "netclaw.json holds no notification webhook URL or header value."));
+
+        var names = string.Join(", ", exposed.Select(static webhook => webhook.Label));
+        return Task.FromResult(DoctorCheckResult.Warning(
+            CheckName,
+            $"netclaw.json holds a URL or header value for notification webhook(s): {names}. A webhook URL can be a credential.",
+            "Run `netclaw doctor --fix` to move the values to secrets.json after a backup."));
+    }
+}
+
+/// <summary>
+/// Reads and rewrites <c>Notifications.Webhooks</c> in a parsed netclaw.json. It handles the old list
+/// shape and the keyed shape, because the CLI reads raw JSON and an old file can hold either.
+/// </summary>
+internal static class NotificationWebhookSecretsMigration
+{
+    private const string NotificationsKey = "Notifications";
+    private const string WebhooksKey = "Webhooks";
+    private const string UrlKey = "Url";
+    private const string HeadersKey = "Headers";
+    private const string NameKey = "Name";
+
+    /// <summary>The secret values of one webhook. <paramref name="Key"/> is the key in the keyed shape.</summary>
+    internal sealed record WebhookSecrets(string Key, string Label, string? Url, IReadOnlyDictionary<string, string> Headers);
+
+    /// <summary>The webhook entries of either shape, in file order.</summary>
+    internal static IEnumerable<JsonObject> Entries(JsonObject config)
+    {
+        if (FindKey(config, NotificationsKey) is not { } notificationsKey
+            || config[notificationsKey] is not JsonObject notifications
+            || FindKey(notifications, WebhooksKey) is not { } webhooksKey)
+        {
+            return [];
+        }
+
+        return notifications[webhooksKey] switch
+        {
+            JsonArray list => list.OfType<JsonObject>(),
+            JsonObject map => map.Select(static property => property.Value).OfType<JsonObject>(),
+            _ => []
+        };
+    }
+
+    /// <summary>Finds the webhooks whose URL or header values sit in netclaw.json. Does not change the config.</summary>
+    internal static IReadOnlyList<WebhookSecrets> Find(JsonObject config)
+        => Extract(config, mutate: false);
+
+    /// <summary>
+    /// Rewrites <c>Notifications.Webhooks</c> in <paramref name="config"/> to the keyed shape without URLs or
+    /// header values, and returns the values that left the file. Returns an empty list and changes nothing
+    /// when no webhook holds a value.
+    /// </summary>
+    internal static IReadOnlyList<WebhookSecrets> ConvertToKeyed(JsonObject config)
+    {
+        if (Find(config).Count == 0)
+            return [];
+
+        return Extract(config, mutate: true);
+    }
+
+    /// <summary>
+    /// Copies the values into secrets.json in one locked update and encrypts them. A value that
+    /// secrets.json already holds stays, because secrets.json overrides netclaw.json at bind time.
+    /// </summary>
+    internal static void MoveToSecrets(
+        NetclawPaths paths,
+        IReadOnlyList<WebhookSecrets> secrets,
+        Configuration.Secrets.ISecretsProtector protector)
+    {
+        if (secrets.Count == 0)
+            return;
+
+        SecretsFileWriter.Update<int>(paths.SecretsPath, (root, _) =>
+        {
+            var webhooks = GetOrAddObject(GetOrAddObject(root, NotificationsKey), WebhooksKey);
+            foreach (var webhook in secrets)
+            {
+                var entry = GetOrAddObject(webhooks, webhook.Key);
+                if (webhook.Url is not null && FindKey(entry, UrlKey) is null)
+                    entry[UrlKey] = webhook.Url;
+
+                if (webhook.Headers.Count == 0)
+                    continue;
+
+                var headers = GetOrAddObject(entry, HeadersKey);
+                foreach (var (name, value) in webhook.Headers)
+                {
+                    if (FindKey(headers, name) is null)
+                        headers[name] = value;
+                }
+            }
+
+            return (root, secrets.Count);
+        }, protector);
+    }
+
+    private static List<WebhookSecrets> Extract(JsonObject config, bool mutate)
+    {
+        var found = new List<WebhookSecrets>();
+        if (FindKey(config, NotificationsKey) is not { } notificationsKey
+            || config[notificationsKey] is not JsonObject notifications
+            || FindKey(notifications, WebhooksKey) is not { } webhooksKey)
+        {
+            return found;
+        }
+
+        var keyed = new JsonObject();
+        var usedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        switch (notifications[webhooksKey])
+        {
+            case JsonArray list:
+                for (var index = 0; index < list.Count; index++)
+                {
+                    if (list[index] is not JsonObject item)
+                        continue;
+
+                    var key = UniqueKey(StringProperty(item, NameKey), $"webhook-{index}", usedKeys);
+                    Take(item, key, $"{key} (list item {index})", found, keyed);
+                }
+
+                break;
+            case JsonObject map:
+                foreach (var (key, node) in map.ToArray())
+                {
+                    usedKeys.Add(key);
+                    if (node is JsonObject item)
+                        Take(item, key, key, found, keyed);
+                    else
+                        keyed[key] = node?.DeepClone();
+                }
+
+                break;
+        }
+
+        if (mutate)
+            notifications[webhooksKey] = keyed;
+
+        return found;
+    }
+
+    // Copies the entry into keyed without Name, Url and Headers and records the values that it leaves out.
+    // The check discards keyed, so one code path serves the check and the fix.
+    private static void Take(JsonObject item, string key, string label, List<WebhookSecrets> found, JsonObject keyed)
+    {
+        var url = StringProperty(item, UrlKey);
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (FindKey(item, HeadersKey) is { } headersKey && item[headersKey] is JsonObject headerNodes)
+        {
+            foreach (var (name, value) in headerNodes.ToArray())
+            {
+                if (value is JsonValue headerValue && headerValue.TryGetValue<string>(out var text) && text.Length > 0)
+                    headers[name] = text;
+            }
+        }
+
+        var entry = new JsonObject();
+        foreach (var (name, value) in item.ToArray())
+        {
+            if (name.Equals(NameKey, StringComparison.OrdinalIgnoreCase)
+                || name.Equals(UrlKey, StringComparison.OrdinalIgnoreCase)
+                || name.Equals(HeadersKey, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            entry[name] = value?.DeepClone();
+        }
+
+        keyed[key] = entry;
+
+        if (url is not null || headers.Count > 0)
+            found.Add(new WebhookSecrets(key, label, url, headers));
+    }
+
+    private static string? StringProperty(JsonObject obj, string name)
+        => FindKey(obj, name) is { } key
+           && obj[key] is JsonValue value
+           && value.TryGetValue<string>(out var text)
+           && !string.IsNullOrWhiteSpace(text)
+            ? text
+            : null;
+
+    // The key joins a netclaw.json entry to a secrets.json entry. The configuration path and the secrets
+    // path both split on '.' and ':', so a name keeps neither. A repeated name gets a number.
+    private static string UniqueKey(string? name, string fallback, HashSet<string> used)
+    {
+        var baseKey = string.IsNullOrWhiteSpace(name)
+            ? fallback
+            : name.Trim().Replace('.', '-').Replace(':', '-');
+
+        var key = baseKey;
+        for (var number = 2; !used.Add(key); number++)
+            key = $"{baseKey}-{number}";
+
+        return key;
+    }
+
+    private static JsonObject GetOrAddObject(JsonObject parent, string name)
+    {
+        if (FindKey(parent, name) is { } key && parent[key] is JsonObject existing)
+            return existing;
+
+        var created = new JsonObject();
+        parent[name] = created;
+        return created;
+    }
+
+    // The configuration binder reads keys without case, so a lookup does the same.
+    private static string? FindKey(JsonObject parent, string name)
+        => parent.Select(static property => property.Key)
+            .FirstOrDefault(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
+}

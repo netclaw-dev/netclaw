@@ -797,6 +797,9 @@ static (IReadOnlyList<string> Warnings, IReadOnlyList<string> Notices, MergedSki
     // Operational notification webhooks
     var notificationsConfig = configuration.GetSection("Notifications")
         .Get<NotificationsConfig>() ?? new NotificationsConfig();
+    // A webhook with no Url from any source stops startup. Skipping it would drop every alert without a sign.
+    if (new NotificationsConfigValidator().Validate(name: null, notificationsConfig) is { Failed: true } notificationsInvalid)
+        throw new OptionsValidationException(Options.DefaultName, typeof(NotificationsConfig), notificationsInvalid.Failures);
     services.AddSingleton(notificationsConfig);
 
     if (notificationsConfig.Webhooks.Count > 0)

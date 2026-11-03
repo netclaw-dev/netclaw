@@ -118,29 +118,26 @@ public sealed class DoctorFixService
         }
 
         // Webhook format auto-detection
-        if (obj["Notifications"] is JsonObject notif
-            && notif["Webhooks"] is JsonArray webhooksArr)
+        foreach (var wh in NotificationWebhookSecretsMigration.Entries(obj))
         {
-            foreach (var item in webhooksArr)
+            var url = wh["Url"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(url))
+                continue;
+
+            if (WebhookFormatDetection.InferFromUrl(url) != WebhookFormat.Slack)
+                continue;
+
+            var existing = wh["Format"]?.GetValue<string>();
+            if (existing is null || existing.Equals(nameof(WebhookFormat.Generic), StringComparison.OrdinalIgnoreCase))
             {
-                if (item is not JsonObject wh)
-                    continue;
-
-                var url = wh["Url"]?.GetValue<string>();
-                if (string.IsNullOrWhiteSpace(url))
-                    continue;
-
-                if (WebhookFormatDetection.InferFromUrl(url) != WebhookFormat.Slack)
-                    continue;
-
-                var existing = wh["Format"]?.GetValue<string>();
-                if (existing is null || existing.Equals(nameof(WebhookFormat.Generic), StringComparison.OrdinalIgnoreCase))
-                {
-                    wh["Format"] = nameof(WebhookFormat.Slack);
-                    appliedFixes.Add("webhook format");
-                }
+                wh["Format"] = nameof(WebhookFormat.Slack);
+                appliedFixes.Add("webhook format");
             }
         }
+
+        // After the format fix above, which reads the URL from the list shape.
+        if (NotificationWebhookSecretsMigration.ConvertToKeyed(obj).Count > 0)
+            appliedFixes.Add(NotificationWebhookSecretsFixName);
 
         // --- Schema-driven fixes ---
         TryApplySchemaFixes(obj, appliedFixes);
@@ -166,6 +163,8 @@ public sealed class DoctorFixService
     private const string LegacyAllowedToolsFixName = "remove copied default audience tool lists";
 
     internal const string RetiredOAuthExpiryFixName = "move retired OAuthTokenExpiry keys to secrets.json";
+
+    internal const string NotificationWebhookSecretsFixName = "move notification webhook URLs and headers to secrets.json";
 
     // Applying the fix first copies each date to secrets.json (see ApplyAsync). Without an entry
     // there, a provider has no expiry, and a Copilot token that expires then fails with HTTP 401 and no refresh.
@@ -376,6 +375,8 @@ public sealed class DoctorFixService
             backups.Add(NextBackupPath(fix.FilePath, "legacy-tool-defaults"));
         if (fix.Description.Contains(RetiredOAuthExpiryFixName, StringComparison.Ordinal))
             backups.Add(NextBackupPath(fix.FilePath, "retired-oauth-expiry"));
+        if (fix.Description.Contains(NotificationWebhookSecretsFixName, StringComparison.Ordinal))
+            backups.Add(NextBackupPath(fix.FilePath, "notification-webhook-secrets"));
         if (fix.Description.Contains(SchemaFixResolver.RemovedPropertyPrefix, StringComparison.Ordinal))
             backups.Add(NextBackupPath(fix.FilePath, "removed-keys"));
         return backups;
@@ -433,6 +434,17 @@ public sealed class DoctorFixService
                 OAuthTokenExpiryStorage.MoveRetiredToSecrets(
                     _paths,
                     (JsonObject)JsonNode.Parse(fix.OriginalText)!,
+                    SecretsProtection.CreateProtector(_paths));
+            }
+
+            // Same order and same reasoning as the dates above: a crash before the netclaw.json write leaves
+            // the values in both files, and secrets.json wins. The backup of netclaw.json holds the plain values.
+            if (string.Equals(fix.FilePath, _paths.NetclawConfigPath, StringComparison.Ordinal)
+                && fix.Description.Contains(NotificationWebhookSecretsFixName, StringComparison.Ordinal))
+            {
+                NotificationWebhookSecretsMigration.MoveToSecrets(
+                    _paths,
+                    NotificationWebhookSecretsMigration.Find((JsonObject)JsonNode.Parse(fix.OriginalText)!),
                     SecretsProtection.CreateProtector(_paths));
             }
 

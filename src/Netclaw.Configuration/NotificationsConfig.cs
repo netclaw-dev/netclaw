@@ -12,9 +12,11 @@ namespace Netclaw.Configuration;
 public sealed class NotificationsConfig
 {
     /// <summary>
-    /// Webhook targets for operational notifications. Empty = logging only.
+    /// Webhook targets for operational notifications, keyed by webhook name. Empty = logging only.
+    /// The key joins a netclaw.json entry to its secrets.json entry. The old list shape still binds,
+    /// with the list index as the key ("0", "1", ...).
     /// </summary>
-    public List<WebhookTarget> Webhooks { get; set; } = [];
+    public Dictionary<string, WebhookTarget> Webhooks { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Minimum interval in seconds between duplicate alerts of the same type
@@ -39,19 +41,17 @@ public sealed class NotificationsConfig
 public sealed class WebhookTarget
 {
     /// <summary>
-    /// HTTP(S) endpoint to POST alerts to.
+    /// HTTP(S) endpoint to POST alerts to. The URL can carry a credential (a Slack incoming-webhook
+    /// URL is one), so it normally lives encrypted in secrets.json. A plain value in netclaw.json
+    /// still loads. <see cref="NotificationsConfigValidator"/> rejects an entry with no URL.
     /// </summary>
-    public string Url { get; set; } = "";
-
-    /// <summary>
-    /// Optional display name for this target (used in logs).
-    /// </summary>
-    public string? Name { get; set; }
+    public SensitiveString? Url { get; set; }
 
     /// <summary>
     /// Optional static headers to include with every POST (e.g. Authorization).
+    /// Header values are secrets and normally live in secrets.json.
     /// </summary>
-    public Dictionary<string, string>? Headers { get; set; }
+    public Dictionary<string, SensitiveString>? Headers { get; set; }
 
     /// <summary>
     /// Payload format for this webhook target.
