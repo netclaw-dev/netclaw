@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
@@ -42,6 +43,7 @@ internal sealed class ToolAuthorizer
     private readonly ToolAccessPolicy _policy;
     private readonly IToolApprovalService? _approvalService;
     private readonly ShellPolicyCoordinator _shell;
+    private readonly ILogger _logger;
 
     /// <param name="registry">The tools that a call can name.</param>
     /// <param name="policy">Admission, prohibition, filesystem, and consent-request rules.</param>
@@ -51,19 +53,23 @@ internal sealed class ToolAuthorizer
     /// state that <see cref="DispatchingToolExecutor"/> supports today.
     /// </param>
     /// <param name="shell">Shell advice selection and shell coverage.</param>
+    /// <param name="logger">Records the exception when a shell rule fails and the call is denied.</param>
     internal ToolAuthorizer(
         ToolRegistry registry,
         ToolAccessPolicy policy,
         IToolApprovalService? approvalService,
-        ShellPolicyCoordinator shell)
+        ShellPolicyCoordinator shell,
+        ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(logger);
         _registry = registry;
         _policy = policy;
         _approvalService = approvalService;
         _shell = shell;
+        _logger = logger;
     }
 
     /// <summary>Decides one tool call. The call must already have its metadata arguments removed.</summary>
@@ -179,10 +185,16 @@ internal sealed class ToolAuthorizer
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // A rule that fails denies the call. It never allows it.
+            // A rule that fails denies the call. It never allows it. The deny reason
+            // does not say which rule failed, so the log keeps the exception.
             ct.ThrowIfCancellationRequested();
+            _logger.LogError(
+                ex,
+                "A shell rule failed for tool {ToolName}; the call is denied with {DenyReason}",
+                call.Tool.Name,
+                InternalPolicyFailure);
             return AuthorizationDecision.From(
                 call.Complete(ToolAuthorizationDecision.Deny(InternalPolicyFailure)),
                 analysis: null);
