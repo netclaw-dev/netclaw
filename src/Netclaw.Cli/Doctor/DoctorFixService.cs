@@ -437,8 +437,10 @@ public sealed class DoctorFixService
                     SecretsProtection.CreateProtector(_paths));
             }
 
-            // Same order and same reasoning as the dates above: a crash before the netclaw.json write leaves
-            // the values in both files, and secrets.json wins. The backup of netclaw.json holds the plain values.
+            // secrets.json first, as for the dates above. During a list conversion the keys differ: the list
+            // item "0" becomes "ops". A crash between the two writes leaves the old list item and the new keyed
+            // secrets entry, so the daemon delivers to both until the next `netclaw doctor --fix` converges.
+            // The backup of netclaw.json holds the plain values.
             if (string.Equals(fix.FilePath, _paths.NetclawConfigPath, StringComparison.Ordinal)
                 && fix.Description.Contains(NotificationWebhookSecretsFixName, StringComparison.Ordinal))
             {

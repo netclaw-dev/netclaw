@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Text.Json.Nodes;
 using Netclaw.Configuration;
 
@@ -48,8 +49,13 @@ internal static class NotificationWebhookSecretsMigration
     private const string HeadersKey = "Headers";
     private const string NameKey = "Name";
 
-    /// <summary>The secret values of one webhook. <paramref name="Key"/> is the key in the keyed shape.</summary>
-    internal sealed record WebhookSecrets(string Key, string Label, string? Url, IReadOnlyDictionary<string, string> Headers);
+    /// <summary>
+    /// The secret values of one webhook. <paramref name="Key"/> is the key in the keyed shape.
+    /// <paramref name="IndexKey"/> is the list position ("0", "1", ...) that the binder used as the key
+    /// of a list item, or null for a keyed entry. A list item can have no value in netclaw.json.
+    /// </summary>
+    internal sealed record WebhookSecrets(
+        string Key, string Label, string? Url, IReadOnlyDictionary<string, string> Headers, string? IndexKey = null);
 
     /// <summary>The webhook entries of either shape, in file order.</summary>
     internal static IEnumerable<JsonObject> Entries(JsonObject config)
@@ -69,14 +75,17 @@ internal static class NotificationWebhookSecretsMigration
         };
     }
 
-    /// <summary>Finds the webhooks whose URL or header values sit in netclaw.json. Does not change the config.</summary>
+    /// <summary>
+    /// Finds every list item, and every keyed entry whose URL or header values sit in netclaw.json.
+    /// Does not change the config.
+    /// </summary>
     internal static IReadOnlyList<WebhookSecrets> Find(JsonObject config)
         => Extract(config, mutate: false);
 
     /// <summary>
     /// Rewrites <c>Notifications.Webhooks</c> in <paramref name="config"/> to the keyed shape without URLs or
     /// header values, and returns the values that left the file. Returns an empty list and changes nothing
-    /// when no webhook holds a value.
+    /// when the file has neither a list nor a value.
     /// </summary>
     internal static IReadOnlyList<WebhookSecrets> ConvertToKeyed(JsonObject config)
     {
@@ -87,8 +96,10 @@ internal static class NotificationWebhookSecretsMigration
     }
 
     /// <summary>
-    /// Copies the values into secrets.json in one locked update and encrypts them. A value that
-    /// secrets.json already holds stays, because secrets.json overrides netclaw.json at bind time.
+    /// Copies the values into secrets.json in one locked update and encrypts them. A secrets.json entry
+    /// under a list position ("0") moves to the name key, so no URL stays under a key that no webhook has.
+    /// A value that secrets.json already holds stays, because secrets.json overrides netclaw.json at bind
+    /// time. The entry under the name key wins over the entry under the position, and both win over netclaw.json.
     /// </summary>
     internal static void MoveToSecrets(
         NetclawPaths paths,
@@ -98,19 +109,51 @@ internal static class NotificationWebhookSecretsMigration
         if (secrets.Count == 0)
             return;
 
-        SecretsFileWriter.Update<int>(paths.SecretsPath, (root, _) =>
+        SecretsFileWriter.Update<bool>(paths.SecretsPath, (root, _) =>
         {
-            var webhooks = GetOrAddObject(GetOrAddObject(root, NotificationsKey), WebhooksKey);
+            var before = root.ToJsonString();
+            var webhooks = FindKey(root, NotificationsKey) is { } notificationsKey
+                           && root[notificationsKey] is JsonObject notifications
+                           && FindKey(notifications, WebhooksKey) is { } webhooksKey
+                           && notifications[webhooksKey] is JsonObject existingWebhooks
+                ? existingWebhooks
+                : null;
+
+            // Detach every position entry first, so a name that equals another item's position cannot take it.
+            var detached = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
+            if (webhooks is not null)
+            {
+                foreach (var webhook in secrets)
+                {
+                    if (webhook.IndexKey is { } position
+                        && !position.Equals(webhook.Key, StringComparison.OrdinalIgnoreCase)
+                        && FindKey(webhooks, position) is { } positionKey
+                        && webhooks[positionKey] is JsonObject entry)
+                    {
+                        webhooks.Remove(positionKey);
+                        detached[webhook.Key] = entry;
+                    }
+                }
+            }
+
             foreach (var webhook in secrets)
             {
-                var entry = GetOrAddObject(webhooks, webhook.Key);
-                if (webhook.Url is not null && FindKey(entry, UrlKey) is null)
-                    entry[UrlKey] = webhook.Url;
+                detached.TryGetValue(webhook.Key, out var moved);
+                if (moved is null && webhook.Url is null && webhook.Headers.Count == 0)
+                    continue;
+
+                webhooks ??= GetOrAddObject(GetOrAddObject(root, NotificationsKey), WebhooksKey);
+                var target = GetOrAddObject(webhooks, webhook.Key);
+                if (moved is not null)
+                    MergeMissing(target, moved);
+
+                if (webhook.Url is not null && FindKey(target, UrlKey) is null)
+                    target[UrlKey] = webhook.Url;
 
                 if (webhook.Headers.Count == 0)
                     continue;
 
-                var headers = GetOrAddObject(entry, HeadersKey);
+                var headers = GetOrAddObject(target, HeadersKey);
                 foreach (var (name, value) in webhook.Headers)
                 {
                     if (FindKey(headers, name) is null)
@@ -118,8 +161,29 @@ internal static class NotificationWebhookSecretsMigration
                 }
             }
 
-            return (root, secrets.Count);
+            var changed = !string.Equals(before, root.ToJsonString(), StringComparison.Ordinal);
+            return (changed ? root : null, changed);
         }, protector);
+    }
+
+    private static void MergeMissing(JsonObject target, JsonObject source)
+    {
+        foreach (var (name, value) in source.ToArray())
+        {
+            if (name.Equals(HeadersKey, StringComparison.OrdinalIgnoreCase) && value is JsonObject sourceHeaders)
+            {
+                var headers = GetOrAddObject(target, HeadersKey);
+                foreach (var (header, headerValue) in sourceHeaders.ToArray())
+                {
+                    if (FindKey(headers, header) is null)
+                        headers[header] = headerValue?.DeepClone();
+                }
+            }
+            else if (FindKey(target, name) is null)
+            {
+                target[name] = value?.DeepClone();
+            }
+        }
     }
 
     private static List<WebhookSecrets> Extract(JsonObject config, bool mutate)
@@ -143,7 +207,7 @@ internal static class NotificationWebhookSecretsMigration
                         continue;
 
                     var key = UniqueKey(StringProperty(item, NameKey), $"webhook-{index}", usedKeys);
-                    Take(item, key, $"{key} (list item {index})", found, keyed);
+                    Take(item, key, $"{key} (list item {index})", index.ToString(CultureInfo.InvariantCulture), found, keyed);
                 }
 
                 break;
@@ -152,7 +216,7 @@ internal static class NotificationWebhookSecretsMigration
                 {
                     usedKeys.Add(key);
                     if (node is JsonObject item)
-                        Take(item, key, key, found, keyed);
+                        Take(item, key, key, null, found, keyed);
                     else
                         keyed[key] = node?.DeepClone();
                 }
@@ -168,7 +232,8 @@ internal static class NotificationWebhookSecretsMigration
 
     // Copies the entry into keyed without Name, Url and Headers and records the values that it leaves out.
     // The check discards keyed, so one code path serves the check and the fix.
-    private static void Take(JsonObject item, string key, string label, List<WebhookSecrets> found, JsonObject keyed)
+    private static void Take(
+        JsonObject item, string key, string label, string? indexKey, List<WebhookSecrets> found, JsonObject keyed)
     {
         var url = StringProperty(item, UrlKey);
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -196,8 +261,9 @@ internal static class NotificationWebhookSecretsMigration
 
         keyed[key] = entry;
 
-        if (url is not null || headers.Count > 0)
-            found.Add(new WebhookSecrets(key, label, url, headers));
+        // A list item is a finding by its shape alone: its URL can sit in secrets.json under its position.
+        if (indexKey is not null || url is not null || headers.Count > 0)
+            found.Add(new WebhookSecrets(key, label, url, headers, indexKey));
     }
 
     private static string? StringProperty(JsonObject obj, string name)

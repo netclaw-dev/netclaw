@@ -64,10 +64,12 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             state = LoadState(paths);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
-                                       or InvalidDataException or FormatException or CryptographicException)
+                                       or InvalidDataException or FormatException or SecretsReadException)
         {
             state = (false, DefaultOtlpEndpoint, []);
-            loadError = $"Could not read netclaw.json: {ex.Message}";
+            loadError = ex is SecretsReadException
+                ? $"Could not read secrets.json: {ex.InnerException?.Message ?? ex.Message}"
+                : $"Could not read netclaw.json: {ex.Message}";
         }
         TelemetryEnabled = new ReactiveProperty<bool>(state.TelemetryEnabled);
         OtlpEndpointDraft = new ReactiveProperty<string>(state.OtlpEndpoint);
@@ -345,6 +347,10 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
                 secretActions.Add(new SectionSecretAction(WebhookPath(renamedFrom), SectionSecretActionKind.Delete));
             }
 
+            // A plain Url or Headers in netclaw.json (an older release, or a hand edit) leaves the file on every
+            // save: the values move to secrets.json below, or the clear gesture drops them from both files.
+            fieldActions.Add(new SectionFieldAction($"{path}.Url", SectionFieldActionKind.Delete));
+            fieldActions.Add(new SectionFieldAction($"{path}.Headers", SectionFieldActionKind.Delete));
             fieldActions.Add(new SectionFieldAction($"{path}.Format", SectionFieldActionKind.Set, format.ToString()));
             secretActions.Add(new SectionSecretAction($"{path}.Url", SectionSecretActionKind.Set, new SensitiveString(normalizedUrl!)));
 
@@ -359,10 +365,12 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             {
                 secretActions.Add(new SectionSecretAction($"{path}.Headers", SectionSecretActionKind.Delete));
             }
-            else if (renamedFrom is not null
-                     && notifications.Webhooks.TryGetValue(renamedFrom, out var previous)
+            else if (editing is not null
+                     && notifications.Webhooks.TryGetValue(editing, out var previous)
                      && previous.Headers is not null)
             {
+                // The headers that the form leaves untouched follow the entry: to the new key after a rename,
+                // and out of netclaw.json into secrets.json when an older release left them there.
                 foreach (var (headerKey, value) in previous.Headers)
                     secretActions.Add(new SectionSecretAction($"{path}.Headers.{headerKey}", SectionSecretActionKind.Set, value));
             }
@@ -601,13 +609,25 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
         var builder = new ConfigurationBuilder().AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false);
         if (File.Exists(paths.SecretsPath))
         {
-            var decrypted = SecretsFileWriter.DecryptJsonLeaves(
-                File.ReadAllText(paths.SecretsPath), SecretsProtection.CreateProtector(paths));
+            string decrypted;
+            try
+            {
+                decrypted = SecretsFileWriter.DecryptJsonLeaves(
+                    File.ReadAllText(paths.SecretsPath), SecretsProtection.CreateProtector(paths));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or CryptographicException)
+            {
+                throw new SecretsReadException(ex);
+            }
+
             builder.AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(decrypted)));
         }
 
         return builder.Build().GetSection("Notifications").Get<NotificationsConfig>() ?? new NotificationsConfig();
     }
+
+    // Lets the constructor name secrets.json, not netclaw.json, when the failure is in secrets.json.
+    private sealed class SecretsReadException(Exception inner) : Exception(inner.Message, inner);
 
     private static Dictionary<string, object> LoadRawSection(Dictionary<string, object> root, string sectionName)
     {

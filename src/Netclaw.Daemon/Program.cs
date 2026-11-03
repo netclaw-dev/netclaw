@@ -134,6 +134,12 @@ catch (ModelConfigurationException ex)
     StartupConfigurationFailure.Report(bootstrapPaths, ex.Message, Console.Error);
     Environment.ExitCode = 1;
 }
+catch (OptionsValidationException ex)
+{
+    // A validated option section that the operator wrote wrongly, such as a notification webhook with no Url.
+    StartupConfigurationFailure.Report(bootstrapPaths, string.Join(' ', ex.Failures), Console.Error);
+    Environment.ExitCode = 1;
+}
 catch (InvalidDataException ex)
 {
     // netclaw.json or secrets.json that the configuration source cannot read (invalid JSON, a
