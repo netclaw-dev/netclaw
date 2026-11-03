@@ -1189,6 +1189,7 @@ Each wait that a mutant can starve has a signal for the bad outcome:
 
 - The completion goes through the query barrier. The health reply comes after any acceptance reply, so a missing acceptance fails at once.
 - A dispatch that the guard blocks logs `reminder_skipped_duplicate_execution`. The dispatch observer fails the wait when it sees that warning.
+- `OneShotEndMutationTests` sends its fires and its completions through the same query barrier. The health reply shows at once a fire that started no run.
 
 The one 30-second bound only stops a real hang.
 

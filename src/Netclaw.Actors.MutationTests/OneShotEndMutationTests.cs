@@ -33,7 +33,12 @@ namespace Netclaw.Actors.MutationTests;
 /// </summary>
 public sealed class OneShotEndMutationTests : IAsyncLifetime
 {
-    private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(5);
+    // This bound only stops a real hang. No gate mutant may depend on it: Stryker reports a mutant as
+    // Killed only when a test fails before its per-mutant time limit, and the gate rejects Timeout.
+    // So each wait that a mutant can starve gets a signal for the bad outcome too. The query barrier
+    // proves a fire that started no run and a missing acceptance reply. A short wall-clock bound failed
+    // correct code on loaded CI runners.
+    private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(30);
     private readonly NetclawPaths _paths = new(Path.Combine(
         Path.GetTempPath(), "netclaw-oneshot-end-mutations", Guid.NewGuid().ToString("N")));
     private readonly HeldPipeline _pipeline = new();
@@ -42,6 +47,7 @@ public sealed class OneShotEndMutationTests : IAsyncLifetime
     private readonly ReminderId _id = new("end-probe");
     private IHost _host = null!;
     private IActorRef _manager = null!;
+    private IActorRef _barrier = null!;
     private ReminderDefinitionStore _definitions = null!;
     private ReminderHistoryStore _history = null!;
 
@@ -62,6 +68,7 @@ public sealed class OneShotEndMutationTests : IAsyncLifetime
                         DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false),
                     new SchedulingConfig(), TimeProvider.System, _definitions, _history,
                     new AlertSink(_alerts), NullReminderChannelNotifier.Instance)));
+                _barrier = system.ActorOf(Props.Create(() => new QueryBarrier(_manager)));
             }));
         _host = builder.Build();
         await _host.StartAsync();
@@ -233,19 +240,23 @@ public sealed class OneShotEndMutationTests : IAsyncLifetime
 
     private async Task<Guid> DispatchAsync(DateTimeOffset due)
     {
-        _manager.Tell(new ReminderEnvelope<ReminderPayload>(
+        // The health reply comes after the manager handles the fire. A fire that the manager refused
+        // starts no run, so the test fails at once and does not wait for a dispatch that never comes.
+        var reply = await _barrier.Ask<BarrierReply>(new ReminderEnvelope<ReminderPayload>(
             new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
-            new ReminderKey(_id.Value), due, ReminderDeadline.Infinite, new ReminderPayload { Id = _id }));
+            new ReminderKey(_id.Value), due, ReminderDeadline.Infinite, new ReminderPayload { Id = _id }),
+            ReplyTimeout);
+        Assert.Equal(1, reply.Health.ActiveExecutions);
         return await _dispatches.Reader.ReadAsync().AsTask().WaitAsync(ReplyTimeout);
     }
 
     private async Task CompleteAsync(Guid executionId, bool success)
     {
-        var accepted = await _manager.Ask<ReminderExecutionAccepted>(new ReminderExecutionCompleted(
+        var reply = await _barrier.Ask<BarrierReply>(new ReminderExecutionCompleted(
             executionId, _id, success,
             new HistoryRecord(DateTimeOffset.UtcNow, success, 10, $"reminder/{executionId:N}", success ? null : "probe failure"),
             success ? null : "probe failure"), ReplyTimeout);
-        Assert.Equal(executionId, accepted.ExecutionId);
+        Assert.Equal(executionId, reply.Accepted?.ExecutionId);
     }
 
     private Task<ReminderManagerActor.ReconcileCompleted> ReconcileAsync() =>
