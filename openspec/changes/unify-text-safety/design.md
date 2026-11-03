@@ -105,8 +105,9 @@ The stage scans the full formatted message, so name-aware patterns such as
 scans each string value and keeps every name. It does not call `IsSecretKey`
 on names.
 
-- Positive example: an attribute `Body` with the value `Bearer abc123` becomes
-  `Bearer ***REDACTED***`.
+- Positive example: an attribute `Body` with the value
+  `Authorization: Bearer abc123` becomes
+  `Authorization: Bearer ***REDACTED***`.
 - Negative example: an attribute `InputTokens` with the value `1234` stays
   `1234`. `IsSecretKey("InputTokens")` returns true, so name-based masking
   would hide usage metrics.
@@ -115,9 +116,11 @@ on names.
 
 ### D5. A regression test crosses the fork
 
-One end-to-end test runs an MCP tool result that contains a presigned URL. It
-asserts that the model receives the full URL and that `daemon.log` contains
-the masked URL.
+One test sends the same presigned URL down both paths. It asserts that the MCP
+adapter skips output redaction, so the model receives the full URL, and that
+`session.log` masks it. A tool result reaches the logs through `session.log`,
+not `daemon.log`. The #1992 test in `DispatchingToolExecutorTests` still proves
+the model path end to end through the dispatcher.
 
 ### D6. The stage wraps the one `ILoggerFactory`
 
@@ -156,9 +159,10 @@ Alternatives:
 The stage renders `exception.ToString()` and runs `Redact`. If nothing
 changes, it passes the original exception. If something changes, it passes a
 stand-in exception whose message names the original type and contains the
-redacted text. This is today's `RedactForLogging` logic, moved into the
-stage. Then `RedactForLogging` and `RedactedLoggingException` are removed, and
-their 14 call sites log the exception directly.
+redacted text. The stage calls `SecretOutputRedactor.RedactForLogging` for
+this, so the logic stays in one place in `Netclaw.Security`, with its tests.
+Its 14 call sites log the exception directly, because the stage now applies it
+to every record.
 
 ### D8. Text sinks own their record framing
 
@@ -179,6 +183,13 @@ sink, including OTLP viewers.
 
 `RollingFileLoggerProvider` and `SessionLogActor` put a fixed continuation
 prefix at the start of every physical line after the first line of a record.
+A text sink renders the exception text itself, so it normalizes that text
+with the same rule before it frames it. The stock console formatter does not
+do this. So when the text of an exception needs escaping, the stage replaces
+the exception with a stand-in that carries the normalized text, for every
+sink. An exception whose text needs no escaping and holds no secret reaches
+every sink as the original object, with its type and native stack trace. `LogTextFraming` in `Netclaw.Configuration` holds the
+normalization and the prefix, so the stage and both text sinks share one rule.
 
 - Owner: each text sink. The file provider owns provider-local formatting;
   `SessionLogActor` owns actor-local writer state. Data: durable log files,
@@ -286,8 +297,11 @@ Dispatcher beacon:           Redact(ex.Message) → daemon.log queue, or stderr
   one decorator per provider (the D6 alternative). That fallback needs a
   design update before implementation continues.
 - [The redactor costs CPU on every enabled record.] → It runs once per record,
-  and disabled levels never reach it. A benchmark measures the added cost
-  before merge against a threshold that a task sets.
+  and disabled levels never reach it. The added CPU must stay at most 0.1% of
+  one core at the observed peak log volume. A per-record ratio was the wrong
+  measure: exception records are rare, so a large ratio on them costs almost
+  nothing. Measured: +4.3 us per record and +60 us per exception record, about
+  0.42 s of CPU per day on the busiest observed day (0.0005% of one core).
 - [Over-redaction hides diagnostic text.] → The operator accepts this cost. D3
   keeps one tested pattern set, and D4 keeps attribute names. New
   false-positive cases for log text join the redactor tests.
@@ -296,6 +310,11 @@ Dispatcher beacon:           Redact(ex.Message) → daemon.log queue, or stderr
 - [A shared predicate changes a caller's output.] → Tests pin each caller's
   current output before the refactor. The refactor must keep them green with
   no edits.
+- [A call site reshapes untrusted text before it logs it, for example by cutting
+  it into words. The pattern that marks a secret is then gone, so the stage
+  cannot find it.] -> The call site redacts the source text first and logs only
+  what survives. The memory recall plan log had this gap. The sink map states
+  the rule as a guideline.
 - [Agents read `session.log` and see `***REDACTED***`.] → This is intended.
   The original text stays in the conversation, and tool arguments in
   `session.log` are already redacted today.
@@ -319,7 +338,7 @@ The work ships in two PRs:
 
 Close #2729 and #2731 with a link when PR 2 opens.
 
-Rollback: revert PR 2. The revert restores `RedactForLogging` and its call
+Rollback: revert PR 2. The revert restores the 14 `RedactForLogging` call
 sites. PR 1 changes no behavior, so it can stay.
 
 ## Open Questions

@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using Netclaw.Actors.Memory;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -300,15 +301,28 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     return new AutomaticRecallResult([], true, ex.Message, "planning");
                 }
 
-                logger.LogInformation(
-                    "memory_retrieval_request_plan session={SessionId} mode={Mode} candidateLimit={CandidateLimit} facets={Facets} softScopes={SoftScopes} anchorHints={AnchorHints} lexicalTerms={LexicalTerms}",
-                    request.SessionId,
-                    deterministicPlan.RetrievalMode,
-                    deterministicPlan.CandidateLimit,
-                    string.Join("|", deterministicPlan.Facets),
-                    string.Join("|", deterministicPlan.SoftScopes),
-                    string.Join("|", deterministicPlan.AnchorHints),
-                    string.Join("|", deterministicPlan.LexicalTerms));
+                // The plan holds words cut from the user's text. Cutting removes the shape that marks
+                // a secret ("password=hunter2" becomes "password" and "hunter2"), so the log stage
+                // can no longer find it. Log only the words that survive redaction of the text they
+                // came from. Retrieval below still uses every word. The redaction scans every recent
+                // message, so it runs only when the record is written.
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    var redactedSources = SecretOutputRedactor.Redact(string.Join('\n',
+                        [request.Query, .. request.RecentUserMessages, .. request.RecentEntities ?? [], request.ThreadTitle ?? string.Empty]));
+                    string LoggedWords(IEnumerable<string> words)
+                        => string.Join("|", words.Where(word => redactedSources.Contains(word, StringComparison.OrdinalIgnoreCase)));
+
+                    logger.LogInformation(
+                        "memory_retrieval_request_plan session={SessionId} mode={Mode} candidateLimit={CandidateLimit} facets={Facets} softScopes={SoftScopes} anchorHints={AnchorHints} lexicalTerms={LexicalTerms}",
+                        request.SessionId,
+                        deterministicPlan.RetrievalMode,
+                        deterministicPlan.CandidateLimit,
+                        string.Join("|", deterministicPlan.Facets),
+                        LoggedWords(deterministicPlan.SoftScopes),
+                        LoggedWords(deterministicPlan.AnchorHints),
+                        LoggedWords(deterministicPlan.LexicalTerms));
+                }
 
                 var effectiveBoundary = Memory.MemoryPolicyScopeResolver.ResolveBoundary(request.Boundary);
 

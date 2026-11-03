@@ -189,6 +189,7 @@ coverage. They do not replace positive and negative behavior tests.
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
 | The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
 | `DaemonLogRetention.Prune` (`// daemon-log-retention-cutoff:begin` to `end`) | Issue #2484: only daemon segments before the UTC retention cutoff can be deleted. A segment on the cutoff remains. | 2 killed | `./scripts/run-daemon-log-retention-mutations.sh` |
+| The log redaction registration (`// log-redaction-registration:begin` to `end` in `LoggingRegistrationExtensions`) | unify-text-safety D6: the daemon's `ILoggerFactory` is `RedactingLoggerFactory`. If either registration statement is removed, every log record reaches the sinks unredacted. | 2 killed | `./scripts/run-log-redaction-registration-mutations.sh` |
 
 ### Daemon Log Retention Cutoff
 
@@ -204,6 +205,21 @@ The first local Stryker run killed both expected mutants in 161 seconds.
 The `daemon-log-retention` matrix group also runs the startup hash check.
 The combined group retains the existing time budget.
 The gate does not measure general code coverage or replace the writer and retention tests.
+
+### Log Redaction Registration
+
+The gate selects the two statements that make `RedactingLoggerFactory` the daemon's
+`ILoggerFactory`: the call in `ConfigureNetclawLogging` and the `Replace` in
+`AddNetclawLogRedaction`. Removing either one turns off redaction for every log record,
+while the rest of the logging tests can still pass.
+Stryker removes each statement. `LogRedactionRoutingTests` rejects both removals, because the
+host's factory is then not the redacting factory and a secret reaches a later provider.
+The gate requires exactly two statement mutants, one on each statement, and a `Killed` status
+for each. A changed span, a survivor, or an untested mutant fails the gate.
+
+The first local Stryker run killed both mutants in 100 seconds.
+The gate runs in the `daemon-log-retention` matrix group, which adds about two minutes to
+that group.
 
 Run the path-access check locally:
 

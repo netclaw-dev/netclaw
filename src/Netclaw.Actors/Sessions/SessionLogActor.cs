@@ -4,9 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using System.Text;
 using System.Text.Json;
 using Akka.Event;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Security;
@@ -49,6 +51,11 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
     private StreamWriter? _writer;
     private int _unflushedWrites;
     private bool _flushFailing;
+
+    // Thinking streams in small deltas, and a secret can span two of them, where no pattern sees
+    // it. The deltas of one run are joined and written as one line when the run ends, so the
+    // whole run is redacted at once.
+    private readonly StringBuilder _thinkingRun = new();
 
     public ITimerScheduler Timers { get; set; } = null!;
 
@@ -125,6 +132,15 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
 
     protected override void PostStop()
     {
+        try
+        {
+            WriteThinkingRun();
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Dropped thinking audit line for {Session}", _sessionId.Value);
+        }
+
         // Flush explicitly first so a write failure is reported via Flush's rate-limited warning.
         // Dispose flushes again; guard it so a still-failing disk (the _flushFailing state) cannot
         // throw IOException out of PostStop and bury the real cause under Akka's PostStop noise.
@@ -158,6 +174,29 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         Write(line);
         Flush();
     }
+
+    // Every transcript line is redacted and framed here, in one place. The timestamp header is
+    // added after framing, so content can never start a line that reads as a new transcript
+    // entry. Diagnostic lines need neither step: they come from the log pipeline, which has
+    // already redacted and framed them.
+    private void WriteTranscript(string body)
+        => WriteDurable($"[{_timeProvider.GetUtcNow():o}] {LogTextFraming.Frame(SecretOutputRedactor.Redact(body))}");
+
+    private void WriteThinkingRun()
+    {
+        if (_thinkingRun.Length == 0)
+            return;
+
+        // Not clipped: the log held every delta in full before, and WriteTranscript redacts the
+        // whole run at once.
+        var run = _thinkingRun.ToString();
+        _thinkingRun.Clear();
+        WriteTranscript($"Thinking (streamed): {run}");
+    }
+
+    // Redact before truncating: a cut can split a secret into a fragment that no pattern matches.
+    private static string Clip(string text)
+        => TextTruncation.EllipsisAppend(SecretOutputRedactor.Redact(text), 1000);
 
     private void Flush()
     {
@@ -195,12 +234,11 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
     {
         try
         {
+            WriteThinkingRun();
             var mediaNote = msg.MediaReferences.Count > 0
                 ? $" (+{msg.MediaReferences.Count} media)"
                 : string.Empty;
-            var line = $"[{_timeProvider.GetUtcNow():o}] User: {TextTruncation.EllipsisAppend(msg.Content, 1000)}{mediaNote}";
-
-            WriteDurable(line);
+            WriteTranscript($"User: {Clip(msg.Content)}{mediaNote}");
         }
         catch (Exception ex)
         {
@@ -212,13 +250,20 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
     {
         try
         {
+            if (output is ThinkingDeltaOutput thinkingDelta)
+            {
+                _thinkingRun.Append(thinkingDelta.Delta);
+                return;
+            }
+
+            // Any other output ends the run, and the run is written before it to keep the order.
+            WriteThinkingRun();
             var line = output switch
             {
-                TextOutput text => $"Assistant: {TextTruncation.EllipsisAppend(text.Text, 1000)}",
+                TextOutput text => $"Assistant: {Clip(text.Text)}",
                 ToolCallOutput toolCall => FormatToolCall(toolCall),
-                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {TextTruncation.EllipsisAppend(SecretOutputRedactor.Redact(toolResult.Result), 1000)}",
-                ThinkingOutput thinking => $"Thinking: {TextTruncation.EllipsisAppend(thinking.Text, 1000)}",
-                ThinkingDeltaOutput thinkingDelta => $"Thinking delta: {TextTruncation.EllipsisAppend(thinkingDelta.Delta, 1000)}",
+                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {Clip(toolResult.Result)}",
+                ThinkingOutput thinking => $"Thinking: {Clip(thinking.Text)}",
                 UsageOutput usage => $"Usage: in={usage.InputTokens} out={usage.OutputTokens} cached={usage.CachedInputTokens} reasoning={usage.ReasoningTokens} context={usage.UsagePercent:P0}",
                 TurnCompleted tc => $"Turn {tc.TurnNumber} {tc.Outcome.ToString().ToLowerInvariant()}",
                 SessionTitleOutput title => $"Title set: {title.Title}",
@@ -236,7 +281,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
 
             if (line is not null)
             {
-                WriteDurable($"[{_timeProvider.GetUtcNow():o}] {line}");
+                WriteTranscript(line);
             }
         }
         catch (Exception ex)

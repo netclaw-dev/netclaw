@@ -12,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Channels;
@@ -67,6 +68,12 @@ public sealed class HeadlessChannel : IChannel
 
     // Set under the log lock when the run thread closes the log writer. A late write then does nothing.
     private bool _logClosed;
+
+    // Text and thinking stream in small deltas, and a secret can span two of them, where no
+    // pattern sees it. The deltas of one run are joined and written as one record when the run
+    // ends, so the whole run is redacted at once. Guarded by the log writer lock.
+    private readonly StringBuilder _deltaRun = new();
+    private string? _deltaRunKind;
 
     // The open child runs of the most recent completed turn. Empty before the first one. The channel stores
     // them before it prints the waiting line, so a signal that follows that line finds them.
@@ -231,6 +238,7 @@ public sealed class HeadlessChannel : IChannel
             {
                 lock (logWriter)
                 {
+                    WriteDeltaRun(logWriter);
                     _logClosed = true;
                     logWriter.Dispose();
                 }
@@ -344,7 +352,7 @@ public sealed class HeadlessChannel : IChannel
                     _responseBuffer.Append(msg.Delta);
                 else
                     Console.Write(msg.Delta);
-                Log(log, $"ASSISTANT_DELTA: {msg.Delta}");
+                LogDelta(log, "ASSISTANT_DELTA", msg.Delta);
                 break;
 
             case ThinkingOutput msg:
@@ -360,7 +368,7 @@ public sealed class HeadlessChannel : IChannel
 
             case ThinkingDeltaOutput msg:
                 _receivedThinkingDeltaInCurrentTurn = true;
-                Log(log, $"THINKING_DELTA: {msg.Delta}");
+                LogDelta(log, "THINKING_DELTA", msg.Delta);
                 break;
 
             case ToolCallOutput msg:
@@ -612,6 +620,9 @@ public sealed class HeadlessChannel : IChannel
     // (DaemonClient.EventPumpAsync reads one channel for both). The run thread writes the two start records
     // while SessionJoined and the first outputs already arrive. A StreamWriter is not thread safe, so an
     // unlocked write can drop a line. The run thread closes the writer under the same lock.
+    // Each record is redacted, because tool arguments, tool results, and model text can hold a
+    // secret. Records are not framed: the eval scripts read multi-line records verbatim (see
+    // evals/trial_evidence.py), and they tell a quoted header from a real one by its time.
     private void Log(StreamWriter? log, string message)
     {
         if (log is null)
@@ -621,9 +632,40 @@ public sealed class HeadlessChannel : IChannel
         {
             if (_logClosed)
                 return;
-            log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
+            WriteDeltaRun(log);
+            WriteRecord(log, message);
         }
     }
+
+    private void LogDelta(StreamWriter? log, string kind, string delta)
+    {
+        if (log is null)
+            return;
+
+        lock (log)
+        {
+            if (_logClosed)
+                return;
+            if (_deltaRunKind != kind)
+                WriteDeltaRun(log);
+            _deltaRunKind = kind;
+            _deltaRun.Append(delta);
+        }
+    }
+
+    // Call under the log writer lock.
+    private void WriteDeltaRun(StreamWriter log)
+    {
+        if (_deltaRun.Length == 0)
+            return;
+
+        var record = $"{_deltaRunKind}: {_deltaRun}";
+        _deltaRun.Clear();
+        WriteRecord(log, record);
+    }
+
+    private void WriteRecord(StreamWriter log, string message)
+        => log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {SecretOutputRedactor.Redact(message)}");
 
     private void WriteFailureLog(string kind, string detail)
     {
@@ -632,7 +674,7 @@ public sealed class HeadlessChannel : IChannel
             _paths.EnsureDirectoriesExist();
             var path = Path.Combine(_paths.LogsDirectory, "headless-errors.log");
             File.AppendAllText(path,
-                $"[{_timeProvider.GetUtcNow():o}] {kind}: {detail}\n");
+                $"[{_timeProvider.GetUtcNow():o}] {SecretOutputRedactor.Redact($"{kind}: {detail}")}\n");
         }
         catch (Exception logEx)
         {

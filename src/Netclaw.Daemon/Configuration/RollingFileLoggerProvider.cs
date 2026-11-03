@@ -9,6 +9,8 @@ using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Configuration;
@@ -194,8 +196,9 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
         {
             // Resolution failed: _sessionDispatcher stays null, so session-tagged lines keep
             // falling back to daemon.log. One loud beacon, with a stderr fallback so the single
-            // failure signal survives even a saturated daemon-log queue.
-            var beacon = $"{GetTimestamp()} [ERR] Netclaw.Logging: session log dispatcher resolution failed; per-session routing disabled. {ex.Message}";
+            // failure signal survives even a saturated daemon-log queue. The beacon bypasses the
+            // logging pipeline, so it redacts and frames the exception text itself.
+            var beacon = $"{GetTimestamp()} [ERR] Netclaw.Logging: session log dispatcher resolution failed; per-session routing disabled. {LogTextFraming.Frame(SecretOutputRedactor.Redact(ex.Message))}";
             if (!_queue.TryAdd(beacon))
                 Console.Error.WriteLine(beacon);
         }
@@ -333,10 +336,10 @@ internal sealed class RollingFileLogger : ILogger
         };
 
         var source = logSource ?? _category;
+        // The record body is framed here, because this sink renders the exception text itself.
         var message = formatter(state, exception);
-        var line = $"{timestamp} [{level}] {source}: {message}";
-        if (exception is not null)
-            line += Environment.NewLine + exception;
+        var body = exception is null ? message : message + Environment.NewLine + exception;
+        var line = $"{timestamp} [{level}] {source}: {LogTextFraming.Frame(body)}";
 
         // A session id found in the message STATE is a routing trigger only when it rode in on an
         // Akka actor context: the Akka→MEL bridge's AkkaLogState carries a LogSource alongside the

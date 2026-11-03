@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.145.0"
+  version: "2.146.0"
 ---
 
 # Netclaw Operations
@@ -200,6 +200,12 @@ Legacy runs can read their own exact log, but not separate parent or child logs.
 Use a legacy child's summary and shared-workspace artifacts instead.
 Directory list and search require directory authority; an exact log grants none.
 Do not use shell to find session logs.
+Logs mask secrets. `session.log`, `daemon.log`, crash logs, and the log export show
+a secret as `***REDACTED***`. Do not try to recover a credential or a presigned URL
+from a log; use the tool result in the conversation.
+A record that spans several lines continues on lines that start with two spaces.
+Only a line that starts in column 0 with a timestamp starts a new record.
+Control characters and bidi controls in log text appear as `\uXXXX`.
 Normal audience and operation policy applies to every session path.
 Attachment copies and fetched files must pass destination checks before Netclaw saves them.
 A permitted copy or fetch does not enable general file-write access.
