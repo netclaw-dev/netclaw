@@ -216,7 +216,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://hooks.slack.com/test", Format = WebhookFormat.Slack }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://hooks.slack.com/test"), Format = WebhookFormat.Slack } },
             DeduplicationWindowSeconds = 0
         };
 
@@ -243,7 +243,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 0
         };
 
@@ -271,10 +271,10 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
         var config = new NotificationsConfig
         {
             Webhooks =
-            [
-                new WebhookTarget { Url = "https://example.com/generic", Format = WebhookFormat.Generic },
-                new WebhookTarget { Url = "https://hooks.slack.com/slack", Format = WebhookFormat.Slack },
-            ],
+            {
+                ["generic"] = new WebhookTarget { Url = new SensitiveString("https://example.com/generic"), Format = WebhookFormat.Generic },
+                ["slack"] = new WebhookTarget { Url = new SensitiveString("https://hooks.slack.com/slack"), Format = WebhookFormat.Slack },
+            },
             DeduplicationWindowSeconds = 0
         };
 
