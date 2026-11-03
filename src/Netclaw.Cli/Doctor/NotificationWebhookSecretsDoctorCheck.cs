@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Globalization;
 using System.Text.Json.Nodes;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -29,11 +30,21 @@ public sealed class NotificationWebhookSecretsDoctorCheck(NetclawPaths paths) : 
         if (exposed.Count == 0)
             return Task.FromResult(DoctorCheckResult.Pass(CheckName, "netclaw.json holds no notification webhook URL or header value."));
 
-        var names = string.Join(", ", exposed.Select(static webhook => webhook.Label));
+        var withValues = exposed.Where(static webhook => webhook.Url is not null || webhook.Headers.Count > 0)
+            .Select(static webhook => webhook.Label).ToList();
+        var listOnly = exposed.Where(static webhook => webhook.Url is null && webhook.Headers.Count == 0)
+            .Select(static webhook => webhook.Label).ToList();
+
+        var parts = new List<string>();
+        if (withValues.Count > 0)
+            parts.Add($"netclaw.json holds a URL or header value for notification webhook(s): {string.Join(", ", withValues)}. A webhook URL can be a credential.");
+        if (listOnly.Count > 0)
+            parts.Add($"netclaw.json uses the old list shape for notification webhook(s): {string.Join(", ", listOnly)}.");
+
         return Task.FromResult(DoctorCheckResult.Warning(
             CheckName,
-            $"netclaw.json holds a URL or header value for notification webhook(s): {names}. A webhook URL can be a credential.",
-            "Run `netclaw doctor --fix` to move the values to secrets.json after a backup."));
+            string.Join(' ', parts),
+            "Run `netclaw doctor --fix` to convert the list to named entries and move the values to secrets.json after a backup."));
     }
 }
 
@@ -98,8 +109,9 @@ internal static class NotificationWebhookSecretsMigration
     /// <summary>
     /// Copies the values into secrets.json in one locked update and encrypts them. A secrets.json entry
     /// under a list position ("0") moves to the name key, so no URL stays under a key that no webhook has.
-    /// A value that secrets.json already holds stays, because secrets.json overrides netclaw.json at bind
-    /// time. The entry under the name key wins over the entry under the position, and both win over netclaw.json.
+    /// The entry under the position wins over an entry under the name key, because the daemon used the position
+    /// entry for that item. The replaced value stays in the secrets.json backup. A value that secrets.json
+    /// already holds wins over netclaw.json, because secrets.json overrides netclaw.json at bind time.
     /// </summary>
     internal static void MoveToSecrets(
         NetclawPaths paths,
@@ -145,7 +157,7 @@ internal static class NotificationWebhookSecretsMigration
                 webhooks ??= GetOrAddObject(GetOrAddObject(root, NotificationsKey), WebhooksKey);
                 var target = GetOrAddObject(webhooks, webhook.Key);
                 if (moved is not null)
-                    MergeMissing(target, moved);
+                    Merge(target, moved);
 
                 if (webhook.Url is not null && FindKey(target, UrlKey) is null)
                     target[UrlKey] = webhook.Url;
@@ -166,7 +178,8 @@ internal static class NotificationWebhookSecretsMigration
         }, protector);
     }
 
-    private static void MergeMissing(JsonObject target, JsonObject source)
+    // Source values replace target values of the same name.
+    private static void Merge(JsonObject target, JsonObject source)
     {
         foreach (var (name, value) in source.ToArray())
         {
@@ -174,15 +187,52 @@ internal static class NotificationWebhookSecretsMigration
             {
                 var headers = GetOrAddObject(target, HeadersKey);
                 foreach (var (header, headerValue) in sourceHeaders.ToArray())
-                {
-                    if (FindKey(headers, header) is null)
-                        headers[header] = headerValue?.DeepClone();
-                }
+                    Replace(headers, header, headerValue);
             }
-            else if (FindKey(target, name) is null)
+            else
             {
-                target[name] = value?.DeepClone();
+                Replace(target, name, value);
             }
+        }
+    }
+
+    private static void Replace(JsonObject target, string name, JsonNode? value)
+    {
+        if (FindKey(target, name) is { } existing)
+            target.Remove(existing);
+
+        target[name] = value?.DeepClone();
+    }
+
+    /// <summary>
+    /// Throws when secrets.json holds <c>Notifications.Webhooks</c> as a JSON array. The fix writes the keyed shape
+    /// there and would have to drop the array. An operator must decide what that array means.
+    /// </summary>
+    internal static void RequireKeyedSecrets(NetclawPaths paths)
+    {
+        if (!File.Exists(paths.SecretsPath))
+            return;
+
+        // Plain parse: the shape does not depend on decryption, and an unreadable file fails later with its own error.
+        JsonObject? root;
+        try
+        {
+            root = JsonNode.Parse(File.ReadAllText(paths.SecretsPath), documentOptions: JsonDefaults.ConfigDocument) as JsonObject;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return;
+        }
+
+        if (root is not null
+            && FindKey(root, NotificationsKey) is { } notificationsKey
+            && root[notificationsKey] is JsonObject notifications
+            && FindKey(notifications, WebhooksKey) is { } webhooksKey
+            && notifications[webhooksKey] is JsonArray)
+        {
+            throw new InvalidOperationException(
+                $"{paths.SecretsPath} holds Notifications:Webhooks as a list. Netclaw keeps the webhooks there as an object keyed by name. "
+                + "Convert or remove that list in secrets.json, then run `netclaw doctor --fix` again. No file changed.");
         }
     }
 

@@ -364,22 +364,36 @@ public sealed class DoctorFixService
     /// model migration and the property removal each delete or rewrite user data.
     /// </summary>
     public static IReadOnlyList<string> PlannedBackups(DoctorFileFix fix)
+        => [.. PlannedBackupCopies(fix).Select(static copy => copy.Backup)];
+
+    private static List<(string Source, string Backup)> PlannedBackupCopies(DoctorFileFix fix)
     {
         if (!File.Exists(fix.FilePath))
             return [];
 
-        var backups = new List<string>();
+        var copies = new List<(string Source, string Backup)>();
+        void Add(string name) => copies.Add((fix.FilePath, NextBackupPath(fix.FilePath, name)));
+
         if (fix.Description.Contains("named model definitions", StringComparison.Ordinal))
-            backups.Add(NextBackupPath(fix.FilePath, "legacy-models"));
+            Add("legacy-models");
         if (fix.Description.Contains(LegacyAllowedToolsFixName, StringComparison.Ordinal))
-            backups.Add(NextBackupPath(fix.FilePath, "legacy-tool-defaults"));
+            Add("legacy-tool-defaults");
         if (fix.Description.Contains(RetiredOAuthExpiryFixName, StringComparison.Ordinal))
-            backups.Add(NextBackupPath(fix.FilePath, "retired-oauth-expiry"));
+            Add("retired-oauth-expiry");
         if (fix.Description.Contains(NotificationWebhookSecretsFixName, StringComparison.Ordinal))
-            backups.Add(NextBackupPath(fix.FilePath, "notification-webhook-secrets"));
+        {
+            Add("notification-webhook-secrets");
+
+            // The fix rewrites secrets.json, and a position entry replaces a name entry there. The copy keeps the
+            // original ciphertext, so it holds no plain secret. netclaw.json and secrets.json share a directory.
+            var secretsPath = Path.Combine(Path.GetDirectoryName(fix.FilePath)!, "secrets.json");
+            if (File.Exists(secretsPath))
+                copies.Add((secretsPath, NextBackupPath(secretsPath, "notification-webhook-secrets")));
+        }
+
         if (fix.Description.Contains(SchemaFixResolver.RemovedPropertyPrefix, StringComparison.Ordinal))
-            backups.Add(NextBackupPath(fix.FilePath, "removed-keys"));
-        return backups;
+            Add("removed-keys");
+        return copies;
     }
 
     private static void CopyFileMode(string source, string temp)
@@ -397,14 +411,18 @@ public sealed class DoctorFixService
     /// </summary>
     public Task<IReadOnlyList<string>> ApplyAsync(DoctorFixPlan plan, CancellationToken cancellationToken = default)
     {
+        // Refuse before any backup or write, so a refusal leaves every file as it was.
+        if (plan.Fixes.Any(static fix => fix.Description.Contains(NotificationWebhookSecretsFixName, StringComparison.Ordinal)))
+            NotificationWebhookSecretsMigration.RequireKeyedSecrets(_paths);
+
         var backups = new List<string>();
         foreach (var fix in plan.Fixes)
         {
             // A failed copy throws before any write. An older backup is never overwritten: each
             // run that applies one of these fixes writes a new file.
-            foreach (var backupPath in PlannedBackups(fix))
+            foreach (var (source, backupPath) in PlannedBackupCopies(fix))
             {
-                File.Copy(fix.FilePath, backupPath, overwrite: false);
+                File.Copy(source, backupPath, overwrite: false);
                 backups.Add(backupPath);
             }
         }

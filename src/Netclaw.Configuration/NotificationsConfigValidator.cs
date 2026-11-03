@@ -22,7 +22,8 @@ public sealed class NotificationsConfigValidator : IValidateOptions<Notification
             .Select(static webhook =>
                 $"Notifications:Webhooks:{webhook.Key}:Url is required. Set it in secrets.json " +
                 $"(`netclaw secrets set Notifications:Webhooks:{webhook.Key}:Url <url>`) or in netclaw.json. " +
-                $"A Slack URL also needs Notifications:Webhooks:{webhook.Key}:Format set to Slack.")
+                $"A Slack URL also needs Notifications:Webhooks:{webhook.Key}:Format set to Slack. " +
+                "The daemon does not watch secrets.json, so edit the files, then restart the daemon.")
             .ToList();
 
         return errors.Count > 0
