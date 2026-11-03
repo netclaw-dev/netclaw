@@ -303,34 +303,6 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
         }
     }
 
-    private sealed record BarrierReply(ReminderExecutionAccepted? Accepted, ReminderHealthResponse Health);
-
-    // The manager finishes one message before it reads the next, and Akka keeps the order of the
-    // replies to one sender. So the health reply comes after the manager handles the message, and
-    // after any acceptance reply for it. A missing acceptance reply fails the test at once.
-    private sealed class QueryBarrier : ReceiveActor
-    {
-        public QueryBarrier(IActorRef manager)
-        {
-            Receive<object>(message =>
-            {
-                var replyTo = Sender;
-                ReminderExecutionAccepted? accepted = null;
-                manager.Tell(message, Self);
-                manager.Tell(GetReminderHealthQuery.Instance, Self);
-                BecomeStacked(() =>
-                {
-                    Receive<ReminderExecutionAccepted>(reply => accepted = reply);
-                    Receive<ReminderHealthResponse>(health =>
-                    {
-                        replyTo.Tell(new BarrierReply(accepted, health));
-                        UnbecomeStacked();
-                    });
-                });
-            });
-        }
-    }
-
     private sealed class AlertSink : IOperationalNotificationSink
     {
         public ConcurrentQueue<OperationalAlert> Items { get; } = new();
