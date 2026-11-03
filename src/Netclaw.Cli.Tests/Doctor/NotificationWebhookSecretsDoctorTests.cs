@@ -163,6 +163,69 @@ public sealed class NotificationWebhookSecretsDoctorTests : IDisposable
     }
 
     [Fact]
+    public async Task Fix_writes_a_backup_of_secrets_json_that_matches_the_original_before_it_changes_secrets_json()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, OldListShape);
+        WriteSecrets("""{ "Slack": { "BotToken": "xoxb-existing" } }""");
+        var originalSecrets = File.ReadAllText(_paths.SecretsPath);
+        var service = ConfigOnlyService();
+
+        var backups = await service.ApplyAsync(await service.BuildPlanAsync(TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(originalSecrets, File.ReadAllText(_paths.SecretsPath));
+        Assert.Contains(backups, backup => backup != _paths.NetclawConfigPath && File.ReadAllText(backup) == originalSecrets);
+    }
+
+    [Fact]
+    public async Task Fix_moves_the_value_under_the_list_position_to_the_name_key_and_keeps_the_conflicting_name_value_in_the_secrets_backup()
+    {
+        // The daemon joined list item 0 to secrets.json "0", so "0" is the value that item 0 used.
+        File.WriteAllText(_paths.NetclawConfigPath, """
+            { "configVersion": 1, "Notifications": { "Webhooks": [ { "Name": "ops", "Format": "Slack" } ] } }
+            """);
+        WriteSecrets("""
+            { "Notifications": { "Webhooks": {
+                "0": { "Url": "https://zero.example.test/ZEROURL" },
+                "ops": { "Url": "https://ops-other.example.test/OPSURL" } } } }
+            """);
+        var originalSecrets = File.ReadAllText(_paths.SecretsPath);
+        var service = ConfigOnlyService();
+
+        var backups = await service.ApplyAsync(await service.BuildPlanAsync(TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+
+        var protector = SecretsProtection.CreateProtector(_paths);
+        using var secrets = JsonDocument.Parse(SecretsFileWriter.DecryptJsonLeaves(File.ReadAllText(_paths.SecretsPath), protector));
+        var ops = secrets.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+        Assert.Equal("https://zero.example.test/ZEROURL", ops.GetProperty("Url").GetString());
+
+        // The replaced value is not lost: the secrets backup still holds it.
+        var secretsBackup = Assert.Single(backups, backup => File.ReadAllText(backup) == originalSecrets);
+        Assert.Contains("https://ops-other.example.test/OPSURL", SecretsFileWriter.DecryptJsonLeaves(File.ReadAllText(secretsBackup), protector), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Fix_refuses_when_secrets_json_holds_the_webhooks_as_an_array_names_secrets_json_and_changes_neither_file()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, OldListShape);
+        File.WriteAllText(_paths.SecretsPath, """{ "Notifications": { "Webhooks": [ { "Url": "https://hand.example.test/hook" } ] } }""");
+        var netclawBefore = File.ReadAllBytes(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllBytes(_paths.SecretsPath);
+        var service = ConfigOnlyService();
+
+        // The refusal may come from the plan or from the apply step. Either way no file changes.
+        var error = await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await service.ApplyAsync(await service.BuildPlanAsync(TestContext.Current.CancellationToken), TestContext.Current.CancellationToken));
+
+        Assert.Contains("secrets.json", error.Message, StringComparison.Ordinal);
+        Assert.Equal(netclawBefore, File.ReadAllBytes(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllBytes(_paths.SecretsPath));
+        Assert.Empty(Directory.GetFiles(_paths.ConfigDirectory, "*.bak"));
+    }
+
+    private void WriteSecrets(string json)
+        => SecretsFileWriter.Write(_paths.SecretsPath, json, SecretsProtection.CreateProtector(_paths));
+
+    [Fact]
     public async Task After_the_fix_removing_the_first_webhook_does_not_change_the_url_of_the_second()
     {
         File.WriteAllText(_paths.NetclawConfigPath, OldListShape);
