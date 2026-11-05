@@ -58,11 +58,14 @@ public static partial class SecretOutputRedactor
         SearchValues.Create(['\r', '\n', '\f', (char)0x85, (char)0x2028, (char)0x2029]);
 
     // Log-only. A key at the end of a line and its value at the start of the next line:
-    // "API_KEY=" and then "abc123" (#2770). The key is read in code, from the text before '='.
-    // A "Name:" line is not covered: prose such as "Failed to refresh token:" followed by a
-    // stack trace would lose its first frame.
+    // "API_KEY=" and then "abc123" (#2770). The match starts at the line break and does not
+    // include the '='. The code reads the key from the text before the line break. Thus a
+    // token that is a key stays out of the value, and the next pair is read on its own:
+    // "API_KEY=", "DB_PASSWORD=", and then "hunter2" masks only hunter2. A "Name:" line is not
+    // covered: prose such as "Failed to refresh token:" followed by a stack trace would lose
+    // its first frame.
     private static readonly Regex NextLineValueRegex = LinearRegex(
-        "=[ \\t]*(?:\\r\\n|[\\r\\n\\f\\x85\\p{Zl}\\p{Zp}])[ \\t]*(?<value>[^\\s;]+)", RegexOptions.None);
+        "(?:\\r\\n|[\\r\\n\\f\\x85\\p{Zl}\\p{Zp}])[ \\t]*(?<value>[^\\s;]+)", RegexOptions.None);
 
     // The value is masked only when the shared rules mask the same key and value on one line.
     // Thus this rule has the vocabulary and the exceptions of the shared rules: max_tokens,
@@ -70,6 +73,17 @@ public static partial class SecretOutputRedactor
     private static string RedactNextLineValue(string text, Match m)
     {
         var end = m.Index;
+        while (end > 0 && text[end - 1] is ' ' or '\t')
+            end--;
+
+        if (end == 0 || text[end - 1] != '=')
+            return m.Value;
+
+        var value = m.Groups["value"];
+        if (IsKeyToken(value.ValueSpan))
+            return m.Value;
+
+        end--;
         var start = end;
         while (start > 0 && end - start < MaxSecretKeyChars && IsKeyCharacter(text[start - 1]))
             start--;
@@ -77,11 +91,31 @@ public static partial class SecretOutputRedactor
         if (start == end)
             return m.Value;
 
-        var value = m.Groups["value"];
         var joined = string.Concat(text.AsSpan(start, end - start), "=", value.ValueSpan);
         return string.Equals(Redact(joined), joined, StringComparison.Ordinal)
             ? m.Value
             : MaskGroup(m, value);
+    }
+
+    // A token that starts a new pair: "DB_PASSWORD=" or "HOME=/root". It is not the value of the
+    // key before it. Base64 padding ("abc123==") and a token with a character that a key does not
+    // have ("a/b+c=") are values.
+    private static bool IsKeyToken(ReadOnlySpan<char> token)
+    {
+        var equals = token.IndexOf('=');
+        if (equals <= 0)
+            return false;
+
+        if (equals + 1 < token.Length && token[equals + 1] == '=')
+            return false;
+
+        foreach (var c in token[..equals])
+        {
+            if (!IsKeyCharacter(c))
+                return false;
+        }
+
+        return true;
     }
 
     // The characters of an environment, option, or query key: API_KEY, --api-key, app.secret.

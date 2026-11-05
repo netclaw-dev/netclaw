@@ -123,17 +123,19 @@ public static partial class SecretOutputRedactor
     private static string Replace(Regex rule, string input, MatchEvaluator evaluator, LogMaskMap? masks)
         => masks is null ? rule.Replace(input, evaluator) : masks.Replace(rule, input, evaluator);
 
-    // An ID or a count of attempts is not a secret: authorizationAttemptId, auth_attempt_id,
-    // TOKEN_ATTEMPTS. The name ends with "attempt id" or with "attempts". An "attempt" alone can
-    // hold the secret that was tried (password_attempt=hunter2), so it stays a secret name.
+    // The ID of an authorization attempt is not a secret: authorizationAttemptId,
+    // authorization_attempt_id. The name must end with "authorization attempt id". Any other
+    // name stays a secret name, because it can hold the secret that was tried
+    // (password_attempt=hunter2, password_attempts=hunter2, api_key_attempt_id=hunter2).
     private static bool IsAttemptIdName(string name)
     {
         var last = LastSegment(name, out var before);
-        if (last.Equals("attempts", StringComparison.OrdinalIgnoreCase))
-            return true;
+        if (!last.Equals("id", StringComparison.OrdinalIgnoreCase))
+            return false;
 
-        return last.Equals("id", StringComparison.OrdinalIgnoreCase)
-               && LastSegment(before, out _).Equals("attempt", StringComparison.OrdinalIgnoreCase);
+        var attempt = LastSegment(before, out var stem);
+        return attempt.Equals("attempt", StringComparison.OrdinalIgnoreCase)
+               && LastSegment(stem, out _).Equals("authorization", StringComparison.OrdinalIgnoreCase);
     }
 
     // Replaces only the value group. All other text of the match stays as it is.

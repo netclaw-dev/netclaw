@@ -42,6 +42,19 @@ public sealed class SecretOutputRedactorLoggingTests
         Assert.Contains(secret, SecretOutputRedactor.Redact(input), StringComparison.Ordinal);
     }
 
+    // A next-line token that is a key starts a new pair. It is not the value of the key before it.
+    // The scan goes on, so the next pair is read on its own.
+    [Theory]
+    [InlineData("API_KEY=\nDB_PASSWORD=\nhunter2", "API_KEY=\nDB_PASSWORD=\n" + Masked)]
+    [InlineData("API_KEY=\nHOME=/root\nPATH=/bin", "API_KEY=\nHOME=/root\nPATH=/bin")]
+    [InlineData("API_KEY=\nDB_PASSWORD=\nAUTH_TOKEN=\nhunter2", "API_KEY=\nDB_PASSWORD=\nAUTH_TOKEN=\n" + Masked)]
+    [InlineData("API_KEY=\nHOME=/root\nDB_PASSWORD=\nhunter2", "API_KEY=\nHOME=/root\nDB_PASSWORD=\n" + Masked)]
+    [InlineData("API_KEY=\nabc123==", "API_KEY=\n" + Masked)]
+    public void A_key_on_the_next_line_is_not_the_value_of_the_key_before_it(string input, string expected)
+    {
+        Assert.Equal(expected, SecretOutputRedactor.RedactForLogging(input));
+    }
+
     // The next-line rule masks only what the shared rules mask on one line, so it keeps their
     // exceptions: counts, cursors, descriptors, references, code idioms, and "Name:" prose.
     [Theory]
@@ -126,8 +139,9 @@ public sealed class SecretOutputRedactorLoggingTests
     [Theory]
     [InlineData("authorizationAttemptId=auth-3f9a1c sessionId=D1/1700000000.0001")]
     [InlineData("authorization_attempt_id=auth-3f9a1c")]
-    [InlineData("TOKEN_ATTEMPTS=3")]
-    public void An_attempt_id_or_count_is_not_a_secret(string input)
+    [InlineData("AuthorizationAttemptId=auth-0123abcd")]
+    [InlineData("authorizationAttemptId=auth-0123abcd")]
+    public void An_authorization_attempt_id_is_not_a_secret(string input)
     {
         Assert.Equal(input, SecretOutputRedactor.Redact(input));
         Assert.Equal(input, SecretOutputRedactor.RedactForLogging(input));
@@ -135,6 +149,8 @@ public sealed class SecretOutputRedactorLoggingTests
 
     [Theory]
     [InlineData("password_attempt=hunter2", "hunter2")]
+    [InlineData("api_key_attempt_id=hunter2", "hunter2")]
+    [InlineData("TOKEN_ATTEMPTS=hunter2", "hunter2")]
     [InlineData("authorizationCode=abc123", "abc123")]
     [InlineData("authorization=Bearer-abc123", "Bearer-abc123")]
     [InlineData("token_id_secret=abc123", "abc123")]

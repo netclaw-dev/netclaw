@@ -239,6 +239,8 @@ and give the log its own masked copy.
   name. See #2750.
 - The next-line rule covers `=` only. A header name with `:` at the end of a
   line, and its value on the next line, stays unmasked.
+- The signature rule does not match a URL-encoded parameter (`%3Fsig%3D`),
+  `x-ms-signature=`, or `"sig":"..."` in JSON.
 - The header rules that need a line start do not match after the Akka prefix
   (`[INFO][...][akka://...] X-Api-Key: abc`). The template rule uses the
   rendered template, which has no prefix, so the attribute and the message
