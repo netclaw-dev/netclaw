@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text;
 using System.Text.Json;
 using Netclaw.Configuration;
 using Netclaw.Security.Authorization.Filesystem;
@@ -2759,6 +2760,58 @@ public sealed class McpApprovalMatcherTests
         Assert.DoesNotContain("opaque-secret", display);
         Assert.DoesNotContain("access-token", display);
         Assert.Contains("REDACTED", display);
+    }
+
+    // Regression for #2771. System.Uri.TryCreate throws IndexOutOfRangeException
+    // from CreateUriInfo for these values on .NET 10. Code points stay as
+    // integers so that this source file stays ASCII.
+    public static TheoryData<string> UriParserCrashValues()
+    {
+        // Reviewer shape, 31 code units: "\/", LRE, "/", LRM, 23 CJK units,
+        // a lone high surrogate, PDI, RLO.
+        var reviewerShape = new StringBuilder();
+        reviewerShape.Append('\\').Append('/').Append((char)0x202A).Append('/').Append((char)0x200E);
+        for (var i = 0; i < 23; i++)
+            reviewerShape.Append((char)(0x4E00 + i));
+        reviewerShape.Append((char)0xD800).Append((char)0x2069).Append((char)0x202E);
+
+        return new TheoryData<string>
+        {
+            reviewerShape.ToString(),
+            // Smallest value found: "//" followed by LRE.
+            new string(['/', '/', (char)0x202A]),
+            new string(['\\', '/', (char)0x200E])
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(UriParserCrashValues))]
+    public void FormatForDisplay_shows_value_as_escaped_string_when_uri_parser_throws(string value)
+    {
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(new { target = value }));
+        var displays = new[]
+        {
+            _matcher.FormatForDisplay(
+                new ToolName("service/invoke"),
+                new Dictionary<string, object?> { ["target"] = value }),
+            _matcher.FormatForDisplay(
+                new ToolName("service/invoke"),
+                new Dictionary<string, object?> { ["target"] = json.RootElement.GetProperty("target").Clone() })
+        };
+
+        foreach (var display in displays)
+        {
+            Assert.StartsWith("service/invoke(target=\"", display);
+            Assert.All(display, ch =>
+            {
+                Assert.False(char.IsSurrogate(ch), $"raw surrogate U+{(int)ch:X4} in display");
+                Assert.False(TextControlCharacters.IsBidiControl(ch), $"raw bidi control U+{(int)ch:X4} in display");
+                Assert.NotEqual((char)0x200E, ch);
+            });
+            // The value is not dropped: each invisible code unit shows as an escape.
+            foreach (var ch in value.Where(static c => c is not ('/' or '\\') && !char.IsAsciiLetterOrDigit(c)))
+                Assert.Contains($"\\u{(int)ch:X4}", display, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]

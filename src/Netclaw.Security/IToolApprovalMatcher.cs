@@ -2839,15 +2839,20 @@ public sealed class McpApprovalMatcher : IToolApprovalMatcher
     private static bool TrySanitizeAbsoluteUri(string value, out string sanitized)
     {
         sanitized = string.Empty;
-        if (value.Length > MaxUrlParseChars
-            || !Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            || string.IsNullOrEmpty(uri.Host))
-        {
+        if (value.Length > MaxUrlParseChars)
             return false;
-        }
 
+        string absoluteUri;
+        // An MCP server or the model supplies this value. When System.Uri
+        // fails, the caller shows the value as a plain escaped string.
         try
         {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+                || string.IsNullOrEmpty(uri.Host))
+            {
+                return false;
+            }
+
             var builder = new UriBuilder(uri)
             {
                 UserName = string.Empty,
@@ -2855,13 +2860,17 @@ public sealed class McpApprovalMatcher : IToolApprovalMatcher
                 Query = string.IsNullOrEmpty(uri.Query) ? string.Empty : Redacted,
                 Fragment = string.IsNullOrEmpty(uri.Fragment) ? string.Empty : Redacted
             };
-            sanitized = SecretOutputRedactor.Redact(builder.Uri.AbsoluteUri);
-            return true;
+            absoluteUri = builder.Uri.AbsoluteUri;
         }
-        catch (UriFormatException)
+        catch (Exception)
         {
+            // System.Uri throws undocumented exceptions on malformed input
+            // (for example IndexOutOfRangeException from CreateUriInfo, #2771).
             return false;
         }
+
+        sanitized = SecretOutputRedactor.Redact(absoluteUri);
+        return true;
     }
 
     private static bool IsPathLike(string value)
