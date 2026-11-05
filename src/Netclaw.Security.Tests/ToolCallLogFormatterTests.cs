@@ -27,6 +27,21 @@ public sealed class ToolCallLogFormatterTests
         Assert.Equal("{}", ToolCallLogFormatter.FormatArguments(null));
     }
 
+    // A long string becomes a hash unless redaction changed it, and a hash of a secret is not
+    // safe to export. Thus the formatter must use the log rules, which mask this signature.
+    [Fact]
+    public void A_long_value_with_a_log_only_secret_is_redacted_and_not_hashed()
+    {
+        var url = "https://acct.blob.core.windows.net/c/" + new string('a', 300) + "?sig=Zm9vYmFy%3D&sv=2024-11-04";
+        var arguments = new Dictionary<string, object?> { ["url"] = url, ["command"] = "export API_KEY=\nabc123secret" };
+
+        var text = ToolCallLogFormatter.FormatArguments(arguments);
+
+        Assert.Contains($"<{url.Length} chars, redacted>", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("sha256:", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("abc123secret", text, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Nested_secret_key_is_redacted()
     {

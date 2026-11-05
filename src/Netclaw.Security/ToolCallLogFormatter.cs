@@ -25,13 +25,13 @@ namespace Netclaw.Security;
 /// reader can confirm a guessed value with it.</item>
 /// <item>The walk writes only known types. Any other value becomes "&lt;TypeName&gt;",
 /// because a serializer can write a secret that the walk cannot see.</item>
-/// <item><see cref="SecretOutputRedactor.Redact"/> runs on each string value. In the
+/// <item><see cref="SecretOutputRedactor.RedactForLogging(string)"/> runs on each string value. In the
 /// serialized text, the quotes of a JSON body inside a string are escaped, and the
 /// JSON rule of the redactor cannot match them.</item>
 /// <item>A string longer than <see cref="MaxInlineStringChars"/> becomes its length and
 /// a SHA-256 prefix, so file bodies do not leave the host. When the redactor changed
 /// that string, it gets no hash.</item>
-/// <item><see cref="SecretOutputRedactor.Redact"/> runs again on the whole text.</item>
+/// <item><see cref="SecretOutputRedactor.RedactForLogging(string)"/> runs again on the whole text.</item>
 /// <item>The cap comes last. A cap before the redactor can cut a secret in half, and
 /// the redactor then cannot match the part that stays.</item>
 /// </list>
@@ -93,7 +93,7 @@ public static class ToolCallLogFormatter
                 WritePairs(writer, arguments, depth: 0);
             }
 
-            var text = SecretOutputRedactor.Redact(Encoding.UTF8.GetString(buffer.WrittenSpan));
+            var text = SecretOutputRedactor.RedactForLogging(Encoding.UTF8.GetString(buffer.WrittenSpan));
 
             // The walk stops only after it passes the budget. The final redactor
             // pass can make that partial text shorter than the cap, so the "..."
@@ -120,7 +120,7 @@ public static class ToolCallLogFormatter
         if (rationale is null)
             return string.Empty;
 
-        return TextTruncation.EllipsisAppend(SecretOutputRedactor.Redact(rationale), MaxRationaleChars);
+        return TextTruncation.EllipsisAppend(SecretOutputRedactor.RedactForLogging(rationale), MaxRationaleChars);
     }
 
     private static bool OverBudget(Utf8JsonWriter writer)
@@ -139,7 +139,7 @@ public static class ToolCallLogFormatter
 
             // The writer escapes the quotes in a key, so the final redactor pass
             // cannot match a JSON body in a key name. Redact the key itself.
-            writer.WritePropertyName(SecretOutputRedactor.Redact(key));
+            writer.WritePropertyName(SecretOutputRedactor.RedactForLogging(key));
             if (SecretOutputRedactor.IsSecretKey(key))
                 writer.WriteStringValue(Redacted);
             else
@@ -220,7 +220,7 @@ public static class ToolCallLogFormatter
                     if (OverBudget(writer))
                         break;
 
-                    writer.WritePropertyName(SecretOutputRedactor.Redact(property.Name));
+                    writer.WritePropertyName(SecretOutputRedactor.RedactForLogging(property.Name));
                     if (SecretOutputRedactor.IsSecretKey(property.Name))
                         writer.WriteStringValue(Redacted);
                     else
@@ -252,7 +252,7 @@ public static class ToolCallLogFormatter
 
     private static string Summarize(string text)
     {
-        var redacted = SecretOutputRedactor.Redact(text);
+        var redacted = SecretOutputRedactor.RedactForLogging(text);
         if (text.Length <= MaxInlineStringChars)
             return redacted;
 
