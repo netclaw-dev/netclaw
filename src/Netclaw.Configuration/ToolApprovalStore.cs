@@ -13,7 +13,9 @@ namespace Netclaw.Configuration;
 /// Reads and writes persistent tool approval entries from
 /// <c>~/.netclaw/config/tool-approvals.json</c>. This file is NOT monitored
 /// by <see cref="ConfigWatcherService"/> — writes do not trigger daemon restart.
-/// Thread-safe for concurrent reads and writes.
+/// Thread-safe for concurrent reads and writes. A read takes no
+/// cross-process lock. A write or a version conversion takes the lock file
+/// at <see cref="LockPath"/> and replaces the store with one atomic rename.
 ///
 /// The on-disk schema is version 3: a typed <see cref="ApprovalEntry"/> list
 /// per (audience, tool). A version-2 file receives a byte-identical backup
@@ -60,7 +62,8 @@ public sealed class ToolApprovalStore
     public string V2BackupPath => _filePath + ".v2.bak";
 
     /// <summary>
-    /// Cross-process lock path for approval-store access.
+    /// Cross-process lock path for approval-store writes and version
+    /// conversions. A read of a current-version store does not take it.
     /// </summary>
     public string LockPath => _filePath + ".lock";
 
@@ -126,6 +129,17 @@ public sealed class ToolApprovalStore
     {
         lock (_lock)
         {
+            // A read takes no cross-process store lock. Each writer replaces
+            // the whole file with one rename, so a read sees the old file or
+            // the new file, never a partial file. Only a store that needs a
+            // version conversion takes the lock, because the conversion
+            // writes. The locked load reads the file again before it converts.
+            var current = LoadCore(allowConversion: false);
+            if (current is not null)
+            {
+                return CloneData(current);
+            }
+
             using var lease = _fileAccess.AcquireLock(LockPath, _lockTimeout);
             return CloneData(LoadLocked());
         }
@@ -156,7 +170,17 @@ public sealed class ToolApprovalStore
     /// </summary>
     public int LastMigrationOmittedEntryCount { get; private set; }
 
-    private ToolApprovalData LoadLocked()
+    private ToolApprovalData LoadLocked() =>
+        LoadCore(allowConversion: true)
+        ?? throw new InvalidOperationException("A locked load must return a store or fail.");
+
+    /// <summary>
+    /// Reads the store. When <paramref name="allowConversion"/> is false, the
+    /// method returns <c>null</c> for a version-1 or version-2 file and does
+    /// not write. The caller must then hold the store lock and call again
+    /// with conversion allowed.
+    /// </summary>
+    private ToolApprovalData? LoadCore(bool allowConversion)
     {
         if (!File.Exists(_filePath))
         {
@@ -182,6 +206,11 @@ public sealed class ToolApprovalStore
             var versionMemberCount = CountVersionMembers(document.RootElement);
             if (versionMemberCount == 0)
             {
+                if (!allowConversion)
+                {
+                    return null;
+                }
+
                 QuarantineV1File(sourceBytes);
                 data = new ToolApprovalData();
                 SaveLocked(data);
@@ -196,6 +225,11 @@ public sealed class ToolApprovalStore
             }
 
             var version = ApprovalStoreCodec.ReadVersion(document.RootElement);
+            if (!allowConversion && version is 1 or 2)
+            {
+                return null;
+            }
+
             sourceIsCurrentVersion = version == CurrentSchemaVersion;
             data = version switch
             {
@@ -295,7 +329,7 @@ public sealed class ToolApprovalStore
             return;
         }
 
-        File.Move(_filePath, V1QuarantinePath);
+        ApprovalStoreFileAccess.MoveFile(_filePath, V1QuarantinePath, overwrite: false);
         _cachedData = null;
         _cachedSourceBytes = null;
     }

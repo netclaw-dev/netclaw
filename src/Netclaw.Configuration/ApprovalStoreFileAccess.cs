@@ -24,6 +24,17 @@ internal interface IApprovalStoreFileAccess
 
 internal sealed class ApprovalStoreFileAccess : IApprovalStoreFileAccess
 {
+    private const int ErrorSharingViolation = 32;
+    private const int ErrorLockViolation = 33;
+
+    // A read races only one rename, so it needs few attempts.
+    private const int ReadAttempts = 3;
+    private const int ReadRetryDelayMilliseconds = 5;
+
+    // A rename waits for each reader that holds the file. About one second.
+    private const int MoveAttempts = 40;
+    private const int MoveRetryDelayMilliseconds = 25;
+
     internal static ApprovalStoreFileAccess Instance { get; } = new();
 
     private ApprovalStoreFileAccess()
@@ -86,7 +97,88 @@ internal sealed class ApprovalStoreFileAccess : IApprovalStoreFileAccess
     public byte[] ReadAllBytes(string path)
     {
         EnsureNotLink(path);
-        return File.ReadAllBytes(path);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return ReadShared(path);
+            }
+            catch (Exception ex) when (attempt < ReadAttempts && IsTransientWindowsShareFailure(ex))
+            {
+                // A read takes no store lock, so it can meet a rename that a
+                // writer in another process does on this path. Windows can
+                // refuse the open for the short time of that rename. The
+                // retry is small because the rename is short.
+                Thread.Sleep(ReadRetryDelayMilliseconds);
+            }
+        }
+    }
+
+    // FileShare.ReadWrite | FileShare.Delete: a writer in another process
+    // must be able to rename a new file over this path while the read holds
+    // it open. The handle refers to one complete file. Writers never change
+    // a file in place; they write a temporary file and rename it.
+    private static byte[] ReadShared(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 1,
+            FileOptions.SequentialScan);
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// Renames <paramref name="sourcePath"/> to <paramref name="destinationPath"/>.
+    /// On Windows, the method retries a short time when an open handle on the
+    /// destination blocks the rename.
+    /// </summary>
+    /// <remarks>
+    /// .NET <see cref="File.Move(string, string, bool)"/> calls
+    /// <c>MoveFileExW</c> with <c>MOVEFILE_REPLACE_EXISTING</c>. That call does
+    /// not use POSIX rename semantics. NTFS then refuses to replace a target
+    /// that has an open handle, whatever the share mode of that handle
+    /// (FILE_RENAME_INFORMATION, "Special rules for renaming open files").
+    /// Approval reads take no store lock, so a reader in another process can
+    /// hold the target for the short time of its read. The caller holds the
+    /// store lock, so only readers can block the rename, and each reader
+    /// closes its handle quickly. Linux and macOS rename over open files, so
+    /// they do not retry.
+    /// </remarks>
+    internal static void MoveFile(string sourcePath, string destinationPath, bool overwrite)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(sourcePath, destinationPath, overwrite);
+                return;
+            }
+            catch (Exception ex) when (attempt < MoveAttempts && IsTransientWindowsShareFailure(ex))
+            {
+                Thread.Sleep(MoveRetryDelayMilliseconds);
+            }
+        }
+    }
+
+    // Windows reports an open target as ERROR_ACCESS_DENIED
+    // (UnauthorizedAccessException) or as ERROR_SHARING_VIOLATION or
+    // ERROR_LOCK_VIOLATION (IOException). A real permission error also shows
+    // as ERROR_ACCESS_DENIED. The retry budget is small, so such an error
+    // still fails after a short delay.
+    private static bool IsTransientWindowsShareFailure(Exception ex)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        return ex is UnauthorizedAccessException ||
+               (ex is IOException && (ex.HResult & 0xFFFF) is ErrorSharingViolation or ErrorLockViolation);
     }
 
     public void WriteAtomic(
@@ -107,7 +199,7 @@ internal sealed class ApprovalStoreFileAccess : IApprovalStoreFileAccess
                     "The approval store changed before replace.");
             }
 
-            File.Move(tempPath, path, overwrite: true);
+            MoveFile(tempPath, path, overwrite: true);
         }
         catch
         {
@@ -162,7 +254,7 @@ internal sealed class ApprovalStoreFileAccess : IApprovalStoreFileAccess
                     "The approval store changed before version-3 replace.");
             }
 
-            File.Move(tempPath, path, overwrite: true);
+            MoveFile(tempPath, path, overwrite: true);
         }
         catch
         {

@@ -628,22 +628,6 @@ public sealed class ToolApprovalStoreTests : IDisposable
         Assert.False(File.Exists(_store.V1QuarantinePath));
     }
 
-    [Fact]
-    public void TryLoad_reports_lock_contention_without_reading_authority()
-    {
-        File.WriteAllText(_file, "{\"version\":3,\"audiences\":{}}");
-        using var competingLease = new FileStream(
-            _store.LockPath,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.None);
-
-        var result = _store.TryLoad();
-
-        var unavailable = Assert.IsType<ApprovalStoreLoadResult.Unavailable>(result);
-        Assert.Equal(ApprovalStoreFailure.LockUnavailable, unavailable.Failure);
-    }
-
     [Theory]
     [InlineData("{\"version\":3,\"audiences\":{},\"extra\":true}")]
     [InlineData("{\"version\":3,\"audiences\":null}")]
