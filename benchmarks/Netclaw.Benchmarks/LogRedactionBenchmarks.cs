@@ -61,6 +61,17 @@ public class LogRedactionBenchmarks
     public void Redacting_information()
         => _redacting.LogInformation("MCP server '{Name}' connected as generation {Generation} ({Tools} tools)", "github", 3, 49);
 
+    // A record whose message holds a secret. Only such a record pays for the template rule.
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Secret")]
+    public void Direct_secret()
+        => _direct.LogInformation("Calling {Endpoint} with Authorization: Bearer {Token} for call {CallId}", "https://api.example.com/v1", "abc123xyz", "call-7");
+
+    [Benchmark]
+    [BenchmarkCategory("Secret")]
+    public void Redacting_secret()
+        => _redacting.LogInformation("Calling {Endpoint} with Authorization: Bearer {Token} for call {CallId}", "https://api.example.com/v1", "abc123xyz", "call-7");
+
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Exception")]
     public void Direct_exception()

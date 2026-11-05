@@ -402,6 +402,77 @@ public sealed class SessionLogActorTests : TestKit
     }
 
     [Fact]
+    public async Task A_value_on_the_line_after_its_key_is_redacted_in_session_log()
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), $"netclaw-session-log-tests-{Guid.NewGuid():N}");
+        var sessionId = new SessionId("channel/next-line");
+
+        try
+        {
+            var dispatcher = SpawnDispatcher(Sys, basePath, new FakeTimeProvider(DateTimeOffset.Parse("2026-10-29T17:00:00Z")));
+            dispatcher.Tell(new SendUserMessage { SessionId = sessionId, Content = "DB_PASSWORD=\nhunter2" }, ActorRefs.NoSender);
+            dispatcher.Tell(new TextOutput("API_KEY=\r\nabc123secret") { SessionId = sessionId }, ActorRefs.NoSender);
+            // A thinking run is not clipped, so only the transcript writer redacts it. The key
+            // and the value come in separate deltas.
+            dispatcher.Tell(new ThinkingDeltaOutput("set GITHUB_TOKEN=\n") { SessionId = sessionId }, ActorRefs.NoSender);
+            dispatcher.Tell(new ThinkingDeltaOutput("tok3nvalue99 now") { SessionId = sessionId }, ActorRefs.NoSender);
+            dispatcher.Tell(new TextOutput("done") { SessionId = sessionId }, ActorRefs.NoSender);
+
+            await AwaitAssertAsync(async () =>
+            {
+                var text = await ReadLogAsync(GetLegacyLogPath(sessionId, basePath), TestContext.Current.CancellationToken);
+                Assert.Contains("Assistant: API_KEY=", text, StringComparison.Ordinal);
+                Assert.Contains("Thinking (streamed): set GITHUB_TOKEN=", text, StringComparison.Ordinal);
+                Assert.Contains("Assistant: done", text, StringComparison.Ordinal);
+                Assert.Contains("  ***REDACTED***", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("hunter2", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("abc123secret", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("tok3nvalue99", text, StringComparison.Ordinal);
+            }, cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            await TryDeleteDirectoryAsync(basePath);
+        }
+    }
+
+    [Fact]
+    public async Task A_presigned_url_whose_signature_comes_first_is_masked_in_session_log()
+    {
+        // The signature comes before the credential, so the shared rules alone leave it in clear
+        // text (#2770). The model path for the same URL is in DispatchingToolExecutorTests.
+        const string presignedUrl =
+            "https://acct.r2.cloudflarestorage.com/bucket/x.png?X-Amz-Signature=deadbeefcafe01" +
+            "&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=abc123def456ghijklmnop%2F20260818%2Fauto%2Fs3%2Faws4_request";
+        var basePath = Path.Combine(Path.GetTempPath(), $"netclaw-session-log-tests-{Guid.NewGuid():N}");
+        var sessionId = new SessionId("channel/presigned-signature-first");
+
+        try
+        {
+            var dispatcher = SpawnDispatcher(Sys, basePath, new FakeTimeProvider(DateTimeOffset.Parse("2026-10-29T17:00:00Z")));
+            dispatcher.Tell(new ToolResultOutput
+            {
+                SessionId = sessionId,
+                CallId = new ToolCallId("call-1"),
+                ToolName = new ToolName("mcp_assetbridge_create_upload"),
+                Result = presignedUrl,
+            }, ActorRefs.NoSender);
+
+            await AwaitAssertAsync(async () =>
+            {
+                var text = await ReadLogAsync(GetLegacyLogPath(sessionId, basePath), TestContext.Current.CancellationToken);
+                Assert.Contains("X-Amz-Signature=***REDACTED***", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("deadbeefcafe01", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("abc123def456ghijklmnop", text, StringComparison.Ordinal);
+            }, cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            await TryDeleteDirectoryAsync(basePath);
+        }
+    }
+
+    [Fact]
     public async Task A_secret_at_the_truncation_point_is_redacted_before_the_cut()
     {
         var basePath = Path.Combine(Path.GetTempPath(), $"netclaw-session-log-tests-{Guid.NewGuid():N}");

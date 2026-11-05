@@ -4,7 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections;
+using System.Collections.Frozen;
+using System.Globalization;
+using System.Text;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 
@@ -89,10 +93,20 @@ internal sealed class RedactingLogger(ILogger inner) : ILogger
     }
 
     private static RedactedLogState RedactState(string message, IEnumerable<KeyValuePair<string, object?>>? pairs)
-        => new(RedactText(message), RedactValues(pairs));
+    {
+        var redactedMessage = SecretOutputRedactor.RedactForLogging(message);
+        var values = RedactValues(pairs);
 
-    // Each value is redacted alone. A value whose secret marker sits in the template, as in
-    // "Authorization: Bearer {Token}", is masked in the message but not in its attribute (#2770).
+        // Only a message that holds a secret can have a value that its template marks as a
+        // secret. Thus an ordinary record pays for one string comparison here.
+        if (pairs is not null && !string.Equals(redactedMessage, message, StringComparison.Ordinal))
+            TemplateMarkedValues.Mask(pairs, values);
+
+        return new(LogTextFraming.Normalize(redactedMessage), values);
+    }
+
+    // Each value is redacted alone. TemplateMarkedValues then masks a value whose secret marker
+    // sits in the template, as in "Authorization: Bearer {Token}" (#2770).
     private static KeyValuePair<string, object?>[] RedactValues(IEnumerable<KeyValuePair<string, object?>>? pairs)
         => pairs is null
             ? []
@@ -125,7 +139,153 @@ internal sealed class RedactingLogger(ILogger inner) : ILogger
     }
 
     // Redact first: some secret patterns end at a line break, so they must see the original breaks.
-    private static string RedactText(string text) => LogTextFraming.Normalize(SecretOutputRedactor.Redact(text));
+    private static string RedactText(string text) => LogTextFraming.Normalize(SecretOutputRedactor.RedactForLogging(text));
+}
+
+/// <summary>
+/// Masks a structured value that its message template marks as a secret. In
+/// <c>LogInformation("Authorization: Bearer {Token}", token)</c>, redaction of the message masks
+/// the token, but redaction of the <c>Token</c> value alone finds no secret shape (#2770).
+/// </summary>
+/// <remarks>
+/// The template is rendered with its values, and each value gets the span of its placeholder in
+/// that text. The span comes from the placeholder position, never from a search for the value
+/// text: the same text can be a secret at one position and an ordinary word at another. The
+/// rendered template stands in for the formatted message, because a formatter can add text that
+/// the stage cannot map, such as the Akka prefix. A value is masked when log redaction of the
+/// rendered text masks a character of its span that log redaction of the value alone does not.
+/// </remarks>
+internal static class TemplateMarkedValues
+{
+    private const string OriginalFormatKey = "{OriginalFormat}";
+
+    // A secret pattern can run past its own value into the next one, as in
+    // "token={Token}&session={SessionId}". These values route or correlate a record, and they are
+    // never secrets. A masked SessionId sends the record to a session log named ***REDACTED***,
+    // and a masked attempt ID breaks the OTLP correlation of #2589.
+    private static readonly FrozenSet<string> ExemptKeys = FrozenSet.Create(
+        StringComparer.Ordinal,
+        NetclawLogProperties.SessionId,
+        NetclawLogProperties.SubSessionId,
+        "LogSource",
+        "ActorPath",
+        "AuthorizationAttemptId");
+
+    /// <summary>
+    /// Replaces each value in <paramref name="redacted"/> that the template marks as a secret
+    /// with the mask text. <paramref name="redacted"/> holds the redacted values of
+    /// <paramref name="pairs"/>, in the same order.
+    /// </summary>
+    public static void Mask(IEnumerable<KeyValuePair<string, object?>> pairs, KeyValuePair<string, object?>[] redacted)
+    {
+        var originals = pairs.ToArray();
+        if (originals.Length != redacted.Length)
+            throw new InvalidOperationException("The log state returned a different number of values on a second read.");
+
+        var template = originals.FirstOrDefault(static pair => pair.Key == OriginalFormatKey).Value as string;
+        if (string.IsNullOrEmpty(template))
+            return;
+
+        var rendered = Render(template, originals, out var spans);
+        if (spans.Count == 0)
+            return;
+
+        var masks = SecretOutputRedactor.FindLogMasks(rendered);
+        foreach (var span in spans)
+        {
+            var inContext = masks.AsSpan(span.Start, span.Text.Length);
+            if (ExemptKeys.Contains(originals[span.PairIndex].Key) || !inContext.Contains(true))
+                continue;
+
+            if (IsMaskedOnlyInContext(inContext, span.Text))
+                redacted[span.PairIndex] = new KeyValuePair<string, object?>(originals[span.PairIndex].Key, SecretOutputRedactor.Redacted);
+        }
+    }
+
+    // True when the rendered text masks a character of the value that the value alone keeps.
+    // A value that holds the whole secret shape ("Authorization: Bearer abc") is masked the same
+    // way alone, so it keeps its own redacted text.
+    private static bool IsMaskedOnlyInContext(ReadOnlySpan<bool> inContext, string value)
+    {
+        var alone = SecretOutputRedactor.FindLogMasks(value);
+        for (var i = 0; i < inContext.Length; i++)
+        {
+            if (inContext[i] && !alone[i])
+                return true;
+        }
+
+        return false;
+    }
+
+    // Renders the template the way MEL and the Akka bridge do: "{{" and "}}" are braces, and a
+    // placeholder "{Name}", "{Name,10}", or "{Name:x}" takes the value with that name. A repeated
+    // name takes the next value with that name, or the last one when no more are left (Akka gives
+    // one value for each name). A placeholder with no value stays as text.
+    private static string Render(string template, KeyValuePair<string, object?>[] pairs, out List<ValueSpan> spans)
+    {
+        var byName = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
+        for (var i = 0; i < pairs.Length; i++)
+        {
+            if (pairs[i].Key == OriginalFormatKey)
+                continue;
+            if (!byName.TryGetValue(pairs[i].Key, out var indexes))
+                byName[pairs[i].Key] = indexes = new Queue<int>();
+            indexes.Enqueue(i);
+        }
+
+        spans = [];
+        var text = new StringBuilder(template.Length + 64);
+        var position = 0;
+        while (position < template.Length)
+        {
+            var c = template[position];
+            if (c is '{' or '}' && position + 1 < template.Length && template[position + 1] == c)
+            {
+                text.Append(c);
+                position += 2;
+                continue;
+            }
+
+            var close = c == '{' ? template.IndexOf('}', position + 1) : -1;
+            if (close < 0)
+            {
+                text.Append(c);
+                position++;
+                continue;
+            }
+
+            var hole = template.AsSpan(position + 1, close - position - 1);
+            var nameEnd = hole.IndexOfAny(',', ':');
+            var name = (nameEnd < 0 ? hole : hole[..nameEnd]).Trim().ToString();
+            if (byName.TryGetValue(name, out var queue))
+            {
+                var pairIndex = queue.Count > 1 ? queue.Dequeue() : queue.Peek();
+                var value = RenderValue(pairs[pairIndex].Value);
+                spans.Add(new ValueSpan(text.Length, value, pairIndex));
+                text.Append(value);
+            }
+            else
+            {
+                text.Append(template, position, close - position + 1);
+            }
+
+            position = close + 1;
+        }
+
+        return text.ToString();
+    }
+
+    // The text that MEL writes for a value.
+    private static string RenderValue(object? value)
+        => value switch
+        {
+            null => "(null)",
+            string text => text,
+            IEnumerable items => string.Join(", ", items.Cast<object?>().Select(static item => item ?? "(null)")),
+            _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty,
+        };
+
+    private readonly record struct ValueSpan(int Start, string Text, int PairIndex);
 }
 
 /// <summary>

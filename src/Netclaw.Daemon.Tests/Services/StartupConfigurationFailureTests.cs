@@ -49,4 +49,24 @@ public sealed class StartupConfigurationFailureTests : IDisposable
         Assert.Contains("DB_PASSWORD=***REDACTED***", daemonLog, StringComparison.Ordinal);
         Assert.DoesNotContain("hunter2", daemonLog, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Report_UsesTheLogOnlyRules()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+        using var stderr = new StringWriter();
+
+        StartupConfigurationFailure.Report(
+            paths,
+            "Provider rejected API_KEY=\nabc123secret for https://acct.blob.core.windows.net/c?sig=Zm9vYmFy%3D",
+            stderr);
+
+        var daemonLog = File.ReadAllText(Directory.GetFiles(paths.LogsDirectory, "daemon*.log").Single());
+        foreach (var text in new[] { stderr.ToString(), daemonLog })
+        {
+            Assert.DoesNotContain("abc123secret", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Zm9vYmFy", text, StringComparison.Ordinal);
+        }
+    }
 }

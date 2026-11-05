@@ -24,9 +24,9 @@ public sealed class CrashLogRedactionTests : IDisposable
         using var errors = new StringWriter();
 
         var crashPath = CrashLogWriter.TryWrite(
-            new InvalidOperationException("login failed for password=hunter2"),
+            new InvalidOperationException("login failed for password=hunter2 API_KEY=\nabc123secret"),
             "daemon",
-            SecretOutputRedactor.Redact,
+            SecretOutputRedactor.RedactForLogging,
             errorWriter: errors,
             logsDirectory: _directory.Path);
 
@@ -34,6 +34,7 @@ public sealed class CrashLogRedactionTests : IDisposable
         var text = File.ReadAllText(crashPath);
         Assert.Contains("password=***REDACTED***", text, StringComparison.Ordinal);
         Assert.DoesNotContain("hunter2", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("abc123secret", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -45,15 +46,16 @@ public sealed class CrashLogRedactionTests : IDisposable
         using var errors = new StringWriter();
 
         var crashPath = CrashLogWriter.TryWrite(
-            new InvalidOperationException("login failed for password=hunter2"),
+            new InvalidOperationException("login failed for password=hunter2 API_KEY=\nabc123secret"),
             "daemon",
-            SecretOutputRedactor.Redact,
+            SecretOutputRedactor.RedactForLogging,
             errorWriter: errors,
             logsDirectory: blocked);
 
         Assert.Null(crashPath);
         Assert.Contains("password=***REDACTED***", errors.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("hunter2", errors.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("abc123secret", errors.ToString(), StringComparison.Ordinal);
     }
 
     public void Dispose() => _directory.Dispose();

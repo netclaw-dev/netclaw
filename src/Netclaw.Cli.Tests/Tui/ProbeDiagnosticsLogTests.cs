@@ -36,5 +36,26 @@ public sealed class ProbeDiagnosticsLogTests : IDisposable
         Assert.DoesNotContain((char)0x2028, text);
     }
 
+    [Fact]
+    public void An_entry_uses_the_log_only_rules()
+    {
+        var paths = new NetclawPaths(_directory.Path);
+
+        ProbeDiagnosticsLog.Write(
+            paths,
+            source: "test",
+            providerType: "openai",
+            endpoint: "https://api.example.com/v1",
+            probeId: "probe-2",
+            outcome: "failed",
+            detail: "env API_KEY=\nabc123secret for ?X-Amz-Signature=deadbeefcafe01&X-Amz-Date=20261105T000000Z",
+            exception: null);
+
+        var text = File.ReadAllText(Path.Combine(paths.LogsDirectory, "provider-probe.log"));
+        Assert.DoesNotContain("abc123secret", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("deadbeefcafe01", text, StringComparison.Ordinal);
+        Assert.Single(text.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+    }
+
     public void Dispose() => _directory.Dispose();
 }

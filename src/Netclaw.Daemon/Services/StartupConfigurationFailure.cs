@@ -20,7 +20,7 @@ internal static class StartupConfigurationFailure
     public static void Report(NetclawPaths paths, string message, TextWriter stderr)
     {
         // The message can quote a config value or an SDK error, so stderr gets a redacted copy.
-        stderr.WriteLine($"error: {SecretOutputRedactor.Redact(message)}");
+        stderr.WriteLine($"error: {SecretOutputRedactor.RedactForLogging(message)}");
 
         // Logging is not configured this early in startup, so this builds its own pipeline. It
         // goes through the redaction stage like every other daemon record. Dispose drains the

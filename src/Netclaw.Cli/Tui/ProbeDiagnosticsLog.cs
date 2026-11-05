@@ -74,5 +74,5 @@ internal static class ProbeDiagnosticsLog
     // This file bypasses the logging pipeline, so it redacts here. Each entry is one line:
     // every kind of line break (including NEL, U+2028, and U+2029) becomes a space.
     private static string Sanitize(string input)
-        => SecretOutputRedactor.Redact(input).ReplaceLineEndings(" ").Trim();
+        => SecretOutputRedactor.RedactForLogging(input).ReplaceLineEndings(" ").Trim();
 }

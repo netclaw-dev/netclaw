@@ -14,7 +14,8 @@ namespace Netclaw.Security;
 public static partial class SecretOutputRedactor
 {
     private const int MaxSecretKeyChars = 512;
-    private const string Redacted = "***REDACTED***";
+    /// <summary>The text that replaces each masked secret.</summary>
+    public const string Redacted = "***REDACTED***";
 
     private static readonly string[] SecretKeyFragments =
     [
@@ -63,55 +64,78 @@ public static partial class SecretOutputRedactor
         return !string.Equals(Redact(output), output, StringComparison.Ordinal);
     }
 
-    public static string Redact(string output)
+    public static string Redact(string output) => Redact(output, masks: null);
+
+    // The shared pipeline. When masks is not null, it records which characters of the
+    // original text each rule masks (see LogMaskMap). The output is the same either way.
+    private static string Redact(string output, LogMaskMap? masks)
     {
         if (string.IsNullOrEmpty(output))
             return output;
 
         var sanitized = output;
 
-        sanitized = JsonSecretValueRegex().Replace(sanitized, m =>
-            $"\"{m.Groups[1].Value}\": \"{Redacted}\"");
+        sanitized = Replace(JsonSecretValueRegex(), sanitized, static m =>
+            $"\"{m.Groups[1].Value}\": \"{Redacted}\"", masks);
 
-        sanitized = ConnectionStringPasswordRegex.Replace(sanitized, m =>
-            $"{m.Groups[1].Value}{Redacted};");
+        sanitized = Replace(ConnectionStringPasswordRegex, sanitized, static m =>
+            $"{m.Groups[1].Value}{Redacted};", masks);
 
-        sanitized = EnvSecretValueRegex.Replace(sanitized, m =>
-            $"{m.Groups[1].Value}={Redacted}");
+        sanitized = Replace(EnvSecretValueRegex, sanitized, static m =>
+            IsAttemptIdName(m.Groups[1].Value) ? m.Value : $"{m.Groups[1].Value}={Redacted}", masks);
 
         var beforePrefixed = sanitized;
-        sanitized = PrefixedEnvSecretValueRegex().Replace(beforePrefixed, m => RedactPrefixedValue(beforePrefixed, m));
+        sanitized = Replace(PrefixedEnvSecretValueRegex(), beforePrefixed, m => RedactPrefixedValue(beforePrefixed, m), masks);
 
-        sanitized = HeaderSecretValueRegex().Replace(sanitized, m =>
-            $"{m.Groups[1].Value}{Redacted}");
+        sanitized = Replace(HeaderSecretValueRegex(), sanitized, static m =>
+            $"{m.Groups[1].Value}{Redacted}", masks);
 
-        sanitized = SlackWebhookUrlRegex().Replace(sanitized, m =>
-            $"{m.Groups[1].Value}{Redacted}");
+        sanitized = Replace(SlackWebhookUrlRegex(), sanitized, static m =>
+            $"{m.Groups[1].Value}{Redacted}", masks);
 
-        sanitized = KnownTokenRegex().Replace(sanitized, Redacted);
+        sanitized = Replace(KnownTokenRegex(), sanitized, static _ => Redacted, masks);
 
-        sanitized = JwtTokenRegex.Replace(sanitized, Redacted);
+        sanitized = Replace(JwtTokenRegex, sanitized, static _ => Redacted, masks);
 
-        sanitized = PrivateKeyBlockRegex.Replace(sanitized, Redacted);
+        sanitized = Replace(PrivateKeyBlockRegex, sanitized, static _ => Redacted, masks);
 
         // The rules below run after the private-key rule. A rule that runs before it can mask
         // a part of an END line, and then the key body stays visible. The rules below also
         // keep all text outside the secret value, so they only add masks to the output above.
-        sanitized = UrlCredentialsRegex.Replace(sanitized, m => MaskGroup(m, m.Groups["value"]));
+        sanitized = Replace(UrlCredentialsRegex, sanitized, static m => MaskGroup(m, m.Groups["value"]), masks);
 
         var headerText = sanitized;
-        sanitized = SecretHeaderLineRegex.Replace(headerText, m => RedactHeaderValue(headerText, m));
+        sanitized = Replace(SecretHeaderLineRegex, headerText, m => RedactHeaderValue(headerText, m), masks);
 
         var jsonText = sanitized;
-        sanitized = JsonSecretHeaderRegex.Replace(jsonText, m => RedactHeaderValue(jsonText, m));
+        sanitized = Replace(JsonSecretHeaderRegex, jsonText, m => RedactHeaderValue(jsonText, m), masks);
 
-        sanitized = NameValuePairRegex.Replace(sanitized, m =>
-            IsSecretPairName(m.Groups["name"].Value) ? MaskGroup(m, m.Groups["value"]) : m.Value);
+        sanitized = Replace(NameValuePairRegex, sanitized, static m =>
+            IsSecretPairName(m.Groups["name"].Value) ? MaskGroup(m, m.Groups["value"]) : m.Value, masks);
 
         var optionText = sanitized;
-        sanitized = SecretOptionValueRegex.Replace(optionText, m => RedactOptionValue(optionText, m));
+        sanitized = Replace(SecretOptionValueRegex, optionText, m => RedactOptionValue(optionText, m), masks);
 
         return sanitized;
+    }
+
+    // Every rule replaces its matches through this method, so a mask map sees each rule.
+    private static string Replace(Regex rule, string input, MatchEvaluator evaluator, LogMaskMap? masks)
+        => masks is null ? rule.Replace(input, evaluator) : masks.Replace(rule, input, evaluator);
+
+    // The ID of an authorization attempt is not a secret: authorizationAttemptId,
+    // authorization_attempt_id. The name must end with "authorization attempt id". Any other
+    // name stays a secret name, because it can hold the secret that was tried
+    // (password_attempt=hunter2, password_attempts=hunter2, api_key_attempt_id=hunter2).
+    private static bool IsAttemptIdName(string name)
+    {
+        var last = LastSegment(name, out var before);
+        if (!last.Equals("id", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var attempt = LastSegment(before, out var stem);
+        return attempt.Equals("attempt", StringComparison.OrdinalIgnoreCase)
+               && LastSegment(stem, out _).Equals("authorization", StringComparison.OrdinalIgnoreCase);
     }
 
     // Replaces only the value group. All other text of the match stays as it is.
@@ -377,11 +401,12 @@ public static partial class SecretOutputRedactor
     /// This swaps in a redacted stand-in only when secret-shaped content is actually
     /// present, so the overwhelming majority of exceptions (network errors, cancellations,
     /// disposal failures) keep their original instance, type, and full native stack trace.
+    /// It applies the log rules of <see cref="RedactForLogging(string)"/>.
     /// </summary>
     public static Exception RedactForLogging(Exception ex)
     {
         var rendered = ex.ToString();
-        var redacted = Redact(rendered);
+        var redacted = RedactForLogging(rendered);
         if (string.Equals(redacted, rendered, StringComparison.Ordinal))
             return ex;
 

@@ -665,7 +665,7 @@ public sealed class HeadlessChannel : IChannel
     }
 
     private void WriteRecord(StreamWriter log, string message)
-        => log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {SecretOutputRedactor.Redact(message)}");
+        => log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {SecretOutputRedactor.RedactForLogging(message)}");
 
     private void WriteFailureLog(string kind, string detail)
     {
@@ -674,7 +674,7 @@ public sealed class HeadlessChannel : IChannel
             _paths.EnsureDirectoriesExist();
             var path = Path.Combine(_paths.LogsDirectory, "headless-errors.log");
             File.AppendAllText(path,
-                $"[{_timeProvider.GetUtcNow():o}] {SecretOutputRedactor.Redact($"{kind}: {detail}")}\n");
+                $"[{_timeProvider.GetUtcNow():o}] {SecretOutputRedactor.RedactForLogging($"{kind}: {detail}")}\n");
         }
         catch (Exception logEx)
         {

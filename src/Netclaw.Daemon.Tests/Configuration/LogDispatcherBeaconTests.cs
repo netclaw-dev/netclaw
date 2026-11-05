@@ -20,7 +20,7 @@ public sealed class LogDispatcherBeaconTests : IDisposable
     {
         var path = Path.Join(_directory.Path, "daemon.log");
         var failed = Task.FromException<IActorRef>(
-            new InvalidOperationException("lookup failed with password=hunter2\n17:00:00.000 [INF] fake"));
+            new InvalidOperationException("lookup failed with password=hunter2 at ?sig=Zm9vYmFy%3D\n17:00:00.000 [INF] fake"));
 
         // Dispose waits for the writer thread before the test reads the file.
         using (var provider = new RollingFileLoggerProvider(path, new FakeTimeProvider(DateTimeOffset.Parse("2026-10-29T17:00:00Z"))))
@@ -33,6 +33,7 @@ public sealed class LogDispatcherBeaconTests : IDisposable
         var text = File.ReadAllText(Directory.GetFiles(_directory.Path, "daemon-*.log").Single());
         Assert.Contains("password=***REDACTED***", text, StringComparison.Ordinal);
         Assert.DoesNotContain("hunter2", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Zm9vYmFy", text, StringComparison.Ordinal);
         Assert.Contains("\n  17:00:00.000 [INF] fake", text.Replace("\r", string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
     }
 

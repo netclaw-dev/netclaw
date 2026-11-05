@@ -62,6 +62,17 @@ public sealed class LogRecordFramingTests : IDisposable
         Assert.All(lines.Skip(1), line => Assert.StartsWith("  ", line, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void A_value_on_the_line_after_its_key_is_masked_in_the_daemon_log()
+    {
+        var lines = WriteAndRead(logger => logger.LogInformation("loaded environment:\nAPI_KEY=\nabc123secret"));
+
+        Assert.Single(lines, line => Header.IsMatch(line));
+        Assert.Contains("  API_KEY=", lines);
+        Assert.Contains("  ***REDACTED***", lines);
+        Assert.DoesNotContain(lines, line => line.Contains("abc123secret", StringComparison.Ordinal));
+    }
+
     private IReadOnlyList<string> WriteAndRead(Action<ILogger> write)
     {
         var path = Path.Join(_directory.Path, "daemon.log");

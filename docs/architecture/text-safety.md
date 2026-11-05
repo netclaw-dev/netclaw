@@ -7,7 +7,8 @@ people. The testable rules live in two OpenSpec capabilities:
 [`text-safety-primitives`](../../openspec/specs/text-safety-primitives/spec.md).
 This document links to those rules. It does not copy them.
 
-Status: this document describes the code after the `unify-text-safety` change.
+Status: this document describes the code after the `close-log-redaction-gaps`
+change.
 
 Contents:
 
@@ -56,6 +57,29 @@ receivers used twice before:
 A value can go to both kinds of sink. Then each sink gets its own copy. The log
 copy is masked, and the operative copy stays as it is.
 
+### Log redaction
+
+Terminal sinks use log redaction: `SecretOutputRedactor.RedactForLogging`.
+It applies the shared rules of `SecretOutputRedactor.Redact`, and then the
+log-only rules. Operative sinks that redact use `Redact` only. A log-only rule
+can mask a value that a receiver needs, so it must never reach an operative
+sink. The log-only rules:
+
+| Rule | Masks | Keeps |
+|---|---|---|
+| Next-line value | `API_KEY=`, a line break, and then `abc123`: the value on the next line. The rule masks the value only when `Redact` masks the same key and value on one line. | `max_tokens=` and then `4096`; `API_KEY=` and then `$API_KEY`; `token:` and then any line |
+| Presigned URL signature | The value of `X-Amz-Signature`, `X-Goog-Signature`, `Signature`, and `sig` in any query position | `?signed=true&sigma=2`; `sig={signature}` |
+
+The stage also masks a structured value that its template marks as a secret,
+as in `LogInformation("Authorization: Bearer {Token}", token)`. It renders the
+template with its values, and `SecretOutputRedactor.FindLogMasks` marks each
+character that log redaction masks. A value is masked when its own span holds
+a masked character that redaction of the value alone does not mask. The span
+comes from the placeholder position, not from a search for the value text. The
+routing keys (`SessionId`, `SubSessionId`, `LogSource`, `ActorPath`) and
+`AuthorizationAttemptId` are never masked by this rule. This work runs only
+for a record whose message log redaction changed.
+
 ## 3. The sink map
 
 This diagram shows the log path. One stage redacts each record before the
@@ -66,16 +90,18 @@ flowchart LR
     A[Netclaw ILogger calls] --> F
     B[Akka actor logs] --> F
     C[ASP.NET, HttpClient, SDK logs] --> F
-    F["RedactingLoggerFactory<br/>redact + normalize, once per record"] --> L[inner LoggerFactory]
+    F["RedactingLoggerFactory<br/>log redaction + normalize, once per record"] --> L[inner LoggerFactory]
     L --> D["RollingFileLoggerProvider<br/>continuation prefix"]
     L --> K[console single-line formatter]
     L --> O[OTLP export]
     D --> DL[daemon.log]
     D --> SL[session.log]
-    T["SessionLogActor transcript lines<br/>redact + frame at the writer"] --> SL
+    T["SessionLogActor transcript lines<br/>log redaction + frame at the writer"] --> SL
 ```
 
 ### Terminal sinks (log safety)
+
+Each "Redaction" cell below means log redaction (`RedactForLogging`).
 
 | Sink | Owner | Redaction | Framing |
 |---|---|---|---|
@@ -83,12 +109,13 @@ flowchart LR
 | `session.log`, routed records | Same as `daemon.log` | The stage | The file sink |
 | `session.log`, transcript lines | `SessionLogActor.WriteTranscript` | At the writer; truncated fields are redacted before the cut, and streamed thinking deltas are joined before redaction | At the writer |
 | Console | `RedactingLoggerFactory`, then the stock single-line formatter | The stage | The stage normalizes line breaks in the message and the exception text; the formatter keeps one line |
-| OTLP log export | `RedactingLoggerFactory`, then OpenTelemetry | The stage, including each structured value and scope value | Not needed: records are structured |
+| OTLP log export | `RedactingLoggerFactory`, then OpenTelemetry | The stage, including each structured value, each template-marked value, and each scope value | Not needed: records are structured |
 | `crash-*.log` and its stderr fallback | `CrashLogWriter` | A required redactor parameter | Not needed: one file per crash |
 | Startup configuration failure (`daemon.log` and stderr) | `StartupConfigurationFailure` | Its own instance of the stage, because the host does not exist yet | The file sink |
 | Crash monitor fallback on stderr | `DaemonCrashMonitor` | At the writer | Not needed: one line |
 | Session-dispatcher failure beacon | `RollingFileLoggerProvider` | At the beacon | At the beacon |
 | `provider-probe.log` (CLI) | `ProbeDiagnosticsLog` | At the writer | Each entry on one line |
+| Tool call log attributes (`Args`, `Rationale`) | `ToolCallLogFormatter` | At the formatter, before it truncates or hashes a value; the stage again | The stage |
 | `{session}.log` and `headless-errors.log` (`netclaw chat -p`) | `HeadlessChannel` | At the writer; streamed deltas are joined before redaction | None: the eval scripts read multi-line records verbatim, and they tell a quoted header from a real one by its time |
 
 `RedactingLoggerFactory` wraps the daemon's one `ILoggerFactory`. Every daemon
@@ -141,8 +168,9 @@ daemon would not find them. Its tests pin its output.
 | You write text to... | Use |
 |---|---|
 | A log, through `ILogger` | Nothing. The stage redacts and normalizes every record. |
-| A log file, outside `ILogger` | `SecretOutputRedactor.Redact`, then `LogTextFraming.Frame`. Redact before you truncate. Join streamed deltas before you redact. |
-| A value that the model or a tool will use | Nothing by default. Redaction can break the value. Ask first. |
+| A log file, outside `ILogger` | `SecretOutputRedactor.RedactForLogging`, then `LogTextFraming.Frame`. Redact before you truncate. Join streamed deltas before you redact. |
+| Text that you shape for a log value, such as a preview or a word list | `SecretOutputRedactor.RedactForLogging` on the source text, before you shape it. |
+| A value that the model or a tool will use | Nothing by default. Redaction can break the value. Ask first. Never `RedactForLogging`. |
 | A prompt or text that a person approves | `TextControlCharacters.EscapeAsUnicode` with the sets that the sink needs. |
 | A file name, folder name, or actor name | The helper in the identifier table that matches the name's owner. Do not add a new one. |
 | Markdown, JSON, or HTML | The format's own escaping. These are not text-safety helpers. |
@@ -156,6 +184,15 @@ they are.
 - Breaks: `_logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex), ...)`.
   The stage already does this for every record, so the call adds cost and a
   second place to change.
+
+**Use log redaction for log text, and only for log text.**
+
+- Follows: `SessionLogActor.Clip` calls `RedactForLogging` before it truncates
+  a transcript field.
+- Breaks: a log writer that calls `Redact`. It misses the log-only shapes, such
+  as a presigned URL signature.
+- Breaks: a tool result for the model that calls `RedactForLogging`. The model
+  gets a presigned URL without its signature, and the upload fails (#1992).
 
 **Redact before you truncate.** A cut can split a secret into a fragment that
 no pattern matches.
@@ -190,7 +227,8 @@ and give the log its own masked copy.
 |---|---|
 | A new log provider or exporter | Supported. It sits behind the inner factory, so it gets redacted records with no extra step. |
 | A new component that logs through `ILogger` | Supported. Nothing to add. |
-| A new file that bypasses `ILogger` | Manual. The writer must call `SecretOutputRedactor.Redact` and `LogTextFraming.Frame`, and add tests. |
+| A new file that bypasses `ILogger` | Manual. The writer must call `SecretOutputRedactor.RedactForLogging` and `LogTextFraming.Frame`, and add tests. |
+| A new secret shape that only logs can mask | Add a log-only rule in `SecretOutputRedactor.Logging.cs`, with a test that `Redact` keeps the text. |
 | A new operative sink | Manual. Decide its rule from its consumer, and add a row to the sink map. |
 
 ## 7. Known gaps
@@ -199,14 +237,17 @@ and give the log its own masked copy.
   See #2749.
 - `WebhookExecutionService.Sanitize` can keep non-ASCII letters in an actor
   name. See #2750.
-- The shared patterns miss a key and its value on separate lines
-  (`API_KEY=` and then the value on the next line), and a presigned URL
-  signature that comes before the credential. See #2770.
-- The stage redacts each structured value alone. When the template holds the
-  words that mark a secret, as in `Authorization: Bearer {Token}`, the message
-  is masked but the `Token` attribute is not. A rule that masked such values
-  also masked real IDs, because the patterns match `authorizationAttemptId=`.
-  See #2770.
+- The next-line rule covers `=` only. A header name with `:` at the end of a
+  line, and its value on the next line, stays unmasked.
+- The signature rule does not match a URL-encoded parameter (`%3Fsig%3D`),
+  `x-ms-signature=`, or `"sig":"..."` in JSON.
+- The header rules that need a line start do not match after the Akka prefix
+  (`[INFO][...][akka://...] X-Api-Key: abc`). The template rule uses the
+  rendered template, which has no prefix, so the attribute and the message
+  can differ for such a record.
+- The template attribute `{OriginalFormat}` is redacted as text. A template
+  such as `Authorization: Bearer {Token}` shows `***REDACTED***` in place of
+  `{Token}`.
 - A crafted MCP argument value makes the approval display throw. See #2771.
 - The headless CLI session log is redacted but not framed. Its eval readers
   rely on verbatim records.
@@ -217,7 +258,15 @@ and give the log its own masked copy.
 
 - `RedactingLoggerFactoryTests`: message, structured values, scopes,
   exceptions, exception text that needs escaping, false positives such as
-  `max_tokens=4096`, and the fail-closed path.
+  `max_tokens=4096` and `authorizationAttemptId=`, the log-only rules,
+  template-marked values, the exempt keys, and the fail-closed path.
+- `SecretOutputRedactorLoggingTests`: each log-only rule masks its shape in
+  logs and `Redact` keeps it; the negative cases; the attempt ID fix; and the
+  mask map.
+- `ActorLogRedactionRoutingTests`: an Akka record masks a template-marked
+  value.
+- `DispatchingToolExecutorTests`: a presigned URL reaches the model unchanged,
+  when its signature comes first too.
 - `LogRedactionRoutingTests`: `ILogger<T>`, framework, and Akka records go
   through the stage, including a provider registered after it.
 - `LogRecordFramingTests` and `ConsoleLogFramingTests`: content cannot forge a

@@ -53,8 +53,32 @@ public sealed class ActorLogRedactionRoutingTests : TestKit
         Assert.DoesNotContain(_capture.Records, r => r.Message.Contains("hunter2", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task An_actor_value_that_only_the_template_marks_as_a_secret_is_masked()
+    {
+        var actor = Sys.ActorOf(Props.Create(() => new TemplateLogger()));
+        actor.Tell("abc123xyz");
+
+        await AwaitAssertAsync(
+            () => Assert.Contains(_capture.Records, r => r.Message.Contains("actor template marker", StringComparison.Ordinal)),
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var record = Assert.Single(_capture.Records, r => r.Message.Contains("actor template marker", StringComparison.Ordinal));
+        var values = record.Values.ToDictionary(pair => pair.Key, pair => pair.Value);
+        Assert.Equal("***REDACTED***", values["Token"]);
+        Assert.Equal("call-7", values["CallId"]);
+        Assert.Contains("ActorPath", values.Keys);
+        Assert.DoesNotContain("abc123xyz", record.Message, StringComparison.Ordinal);
+    }
+
     private sealed class MarkerLogger : ReceiveActor
     {
         public MarkerLogger() => Receive<string>(message => Context.GetLogger().Info(message));
+    }
+
+    private sealed class TemplateLogger : ReceiveActor
+    {
+        public TemplateLogger() => Receive<string>(token =>
+            Context.GetLogger().Info("actor template marker call={CallId} Authorization: Bearer {Token}", "call-7", token));
     }
 }
