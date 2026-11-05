@@ -36,7 +36,8 @@ public sealed class MemoryCurationLlmDoctorCheckTests : IDisposable
 
         Assert.Equal("Memory Curation LLM", result.Name);
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
-        Assert.Contains("50%", result.Message);
+        // The percent text follows the current culture ("50%" or "50 %"), so
+        // check the counts, which do not change with the culture.
         Assert.Contains("(1/2)", result.Message);
     }
 }
