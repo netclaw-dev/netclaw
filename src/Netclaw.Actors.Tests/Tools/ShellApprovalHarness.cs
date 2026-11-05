@@ -411,6 +411,13 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                     .ToList());
         }
 
+        // Each read through the actor takes the store's lock file. The first read
+        // creates the directory and the lock file, which on a loaded Windows runner
+        // can take longer than the 5s Ask deadline, so the policy denies the call
+        // with internal_policy_failure. Read once here, on the test thread, so the
+        // actor's first read finds both already in place.
+        store.Load();
+
         var approvalService = provider.GetRequiredService<CountingApprovalService>();
         foreach (var seed in approvals.Seeds.Where(seed => seed.Source == ApprovalSeedSource.Session))
         {

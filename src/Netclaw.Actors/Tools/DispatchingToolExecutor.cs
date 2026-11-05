@@ -44,12 +44,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
     {
         _registry = registry;
         _policy = policy;
+        _logger = logger;
         Authorizer = new ToolAuthorizer(
             registry,
             policy,
             approvalService,
-            new ShellPolicyCoordinator(registry, policy, approvalService));
-        _logger = logger;
+            new ShellPolicyCoordinator(registry, policy, approvalService),
+            logger);
     }
 
     internal static DispatchingToolExecutor CreateWithLogger(
