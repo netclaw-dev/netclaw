@@ -24,7 +24,12 @@ public sealed class MemoryCurationLlmDoctorCheckTests : IDisposable
         paths.EnsureDirectoriesExist();
 
         var logPath = Path.Combine(paths.LogsDirectory, "daemon-2026-05-20.log");
-        using var writer = new StreamWriter(logPath, append: true);
+        using var writerStream = new FileStream(
+            logPath,
+            FileMode.Append,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var writer = new StreamWriter(writerStream);
         writer.WriteLine("curation_llm_decision");
         writer.WriteLine("curation_llm_timeout");
         writer.Flush();
