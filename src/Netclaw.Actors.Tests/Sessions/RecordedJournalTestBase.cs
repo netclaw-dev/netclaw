@@ -329,6 +329,7 @@ internal static class SqlPersistencePlugins
 
     // Each attempt clears the pools first. A connection that a plugin returns late goes back to the pool, and only
     // a new clear closes it. DisposableTempDir retries the delete between the attempts.
+    [SlopwatchSuppress("SW003", "A failed delete attempt is retried; the last attempt throws.")]
     private static void DeleteWithPoolClear(TestSessionTempDirectory? directory)
     {
         for (var attempt = 1; attempt <= DeleteAttempts; attempt++)
@@ -339,7 +340,7 @@ internal static class SqlPersistencePlugins
                 directory?.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 return;
             }
-            catch (IOException) when (attempt < DeleteAttempts) // slopwatch-ignore: SW003 test cleanup retry
+            catch (IOException) when (attempt < DeleteAttempts)
             {
             }
         }
