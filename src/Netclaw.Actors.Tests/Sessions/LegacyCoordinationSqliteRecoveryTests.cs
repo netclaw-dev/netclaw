@@ -61,7 +61,7 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : RecordedJournalTestB
         {
             SessionId = sessionId,
             Content = "Continue after the recovered child result."
-        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }, ColdRecoveryCeiling, TestContext.Current.CancellationToken);
         await subscriber.FishForMessageAsync<TurnCompleted>(_ => true, TimeSpan.FromSeconds(10),
             cancellationToken: TestContext.Current.CancellationToken);
 
@@ -111,7 +111,7 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : RecordedJournalTestB
         {
             SessionId = sessionId,
             Content = "Continue after the quarantined legacy snapshot."
-        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }, ColdRecoveryCeiling, TestContext.Current.CancellationToken);
         await subscriber.FishForMessageAsync<TurnCompleted>(_ => true, TimeSpan.FromSeconds(10),
             cancellationToken: TestContext.Current.CancellationToken);
 
@@ -157,7 +157,7 @@ public sealed class LegacyCoordinationSqliteRecoveryTests : RecordedJournalTestB
         {
             SessionId = sessionId,
             Content = "Continue after the notice."
-        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }, ColdRecoveryCeiling, TestContext.Current.CancellationToken);
         await subscriber.FishForMessageAsync<TurnCompleted>(_ => true, TimeSpan.FromSeconds(10),
             cancellationToken: TestContext.Current.CancellationToken);
         var later = _chatClient.ReceivedMessages.Last();

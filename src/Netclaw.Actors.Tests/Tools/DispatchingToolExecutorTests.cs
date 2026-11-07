@@ -340,6 +340,69 @@ public partial class DispatchingToolExecutorTests : IDisposable
         });
     }
 
+    // The log-only signature rule (#2770) must not reach the model. A signature that comes first
+    // is a shape that only the log rules mask.
+    [Fact]
+    public async Task Mcp_tool_output_with_the_signature_first_reaches_the_model_unredacted()
+    {
+        const string presignedUrl =
+            "https://acct.r2.cloudflarestorage.com/bucket/x.png?X-Amz-Signature=deadbeefcafe01" +
+            "&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=abc123def456ghijklmnop%2F20260818%2Fauto%2Fs3%2Faws4_request";
+        var adapter = new McpToolAdapter(AIFunctionFactory.Create(() => presignedUrl, "create_upload"), "assetbridge", "create_upload");
+
+        var result = await ExecuteOnlyToolAsync(adapter);
+
+        Assert.Equal(presignedUrl, result);
+    }
+
+    [Fact]
+    public async Task Tool_output_redacted_for_the_model_keeps_a_presigned_url_signature()
+    {
+        const string presignedUrl =
+            "https://acct.blob.core.windows.net/c/x.png?sv=2024-11-04&sig=Zm9vYmFy%3D&X-Amz-Signature=deadbeefcafe01";
+        Assert.NotEqual(presignedUrl, SecretOutputRedactor.RedactForLogging(presignedUrl));
+
+        var result = await ExecuteOnlyToolAsync(new FixedOutputTestTool(presignedUrl));
+
+        Assert.Equal(presignedUrl, result);
+    }
+
+    // Runs one auto-approved tool call through a new executor, with the default output redaction.
+    private async Task<string> ExecuteOnlyToolAsync(INetclawTool tool)
+    {
+        var registry = new ToolRegistry();
+        registry.Register(tool);
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [tool.Name] = ToolApprovalMode.Auto
+            }
+        };
+        var executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(new NetclawPaths(),
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(ShellEnvironment),
+                new ToolPathPolicy(ShellEnvironment, [])),
+            logger: new RecordingLogger<DispatchingToolExecutor>());
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", BoundSessionDirectory, new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+        });
+
+        return await executor.ExecuteAsync(
+            CreateToolCall("call-only", tool.Name, new Dictionary<string, object?>()),
+            context,
+            CancellationToken.None);
+    }
+
     [Fact]
     public async Task Shell_output_still_redacts_secrets()
     {
@@ -4474,6 +4537,21 @@ public partial class DispatchingToolExecutorTests : IDisposable
             {
             }
         }
+    }
+
+    private sealed class FixedOutputTestTool(string output) : INetclawTool
+    {
+        public string Name => "fixed_output_probe";
+        public LlmFacingToolName LlmFacingName => LlmFacingToolName.FromCanonical(Name);
+        public string Description => "A test tool that returns a fixed text.";
+        public string GrantCategory => "test";
+        public System.Text.Json.JsonElement ParameterSchema => default;
+        public AITool ToAITool() => AIFunctionFactory.Create(() => output, Name);
+        public Task<string> ExecuteAsync(
+            IDictionary<string, object?>? arguments,
+            ToolInvocationContext context,
+            CancellationToken ct = default)
+            => Task.FromResult(output);
     }
 
     private sealed class ThrowingTestTool(Exception exception) : INetclawTool

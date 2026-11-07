@@ -119,7 +119,7 @@ internal sealed class DaemonCrashMonitor : IDisposable
             var crashLogPath = CrashLogWriter.TryWrite(
                 exception,
                 reason,
-                SecretOutputRedactor.Redact,
+                SecretOutputRedactor.RedactForLogging,
                 timeProvider: _timeProvider,
                 logsDirectory: _logsDirectory,
                 context: context);
@@ -254,10 +254,10 @@ internal sealed class DaemonCrashMonitor : IDisposable
         catch (Exception loggingFailure)
         {
             Console.Error.WriteLine(
-                $"[Netclaw.Daemon.CrashMonitor] Failed to write monitor warning via logger factory: {SecretOutputRedactor.Redact(loggingFailure.ToString())}");
+                $"[Netclaw.Daemon.CrashMonitor] Failed to write monitor warning via logger factory: {SecretOutputRedactor.RedactForLogging(loggingFailure.ToString())}");
         }
 
         // This path skips the log stage, so it redacts its own copy.
-        Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] {SecretOutputRedactor.Redact($"{message} {exception}")}");
+        Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] {SecretOutputRedactor.RedactForLogging($"{message} {exception}")}");
     }
 }

@@ -116,14 +116,20 @@ public sealed class ChannelBotFilterOrderTests(ITestOutputHelper output) : TestK
         await AssertDroppedNotFiltered(ChannelType.Mattermost);
     }
 
+    // RecordEventDropped and RecordEventFiltered bump the snapshot total first. The meter listener then runs and
+    // records the reason. So a wait on the total does not prove that the reason exists. Each helper waits on the
+    // reason itself, and only then checks the negative side.
     private async Task AssertFilteredNotDropped(ChannelType channelType)
     {
         var metrics = ChannelTelemetry.For(channelType);
         await AwaitAssertAsync(
-            () => Assert.Equal(1, metrics.GetSnapshot().EventsFiltered),
+            () =>
+            {
+                Assert.Equal(1, metrics.GetSnapshot().EventsFiltered);
+                Assert.Equal(["bot_message"], Reasons("events.filtered"));
+            },
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(0, metrics.GetSnapshot().EventsDropped);
-        Assert.Equal(["bot_message"], Reasons("events.filtered"));
         Assert.Empty(Reasons("events.dropped"));
     }
 
@@ -131,10 +137,13 @@ public sealed class ChannelBotFilterOrderTests(ITestOutputHelper output) : TestK
     {
         var metrics = ChannelTelemetry.For(channelType);
         await AwaitAssertAsync(
-            () => Assert.Equal(1, metrics.GetSnapshot().EventsDropped),
+            () =>
+            {
+                Assert.Equal(1, metrics.GetSnapshot().EventsDropped);
+                Assert.Equal([AclDenyReasons.UserNotAllowed], Reasons("events.dropped"));
+            },
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(0, metrics.GetSnapshot().EventsFiltered);
-        Assert.Equal([AclDenyReasons.UserNotAllowed], Reasons("events.dropped"));
         Assert.Empty(Reasons("events.filtered"));
     }
 

@@ -198,7 +198,7 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
             // falling back to daemon.log. One loud beacon, with a stderr fallback so the single
             // failure signal survives even a saturated daemon-log queue. The beacon bypasses the
             // logging pipeline, so it redacts and frames the exception text itself.
-            var beacon = $"{GetTimestamp()} [ERR] Netclaw.Logging: session log dispatcher resolution failed; per-session routing disabled. {LogTextFraming.Frame(SecretOutputRedactor.Redact(ex.Message))}";
+            var beacon = $"{GetTimestamp()} [ERR] Netclaw.Logging: session log dispatcher resolution failed; per-session routing disabled. {LogTextFraming.Frame(SecretOutputRedactor.RedactForLogging(ex.Message))}";
             if (!_queue.TryAdd(beacon))
                 Console.Error.WriteLine(beacon);
         }

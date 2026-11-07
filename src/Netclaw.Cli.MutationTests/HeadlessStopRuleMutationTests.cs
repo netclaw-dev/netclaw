@@ -30,7 +30,12 @@ public sealed class HeadlessStopRuleMutationTests
     private const string Session = "fake/session";
 
     // A fault ceiling. A run that never stops fails here. No test orchestrates with this wait.
+    // It starts after the send. Stryker pays it in full for each mutant that never stops, so keep it short.
     private static readonly TimeSpan StopCeiling = TimeSpan.FromSeconds(10);
+
+    // A ceiling for the cold start of the first run in the process. It covers the session create, the first
+    // log file, and the first send. A loaded Windows runner needs more than 10 s for this work.
+    private static readonly TimeSpan ColdStartCeiling = TimeSpan.FromSeconds(30);
 
     [Fact]
     public async Task An_open_run_keeps_the_wait_until_a_turn_reports_none()
@@ -103,10 +108,12 @@ public sealed class HeadlessStopRuleMutationTests
     {
         var directory = Path.Combine(Path.GetTempPath(), "netclaw-headless-stop-rule-" + Guid.NewGuid().ToString("N"));
         var transport = new FakeDaemonHubTransport();
+        var sent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         transport.VoidInvokeHook = (method, _, _) =>
         {
             if (method == "SendMessage")
             {
+                sent.TrySetResult();
                 // The client pump delivers the outputs in order, so the channel sees every turn.
                 foreach (var output in outputs)
                     transport.PushOutput(output);
@@ -137,7 +144,28 @@ public sealed class HeadlessStopRuleMutationTests
         try
         {
             await channel.StartAsync(CancellationToken.None);
-            await stopped.Task.WaitAsync(StopCeiling);
+            // Phase one: the cold start. The ceiling of the stop rule does not cover it.
+            try
+            {
+                await sent.Task.WaitAsync(ColdStartCeiling);
+            }
+            catch (TimeoutException)
+            {
+                throw new TimeoutException(
+                    $"Cold start phase: the channel did not send the message within {ColdStartCeiling.TotalSeconds:0} s.");
+            }
+
+            // Phase two: the stop rule. The outputs are already queued, so the run stops soon after the send.
+            try
+            {
+                await stopped.Task.WaitAsync(StopCeiling);
+            }
+            catch (TimeoutException)
+            {
+                throw new TimeoutException(
+                    $"Stop phase: the run did not stop within {StopCeiling.TotalSeconds:0} s after the send.");
+            }
+
             await channel.StopAsync(CancellationToken.None);
             Console.SetOut(originalOut);
             Console.SetError(originalError);

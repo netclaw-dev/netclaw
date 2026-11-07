@@ -80,6 +80,39 @@ public sealed class HeadlessSessionLogTests : IAsyncDisposable
         Assert.Contains("[2026-01-01T00:00:00.0000000+00:00] TURN_COMPLETED: turn=9", lines);
     }
 
+    [Fact]
+    public void Records_use_the_log_only_rules()
+    {
+        var channel = new HeadlessChannel(
+            _client,
+            new NetclawPaths(_dir.Path),
+            new NoopLifetime(),
+            TimeProvider.System,
+            new HeadlessOptions("hello") { JsonOutput = true },
+            NullLogger<HeadlessChannel>.Instance);
+        var logPath = Path.Combine(_dir.Path, "session.log");
+
+        using (var log = new StreamWriter(logPath))
+        {
+            channel.HandleOutput(new ToolResultOutput
+            {
+                SessionId = Session,
+                CallId = new ToolCallId("call-2"),
+                ToolName = new ToolName("shell_execute"),
+                Result = "upload to https://acct.blob.core.windows.net/c/x.png?sig=Zm9vYmFy%3D&sv=2024-11-04\nAPI_KEY=\nabc123secret",
+            }, log);
+        }
+
+        var lines = File.ReadAllLines(logPath);
+        var text = string.Join('\n', lines);
+        Assert.Contains("sig=***REDACTED***&sv=2024-11-04", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Zm9vYmFy", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("abc123secret", text, StringComparison.Ordinal);
+        // The record keeps its line breaks for the eval scripts.
+        Assert.Contains("API_KEY=", lines);
+        Assert.Contains("***REDACTED***", lines);
+    }
+
     private sealed class NoopLifetime : IHostApplicationLifetime
     {
         public CancellationToken ApplicationStarted => CancellationToken.None;

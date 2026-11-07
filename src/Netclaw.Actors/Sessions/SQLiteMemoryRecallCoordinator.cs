@@ -308,7 +308,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 // message, so it runs only when the record is written.
                 if (logger.IsEnabled(LogLevel.Information))
                 {
-                    var redactedSources = SecretOutputRedactor.Redact(string.Join('\n',
+                    var redactedSources = SecretOutputRedactor.RedactForLogging(string.Join('\n',
                         [request.Query, .. request.RecentUserMessages, .. request.RecentEntities ?? [], request.ThreadTitle ?? string.Empty]));
                     string LoggedWords(IEnumerable<string> words)
                         => string.Join("|", words.Where(word => redactedSources.Contains(word, StringComparison.OrdinalIgnoreCase)));

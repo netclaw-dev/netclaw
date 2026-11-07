@@ -56,10 +56,7 @@ public abstract class RecordedJournalTestBase : ChildNoticeTestBase
             .WithStrictSerialization();
 
     protected override void DeleteOwnedDirectories()
-    {
-        SqliteConnection.ClearAllPools();
-        _sqliteDirectory?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-    }
+        => SqlPersistencePlugins.WaitForStopThenDelete(Sys, _sqliteDirectory);
 
     /// <summary>Writes the named corpus records into the journal of one persistence id, in order.</summary>
     protected async Task SeedJournalAsync(string persistenceId, string seederName, params string[] recordNames)
@@ -96,12 +93,17 @@ public abstract class RecordedJournalTestBase : ChildNoticeTestBase
     /// </summary>
     private async Task<IActorRef> StartSeederAsync(string persistenceId, string actorName)
     {
-        await SqlPersistencePlugins.StartOneAtATimeAsync(this, ColdRecoveryCeiling);
+        await SqlPersistencePlugins.StartOneAtATimeAsync(this, ColdRecoveryCeiling, SqliteDatabasePath());
         var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var seeder = Sys.ActorOf(Props.Create(() => new RecordedRowSeeder(persistenceId, recovered)), actorName);
         await recovered.Task.WaitAsync(ColdRecoveryCeiling, TestContext.Current.CancellationToken);
         return seeder;
     }
+
+    private string SqliteDatabasePath()
+        => Path.Combine(
+            _sqliteDirectory?.Path ?? throw new InvalidOperationException("The test SQLite directory was not configured."),
+            "journal.db");
 
     private void BackupAndRestoreSqliteDatabase()
     {
@@ -258,17 +260,89 @@ internal static class SqlPersistencePlugins
     /// fight. That timeout is equal to the cold ceiling, so a long fight fails the start wait with no cause (#2599).
     /// One plugin at a time has no fight. A warm plugin answers at once.
     /// </summary>
-    public static async Task StartOneAtATimeAsync(Akka.TestKit.TestKitBase kit, TimeSpan ceiling)
+    public static async Task StartOneAtATimeAsync(Akka.TestKit.TestKitBase kit, TimeSpan ceiling, string databasePath)
     {
         const string unusedId = "recorded-journal-plugin-start";
         var persistence = AkkaPersistence.Instance.Apply(kit.Sys);
         var probe = kit.CreateTestProbe();
-        persistence.JournalFor(null).Tell(new ReplayMessages(0, long.MaxValue, long.MaxValue, unusedId, probe.Ref));
-        await probe.ExpectMsgAsync<RecoverySuccess>(ceiling,
-            cancellationToken: TestContext.Current.CancellationToken);
-        persistence.SnapshotStoreFor(null).Tell(
+        var journal = persistence.JournalFor(null);
+        journal.Tell(new ReplayMessages(0, long.MaxValue, long.MaxValue, unusedId, probe.Ref));
+        await ExpectStartReplyAsync<RecoverySuccess>(probe, ceiling, "journal", journal, databasePath);
+        var snapshotStore = persistence.SnapshotStoreFor(null);
+        snapshotStore.Tell(
             new LoadSnapshot(unusedId, SnapshotSelectionCriteria.Latest, long.MaxValue), probe.Ref);
-        await probe.ExpectMsgAsync<LoadSnapshotResult>(ceiling,
-            cancellationToken: TestContext.Current.CancellationToken);
+        await ExpectStartReplyAsync<LoadSnapshotResult>(probe, ceiling, "snapshot store", snapshotStore, databasePath);
+    }
+
+    // The plugin that does not reply is the one that failed to start. The message names it and the database file,
+    // so a stall shows where it happened. A plain timeout would not say which plugin blocked.
+    private static async Task ExpectStartReplyAsync<TReply>(
+        Akka.TestKit.TestProbe probe, TimeSpan ceiling, string plugin, IActorRef pluginActor, string databasePath)
+    {
+        try
+        {
+            await probe.ExpectMsgAsync<TReply>(ceiling, cancellationToken: TestContext.Current.CancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                $"The SQL {plugin} plugin at {pluginActor.Path} did not send {typeof(TReply).Name} within "
+                + $"{ceiling.TotalSeconds:0} s. The plugins start in this order: journal, snapshot store. "
+                + $"Database: {databasePath} (file exists: {File.Exists(databasePath)}).", ex);
+        }
+    }
+
+    // A fault ceiling for the stop of the actor system. It is not an orchestration delay.
+    private static readonly TimeSpan TerminationCeiling = TimeSpan.FromSeconds(15);
+
+    private const int DeleteAttempts = 3;
+
+    /// <summary>
+    /// Waits for the actor system to terminate, and then deletes the SQLite folder. The journal and the snapshot store
+    /// are actors of the system. Each one holds a connection until it stops. A plugin that blocks in a SQL call
+    /// cannot stop, and its connection stays open. Windows then refuses the delete with "journal.db in use". The wait is
+    /// bounded. If it ends first, the method still tries the delete, and then reports the stall. The seeders of the
+    /// base run in the same system, so this one wait covers them.
+    /// </summary>
+    public static void WaitForStopThenDelete(ActorSystem system, TestSessionTempDirectory? directory)
+    {
+        TimeoutException? stall = null;
+        if (!system.WhenTerminated.Wait(TerminationCeiling))
+        {
+            stall = new TimeoutException(
+                $"The actor system did not terminate within {TerminationCeiling.TotalSeconds:0} s. "
+                + "A SQL persistence plugin actor probably still holds its connection.");
+        }
+
+        try
+        {
+            DeleteWithPoolClear(directory);
+        }
+        catch (IOException ex) when (stall is not null)
+        {
+            throw new AggregateException(stall, ex);
+        }
+
+        if (stall is not null)
+            throw stall;
+    }
+
+    // Each attempt clears the pools first. A connection that a plugin returns late goes back to the pool, and only
+    // a new clear closes it. DisposableTempDir retries the delete between the attempts.
+    [SlopwatchSuppress("SW003", "A failed delete attempt is retried; the last attempt throws.")]
+    private static void DeleteWithPoolClear(TestSessionTempDirectory? directory)
+    {
+        for (var attempt = 1; attempt <= DeleteAttempts; attempt++)
+        {
+            SqliteConnection.ClearAllPools();
+            try
+            {
+                directory?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                return;
+            }
+            catch (IOException) when (attempt < DeleteAttempts)
+            {
+            }
+        }
     }
 }

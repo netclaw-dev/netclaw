@@ -180,7 +180,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
     // entry. Diagnostic lines need neither step: they come from the log pipeline, which has
     // already redacted and framed them.
     private void WriteTranscript(string body)
-        => WriteDurable($"[{_timeProvider.GetUtcNow():o}] {LogTextFraming.Frame(SecretOutputRedactor.Redact(body))}");
+        => WriteDurable($"[{_timeProvider.GetUtcNow():o}] {LogTextFraming.Frame(SecretOutputRedactor.RedactForLogging(body))}");
 
     private void WriteThinkingRun()
     {
@@ -196,7 +196,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
 
     // Redact before truncating: a cut can split a secret into a fragment that no pattern matches.
     private static string Clip(string text)
-        => TextTruncation.EllipsisAppend(SecretOutputRedactor.Redact(text), 1000);
+        => TextTruncation.EllipsisAppend(SecretOutputRedactor.RedactForLogging(text), 1000);
 
     private void Flush()
     {

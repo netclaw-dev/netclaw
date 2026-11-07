@@ -123,6 +123,24 @@ public sealed class SubAgentTruncationPreviewTests(ITestOutputHelper output) : T
     }
 
     [Fact]
+    public void Log_preview_masks_a_presigned_url_signature()
+    {
+        var preview = SubAgentActor.PreviewForLog("upload to https://b/x.png?X-Amz-Signature=deadbeefcafe01&X-Amz-Date=1", 300);
+
+        Assert.DoesNotContain("deadbeefcafe01", preview, StringComparison.Ordinal);
+    }
+
+    // The parent model acts on the cut-off text, so the log-only rules must not reach it (#1992).
+    [Fact]
+    public async Task Failed_output_keeps_a_presigned_url_signature_for_the_parent()
+    {
+        var result = await RunTruncatedAsync("upload to https://b/x.png?X-Amz-Signature=deadbeefcafe01&X-Amz-Date=1");
+
+        Assert.Equal("output_truncated", result.OutcomeReason?.Value);
+        Assert.Contains("X-Amz-Signature=deadbeefcafe01", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Failed_output_masks_a_value_on_the_line_after_its_key()
     {
         var result = await RunTruncatedAsync("cfg API_KEY=\nsupersecretvalue123");
