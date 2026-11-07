@@ -14,13 +14,17 @@
     "eval_analytics": {
       "Transport": "stdio",
       "Command": "python3",
-      "Arguments": ["/home/netclaw/.netclaw/evals/prompt_server.py"],
+      "Arguments": [
+        "/home/netclaw/.netclaw/evals/prompt_server.py"
+      ],
       "Enabled": true
     },
     "eval_workspace": {
       "Transport": "stdio",
       "Command": "python3",
-      "Arguments": ["/home/netclaw/.netclaw/evals/catalog_server.py"],
+      "Arguments": [
+        "/home/netclaw/.netclaw/evals/catalog_server.py"
+      ],
       "Enabled": true
     }
   },
@@ -37,7 +41,9 @@
         },
         "ApprovalPolicy": {
           "DefaultMode": "Auto",
-          "ToolOverrides": {}
+          "ToolOverrides": {
+            "shell_execute": "Auto"
+          }
         }
       }
     }
