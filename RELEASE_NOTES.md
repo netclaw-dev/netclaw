@@ -1,14 +1,75 @@
 # NetClaw Release Notes
 
-## Unreleased
+## 0.28.3 (2026-11-07)
+
+This is a stable patch release for 0.28.2. The daemon now redacts secrets in every log record. Notification webhook URLs move to `secrets.json`. The default output limit no longer shrinks after a session holds an image. A scripted uninstall for Linux, macOS, and Windows is new.
+
+**Upgrade impact:** none for the database. 0.28.3 uses the same database format as 0.28.0, 0.28.1, and 0.28.2. The config format stays valid, and `netclaw doctor --fix` converts the old webhook list shape. Five behaviors change:
+
+- A daemon log record that spans several lines now starts each line after the first with two spaces. Other control characters in a record show as `\uXXXX`.
+- The daemon log no longer holds the ASP.NET "Request starting" and "Request finished" lines.
+- `netclaw daemon install` refuses a path that holds whitespace, a quote, a backslash, or `%`. It also refuses a home that differs from the home of the installed systemd unit.
+- `netclaw approvals <unknown>` now exits with code `1`.
+- A webhook with no URL stops daemon startup.
 
 ### Security
 
 - **Notification webhook URLs and auth header values live in `secrets.json`, encrypted.** A webhook URL can be a credential, and the TUI wrote it to `netclaw.json` in plain text. `Notifications:Webhooks` is now an object keyed by webhook name. The TUI writes only the `Format` to `netclaw.json` and writes the URL and header values to `secrets.json`. The old list shape and a plain `Url` in `netclaw.json` still load. `netclaw doctor` warns about them, and `netclaw doctor --fix` backs up `netclaw.json` and `secrets.json`, converts the list, and moves the values. A webhook with no URL from any source now stops daemon startup and names the key ([#2777](https://github.com/netclaw-dev/netclaw/issues/2777)).
+- **The daemon redacts and frames every log record.** Before, only 14 of about 200 exception-bearing log calls redacted secrets, and framework log lines had no redaction. Now one stage, `RedactingLoggerFactory`, creates each logger of the daemon: `ILogger<T>`, Akka, ASP.NET, `HttpClient`, and SDKs. The stage redacts the message, the structured values, the scope values, and the exception of each record once. The OTLP export receives the redacted text.
+  - Each line break becomes the platform newline. Each line after the first starts with two spaces, so log content cannot forge a record header. Other control characters and bidi controls show as `\uXXXX`.
+  - `session.log` is redacted at its one writer. A secret that spans two streamed thinking deltas can no longer escape, because the writer joins the deltas into one line.
+  - The crash log, the session-dispatcher failure beacon, the CLI probe log, and the `netclaw chat -p` session log redact what they write.
+  - The memory recall plan log now lists only the words that survive redaction of their source text. Before, it listed words cut from a secret, such as `hunter2`.
+  - See `docs/architecture/text-safety.md` for the owner and the rule of each text sink ([#2766](https://github.com/netclaw-dev/netclaw/pull/2766)).
+- **A log record no longer shows a secret that a line break or a message template hid.** Three gaps stayed open after the redaction stage. The log now masks a value on the line after `KEY=`. It masks the signature of a presigned URL (`X-Amz-Signature`, `X-Goog-Signature`, `Signature`, and `sig`). It masks a value that only its message template marks as a secret, such as `Authorization: Bearer {Token}`. The new rules apply to log sinks only, so tool output keeps the shared rules and a presigned URL still reaches the model intact. The log no longer masks the `authorizationAttemptId` value by mistake ([#2789](https://github.com/netclaw-dev/netclaw/pull/2789), fixes [#2770](https://github.com/netclaw-dev/netclaw/issues/2770)).
+- **Request query strings stay out of the daemon log.** ASP.NET logged each request URL with its query string. The log held the OAuth callback code and state, the SignalR connection token, and a local path from the shutdown request. The OTLP exporter sent these values off the machine. Now `ConfigureNetclawLogging` sets the category `Microsoft.AspNetCore.Hosting.Diagnostics` to `Warning` for every provider. The log loses the "Request starting" and "Request finished" lines. An explicit provider-specific setting can show them again ([#2745](https://github.com/netclaw-dev/netclaw/pull/2745)).
+- **An MCP argument shows as an escaped string when `System.Uri` throws.** On .NET 10, `Uri.TryCreate` threw `IndexOutOfRangeException` for some short values, and the approval display failed. Now the display catches the exception and shows the value as an escaped string. It does not drop the value, and it does not show the value raw ([#2787](https://github.com/netclaw-dev/netclaw/pull/2787), fixes [#2771](https://github.com/netclaw-dev/netclaw/issues/2771)).
 
 ### Models
 
 - **The output limit no longer shrinks with an estimate of the prompt.** 0.28.2 clamped the default output limit per call to the context window minus a character-based prompt estimate, with a floor of 1024. The estimate counted an inline image at its base64 size, so one generated image (about 1 MB) added about 330,000 phantom tokens, and every later call in that session was sent `max_tokens: 1024` and failed with "The model reply was truncated". Now the default is still 32000, capped to the known model maximum (hosted APIs) and to a quarter of the known context window, which is static and fits below the 75% compaction threshold. A self-hosted server with an unknown window still gets no limit field, and a configured or call-site value is sent as is. The 1024 floor and its warning are gone. A prompt that still overflows is rejected by the provider, and the session compacts and retries.
+
+### Skills
+
+- **`netclaw skill show` and `netclaw skill remove` read the daemon registry.** Before, `skill show` reported "not found" for every skill from a skill feed. The CLI scanned the disk and could not see feed skills. Now both commands ask the daemon (`GET /api/skills/{name}`), and the endpoint requires authorization. `skill remove` refuses a `system`, `server-feed`, or `external` skill, so it cannot delete a managed feed directory. `skill search` and `skill issues` now see feed skills. A skill version can come from the top-level `version:` key or from `metadata.version`, and the top-level key wins ([#2734](https://github.com/netclaw-dev/netclaw/pull/2734), fixes [#2728](https://github.com/netclaw-dev/netclaw/issues/2728)).
+
+### MCP
+
+- **`netclaw mcp auth` finds OAuth metadata for an issuer that has a path.** Netclaw appended `/.well-known/oauth-authorization-server` to the issuer URL. RFC 8414 puts that segment between the host and the issuer path. The official GitHub MCP server failed with `HTTP 404 NotFound`. Now Netclaw tries the RFC 8414 URL first and the appended URL second. When both fail, the error names both URLs. An issuer with no path still uses one URL. GitHub publishes no `registration_endpoint`, so register a GitHub OAuth App and run `netclaw mcp add` with `--client-id` and `--client-secret` ([#2738](https://github.com/netclaw-dev/netclaw/pull/2738), fixes [#2737](https://github.com/netclaw-dev/netclaw/issues/2737)).
+- **The CLI shows how to fix a failed client registration.** Before, `netclaw mcp auth` printed only "Check daemon logs for details". Now the error names the authorization server and the remedy: run `netclaw mcp add` again with `--client-id <id>`, and add `--client-secret <secret>` when the provider issued a secret. Other exception text stays out of the response, because it can hold provider data ([#2741](https://github.com/netclaw-dev/netclaw/pull/2741), fixes [#2740](https://github.com/netclaw-dev/netclaw/issues/2740)).
+
+### Configuration
+
+- **The daemon applies a `netclaw.json` edit that arrives early.** An edit could arrive after the configuration load and before the watcher started, and the daemon never applied it. Now `ConfigWatcherActor` owns the file events and one 500 ms debounce timer. It starts the watcher before it compares the file with the loaded hash. It validates the config before it calls the restart coordinator. A secret-only event starts no reload ([#2713](https://github.com/netclaw-dev/netclaw/pull/2713), fixes [#2485](https://github.com/netclaw-dev/netclaw/issues/2485)).
+- **`netclaw doctor` accepts the empty values that the loader ignores.** The config schema rejected `null`, `""`, `[]`, and `{}` in `ToolOverrides`, `McpServerDefaults`, and the lists that the loader defaults. These lists are `AllowedTools`, `AllowedMcpServers`, the `Roots` lists, `ChannelAttachments.AllowedCategories`, `GlobalReadRoots`, and `WebFetch.HttpAllowList`. So doctor failed a healthy file. Now the schema accepts these values. Doctor repeats the loader warning for a `null` or `{}` grant list. An unknown mode, or a scalar where a list belongs, still fails. An unmatched schema branch of a valid list no longer hides real errors ([#2757](https://github.com/netclaw-dev/netclaw/pull/2757), fixes [#2756](https://github.com/netclaw-dev/netclaw/issues/2756)).
+- **The daemon reports an unwritable shell temp directory.** At startup the daemon probes the per-user base folder (`/tmp/netclaw-<uid>`) with the checks of the shell launch. When the probe fails, the daemon logs an error that names the path and the fix. `/api/health/status` and `netclaw status` run the probe again for each request, and they report a degraded `Shell/temp` connector. `/api/health/ready` does not change, so Docker health stays green. Windows has no such folder and skips the probe ([#2759](https://github.com/netclaw-dev/netclaw/pull/2759), fixes [#2758](https://github.com/netclaw-dev/netclaw/issues/2758)).
+- **Startup skill scan warnings reach the log.** The warnings "Skill inventory is degraded at startup" and "Rejected skill item during startup scan" used a logger with no provider. They reached neither the console nor `daemon-*.log`. Now the `Netclaw.Startup` logger writes them. The skill-feed sync can log the same problem again about 200 ms later ([#2763](https://github.com/netclaw-dev/netclaw/pull/2763), fixes [#2760](https://github.com/netclaw-dev/netclaw/issues/2760)).
+
+### CLI/TUI
+
+- **A scripted uninstall exists for Linux, macOS, and Windows.** `scripts/uninstall.sh` and `scripts/uninstall.ps1` reverse the writes of the installers ([#2690](https://github.com/netclaw-dev/netclaw/pull/2690)).
+  - Both scripts stop the daemon first and fail on a timeout. They remove the binaries, the `.backup` files, and the daemon env file. They keep the data directory unless you pass `--purge` (`-Purge` on Windows).
+  - `uninstall.sh` also removes the systemd user service, the POSIX env script, and the shell profile block. `uninstall.ps1` also removes the User PATH entry and keeps its registry value kind.
+  - `--dry-run`, `--yes`, and `--skip-shell` (`-DryRun`, `-Yes`, and `-SkipShell` on Windows) preview the work, confirm a purge, and keep the shell profile.
+  - A script refuses to run from inside the install directory. It refuses `--purge` without `--yes` when stdin is redirected. It exits `0` when NetClaw is already gone.
+  - Exit codes: `0` done, `1` the daemon did not stop and nothing was deleted, `2` invalid arguments, `3` purge refused in a non-interactive session, `4` run from inside the install directory.
+  - The scripts do not remove a macOS LaunchAgent or a Windows service, because the installers create neither.
+- **`netclaw approvals <unknown>` exits with code `1`.** Before, an unknown subcommand printed the usage text to stdout and exited with code `0`. Now it prints an error and the usage text to stderr and exits with code `1`. When the CLI cannot resolve the local daemon address, `netclaw daemon status` prints one message. The message gives the process state, the PID, the uptime, the failing file and its fix, and says that readiness was not checked ([#2755](https://github.com/netclaw-dev/netclaw/pull/2755), fixes [#2754](https://github.com/netclaw-dev/netclaw/issues/2754)).
+- **`netclaw daemon install` makes the systemd unit serve a custom home.** Now the command always writes `Environment=NETCLAW_HOME=<home>` to the unit. Before it writes anything, it refuses a home, binary path, or `daemon.env` path that holds whitespace, a quote, a backslash, or `%`, because the unit holds these paths unquoted. One unit exists for each user. `install` and `uninstall` refuse when the unit serves a different home, and they name that home. Start and stop read the home from the unit file. Drop-ins from `systemctl --user edit` are not read ([#2774](https://github.com/netclaw-dev/netclaw/pull/2774), fixes [#2773](https://github.com/netclaw-dev/netclaw/issues/2773)).
+- **`netclaw doctor` reads the active daemon log on Windows.** The Memory Curation LLM check failed with "being used by another process". It opened the log with a sharing mode that denied the write handle of the daemon. Now it opens the log with read-write sharing. A Windows user no longer sees a false `[FAIL]` and exit code `1` while the daemon runs ([#2786](https://github.com/netclaw-dev/netclaw/pull/2786), fixes [#2704](https://github.com/netclaw-dev/netclaw/issues/2704)).
+
+### Channels
+
+- **A shell approval note shows outside the command code span.** The grant-scope and near-miss notes joined the command text, and every channel wraps that text in one code span. Mattermost showed a stray backtick and a literal `**Pattern:**`. Now the notes travel in a separate optional `Notes` field, and the hub carries it as `SessionOutputDto.InteractionNotes`. An older client sees no notes.
+  - Mattermost and Discord show the command in its own code span, and the notes as plain lines below it.
+  - Slack shows the notes in a plain section after the command block.
+  - The TUI shows the notes beside the command. Headless output prints a separate `[approval:note]` line.
+  - Approval matching does not change ([#2748](https://github.com/netclaw-dev/netclaw/pull/2748), fixes [#2746](https://github.com/netclaw-dev/netclaw/issues/2746)).
+- **The bot's own messages count as filtered, not dropped.** The Slack, Discord, and Mattermost conversation actors ran the ACL gate before the bot filter. An echo of a bot reply counted as `dropped`. Now the bot check runs first and counts the message as `filtered` with the reason `bot_message`. The set of processed messages does not change ([#2743](https://github.com/netclaw-dev/netclaw/pull/2743), fixes [#2742](https://github.com/netclaw-dev/netclaw/issues/2742)).
+
+### Dependency Updates
+
+- **CommunityToolkit.Aspire.Hosting.Ollama 13.6.1.** The package moves from 13.5.0 ([#2721](https://github.com/netclaw-dev/netclaw/pull/2721)).
 
 ## 0.28.2 (2026-10-28)
 
