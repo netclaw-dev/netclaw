@@ -26,16 +26,11 @@ namespace Netclaw.Actors.MutationTests;
 
 public sealed class ReminderExecutionMutationTests : IAsyncLifetime
 {
-    // Two bounds with two jobs. Do not merge them.
-    // KillTimeout bounds a wait that a gate mutant can starve: the acceptance reply (the mutant removes
-    // it) and a later dispatch (the cleanup mutants keep the guard). Stryker reports a mutant as Killed
-    // only when a test fails before its per-mutant time limit, so this bound stays short.
-    // ReadyTimeout bounds a wait that every gate mutant still completes: host start, health replies,
-    // the termination barrier, the first dispatch of a test, and the local execution. These waits do
-    // the cold work of a new process (JIT, a new actor system, the first stream materializer). On a
-    // loaded Windows or macOS runner that work took more than 2 s. Correct code always replies, so
-    // this bound only stops a real hang.
-    private static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(2);
+    // This bound only stops a real hang. No gate mutant may depend on it: Stryker reports a mutant as
+    // Killed only when a test fails before its per-mutant time limit, and the gate rejects Timeout.
+    // So each wait that a mutant can starve gets a signal for the bad outcome too. The query barrier
+    // proves a missing acceptance reply, and the skip warning proves a dispatch that the guard blocked.
+    // A short wall-clock bound failed on loaded CI runners, also on warm paths.
     private static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(30);
     private readonly NetclawPaths _paths = new(Path.Combine(
         Path.GetTempPath(), "netclaw-reminder-mutations", Guid.NewGuid().ToString("N")));
@@ -66,6 +61,7 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
             {
                 var observer = system.ActorOf(Props.Create(() => new DispatchObserver(_dispatches.Writer)));
                 system.EventStream.Subscribe(observer, typeof(Info));
+                system.EventStream.Subscribe(observer, typeof(Warning));
                 _manager = system.ActorOf(Props.Create(() => new ReminderManagerActor(
                     _pipeline,
                     new EffectivePolicyDefaults(
@@ -240,32 +236,29 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
 
     private async Task<Guid> DispatchAsync()
     {
-        // No gate mutant can stop the first dispatch of a test: the tracker is new and the schedule is
-        // an interval. A later dispatch follows a release, and the cleanup mutants block it.
-        var dispatchTimeout = _occurrence == 0 ? ReadyTimeout : KillTimeout;
         _manager.Tell(new ReminderEnvelope<ReminderPayload>(
             new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
             new ReminderKey(_id.Value), _now.AddSeconds(++_occurrence), ReminderDeadline.Infinite,
             new ReminderPayload { Id = _id }));
-        var executionId = await _dispatches.Reader.ReadAsync().AsTask().WaitAsync(dispatchTimeout);
+        var executionId = await _dispatches.Reader.ReadAsync().AsTask().WaitAsync(ReadyTimeout);
         Assert.Equal(1, (await HealthAsync()).ActiveExecutions);
         return executionId;
     }
 
     private async Task CompleteAsync(Guid executionId, bool success)
     {
-        var accepted = await _manager.Ask<ReminderExecutionAccepted>(new ReminderExecutionCompleted(
+        var reply = await _barrier.Ask<BarrierReply>(new ReminderExecutionCompleted(
             executionId, _id, success,
             new HistoryRecord(_now, success, 10, $"reminder/{executionId:N}", success ? null : "probe failure"),
-            success ? null : "probe failure"), KillTimeout);
-        Assert.Equal(executionId, accepted.ExecutionId);
+            success ? null : "probe failure"), ReadyTimeout);
+        Assert.Equal(executionId, reply.Accepted?.ExecutionId);
     }
 
     private Task<ReminderHealthResponse> HealthAsync() =>
         _manager.Ask<ReminderHealthResponse>(GetReminderHealthQuery.Instance, ReadyTimeout);
 
-    private Task<ReminderHealthResponse> TerminateAsync(Guid executionId) =>
-        _barrier.Ask<ReminderHealthResponse>(new ReminderExecutionTerminated(executionId, _id), ReadyTimeout);
+    private async Task<ReminderHealthResponse> TerminateAsync(Guid executionId) =>
+        (await _barrier.Ask<BarrierReply>(new ReminderExecutionTerminated(executionId, _id), ReadyTimeout)).Health;
 
     private ReminderDefinition Definition() => Assert.IsType<ReminderDefinition>(_definitions.Get(_id));
 
@@ -299,23 +292,13 @@ public sealed class ReminderExecutionMutationTests : IAsyncLifetime
                     && message.StartsWith(prefix, StringComparison.Ordinal))
                     writer.TryWrite(Guid.Parse(message.AsSpan(prefix.Length, 36)));
             });
-        }
-    }
-
-    private sealed class QueryBarrier : ReceiveActor
-    {
-        public QueryBarrier(IActorRef manager)
-        {
-            Receive<ReminderExecutionTerminated>(terminated =>
+            // The guard blocked the dispatch, so no execution starts. Fail the wait now.
+            Receive<Warning>(warning =>
             {
-                var replyTo = Sender;
-                manager.Tell(terminated, Self);
-                manager.Tell(GetReminderHealthQuery.Instance, Self);
-                BecomeStacked(() => Receive<ReminderHealthResponse>(health =>
-                {
-                    replyTo.Tell(health);
-                    UnbecomeStacked();
-                }));
+                var message = warning.Message.ToString() ?? string.Empty;
+                if (warning.LogClass == typeof(ReminderManagerActor)
+                    && message.StartsWith("reminder_skipped_duplicate_execution ", StringComparison.Ordinal))
+                    writer.TryComplete(new InvalidOperationException($"The manager blocked the dispatch: {message}"));
             });
         }
     }

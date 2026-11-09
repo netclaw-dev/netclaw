@@ -141,11 +141,11 @@ the switch of each provider: Netclaw maps them.
   truncate the reply. The value must be below the context window and not above
   the model maximum that the probe reports.
 - Without a limit, a hosted API gets 32000, capped to its known model maximum
-  and clamped to its known context window minus the estimated prompt and tool
-  schemas. Anthropic replies are therefore no longer cut at 1024 tokens.
-  A self-hosted server gets the same clamp, but only when its window is known
-  from `ContextWindow` or from the server's own probe; a catalog value does not
-  count. Otherwise it gets no limit field, and the server decides.
+  and to a quarter of its known context window. The limit never depends on the
+  size of the prompt. A self-hosted server gets the same window cap, but only
+  when its window is known from `ContextWindow` or from the server's own probe;
+  a catalog value does not count. Otherwise it gets no limit field, and the
+  server decides.
 - A self-hosted server must use the `ollama` or `openai-compatible` provider
   type. A hosted type (`deepseek`, `openrouter`, `veniceai`) that points at
   your own server is treated as hosted: catalog values apply to it.

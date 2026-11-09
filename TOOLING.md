@@ -154,7 +154,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `PathAccessPolicy.AddSessionRoots`, `PathAccessPolicy.IsReadableByAudience`, `PathAccessPolicy.GetEffectiveAccess`, `PathAccessPolicy.IsInOtherTemporaryKeyFolder`, and `ManagedTemporaryEnvironment.CheckFolder` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected; issue #2554: a Personal read or attach follows the write profile and no other audience, operation, or write mode does (write `All` gives `All`, write `Roots` adds its roots, write `None` adds nothing, and a read profile of mode `All` stays `All`); the managed temporary key folder is a session root and the shared base is not; a Team or Public root over the base does not reach another key folder; the shell launch is refused when the base or the key folder is missing, a link, owned by another user, or open to a group or others | 30 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
-| `ThinkingDialectMap.OfferedLevels`, `ThinkingDialectMap.Apply`, `ThinkingDialectMap.ApplySuppression`, `OutputLimitResolver.Resolve` (precedence and clamp arithmetic), and the pipeline reuse of `RoleBasedFailoverRouter` (`PipelineKey`) | model-output-and-thinking-settings D2, D4, D5, D8: a level is offered only when the dialect and the capability allow it, each missing level has a reason, a level that the dialect cannot send is rejected and never mapped to another level, each dialect writes its documented wire fields, the suppression intent writes Off only for a body-field dialect, a call-site limit beats the model limit, which beats the default, and the default is min(32000, model max, window - prompt - margin) with a 1024 floor. The router shares a pipeline only for the same provider (without case), model ID, and settings. `EstimatePromptTokens` and `ApplyThinking` are private members of the model client that only the wire rows reach, so they stay outside the gate. `ExpressibleLevels`, the rejection message of `Apply`, and the floor-warning flag are outside the spans: Stryker reports their mutants as compile errors, the tests check only part of the message, or they are equivalent | 74 killed (47 + 17 + 10) | `./scripts/run-thinking-settings-mutations.sh` |
+| `ThinkingDialectMap.OfferedLevels`, `ThinkingDialectMap.Apply`, `ThinkingDialectMap.ApplySuppression`, `OutputLimitResolver.Resolve` (precedence and the model-max cap), and the pipeline reuse of `RoleBasedFailoverRouter` (`PipelineKey`) | model-output-and-thinking-settings D2, D4, D5, D8: a level is offered only when the dialect and the capability allow it, each missing level has a reason, a level that the dialect cannot send is rejected and never mapped to another level, each dialect writes its documented wire fields, the suppression intent writes Off only for a body-field dialect, a call-site limit beats the model limit, which beats the default, and the default is min(32000, model max, window / 4). The router shares a pipeline only for the same provider (without case), model ID, and settings. `ApplyThinking` is a private member of the model client that only the wire rows reach, so it stays outside the gate. `ExpressibleLevels` and the rejection message of `Apply` are outside the spans: Stryker reports their mutants as compile errors, or the tests check only part of the message | 72 killed (47 + 15 + 10) | `./scripts/run-thinking-settings-mutations.sh` |
 | `OneTimeApprovalKeys.Create` source identity condition | Shell `Once` consent covers only the exact case-sensitive source. Equal candidate facts do not cover changed source. | 1 killed | `./scripts/run-shell-once-identity-mutations.sh` |
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
@@ -189,6 +189,7 @@ coverage. They do not replace positive and negative behavior tests.
 | The identity check of `POST /api/lifecycle/shutdown` (`// shutdown-identity:begin` to `end`) | Rule 1 of #2527: the daemon announces its stop only for a notice with its own PID and its own home. A wrong PID or home gets 409 and no alert; a missing or malformed value gets 400; a folder inside the home is not the home | all tested mutants killed (at least 18) | `./scripts/run-shutdown-notice-identity-mutations.sh` |
 | The proof in `DaemonManager.StopAsync` before the signal (`// stop-proof`, `// stop-notice`, `// stale-pid`) and the home comparison (`// home-match`) | Rule 2 of #2527: a PID gets a signal only when the daemon at the port of this home answers 200 with that PID and this home, or when it does not answer (or answers 200 with no `home`) and the environment of the process shows this home, read as that process reads it (`HOME` and `NETCLAW_HOME` of the target, never of the CLI). A 409, or a 200 with another PID or home, is never overruled; two folders that a `..` in a link target could join are two homes; a home that differs by case, by a folder level, or by a link is another home; a stale PID file signals nothing | all tested mutants killed (at least 32 in `DaemonManager`; at least 49 in `HomeIdentity`, where a `Timeout` counts as killed) | `./scripts/run-stop-proof-mutations.sh` |
 | `DaemonLogRetention.Prune` (`// daemon-log-retention-cutoff:begin` to `end`) | Issue #2484: only daemon segments before the UTC retention cutoff can be deleted. A segment on the cutoff remains. | 2 killed | `./scripts/run-daemon-log-retention-mutations.sh` |
+| The log redaction registration (`// log-redaction-registration:begin` to `end` in `LoggingRegistrationExtensions`) | unify-text-safety D6: the daemon's `ILoggerFactory` is `RedactingLoggerFactory`. If either registration statement is removed, every log record reaches the sinks unredacted. | 2 killed | `./scripts/run-log-redaction-registration-mutations.sh` |
 
 ### Daemon Log Retention Cutoff
 
@@ -204,6 +205,21 @@ The first local Stryker run killed both expected mutants in 161 seconds.
 The `daemon-log-retention` matrix group also runs the startup hash check.
 The combined group retains the existing time budget.
 The gate does not measure general code coverage or replace the writer and retention tests.
+
+### Log Redaction Registration
+
+The gate selects the two statements that make `RedactingLoggerFactory` the daemon's
+`ILoggerFactory`: the call in `ConfigureNetclawLogging` and the `Replace` in
+`AddNetclawLogRedaction`. Removing either one turns off redaction for every log record,
+while the rest of the logging tests can still pass.
+Stryker removes each statement. `LogRedactionRoutingTests` rejects both removals, because the
+host's factory is then not the redacting factory and a secret reaches a later provider.
+The gate requires exactly two statement mutants, one on each statement, and a `Killed` status
+for each. A changed span, a survivor, or an untested mutant fails the gate.
+
+The first local Stryker run killed both mutants in 100 seconds.
+The gate runs in the `daemon-log-retention` matrix group, which adds about two minutes to
+that group.
 
 Run the path-access check locally:
 
@@ -1167,11 +1183,15 @@ Seven settlement cases use the real manager, execution tracker, actor mailbox, d
 An isolated host supplies the local Akka.Reminders scheduler with an in-memory store.
 The fixture observes execution IDs through the existing dispatch event and holds the session pipeline on a task.
 Actor replies provide barriers. The tests use no delay or sleep to wait for state.
-The fixture has two wait bounds. Do not merge them.
-The 2-second bound applies only to a wait that a gate mutant can starve: the acceptance reply and a dispatch after a release.
 A mutant must fail a test before the Stryker limit for each mutant (27.4 seconds in a local run), or the gate reports `Timeout`.
-The 30-second bound applies to host start, health replies, the termination barrier, the first dispatch of a test, and the local execution.
-Every gate mutant completes these waits. On a loaded Windows or macOS runner, their cold work took more than 2 seconds.
+Thus no gate mutant can depend on a wait bound. A short bound also failed correct code on loaded Windows runners.
+Each wait that a mutant can starve has a signal for the bad outcome:
+
+- The completion goes through the query barrier. The health reply comes after any acceptance reply, so a missing acceptance fails at once.
+- A dispatch that the guard blocks logs `reminder_skipped_duplicate_execution`. The dispatch observer fails the wait when it sees that warning.
+- `OneShotEndMutationTests` sends its fires and its completions through the same query barrier. The health reply shows at once a fire that started no run.
+
+The one 30-second bound only stops a real hang.
 
 The stale-message cases complete attempt A, start attempt B, and replay A's completion or termination.
 They require B's guard, history, failure count, and alerts to remain unchanged.

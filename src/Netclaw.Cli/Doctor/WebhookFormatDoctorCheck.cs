@@ -19,19 +19,13 @@ public sealed class WebhookFormatDoctorCheck(NetclawPaths paths) : IDoctorCheck
         if (readError is not null)
             return Task.FromResult(DoctorCheckResult.Pass(CheckName, "Skipped (config missing or invalid)."));
 
-        if (root!["Notifications"] is not JsonObject notifications
-            || notifications["Webhooks"] is not JsonArray webhooks
-            || webhooks.Count == 0)
-        {
+        var webhooks = NotificationWebhookSecretsMigration.Entries(root!).ToList();
+        if (webhooks.Count == 0)
             return Task.FromResult(DoctorCheckResult.Pass(CheckName, "No webhooks configured."));
-        }
 
         var mismatched = new List<string>();
-        foreach (var item in webhooks)
+        foreach (var wh in webhooks)
         {
-            if (item is not JsonObject wh)
-                continue;
-
             var url = wh["Url"]?.GetValue<string>();
             if (string.IsNullOrWhiteSpace(url))
                 continue;

@@ -114,7 +114,13 @@ public sealed class ConfigWatcherActorTests(ITestOutputHelper output) : TestKit(
         { "invalid_model", "{ \"Models\": { \"Definitions\": { \"d\": { \"Provider\": \"p\", \"ModelId\": \"m\", \"ContextWindow\": 100 } }, \"Roles\": { \"Main\": \"d\" } } }",
             null, WatcherChangeTypes.Changed, "netclaw.json", null, "ContextWindow" },
         { "invalid_provider", "{ \"Providers\": { \"p\": { \"Type\": \"banana\" } }, " + Models + " }",
-            null, WatcherChangeTypes.Changed, "netclaw.json", null, "Unknown provider type 'banana'" }
+            null, WatcherChangeTypes.Changed, "netclaw.json", null, "Unknown provider type 'banana'" },
+        // A keyed webhook with no Url from any source stops the reload, as an invalid model does.
+        { "webhook_without_url", "{ \"Notifications\": { \"Webhooks\": { \"ops\": { \"Format\": \"Slack\" } } } }",
+            null, WatcherChangeTypes.Changed, "netclaw.json", null, "Notifications:Webhooks:ops:Url" },
+        { "webhook_url_from_secrets", "{ \"Notifications\": { \"Webhooks\": { \"ops\": { \"Format\": \"Slack\" } } } }",
+            "{ \"Notifications\": { \"Webhooks\": { \"ops\": { \"Url\": \"https://hooks.example.test/x\" } } } }",
+            WatcherChangeTypes.Changed, "netclaw.json", null, null }
     };
 
     [Theory]

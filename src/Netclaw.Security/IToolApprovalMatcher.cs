@@ -2818,7 +2818,7 @@ public sealed class McpApprovalMatcher : IToolApprovalMatcher
         var bounded = toolName.Length <= MaxToolNameChars
             ? toolName
             : $"{toolName[..200]}…[{toolName.Length} chars]";
-        return EscapePresentationControls(bounded);
+        return TextControlCharacters.EscapeAsUnicode(bounded, IsPresentationControl);
     }
 
     private static bool IsSafeArgumentNameChar(char ch)
@@ -2828,49 +2828,31 @@ public sealed class McpApprovalMatcher : IToolApprovalMatcher
             or '_' or '-' or '.';
 
     private static string SerializeStringForDisplay(string value)
-    {
-        var serialized = JsonSerializer.Serialize(value);
-        return EscapePresentationControls(serialized);
-    }
-
-    private static string EscapePresentationControls(string value)
-    {
-        if (!value.Any(IsPresentationControl))
-            return value;
-
-        var escaped = new StringBuilder(value.Length);
-        foreach (var ch in value)
-        {
-            if (IsPresentationControl(ch))
-                escaped.Append("\\u").Append(((int)ch).ToString("X4"));
-            else
-                escaped.Append(ch);
-        }
-
-        return escaped.ToString();
-    }
+        => TextControlCharacters.EscapeAsUnicode(JsonSerializer.Serialize(value), IsPresentationControl);
 
     private static bool IsPresentationControl(char ch)
-        => ch == '`' || char.IsControl(ch) || IsDirectionalOrLineControl(ch);
-
-    private static bool IsDirectionalOrLineControl(char ch)
-        => ch is '\u061C' or '\u200E' or '\u200F'
-            or >= '\u2028' and <= '\u202E'
-            or >= '\u2066' and <= '\u2069'
-            or '\uFEFF';
+        => ch == '`' || char.IsControl(ch)
+            || TextControlCharacters.IsBidiControl(ch)
+            || TextControlCharacters.IsUnicodeLineSeparator(ch)
+            || TextControlCharacters.IsByteOrderMark(ch);
 
     private static bool TrySanitizeAbsoluteUri(string value, out string sanitized)
     {
         sanitized = string.Empty;
-        if (value.Length > MaxUrlParseChars
-            || !Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            || string.IsNullOrEmpty(uri.Host))
-        {
+        if (value.Length > MaxUrlParseChars)
             return false;
-        }
 
+        string absoluteUri;
+        // An MCP server or the model supplies this value. When System.Uri
+        // fails, the caller shows the value as a plain escaped string.
         try
         {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+                || string.IsNullOrEmpty(uri.Host))
+            {
+                return false;
+            }
+
             var builder = new UriBuilder(uri)
             {
                 UserName = string.Empty,
@@ -2878,13 +2860,17 @@ public sealed class McpApprovalMatcher : IToolApprovalMatcher
                 Query = string.IsNullOrEmpty(uri.Query) ? string.Empty : Redacted,
                 Fragment = string.IsNullOrEmpty(uri.Fragment) ? string.Empty : Redacted
             };
-            sanitized = SecretOutputRedactor.Redact(builder.Uri.AbsoluteUri);
-            return true;
+            absoluteUri = builder.Uri.AbsoluteUri;
         }
-        catch (UriFormatException)
+        catch (Exception)
         {
+            // System.Uri throws undocumented exceptions on malformed input
+            // (for example IndexOutOfRangeException from CreateUriInfo, #2771).
             return false;
         }
+
+        sanitized = SecretOutputRedactor.Redact(absoluteUri);
+        return true;
     }
 
     private static bool IsPathLike(string value)

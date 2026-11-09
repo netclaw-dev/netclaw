@@ -3,9 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -130,9 +132,9 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
         vm.WebhookUrlDraft.Value = "https://hooks.slack.com/services/T000/B000/SECRET";
         vm.ActivateSelected();
 
-        var webhook = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks);
-        Assert.Equal("pagerduty", webhook.Name);
-        Assert.Equal("https://hooks.slack.com/services/T000/B000/SECRET", webhook.Url);
+        var (key, webhook) = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks);
+        Assert.Equal("pagerduty", key);
+        Assert.Equal("https://hooks.slack.com/services/T000/B000/SECRET", webhook.Url!.Value);
         Assert.Equal(WebhookFormat.Slack, webhook.Format);
         Assert.Equal(TelemetryConfigScreen.List, vm.Screen.Value);
     }
@@ -146,8 +148,8 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
         vm.WebhookUrlDraft.Value = "https://alerts.example.test/hook";
         vm.ActivateSelected();
 
-        var webhook = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks);
-        Assert.Equal("generic-webhook", webhook.Name);
+        var (key, webhook) = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks);
+        Assert.Equal("generic-webhook", key);
         Assert.Equal(WebhookFormat.Generic, webhook.Format);
     }
 
@@ -168,8 +170,8 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
 
         var webhooks = Bind<NotificationsConfig>("Notifications").Webhooks;
         Assert.Equal(2, webhooks.Count);
-        Assert.Contains(webhooks, w => w.Name == "ops" && w.Format == WebhookFormat.Generic);
-        Assert.Contains(webhooks, w => w.Name == "slack" && w.Format == WebhookFormat.Slack);
+        Assert.Equal(WebhookFormat.Generic, webhooks["ops"].Format);
+        Assert.Equal(WebhookFormat.Slack, webhooks["slack"].Format);
 
         // A fresh VM sees both entries in its list rows (reentrancy).
         using var reopened = new TelemetryAlertingConfigViewModel(_paths);
@@ -179,8 +181,9 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
     [Fact]
     public void Editing_a_webhook_updates_url_and_preserves_stored_header_when_blank()
     {
-        File.WriteAllText(_paths.NetclawConfigPath,
-            "{\"configVersion\":1,\"Notifications\":{\"DeduplicationWindowSeconds\":120,\"MaxRetries\":4,\"TimeoutSeconds\":12,\"Webhooks\":[{\"Name\":\"ops-alerts\",\"Url\":\"https://old.example.test/hook\",\"Headers\":{\"Authorization\":\"Bearer old\"},\"Format\":\"Generic\"}]}}");
+        SeedWebhooks(
+            "{\"configVersion\":1,\"Notifications\":{\"DeduplicationWindowSeconds\":120,\"MaxRetries\":4,\"TimeoutSeconds\":12,\"Webhooks\":{\"ops-alerts\":{\"Format\":\"Generic\"}}}}",
+            "{\"Notifications\":{\"Webhooks\":{\"ops-alerts\":{\"Url\":\"https://old.example.test/hook\",\"Headers\":{\"Authorization\":\"Bearer old\"}}}}}");
         using var vm = new TelemetryAlertingConfigViewModel(_paths);
 
         vm.BeginEditWebhook(0);
@@ -189,9 +192,9 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
         vm.ActivateSelected();
 
         var notifications = Bind<NotificationsConfig>("Notifications");
-        var webhook = Assert.Single(notifications.Webhooks);
-        Assert.Equal("https://new.example.test/hook", webhook.Url);
-        Assert.Equal("Bearer old", webhook.Headers?["Authorization"]);
+        var webhook = Assert.Single(notifications.Webhooks).Value;
+        Assert.Equal("https://new.example.test/hook", webhook.Url!.Value);
+        Assert.Equal("Bearer old", webhook.Headers?["Authorization"].Value);
         // Delivery policy is preserved untouched.
         Assert.Equal(120, notifications.DeduplicationWindowSeconds);
         Assert.Equal(4, notifications.MaxRetries);
@@ -201,23 +204,25 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
     [Fact]
     public void Editing_a_webhook_replaces_the_auth_header_when_a_nonblank_header_is_entered()
     {
-        File.WriteAllText(_paths.NetclawConfigPath,
-            "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":[{\"Name\":\"ops-alerts\",\"Url\":\"https://alerts.example.test/hook\",\"Headers\":{\"Authorization\":\"Bearer old\"},\"Format\":\"Generic\"}]}}");
+        SeedWebhooks(
+            "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":{\"ops-alerts\":{\"Format\":\"Generic\"}}}}",
+            "{\"Notifications\":{\"Webhooks\":{\"ops-alerts\":{\"Url\":\"https://alerts.example.test/hook\",\"Headers\":{\"Authorization\":\"Bearer old\"}}}}}");
         using var vm = new TelemetryAlertingConfigViewModel(_paths);
 
         vm.BeginEditWebhook(0);
         vm.WebhookAuthHeaderDraft.Value = "Authorization: Bearer new";
         vm.ActivateSelected();
 
-        var webhook = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks);
-        Assert.Equal("Bearer new", webhook.Headers?["Authorization"]);
+        var webhook = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks).Value;
+        Assert.Equal("Bearer new", webhook.Headers?["Authorization"].Value);
     }
 
     [Fact]
     public void Editing_a_webhook_clears_the_auth_header_with_the_dash_gesture()
     {
-        File.WriteAllText(_paths.NetclawConfigPath,
-            "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":[{\"Name\":\"ops-alerts\",\"Url\":\"https://alerts.example.test/hook\",\"Headers\":{\"Authorization\":\"Bearer old\"},\"Format\":\"Generic\"}]}}");
+        SeedWebhooks(
+            "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":{\"ops-alerts\":{\"Format\":\"Generic\"}}}}",
+            "{\"Notifications\":{\"Webhooks\":{\"ops-alerts\":{\"Url\":\"https://alerts.example.test/hook\",\"Headers\":{\"Authorization\":\"Bearer old\"}}}}}");
         using var vm = new TelemetryAlertingConfigViewModel(_paths);
 
         vm.BeginEditWebhook(0);
@@ -226,7 +231,7 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
         vm.WebhookAuthHeaderDraft.Value = "-";
         vm.ActivateSelected();
 
-        var webhook = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks);
+        var webhook = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks).Value;
         Assert.Null(webhook.Headers);
     }
 
@@ -277,11 +282,67 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
+    private const string KeyedEntryWithPlainSecrets =
+        "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":{\"ops\":{\"Url\":\"https://old.example.test/OLDURL\",\"Headers\":{\"Authorization\":\"Bearer OLDHEADER\"},\"Format\":\"Generic\"}}}}";
+
+    [Fact]
+    public void Saving_an_edit_moves_a_plain_url_and_headers_out_of_netclaw_json_into_encrypted_secrets_json()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, KeyedEntryWithPlainSecrets);
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        vm.BeginEditWebhook(0);
+        vm.WebhookUrlDraft.Value = "https://new.example.test/NEWURL";
+        vm.ActivateSelected();
+
+        var netclawJson = File.ReadAllText(_paths.NetclawConfigPath);
+        Assert.DoesNotContain("OLDURL", netclawJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("NEWURL", netclawJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("OLDHEADER", netclawJson, StringComparison.Ordinal);
+        using (var config = JsonDocument.Parse(netclawJson))
+        {
+            var entry = config.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+            Assert.False(entry.TryGetProperty("Url", out _));
+            Assert.False(entry.TryGetProperty("Headers", out _));
+            Assert.Equal("Generic", entry.GetProperty("Format").GetString());
+        }
+
+        Assert.DoesNotContain("NEWURL", File.ReadAllText(_paths.SecretsPath), StringComparison.Ordinal);
+        using var secrets = JsonDocument.Parse(DecryptedSecrets());
+        var stored = secrets.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+        Assert.Equal("https://new.example.test/NEWURL", stored.GetProperty("Url").GetString());
+        // A blank header draft keeps the stored header, so it moves with the URL.
+        Assert.Equal("Bearer OLDHEADER", stored.GetProperty("Headers").GetProperty("Authorization").GetString());
+    }
+
+    [Fact]
+    public void Clearing_the_auth_header_leaves_no_header_in_either_file_even_when_it_was_plain_in_netclaw_json()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, KeyedEntryWithPlainSecrets);
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        vm.BeginEditWebhook(0);
+        vm.WebhookAuthHeaderDraft.Value = "-";
+        vm.ActivateSelected();
+
+        Assert.DoesNotContain("OLDHEADER", File.ReadAllText(_paths.NetclawConfigPath), StringComparison.Ordinal);
+        using (var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)))
+        {
+            var entry = config.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+            Assert.False(entry.TryGetProperty("Headers", out _));
+        }
+
+        var secretsText = File.Exists(_paths.SecretsPath) ? DecryptedSecrets() : "{}";
+        Assert.DoesNotContain("OLDHEADER", secretsText, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Headers\"", secretsText, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Removing_a_webhook_drops_only_the_selected_entry()
     {
-        File.WriteAllText(_paths.NetclawConfigPath,
-            "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":[{\"Name\":\"ops\",\"Url\":\"https://a.test/h\",\"Format\":\"Generic\"},{\"Name\":\"slack\",\"Url\":\"https://hooks.slack.com/x\",\"Format\":\"Slack\"}]}}");
+        SeedWebhooks(
+            "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":{\"ops\":{\"Format\":\"Generic\"},\"slack\":{\"Format\":\"Slack\"}}}}",
+            "{\"Notifications\":{\"Webhooks\":{\"ops\":{\"Url\":\"https://a.test/h\"},\"slack\":{\"Url\":\"https://hooks.slack.com/x\"}}}}");
         using var vm = new TelemetryAlertingConfigViewModel(_paths);
 
         // Row 2 == first webhook (OtlpRowCount == 2).
@@ -289,28 +350,104 @@ public sealed class TelemetryAlertingConfigViewModelTests : IDisposable
         vm.RemoveSelectedWebhook();
 
         var webhook = Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks);
-        Assert.Equal("slack", webhook.Name);
+        Assert.Equal("slack", webhook.Key);
+        Assert.Equal("https://hooks.slack.com/x", webhook.Value.Url!.Value);
+    }
+
+    [Fact]
+    public void Removing_a_webhook_also_deletes_its_secrets_json_entry_so_no_orphan_webhook_binds_from_secrets_alone()
+    {
+        SeedWebhooks(
+            "{\"configVersion\":1,\"Notifications\":{\"Webhooks\":{\"ops\":{\"Format\":\"Generic\"},\"slack\":{\"Format\":\"Slack\"}}}}",
+            "{\"Notifications\":{\"Webhooks\":{\"ops\":{\"Url\":\"https://a.test/h\",\"Headers\":{\"Authorization\":\"Bearer old\"}},\"slack\":{\"Url\":\"https://hooks.slack.com/x\"}}}}");
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        vm.SelectedRow.Value = TelemetryAlertingConfigViewModel.OtlpRowCount;
+        vm.RemoveSelectedWebhook();
+
+        var secrets = JsonDocument.Parse(DecryptedSecrets()).RootElement
+            .GetProperty("Notifications").GetProperty("Webhooks");
+        Assert.False(secrets.TryGetProperty("ops", out _));
+        Assert.True(secrets.TryGetProperty("slack", out _));
+        Assert.Equal("slack", Assert.Single(Bind<NotificationsConfig>("Notifications").Webhooks).Key);
     }
 
     [Fact]
     public void Webhook_edits_preserve_unrelated_secrets_file()
     {
         File.WriteAllText(_paths.SecretsPath, "{\"Slack\":{\"BotToken\":\"ENC:slack\"}}");
-        var beforeSecrets = File.ReadAllText(_paths.SecretsPath);
         using var vm = new TelemetryAlertingConfigViewModel(_paths);
 
         vm.BeginAddWebhook();
         vm.WebhookUrlDraft.Value = "https://alerts.example.test/hook";
         vm.ActivateSelected();
 
-        Assert.Equal(beforeSecrets, File.ReadAllText(_paths.SecretsPath));
+        using var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
+        Assert.Equal("ENC:slack", secrets.RootElement.GetProperty("Slack").GetProperty("BotToken").GetString());
     }
 
+    [Fact]
+    public void Adding_a_webhook_keeps_the_url_and_header_value_out_of_netclaw_json_and_encrypts_them_in_secrets_json()
+    {
+        const string url = "https://hooks.slack.com/services/T000/B000/SECRET";
+        using var vm = new TelemetryAlertingConfigViewModel(_paths);
+
+        vm.BeginAddWebhook();
+        vm.WebhookNameDraft.Value = "ops";
+        vm.WebhookUrlDraft.Value = url;
+        vm.WebhookAuthHeaderDraft.Value = "Authorization: Bearer topsecret";
+        vm.ActivateSelected();
+
+        var netclawJson = File.ReadAllText(_paths.NetclawConfigPath);
+        Assert.DoesNotContain("SECRET", netclawJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("topsecret", netclawJson, StringComparison.Ordinal);
+        using (var config = JsonDocument.Parse(netclawJson))
+        {
+            var entry = config.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+            Assert.Equal("Slack", entry.GetProperty("Format").GetString());
+            Assert.False(entry.TryGetProperty("Url", out _));
+            Assert.False(entry.TryGetProperty("Headers", out _));
+        }
+
+        var rawSecrets = File.ReadAllText(_paths.SecretsPath);
+        Assert.DoesNotContain("SECRET", rawSecrets, StringComparison.Ordinal);
+        Assert.DoesNotContain("topsecret", rawSecrets, StringComparison.Ordinal);
+        using (var raw = JsonDocument.Parse(rawSecrets))
+        {
+            var stored = raw.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+            Assert.StartsWith("ENC:", stored.GetProperty("Url").GetString(), StringComparison.Ordinal);
+            Assert.StartsWith("ENC:", stored.GetProperty("Headers").GetProperty("Authorization").GetString(), StringComparison.Ordinal);
+        }
+
+        var decrypted = SecretsFileWriter.DecryptJsonLeaves(rawSecrets, SecretsProtection.CreateProtector(_paths));
+        using var plain = JsonDocument.Parse(decrypted);
+        var webhook = plain.RootElement.GetProperty("Notifications").GetProperty("Webhooks").GetProperty("ops");
+        Assert.Equal(url, webhook.GetProperty("Url").GetString());
+        Assert.Equal("Bearer topsecret", webhook.GetProperty("Headers").GetProperty("Authorization").GetString());
+
+        // The list still shows the webhook although its Url now lives in secrets.json.
+        Assert.Equal("ops", Assert.Single(vm.Webhooks.Value).Name);
+        using var reopened = new TelemetryAlertingConfigViewModel(_paths);
+        Assert.Equal("ops", Assert.Single(reopened.Webhooks.Value).Name);
+    }
+
+    // Writes secrets.json through the real writer, so its values are ENC: as `netclaw secrets set` stores them.
+    private void SeedWebhooks(string netclawJson, string secretsJson)
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, netclawJson);
+        SecretsFileWriter.Write(_paths.SecretsPath, secretsJson, SecretsProtection.CreateProtector(_paths));
+    }
+
+    private string DecryptedSecrets()
+        => SecretsFileWriter.DecryptJsonLeaves(File.ReadAllText(_paths.SecretsPath), SecretsProtection.CreateProtector(_paths));
+
+    // Layers netclaw.json and then secrets.json, as the daemon does. The test decrypts secrets.json by hand
+    // so it does not touch the process-wide SensitiveStringTypeConverter.Protector.
     private T Bind<T>(string sectionName) where T : new()
     {
-        var configuration = new ConfigurationBuilder()
-            .AddJsonFile(_paths.NetclawConfigPath)
-            .Build();
-        return configuration.GetSection(sectionName).Get<T>() ?? new T();
+        var builder = new ConfigurationBuilder().AddJsonFile(_paths.NetclawConfigPath);
+        if (File.Exists(_paths.SecretsPath))
+            builder.AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(DecryptedSecrets())));
+        return builder.Build().GetSection(sectionName).Get<T>() ?? new T();
     }
 }

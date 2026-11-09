@@ -8,6 +8,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Hosting;
@@ -337,6 +338,69 @@ public partial class DispatchingToolExecutorTests : IDisposable
                 entry.Values.OfType<string>(),
                 value => value.Contains("abc123def456ghijklmnop", StringComparison.Ordinal));
         });
+    }
+
+    // The log-only signature rule (#2770) must not reach the model. A signature that comes first
+    // is a shape that only the log rules mask.
+    [Fact]
+    public async Task Mcp_tool_output_with_the_signature_first_reaches_the_model_unredacted()
+    {
+        const string presignedUrl =
+            "https://acct.r2.cloudflarestorage.com/bucket/x.png?X-Amz-Signature=deadbeefcafe01" +
+            "&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=abc123def456ghijklmnop%2F20260818%2Fauto%2Fs3%2Faws4_request";
+        var adapter = new McpToolAdapter(AIFunctionFactory.Create(() => presignedUrl, "create_upload"), "assetbridge", "create_upload");
+
+        var result = await ExecuteOnlyToolAsync(adapter);
+
+        Assert.Equal(presignedUrl, result);
+    }
+
+    [Fact]
+    public async Task Tool_output_redacted_for_the_model_keeps_a_presigned_url_signature()
+    {
+        const string presignedUrl =
+            "https://acct.blob.core.windows.net/c/x.png?sv=2024-11-04&sig=Zm9vYmFy%3D&X-Amz-Signature=deadbeefcafe01";
+        Assert.NotEqual(presignedUrl, SecretOutputRedactor.RedactForLogging(presignedUrl));
+
+        var result = await ExecuteOnlyToolAsync(new FixedOutputTestTool(presignedUrl));
+
+        Assert.Equal(presignedUrl, result);
+    }
+
+    // Runs one auto-approved tool call through a new executor, with the default output redaction.
+    private async Task<string> ExecuteOnlyToolAsync(INetclawTool tool)
+    {
+        var registry = new ToolRegistry();
+        registry.Register(tool);
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [tool.Name] = ToolApprovalMode.Auto
+            }
+        };
+        var executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(new NetclawPaths(),
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(ShellEnvironment),
+                new ToolPathPolicy(ShellEnvironment, [])),
+            logger: new RecordingLogger<DispatchingToolExecutor>());
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", BoundSessionDirectory, new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+        });
+
+        return await executor.ExecuteAsync(
+            CreateToolCall("call-only", tool.Name, new Dictionary<string, object?>()),
+            context,
+            CancellationToken.None);
     }
 
     [Fact]
@@ -1897,6 +1961,33 @@ public partial class DispatchingToolExecutorTests : IDisposable
         Assert.Equal(ShellPolicyTraceReason.InternalPolicyFailure, row.Reason);
     }
 
+    // The deny reason does not say which rule failed. Without the log line, a
+    // grant store timeout and a parser bug look the same to the operator.
+    [Fact]
+    public async Task A_shell_rule_that_throws_denies_the_call_and_logs_the_exception()
+    {
+        var approvalService = new FixedShellApprovalService(
+            _ => throw new InvalidOperationException("grant store did not answer"));
+        var logger = new RecordingLogger<DispatchingToolExecutor>();
+        var executor = CreateApprovalGatedShellExecutor(approvalService, logger);
+        var call = new FunctionCallContent(
+            "call-rule-throws",
+            "shell_execute",
+            ToolInput.Create("Command", "git status"));
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            CreateInteractivePersonalContext("signalr/rule-throws"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("internal_policy_failure", decision.DenyReason);
+        var record = Assert.Single(logger.LogRecords, r => r.Level == LogLevel.Error);
+        Assert.Equal("grant store did not answer", Assert.IsType<InvalidOperationException>(record.Exception).Message);
+        Assert.Equal("shell_execute", record.Properties["ToolName"]);
+        Assert.Equal("internal_policy_failure", record.Properties["DenyReason"]);
+    }
+
     [Fact]
     public async Task Authorization_evaluation_preserves_mixed_actor_match_order_in_one_batch()
     {
@@ -2354,20 +2445,25 @@ public partial class DispatchingToolExecutorTests : IDisposable
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
-            var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
-                executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
-            Assert.Null(context.Receipt);
+            // The test checks the authorization decisions only. Running the command
+            // would start pwsh on Windows, and a cold pwsh on a loaded runner can pass
+            // the 90s command timeout. Process execution has its own tests.
+            var firstAttempt = await executor.EvaluateAuthorizationAsync(
+                toolCall, context, TestContext.Current.CancellationToken);
+            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, firstAttempt.Outcome);
 
-            context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext)));
+            context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext!)));
 
-            var result = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
-            Assert.Contains("Exit code: 0", result, StringComparison.Ordinal);
-            Assert.Equal(ToolInvocationOutcomeCategory.Success, context.Receipt?.Category);
+            var retry = await executor.EvaluateAuthorizationAsync(
+                toolCall, context, TestContext.Current.CancellationToken);
+            Assert.Equal(ToolAuthorizationOutcome.Allowed, retry.Outcome);
+            Assert.Equal(ToolAllowReason.OneTimeApproval, retry.AllowReason);
 
             context.Approval.ClearOneTimeConsent();
 
-            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
-                executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+            var afterClear = await executor.EvaluateAuthorizationAsync(
+                toolCall, context, TestContext.Current.CancellationToken);
+            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, afterClear.Outcome);
         }
         finally
         {
@@ -4108,7 +4204,7 @@ public partial class DispatchingToolExecutorTests : IDisposable
         IToolApprovalService? approvalService,
         FunctionCallContent call,
         ToolExecutionContext context)
-        => new ToolAuthorizer(registry, policy, approvalService, new ShellPolicyCoordinator(registry, policy, approvalService))
+        => new ToolAuthorizer(registry, policy, approvalService, new ShellPolicyCoordinator(registry, policy, approvalService), NullLogger.Instance)
             .AuthorizeAsync(call, context, TestContext.Current.CancellationToken);
 
     private static (ToolRegistry Registry, ToolAccessPolicy Policy) CreateApprovalGatedShellRegistryAndPolicy(
@@ -4441,6 +4537,21 @@ public partial class DispatchingToolExecutorTests : IDisposable
             {
             }
         }
+    }
+
+    private sealed class FixedOutputTestTool(string output) : INetclawTool
+    {
+        public string Name => "fixed_output_probe";
+        public LlmFacingToolName LlmFacingName => LlmFacingToolName.FromCanonical(Name);
+        public string Description => "A test tool that returns a fixed text.";
+        public string GrantCategory => "test";
+        public System.Text.Json.JsonElement ParameterSchema => default;
+        public AITool ToAITool() => AIFunctionFactory.Create(() => output, Name);
+        public Task<string> ExecuteAsync(
+            IDictionary<string, object?>? arguments,
+            ToolInvocationContext context,
+            CancellationToken ct = default)
+            => Task.FromResult(output);
     }
 
     private sealed class ThrowingTestTool(Exception exception) : INetclawTool

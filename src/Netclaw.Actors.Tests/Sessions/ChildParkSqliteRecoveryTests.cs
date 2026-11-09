@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using Akka.Hosting;
 using Akka.Persistence.Sql.Hosting;
-using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tests.Utilities;
@@ -32,9 +31,14 @@ public sealed class ChildParkSqliteRecoveryTests(ITestOutputHelper output) : Chi
 
     protected override void DeleteOwnedDirectories()
     {
-        SqliteConnection.ClearAllPools();
-        _sqliteDirectory?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        base.DeleteOwnedDirectories();
+        try
+        {
+            SqlPersistencePlugins.WaitForStopThenDelete(Sys, _sqliteDirectory);
+        }
+        finally
+        {
+            base.DeleteOwnedDirectories();
+        }
     }
 
     /// <summary>
@@ -48,7 +52,8 @@ public sealed class ChildParkSqliteRecoveryTests(ITestOutputHelper output) : Chi
     {
         // Arrange
         var id = new SessionId("park/sqlite");
-        await SqlPersistencePlugins.StartOneAtATimeAsync(this, ColdRecoveryCeiling);
+        await SqlPersistencePlugins.StartOneAtATimeAsync(this, ColdRecoveryCeiling,
+            Path.Combine(_sqliteDirectory!.Path, "journal.db"));
         ScriptParent();
         PlanChild("park-sqlite", [[Probe("p1")]]);
         await JoinRecorderAsync(id);

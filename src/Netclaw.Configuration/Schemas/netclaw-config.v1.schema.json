@@ -776,27 +776,10 @@
       "description": "Operational alert notification configuration.",
       "properties": {
         "Webhooks": {
-          "type": "array",
-          "description": "Webhook targets for operational notifications. Empty = logging only.",
-          "items": {
-            "type": "object",
-            "properties": {
-              "Url": { "type": "string", "format": "uri" },
-              "Name": { "type": ["string", "null"] },
-              "Headers": {
-                "type": ["object", "null"],
-                "additionalProperties": { "type": "string" }
-              },
-              "Format": {
-                "type": "string",
-                "enum": ["Generic", "Slack"],
-                "default": "Generic",
-                "description": "Payload format for this webhook target. Generic = JSON envelope; Slack = Block Kit format."
-              }
-            },
-            "required": ["Url"],
-            "additionalProperties": false
-          }
+          "type": ["object", "array"],
+          "description": "Webhook targets for operational notifications, keyed by webhook name. Empty = logging only. Url and header values normally live in secrets.json under the same key. The old list shape still loads; `netclaw doctor --fix` converts it.",
+          "additionalProperties": { "$ref": "#/$defs/NotificationWebhook" },
+          "items": { "$ref": "#/$defs/NotificationWebhook" }
         },
         "DeduplicationWindowSeconds": {
           "type": "integer",
@@ -972,6 +955,25 @@
   },
   "additionalProperties": true,
   "$defs": {
+    "NotificationWebhook": {
+      "type": "object",
+      "description": "One notification webhook. Url is optional here because secrets.json can supply it; the daemon stops at startup when no source does.",
+      "properties": {
+        "Url": { "type": "string", "format": "uri" },
+        "Name": { "type": ["string", "null"], "description": "Old list shape only. The key names the webhook in the keyed shape." },
+        "Headers": {
+          "type": ["object", "null"],
+          "additionalProperties": { "type": "string" }
+        },
+        "Format": {
+          "type": "string",
+          "enum": ["Generic", "Slack"],
+          "default": "Generic",
+          "description": "Payload format for this webhook target. Generic = JSON envelope; Slack = Block Kit format."
+        }
+      },
+      "additionalProperties": false
+    },
     "ToolProfileMode": {
       "type": "string",
       "enum": ["Allowlist", "All"]
@@ -1136,7 +1138,7 @@
         "MaxOutputTokens": {
           "type": "integer",
           "minimum": 1,
-          "description": "Output limit in tokens for every call of this model, unless the call site sets its own. Must be below ContextWindow when ContextWindow is set. When absent, Netclaw sends a default of 32000, clamped per call to the model maximum and to the context window minus the estimated prompt."
+          "description": "Output limit in tokens for every call of this model, unless the call site sets its own. Must be below ContextWindow when ContextWindow is set. When absent, Netclaw sends a default of 32000 capped to the model maximum and to a quarter of the context window. A self-hosted server with an unknown window gets no limit."
         },
         "Thinking": {
           "type": "string",

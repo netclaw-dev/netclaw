@@ -524,7 +524,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     "Subagent output was truncated: the model reached its output limit before it finished, "
                     + "and it made no tool call. The text is cut off and is not a result. "
                     + (savedAt is null ? "" : $"The full cut-off text is saved at {savedAt}. ")
-                    + $"Cut-off text: {PreviewRedacted(stub, 300)}",
+                    + $"Cut-off text: {PreviewRedacted(stub, 300, SecretOutputRedactor.Redact)}",
                     SubAgentRunOutcome.Failed,
                     SubAgentOutcomeReason.OutputTruncated);
                 return;
@@ -1512,8 +1512,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         }
     }
 
+    // A log preview uses log redaction. The cut-off text in a failed outcome goes to the parent
+    // model, which acts on it, so it uses the shared rules only: a log-only rule can mask a value
+    // that the parent needs, such as a presigned URL signature.
     internal static string PreviewForLog(string? text, int maxChars)
-        => PreviewRedacted(text, maxChars);
+        => PreviewRedacted(text, maxChars, SecretOutputRedactor.RedactForLogging);
 
     // Redaction sees the whole text first. A cut before redaction can leave a prefix of a
     // secret that no pattern matches. The first pass must come before the line break
@@ -1523,12 +1526,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     // line ("API_KEY=\n<value>"), and then a rule can match the whole pair. The cut falls
     // on a text-element boundary, so it never splits a surrogate pair. The cut can still
     // shorten a secret mask, which is safe.
-    private static string PreviewRedacted(string? text, int maxChars)
+    private static string PreviewRedacted(string? text, int maxChars, Func<string, string> redact)
     {
         if (string.IsNullOrEmpty(text))
             return "";
 
-        var escaped = SecretOutputRedactor.Redact(SecretOutputRedactor.Redact(text).ReplaceLineEndings("\\n"));
+        var escaped = redact(redact(text).ReplaceLineEndings("\\n"));
         if (escaped.Length <= maxChars)
             return escaped;
 

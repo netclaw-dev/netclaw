@@ -198,6 +198,8 @@ internal sealed class ConfigWatcherActor : ReceiveActor, IWithTimers
             if (check.Valid is { } valid && valid.Validation.Status == ProviderRuntimeStatus.Valid)
                 reason = new ProviderPluginFactory(valid.Providers, _plugins, _capabilities, _loggerFactory, _timeProvider)
                     .Validate(valid.Models);
+            // A webhook with no Url stops the reload, as an invalid model does.
+            reason ??= NotificationsConfigValidator.Check(candidate);
         }
         catch (InvalidDataException ex)
         {

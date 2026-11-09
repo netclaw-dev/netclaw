@@ -456,7 +456,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                 .WithChild(new TextNode("  Max output tokens: ").WithForeground(Color.White))
                 .WithChild(_limitInput)
                 .Height(1))
-            .WithChild(new TextNode($"    Blank means the default: {ModelReference.DefaultMaxOutputTokens}, clamped per call. Thinking tokens count inside the limit.")
+            .WithChild(new TextNode($"    Blank means the default: {ModelReference.DefaultMaxOutputTokens}, capped to a quarter of the window. Thinking tokens count inside the limit.")
                 .WithForeground(Color.Gray))
             .WithChild(new TextNode("").Height(1));
 

@@ -60,7 +60,12 @@ public sealed class MemoryCurationLlmDoctorCheck(NetclawPaths paths, TimeProvide
                     continue;
 
                 cancellationToken.ThrowIfCancellationRequested();
-                using var reader = new StreamReader(file);
+                using var stream = new FileStream(
+                    file,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
                 while (await reader.ReadLineAsync(cancellationToken) is { } line)
                 {
                     // Failure markers first: none of them contains the success

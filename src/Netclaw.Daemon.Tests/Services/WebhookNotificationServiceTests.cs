@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Tests.Mcp;
 using Netclaw.Daemon.Services;
 using Xunit;
@@ -77,7 +78,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 0
         };
 
@@ -98,11 +99,11 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var config = new NotificationsConfig
         {
             Webhooks =
-            [
-                new WebhookTarget { Url = "https://target1.com/hook" },
-                new WebhookTarget { Url = "https://target2.com/hook" },
-                new WebhookTarget { Url = "https://target3.com/hook" }
-            ],
+            {
+                ["target1"] = new WebhookTarget { Url = new SensitiveString("https://target1.com/hook") },
+                ["target2"] = new WebhookTarget { Url = new SensitiveString("https://target2.com/hook") },
+                ["target3"] = new WebhookTarget { Url = new SensitiveString("https://target3.com/hook") }
+            },
             DeduplicationWindowSeconds = 0
         };
 
@@ -124,7 +125,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 300
         };
 
@@ -149,7 +150,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 300
         };
 
@@ -170,7 +171,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 0
         };
 
@@ -206,17 +207,17 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var config = new NotificationsConfig
         {
             Webhooks =
-            [
-                new WebhookTarget
+            {
+                ["hook"] = new WebhookTarget
                 {
-                    Url = "https://example.com/hook",
-                    Headers = new Dictionary<string, string>
+                    Url = new SensitiveString("https://example.com/hook"),
+                    Headers = new Dictionary<string, SensitiveString>
                     {
-                        ["Authorization"] = "Bearer test-token",
-                        ["X-Custom"] = "custom-value"
+                        ["Authorization"] = new SensitiveString("Bearer test-token"),
+                        ["X-Custom"] = new SensitiveString("custom-value")
                     }
                 }
-            ],
+            },
             DeduplicationWindowSeconds = 0
         };
 
@@ -237,7 +238,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.InternalServerError);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 0,
             MaxRetries = 0 // no retries for speed
         };
@@ -262,7 +263,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.BadRequest);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 0,
             MaxRetries = 2
         };
@@ -281,7 +282,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task OmitsUnnamedTargetUrlAndRedactsDeliveryException()
+    public async Task LogsTargetKeyNotUrlAndRedactsDeliveryException()
     {
         const string workspace = "T000TEST";
         const string channel = "B000TEST";
@@ -290,7 +291,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(new HttpRequestException($"Delivery to {url} failed."));
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = url }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString(url) } },
             DeduplicationWindowSeconds = 0,
             MaxRetries = 0
         };
@@ -300,7 +301,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
             new TestHttpClientFactory(handler),
             TimeProvider.System,
             TestIdentity,
-            logger);
+            ThroughRedactionStage(logger));
         _services.Add(service);
 
         await service.StartAsync(CancellationToken.None);
@@ -309,7 +310,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         await service.StopAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(url, Assert.Single(handler.Requests).RequestUri?.ToString());
-        Assert.Contains(logger.Entries, entry => entry.Contains("(unnamed webhook)", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry => entry.Contains("→ hook (", StringComparison.Ordinal));
         Assert.All(logger.Entries, entry =>
         {
             Assert.DoesNotContain(workspace, entry, StringComparison.Ordinal);
@@ -335,26 +336,26 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
             holdFirstRequestUntil: release.Task);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = url }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString(url) } },
             DeduplicationWindowSeconds = 0,
             MaxRetries = 0
         };
         var logger = new RecordingLogger<WebhookNotificationService>();
-        var service = CreateService(config, handler, new FakeTimeProvider(), logger: logger);
+        var service = CreateService(config, handler, new FakeTimeProvider(), logger: ThroughRedactionStage(logger));
 
         await service.StartAsync(CancellationToken.None);
         service.Emit(CreateAlert());
         await WaitForDeliveryAsync(handler, expectedCount: 1);
 
         // The delivery fails only after the stop request. This is the CI interleaving
-        // that made OmitsUnnamedTargetUrlAndRedactsDeliveryException flaky.
+        // that made LogsTargetKeyNotUrlAndRedactsDeliveryException flaky.
         var stop = service.StopAsync(TestContext.Current.CancellationToken);
         release.SetResult();
         await stop;
 
         Assert.Contains(logger.Entries, entry =>
             entry.Contains("Webhook delivery error", StringComparison.Ordinal)
-            && entry.Contains("(unnamed webhook)", StringComparison.Ordinal));
+            && entry.Contains("→ hook (", StringComparison.Ordinal));
         Assert.DoesNotContain(logger.Entries, entry => entry.Contains("aborted", StringComparison.Ordinal));
         var loggedException = Assert.Single(logger.Exceptions).ToString();
         Assert.DoesNotContain(workspace, loggedException, StringComparison.Ordinal);
@@ -369,7 +370,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK, holdFirstRequestUntil: release.Task);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 0
         };
         var service = CreateService(config, handler, new FakeTimeProvider());
@@ -397,7 +398,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK, holdFirstRequestUntil: neverReleased.Task);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = url }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString(url) } },
             DeduplicationWindowSeconds = 0,
             TimeoutSeconds = 10
         };
@@ -421,7 +422,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
             && entry.Contains("1 queued alert(s)", StringComparison.Ordinal));
         Assert.Contains(logger.Entries, entry =>
             entry.Contains("Webhook delivery aborted by shutdown", StringComparison.Ordinal)
-            && entry.Contains("(unnamed webhook)", StringComparison.Ordinal));
+            && entry.Contains("→ hook (", StringComparison.Ordinal));
         Assert.All(logger.Entries, entry => Assert.DoesNotContain(credential, entry, StringComparison.Ordinal));
         Assert.Empty(logger.Exceptions);
     }
@@ -434,7 +435,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK, holdFirstRequestUntil: neverReleased.Task);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 0
         };
         var logger = new RecordingLogger<WebhookNotificationService>();
@@ -463,7 +464,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 0,
             MaxRetries = 2,
             TimeoutSeconds = -1
@@ -488,7 +489,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            Webhooks = { ["hook"] = new WebhookTarget { Url = new SensitiveString("https://example.com/hook") } },
             DeduplicationWindowSeconds = 0
         };
         var logger = new RecordingLogger<WebhookNotificationService>();
@@ -509,4 +510,19 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         int expectedCount,
         int timeoutMs = 5000)
         => WebhookTestInfrastructure.WaitForDeliveryAsync(handler, expectedCount, timeoutMs);
+
+    // The daemon logs through RedactingLoggerFactory, so a delivery exception that echoes the
+    // webhook URL is redacted before any sink. These tests use the same arrangement.
+    private static ILogger<WebhookNotificationService> ThroughRedactionStage(ILogger recorder)
+        => new Logger<WebhookNotificationService>(
+            new RedactingLoggerFactory(new LoggerFactory([new SingleLoggerProvider(recorder)])));
+
+    private sealed class SingleLoggerProvider(ILogger logger) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => logger;
+
+        public void Dispose()
+        {
+        }
+    }
 }

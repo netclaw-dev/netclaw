@@ -280,35 +280,6 @@ public sealed class WizardConfigBuilderTests : WizardStepTestBase
     }
 
     [Fact]
-    public void BuildConfigDictionary_IncludesNotifications_WhenWebhookSet()
-    {
-        var builder = new WizardConfigBuilder(Context.Paths)
-        {
-            Notifications = new NotificationsConfigSection
-            {
-                WebhookUrl = "https://hooks.example.com/alert"
-            }
-        };
-
-        var config = builder.BuildConfigDictionary();
-
-        Assert.True(config.ContainsKey("Notifications"));
-    }
-
-    [Fact]
-    public void BuildConfigDictionary_OmitsNotifications_WhenNoWebhook()
-    {
-        var builder = new WizardConfigBuilder(Context.Paths)
-        {
-            Notifications = new NotificationsConfigSection { WebhookUrl = null }
-        };
-
-        var config = builder.BuildConfigDictionary();
-
-        Assert.False(config.ContainsKey("Notifications"));
-    }
-
-    [Fact]
     public void BuildConfigDictionary_IncludesExternalSkills_WhenSet()
     {
         var builder = new WizardConfigBuilder(Context.Paths)

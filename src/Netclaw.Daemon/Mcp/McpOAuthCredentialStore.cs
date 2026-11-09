@@ -11,7 +11,6 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Authentication;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
-using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Mcp;
@@ -707,8 +706,8 @@ internal sealed class McpOAuthCredentialStore
             // every channel, webhook, and schedule.
             // The secrets file is decrypted before this callback runs, so a malformed-JSON or
             // decryption exception can in principle echo a fragment of plaintext credential
-            // content. Redact before logging, same as the OAuth HTTP-body-echo case.
-            _logger.LogError(SecretOutputRedactor.RedactForLogging(ex),
+            // content. The daemon's logging stage redacts it before any sink.
+            _logger.LogError(ex,
                 "Failed to load MCP OAuth credentials from {Path}. " +
                 "Affected MCP servers will require reauthorization.",
                 _paths.SecretsPath);
@@ -742,7 +741,7 @@ internal sealed class McpOAuthCredentialStore
         }
         catch (ArgumentException ex)
         {
-            _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex),
+            _logger.LogWarning(ex,
                 "Legacy MCP OAuth credentials for '{Name}' have an invalid resource binding",
                 serverName.Value);
             return null;

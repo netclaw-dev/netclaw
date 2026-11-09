@@ -15,10 +15,11 @@ using Xunit;
 namespace Netclaw.Daemon.Tests.Configuration;
 
 /// <summary>
-/// Precedence of design D8, the self-hosted clamp of D4, and the per-call debug line of D10. Each row
+/// Precedence of design D8, the self-hosted window cap, and the per-call debug line of D10. Each row
 /// goes through the real <see cref="Netclaw.Daemon.Configuration.ProviderPluginFactory"/> stack of a
 /// self-hosted OpenAI-compatible provider and reads the request body. The probe of that endpoint
-/// (a fake capability resolver) knows the window when a row says so. Every row also proves the shared
+/// (a fake capability resolver) knows the window when a row says so. The prompt never changes the
+/// limit. Every row also proves the shared
 /// post-conditions: the suppression intent key never reaches the wire, and the caller's options do not
 /// change.
 /// </summary>
@@ -35,24 +36,19 @@ public sealed class ModelRequestSettingsChatClientTests
         string[]? DebugLinePatterns = null,
         bool ExpectWarning = false);
 
-    private static ModelReference Model(int? limit = null, ThinkingLevel? thinking = null) => new()
+    private static ModelReference Model(int? limit = null, ThinkingLevel? thinking = null, int? window = null) => new()
     {
         Provider = "local",
         ModelId = "qwen3",
         MaxOutputTokens = limit,
         Thinking = thinking,
+        ContextWindow = window,
     };
 
     private static ChatOptions Suppressed(int? limit = null) => new()
     {
         MaxOutputTokens = limit,
         AdditionalProperties = new() { [NetclawChatOptionKeys.SuppressReasoning] = true },
-    };
-
-    // About 15000 tokens of tool schema text: the clamp must count it.
-    private static ChatOptions WithLargeTool() => new()
-    {
-        Tools = [AIFunctionFactory.Create(() => "ok", "large_tool", new string('d', 60_000))],
     };
 
     private static readonly Dictionary<string, Row> Rows = new()
@@ -68,7 +64,12 @@ public sealed class ModelRequestSettingsChatClientTests
         ["default_fills_unset_model_limit"] = new(Model(), ThinkingDialect.ReasoningEffort,
             () => null,
             b => Assert.Equal("32000", WireCapture.Text(b, "max_tokens")),
-            ProbeWindow: 131_072),
+            ProbeWindow: 131_072,
+            DebugLinePatterns: [@"maxOutputTokens=32,?000 \(default\)"]),
+        ["unknown_window_sends_no_limit"] = new(Model(), ThinkingDialect.ReasoningEffort,
+            () => null,
+            b => Assert.Null(WireCapture.Text(b, "max_tokens")),
+            DebugLinePatterns: [@"maxOutputTokens=none \(window unknown\)"]),
         ["suppression_wins_over_model_level"] = new(Model(thinking: ThinkingLevel.High), ThinkingDialect.DeepSeek,
             () => Suppressed(),
             b =>
@@ -76,14 +77,21 @@ public sealed class ModelRequestSettingsChatClientTests
                 Assert.Equal("disabled", WireCapture.Text(b, "thinking", "type"));
                 Assert.Null(WireCapture.Text(b, "reasoning_effort"));
             }),
-        // Window 40960, prompt 40000 tokens (160000 characters / 4): the headroom is below the floor.
-        ["debug_line_shows_default_clamped_and_prompt_estimate"] = new(Model(), ThinkingDialect.ReasoningEffort,
+        // A prompt near the window no longer shrinks the reply or warns: the cap is a static quarter of
+        // the window (40960 / 4 = 10240), whatever the prompt.
+        ["prompt_near_probe_window_keeps_window_cap"] = new(Model(), ThinkingDialect.ReasoningEffort,
             () => new ChatOptions(),
-            b => Assert.Equal("1024", WireCapture.Text(b, "max_tokens")),
+            b => Assert.Equal("10240", WireCapture.Text(b, "max_tokens")),
             ProbeWindow: 40_960,
             PromptChars: 160_000,
-            DebugLinePatterns: [@"maxOutputTokens=1,?024 \(default-clamped\)", @"promptEstimate=40,?000"],
-            ExpectWarning: true),
+            DebugLinePatterns: [@"maxOutputTokens=10,?240 \(default-clamped\)"]),
+        ["configured_window_caps_default"] = new(Model(window: 40_960), ThinkingDialect.ReasoningEffort,
+            () => new ChatOptions(),
+            b => Assert.Equal("10240", WireCapture.Text(b, "max_tokens"))),
+        ["prompt_past_configured_window_keeps_configured_limit"] = new(Model(limit: 8_192, window: 40_960), ThinkingDialect.ReasoningEffort,
+            () => new ChatOptions(),
+            b => Assert.Equal("8192", WireCapture.Text(b, "max_tokens")),
+            PromptChars: 160_000),
         ["debug_line_shows_call_source_for_curation_limit"] = new(Model(limit: 32_000, thinking: ThinkingLevel.Low), ThinkingDialect.ReasoningEffort,
             () => Suppressed(limit: 4_096),
             b =>
@@ -92,19 +100,6 @@ public sealed class ModelRequestSettingsChatClientTests
                 Assert.Equal("none", WireCapture.Text(b, "reasoning_effort"));
             },
             DebugLinePatterns: [@"maxOutputTokens=4,?096 \(call\)", @"thinking=Off \(suppressed\)", @"dialect=ReasoningEffort"]),
-        // 40960 - 30000 - 2048 = 8912
-        ["prompt_without_tools_sends_8912"] = new(Model(), ThinkingDialect.ReasoningEffort,
-            () => new ChatOptions(),
-            b => Assert.Equal("8912", WireCapture.Text(b, "max_tokens")),
-            ProbeWindow: 40_960,
-            PromptChars: 120_000),
-        // The same prompt plus about 15000 tokens of tool schemas leaves less than the floor.
-        ["clamp_counts_tool_schemas"] = new(Model(), ThinkingDialect.ReasoningEffort,
-            WithLargeTool,
-            b => Assert.Equal("1024", WireCapture.Text(b, "max_tokens")),
-            ProbeWindow: 40_960,
-            PromptChars: 120_000,
-            ExpectWarning: true),
     };
 
     public static TheoryData<string> RowNames => new(Rows.Keys);

@@ -10,15 +10,22 @@ namespace Netclaw.Configuration;
 
 public static class CrashLogWriter
 {
+    /// <param name="redact">
+    /// Removes secrets from the crash text before it reaches the file or stderr. It is required:
+    /// an exception message can echo a provider response or a credential, and a crash log is
+    /// kept on disk and collected for support.
+    /// </param>
     public static string? TryWrite(
         Exception ex,
         string processName,
+        Func<string, string> redact,
         TimeProvider? timeProvider = null,
         TextWriter? errorWriter = null,
         string? logsDirectory = null,
         IReadOnlyDictionary<string, string>? context = null)
     {
         ArgumentNullException.ThrowIfNull(ex);
+        ArgumentNullException.ThrowIfNull(redact);
         if (string.IsNullOrWhiteSpace(processName))
             throw new ArgumentException("Process name cannot be empty.", nameof(processName));
 
@@ -35,14 +42,14 @@ public static class CrashLogWriter
                 $"crash-{now:yyyyMMdd-HHmmss}.log");
             var crashPath = EnsureUniquePath(basePath, now);
 
-            File.WriteAllText(crashPath, BuildCrashLogContent(processName, now, ex, context));
+            File.WriteAllText(crashPath, redact(BuildCrashLogContent(processName, now, ex, context)));
 
             errorWriter.WriteLine($"Fatal error — crash log written to {crashPath}");
             return crashPath;
         }
         catch
         {
-            errorWriter.WriteLine($"Fatal error (could not write crash log): {ex}");
+            errorWriter.WriteLine($"Fatal error (could not write crash log): {redact(ex.ToString())}");
             return null;
         }
     }
@@ -50,12 +57,13 @@ public static class CrashLogWriter
     public static void Write(
         Exception ex,
         string processName,
+        Func<string, string> redact,
         TimeProvider? timeProvider = null,
         TextWriter? errorWriter = null,
         string? logsDirectory = null,
         IReadOnlyDictionary<string, string>? context = null)
     {
-        _ = TryWrite(ex, processName, timeProvider, errorWriter, logsDirectory, context);
+        _ = TryWrite(ex, processName, redact, timeProvider, errorWriter, logsDirectory, context);
     }
 
     private static string BuildCrashLogContent(

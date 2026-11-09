@@ -773,7 +773,7 @@ internal static class ModelCommand
         writer.WriteLine("  --output-modalities <list>   Override output modalities, e.g. \"Text\"");
         writer.WriteLine("  --clear-modalities           Remove modality overrides (fall back to runtime detection)");
         writer.WriteLine("  --max-output-tokens <tokens> Output limit for every call of this model; thinking tokens count inside it");
-        writer.WriteLine($"  --clear-max-output-tokens    Remove the limit (default {ModelReference.DefaultMaxOutputTokens}, clamped per call to the model and the context window)");
+        writer.WriteLine($"  --clear-max-output-tokens    Remove the limit (default {ModelReference.DefaultMaxOutputTokens} capped to the model max and a quarter of the context window; none for a self-hosted server with an unknown window)");
         writer.WriteLine("  --thinking <level>           Thinking level: off, low, medium, high, or max (the highest level the provider offers)");
         writer.WriteLine("  --clear-thinking             Remove the level (the model's default applies)");
         writer.WriteLine();

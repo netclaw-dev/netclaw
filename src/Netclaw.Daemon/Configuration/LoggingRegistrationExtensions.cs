@@ -5,8 +5,10 @@
 // -----------------------------------------------------------------------
 using Akka.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Netclaw.Actors.Hosting;
 using Netclaw.Configuration;
 
@@ -70,7 +72,26 @@ public static class LoggingRegistrationExtensions
         builder.Services.AddHostedService<SessionLogDispatcherWiringService>();
 
         builder.Logging.SetMinimumLevel(level);
+        // log-redaction-registration:begin
+        builder.Services.AddNetclawLogRedaction();
         return level;
+    }
+
+    /// <summary>
+    /// Replaces the host's <see cref="ILoggerFactory"/> with <see cref="RedactingLoggerFactory"/>.
+    /// The inner factory is built from the same services that the host's default factory
+    /// uses, so provider registration and filter rules work as before.
+    /// </summary>
+    internal static IServiceCollection AddNetclawLogRedaction(this IServiceCollection services)
+    {
+        services.Replace(ServiceDescriptor.Singleton<ILoggerFactory>(sp => new RedactingLoggerFactory(
+            new LoggerFactory(
+                sp.GetServices<ILoggerProvider>(),
+                sp.GetRequiredService<IOptionsMonitor<LoggerFilterOptions>>(),
+                sp.GetService<IOptions<LoggerFactoryOptions>>(),
+                sp.GetService<IExternalScopeProvider>()))));
+        // log-redaction-registration:end
+        return services;
     }
 
     private static LogLevel ResolveLogLevel(IConfiguration configuration)
