@@ -61,6 +61,14 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
     private TimeSpan _retryDelay;
     private ICancelable? _retryTimer;
 
+    /// <summary>
+    /// Monotonic stamp identifying the current stop cycle. A stop that times out
+    /// leaves its transport call running; when that call finally completes it
+    /// must not be mistaken for the result of a later stop cycle.
+    /// </summary>
+    private long _stopGeneration;
+    private ICancelable? _stopTimer;
+
     /// <remarks>
     /// The constructor calls <see cref="ActorBase.Become"/>, which invokes the
     /// subclass's Register* hooks before the subclass constructor body has run.
@@ -125,6 +133,22 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
     /// </summary>
     protected virtual TimeSpan? ReadySignalTimeout => null;
 
+    /// <summary>
+    /// How long the actor waits in Disconnecting for the transport stop to
+    /// complete before treating the stop as failed and scheduling the next
+    /// auto-reconnect attempt. Null (the default) waits indefinitely.
+    /// </summary>
+    /// <remarks>
+    /// A transport stop that hangs — a half-open socket, a wedged WebSocket
+    /// close handshake, or a client whose internal reconnect loop never
+    /// settles — otherwise parks the actor in Disconnecting forever. That
+    /// state has no retry timer and discards transport recovery signals, so
+    /// the channel never reconnects until the process restarts. Discord's
+    /// <c>StopAsync</c> is the known offender: after a socket-exhaustion
+    /// event it can await a close handshake that never completes.
+    /// </remarks>
+    protected virtual TimeSpan? StopTimeout => null;
+
     protected override void PreStart()
     {
         SelfRef = Self;
@@ -137,6 +161,7 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
         UnsubscribeTransportEvents();
         CancelRetryTimer();
         CancelReadySignalTimer();
+        CancelStopTimer();
         base.PostStop();
     }
 
@@ -205,6 +230,7 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
             _channelDisplayName + " gateway disconnect is already in progress."))));
         Receive<StopSucceeded>(HandleStopSucceeded);
         Receive<StopFailed>(HandleStopFailed);
+        Receive<StopTimedOut>(HandleStopTimedOut);
         RegisterDisconnectingChannelHandlers();
         ReceiveNotReadyIngress();
         ReceiveUnexpected(nameof(Disconnecting));
@@ -245,6 +271,7 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
         ResetIdentityState();
         _cleanReconnectEmitted = false;
         _readyEnteredAt = null;
+        CancelStopTimer();
 
         // Normalize Nobody to null: "no pending caller" must have exactly one
         // representation. The auto-retry path connects with ActorRefs.Nobody,
@@ -375,6 +402,7 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
     private void BeginStop(IActorRef replyTo)
     {
         var self = Self;
+        var generation = ++_stopGeneration;
         Task stopTask;
         try
         {
@@ -382,21 +410,74 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
         }
         catch (Exception ex)
         {
-            self.Tell(new StopFailed(replyTo, ex));
+            self.Tell(new StopFailed(replyTo, ex, generation));
             return;
         }
 
+        ArmStopTimer(generation);
+
         stopTask.ContinueWith(
             task => self.Tell(task.IsCompletedSuccessfully
-                ? new StopSucceeded(replyTo)
-                : new StopFailed(replyTo, UnwrapTaskException(task))),
+                ? new StopSucceeded(replyTo, generation)
+                : new StopFailed(replyTo, UnwrapTaskException(task), generation)),
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
     }
 
+    /// <summary>
+    /// Arms the stop-completion deadline. When it fires, the actor treats the
+    /// stop as failed and moves on rather than waiting forever on a transport
+    /// call that may never return.
+    /// </summary>
+    private void ArmStopTimer(long generation)
+    {
+        CancelStopTimer();
+        if (StopTimeout is not { } timeout)
+            return;
+
+        _stopTimer = Context.System.Scheduler.ScheduleTellOnceCancelable(
+            timeout,
+            Self,
+            new StopTimedOut(generation, new ChannelConnectException(
+                ChannelConnectFailureKind.Transient,
+                _channelDisplayName + " gateway did not stop within " +
+                $"{timeout.TotalSeconds:F0} seconds.")),
+            ActorRefs.NoSender);
+    }
+
+    private void CancelStopTimer()
+    {
+        _stopTimer?.Cancel();
+        _stopTimer = null;
+    }
+
+    private void HandleStopTimedOut(StopTimedOut timedOut)
+    {
+        if (timedOut.Generation != _stopGeneration)
+            return;
+
+        // The transport call is abandoned, not cancelled: it may still be
+        // awaiting a close handshake. Its eventual completion carries the old
+        // generation and is ignored, so it cannot disturb the next cycle.
+        Logger.LogWarning(
+            "{Channel} gateway stop did not complete within the stop timeout; " +
+            "abandoning the stop and scheduling a reconnect. {Reason}",
+            _channelDisplayName, timedOut.Exception.Message);
+
+        _healthDetail = timedOut.Exception.Message;
+        CancelStopTimer();
+        ResetIdentityState();
+        ScheduleRetryIfEnabled();
+        Become(Disconnected);
+    }
+
     private void HandleStopSucceeded(StopSucceeded stopped)
     {
+        if (stopped.Generation != _stopGeneration)
+            return;
+
+        CancelStopTimer();
         _healthDetail = _disconnectedDetail;
         ResetIdentityState();
         ScheduleRetryIfEnabled();
@@ -407,6 +488,10 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
 
     private void HandleStopFailed(StopFailed failed)
     {
+        if (failed.Generation != _stopGeneration)
+            return;
+
+        CancelStopTimer();
         _healthDetail = failed.Exception.Message;
         ScheduleRetryIfEnabled();
         Become(Disconnected);
@@ -765,9 +850,15 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
     /// </summary>
     private sealed record ReadySignalTimedOut(long Attempt, Exception Exception) : IGatewayConnectFailure;
 
-    private sealed record StopSucceeded(IActorRef ReplyTo) : IGatewayStopWork;
+    private sealed record StopSucceeded(IActorRef ReplyTo, long Generation) : IGatewayStopWork;
 
-    private sealed record StopFailed(IActorRef ReplyTo, Exception Exception) : IGatewayStopFailure;
+    private sealed record StopFailed(IActorRef ReplyTo, Exception Exception, long Generation) : IGatewayStopFailure;
+
+    /// <summary>
+    /// Fires when a transport stop exceeds <see cref="StopTimeout"/>. Carries the
+    /// stop generation so a late timer from an abandoned cycle is ignored.
+    /// </summary>
+    private sealed record StopTimedOut(long Generation, Exception Exception) : IGatewayInternalMessage;
 
     private sealed record RetryConnect : IGatewayInternalMessage
     {
