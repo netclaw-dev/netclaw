@@ -222,7 +222,7 @@ read -r resolve_start resolve_end resolve_start_line resolve_start_column resolv
 policy_file="$repo_root/src/Netclaw.Actors/Tools/ToolAccessPolicy.cs"
 read -r read_start read_end read_start_line read_start_column read_end_line read_end_column < <(
   find_span "$policy_file" \
-    "internal ToolAuthorizationDecision? ScreenNoProgramRedirects(" \
+    "internal AuthorizationDecision? ScreenNoProgramRedirects(" \
     "if (!candidate.RunsNoProgram && !candidate.UsesFileToolRedirects)" \
     '$"this audience may not use {FileToolName(read)}, and a redirect gets the same decision");' \
     "internal ShellApprovalAnalysis WithManagedTemporaryRedirects("

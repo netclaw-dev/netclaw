@@ -473,12 +473,23 @@ The repeated official comparison obtained a separate exit-zero receipt.
 The retained gzip passed its integrity check and reproduced the uncompressed head SHA-256.
 All PR2 hosted checks remain pending until submission.
 
+### Authorization mutation selector repair
+
+PR2 head `73bf713c04c28c6f8293b3de58d13902c8ab57a4` is open as [PR 2800](https://github.com/netclaw-dev/netclaw/pull/2800).
+Hosted job `134354145796` failed when a no-program selector could not find the old result type name.
+The literal-twin selector used the same old type name. Both selectors now name `AuthorizationDecision`.
+The four selected source spans match the PR1 spans after the result type rename.
+The no-program locator self-test and both static locator checks pass.
+The required counts stay at 33 killed and two documented duplicate removals for no-program, and nine killed for literal twins.
+The hosted mutation rerun must prove these counts at the corrected head. Local Stryker did not run for this repair.
+The production source tree stays unchanged, so the earlier corpus and public compatibility evidence remains applicable.
+
 ## Current queue
 
 | Slice | PR | Head | Actual base | Local state | Hosted state |
 |---|---|---|---|---|---|
 | PR1 | [2799](https://github.com/netclaw-dev/netclaw/pull/2799) | `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | `dev` at `76071cfe9e721dee864d60d1379a497d97f19414` | Complete | All required workflows pass |
-| PR2 | Not submitted | Tested source `5d5372a92c30df67e43edf8da1be0638c6dc770b` | PR1 at `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | Focused checks, corpus, mutations, and two native tapes pass | Not submitted |
+| PR2 | [2800](https://github.com/netclaw-dev/netclaw/pull/2800) | `73bf713c04c28c6f8293b3de58d13902c8ab57a4` before selector repair | PR1 at `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | Focused checks, corpus, mutations, and two native tapes pass | Selector failure; corrected-head checks pending |
 | PR3 | Not submitted | Not created | Planned PR2 | Private source preparation | Not submitted |
 | PR4 | Not submitted | Not created | Planned PR3 | Private source preparation | Not submitted |
 
