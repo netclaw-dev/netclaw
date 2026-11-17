@@ -97,6 +97,35 @@ public sealed class OneShotEndOutcomeTests : OneShotReminderTestBase
     // ── Failure ──
 
     [Fact]
+    public async Task History_query_waits_for_failed_run_settlement()
+    {
+        await DrainStartupAsync();
+        Pipeline.Mode = RunMode.Fail;
+        var definition = NewOneShot("history-after-nack");
+        await ScheduleAsync(definition);
+        var entered = ReminderStorage.HoldNextNack();
+        Advance(FirstFireDelay);
+
+        try
+        {
+            await entered.WaitAsync(AskTimeout, TestContext.Current.CancellationToken);
+            var probe = CreateTestProbe("history-during-settlement");
+            probe.Send(Manager, new GetReminderHistoryQuery(definition.Id, 50, OperatorCaller));
+            await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken);
+            ReminderStorage.ReleaseNack();
+
+            var history = await probe.ExpectMsgAsync<ReminderHistoryResponse>(AskTimeout, cancellationToken: TestContext.Current.CancellationToken);
+            Assert.True(history.Found);
+            Assert.Equal("failed", Assert.Single(history.Records).Status);
+            Assert.Equal(1, Definitions.Get(definition.Id)!.ConsecutiveFailures);
+        }
+        finally
+        {
+            ReminderStorage.ReleaseNack();
+        }
+    }
+
+    [Fact]
     public async Task Oneshot_failure_below_threshold_keeps_the_definition_enabled()
     {
         await DrainStartupAsync();

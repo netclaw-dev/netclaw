@@ -499,6 +499,29 @@ The required counts stay at 33 killed and two documented duplicate removals for 
 The hosted mutation rerun must prove these counts at the corrected head. Local Stryker did not run for this repair.
 The production source tree stays unchanged, so the earlier corpus and public compatibility evidence remains applicable.
 
+## PR3 reminder test race receipt
+
+Windows CI job `134382355152` recorded the third execution. A fixture read denied the next append handle.
+The one-shot and denied-run polls now ask the manager for history. The manager serializes the query with settlement.
+The manager and preflight first-create polls also use the query. CI did not show an append collision at those sites.
+A gate holds the Nack lookup. The history query replies after release with the failed row and failure count.
+This control proves actor ordering. It does not reproduce Windows file sharing on Linux.
+The focused warm run passed 179 tests. The initial control caught the wrong storage call and failed; the corrected control passed.
+The warm test build used existing dependency outputs and skipped restore. It started with 20,516,687,872 bytes free under the approved admission rule.
+This test-only patch changes no reliability mutation target. The earlier delivery mutation receipts remain applicable.
+
+## PR3 watcher test race receipt
+
+The `analyze-racy-test` workflow used the Akka specialist first. The concurrency specialist then reviewed the result.
+The watcher actor fixture mixed manual events with native callbacks. The macOS log does not identify the callback that caused its restart.
+The actor now receives a required subscription factory. The host supplies the native watcher and the fixture supplies a controlled source.
+The actor retains startup reconciliation, debounce, restart admission, and subscription disposal. The factory disposes a failed native allocation.
+The controlled event tests cover ignored events and an accepted event followed by an ignored event. This control does not identify the historical callback.
+The focused daemon run passed 41 tests: 25 actor, 13 configuration-source, and three real-host startup-gap cases.
+The linked xUnit 2 configuration-source fixture passed 13 tests. The startup hash gate killed its one selected inversion.
+Stryker reported 600 unrelated compiler artifacts outside the selected span. The focused gate found no unexpected in-scope mutant.
+The focused build rebuilt product references with 20,359,421,952 bytes free under the approved focused-build rule.
+
 ## Current queue
 
 | Slice | PR | Head | Actual base | Local state | Hosted state |
