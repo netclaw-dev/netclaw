@@ -272,41 +272,41 @@ Use this future execution goal text.
 
 **Files.**
 
-- [ ] Edit `src/Netclaw.Actors/Sessions/Handlers/DeliveryRetryHandler.cs` and the delivery-feedback methods in `LlmSessionActor.cs`.
-- [ ] Extend `DeliveryRetryHandlerReminderTests` and the current session integration fixtures.
-- [ ] Remove only integration permutations whose replacement proves the same guarantee.
+- [x] Edit `src/Netclaw.Actors/Sessions/Handlers/DeliveryRetryHandler.cs` and the delivery-feedback methods in `LlmSessionActor.cs`.
+- [x] Extend `DeliveryRetryHandlerReminderTests` and the current session integration fixtures.
+- [x] Remove only integration permutations whose replacement proves the same guarantee.
 
 **Build.**
 
-- [ ] Replace split policy branches with a pure decision over the current retry facts, session phase, and feedback.
-- [ ] Return phase-specific actions from pure decisions. Keep the current state owner and all effects in the actor.
-- [ ] Preserve stale-turn rejection, the existing retry budget, routed-skill behavior, busy-phase behavior, and reminder attribution.
-- [ ] Keep the current event and snapshot fields. Do not journal actor-local decision steps.
-- [ ] Delete the old internal policy path at cutover. Keep no permanent shadow implementation.
-- [ ] Use named theory rows and generated sequences only where they prove distinct behavior. Reuse existing fixture helpers.
+- [x] Replace split policy branches with a pure decision over the current retry facts, session phase, and feedback.
+- [x] Return phase-specific actions from pure decisions. Keep the current state owner and all effects in the actor.
+- [x] Preserve stale-turn rejection, the existing retry budget, routed-skill behavior, busy-phase behavior, and reminder attribution.
+- [x] Keep the current event and snapshot fields. Do not journal actor-local decision steps.
+- [x] Delete the old internal policy path at cutover. Keep no permanent shadow implementation.
+- [x] Use named theory rows and generated sequences only where they prove distinct behavior. Reuse existing fixture helpers.
 
 **You see.**
 
-- [ ] A current retryable failure requests the same retry. Stale feedback requests no retry.
-- [ ] Exhaustion reports the correct reminder once. A routed-skill turn never asks the main model to recreate its reply.
+- [x] A current retryable failure requests the same retry. Stale feedback requests no retry.
+- [x] Exhaustion reports the correct reminder once. A routed-skill turn never asks the main model to recreate its reply.
 
 **Verify, unit.** Verify each claim at its actual boundary. Reuse current-head evidence and preserve required repository gates.
 
-- [ ] Run `dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj -c Release --filter "FullyQualifiedName~DeliveryRetryHandlerReminderTests|FullyQualifiedName~LlmSessionIntegrationTests"`.
-- [ ] Prove stale, exhausted, routed-skill, non-retryable, processing, compaction, and restart-drain outcomes through direct decisions.
-- [ ] Retain actor proof for the actual retry dispatch, attribution after replay and snapshot restore, and no extra model call.
-- [ ] Before deleting a heavy case, map its guarantee to the replacement and demonstrate the same unsafe mutation fails.
-- [ ] Review the focused mutation scope and reuse the reminder post-failure target documented in `TOOLING.md`.
+- [x] Run the direct fixture and the relevant session, replay, drain, and serialization cases. The focused actor run passed 138 tests.
+- [x] Prove stale, exhausted, routed-skill, non-retryable, processing, compaction, and restart-drain outcomes through direct decisions.
+- [x] Retain actor proof for the actual retry dispatch, attribution after replay and snapshot restore, and no extra model call.
+- [x] Before deleting a heavy case, map its guarantee to the replacement and demonstrate the same unsafe mutation fails.
+- [x] Review the focused mutation scope and reuse the reminder post-failure target documented in `TOOLING.md`.
 - [ ] Run full required CI against PR2 plus PR3. Preserve all lifecycle and serialization assertions.
 **Verify, live.**
 
-- [ ] Retain actor proof for model call counts, stale feedback, reminder attribution, and replay and snapshot restore.
-- [ ] Run `chat-admission-quit` and `reminder-run` native tapes against the candidate binary.
+- [x] Retain actor proof for model call counts, stale feedback, reminder attribution, and replay and snapshot restore.
+- [x] Run `chat-admission-quit` and `reminder-run` native tapes against the candidate binary.
 
 **Verify, cost.**
 
-- [ ] Record which equivalent policy permutations move to direct tests and which actor fixtures remain.
-- [ ] Require fewer actor starts for the migrated matrix without lost guarantees. Add no standalone process probe.
+- [x] Record which equivalent policy permutations move to direct tests and which actor fixtures remain.
+- [x] Require fewer actor starts for the migrated matrix without lost guarantees. Add no standalone process probe.
 
 **Review gate.** None. No interaction-specific operator review applies. Independent code reviews remain required. PR3 preserves the interaction contract and is not review-gated. An intended interaction change requires a scope revision.
 
@@ -471,7 +471,22 @@ The original corpus launcher session exited 143 while its runner and probe conti
 A lock guard protected the run. The team preserved the candidate output before the runner removed it.
 The repeated official comparison obtained a separate exit-zero receipt.
 The retained gzip passed its integrity check and reproduced the uncompressed head SHA-256.
-All PR2 hosted checks remain pending until submission.
+The PR2 mutation selector check failed. The repair is pushed. Its hosted checks remain pending.
+
+## PR3 local source receipt
+
+The tested predecessor is `73bf713c04c28c6f8293b3de58d13902c8ab57a4`.
+The focused actor suite passed 138 tests. The linked xUnit 2 fixture passed 45 tests.
+The former Unknown actor case and its direct replacement both failed the same unsafe classification change.
+After source restore, the direct and retained transport cases passed 46 tests.
+The reminder gate killed 16 selected mutants. The combined gate killed 75 selected mutants.
+The stale-turn inversion failed the earlier-turn direct case with `Stale` expected and `Retry` actual.
+After restore, all four stale-turn cases passed. The actor suite retains retry, lifecycle, replay, snapshot, and serialization cases.
+The direct matrix replaces one actor fixture. The two native tapes passed on candidate `3a2baecaa345c0a3d49dd83a4426cbbc593a4fd9`.
+The native CLI and daemon report commit `3a2baec`. The CLI SHA-256 is `f7b22ef659e8c547ed0a545f31856058f7b3f7b0df99909cb8e35841da1d8b38`.
+The daemon SHA-256 is `4535f07ce0ac6dfb866d6a4a7aa3b4a0ea040cb95323df2b750d01e060503564`.
+The candidate source tree is `ed1740ac5cc2ad2bd041aff1e34fe3aefd058c98`. The scripts tree is `a2ff14828612312c1c1695aa9155912660aad160`.
+The final receipt commit changes neither tree. The hosted checks remain pending.
 
 ### Authorization mutation selector repair
 
@@ -489,15 +504,16 @@ The production source tree stays unchanged, so the earlier corpus and public com
 | Slice | PR | Head | Actual base | Local state | Hosted state |
 |---|---|---|---|---|---|
 | PR1 | [2799](https://github.com/netclaw-dev/netclaw/pull/2799) | `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | `dev` at `76071cfe9e721dee864d60d1379a497d97f19414` | Complete | All required workflows pass |
-| PR2 | [2800](https://github.com/netclaw-dev/netclaw/pull/2800) | `73bf713c04c28c6f8293b3de58d13902c8ab57a4` before selector repair | PR1 at `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | Focused checks, corpus, mutations, and two native tapes pass | Selector failure; corrected-head checks pending |
-| PR3 | Not submitted | Not created | Planned PR2 | Private source preparation | Not submitted |
+| PR2 | [2800](https://github.com/netclaw-dev/netclaw/pull/2800) | `9b2c84e5f18f562cd0c68840c2b2dae3f2228278` | PR1 at `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | Corpus, mutations, and two native tapes pass on prior source-equivalent head | Repair pushed; checks pending |
+| PR3 | Not submitted | Tested source candidate `3a2baecaa` | PR2 at `9b2c84e5f18f562cd0c68840c2b2dae3f2228278` | Local tests, controls, mutations, and both native tapes pass | Not submitted |
 | PR4 | Not submitted | Not created | Planned PR3 | Private source preparation | Not submitted |
 
 PR1 remains open and has no automatic merge request.
 The parent prepared PR2 source in a separate checkout while the long native suite ran.
 The parent used `gh stack add feature/closed-authorization` after PR1 local checks and submission.
 The parent then applied the reviewed private patch to that canonical stack branch.
-Only the canonical stack checkout now owns PR2 edits. Private preparation does not authorize early publication.
+The canonical stack checkout holds the next slice. Separate checkouts isolate repairs to earlier PRs.
+The parent restacks unpublished PR3 onto the selector repair. Its production source and retry gate files retain their tested bytes.
 
 ## Appendix A. Prototype evidence
 

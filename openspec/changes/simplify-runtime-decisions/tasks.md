@@ -8,12 +8,12 @@
 
 - [x] 2.1 Replace duplicate internal outcome state with one closed result family. Verify public facade and executor contract compatibility through PR2.
 - [x] 2.2 Preserve authority decisions. Verify zero corpus differences, the disposition matrix, wire fixtures, and the focused mutation gates in PR2.
-- [ ] 2.3 Add and submit PR2 through `gh stack`. Verify its actual predecessor and combined-head checks.
+- [ ] 2.3 Add and submit PR2 through `gh stack`. Verify its actual predecessor and combined-head checks. PR2 is open; hosted checks remain pending.
 
 ## 3. Extract delivery retry decisions
 
-- [ ] 3.1 Extract the pure retry decision and remove the replaced branches. Verify all PR3 positive and negative cases without changed journal records.
-- [ ] 3.2 Move only equivalent policy permutations into direct tests. Verify the same unsafe mutation fails and fewer actor fixtures execute.
+- [x] 3.1 Extract the pure retry decision and remove the replaced branches. Verify all PR3 positive and negative cases without changed journal records.
+- [x] 3.2 Move only equivalent policy permutations into direct tests. Verify the same unsafe mutation fails and fewer actor fixtures execute.
 - [ ] 3.3 Add and submit PR3 through `gh stack`. Verify its actual predecessor and combined-head checks.
 
 ## 4. Extract gateway reconnect decisions

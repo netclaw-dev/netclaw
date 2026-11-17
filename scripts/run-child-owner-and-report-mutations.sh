@@ -36,8 +36,8 @@ add_collected_spans "$owner_spans"
 add_collected_spans "$control_spans"
 add_collected_spans "$report_spans"
 add_collected_spans "$close_spans"
-if [[ "$collected_total" -ne 72 ]]; then
-  echo "Expected the four collected child gates to total 72 mutants; found $collected_total." >&2
+if [[ "$collected_total" -ne 73 ]]; then
+  echo "Expected the four collected child gates to total 73 mutants; found $collected_total." >&2
   exit 1
 fi
 
@@ -94,6 +94,16 @@ for check in "${checks[@]}"; do
       "$report" >&2 || true
     exit 1
   }
+  if [[ "$name" == "retry-stale" ]]; then
+    jq -e --arg source "$file" --argjson line "$first" '
+      [(.files[$source].mutants // [])[]
+        | select(.location.start.line == $line and .mutatorName == "Equality mutation"
+          and .replacement == "eligible == turn" and .status == "Killed")] | length == 1
+    ' "$report" > /dev/null || {
+      echo "Expected the killed stale-turn equality inversion." >&2
+      exit 1
+    }
+  fi
 done
 
 jq -e --argjson count "$expected_total" '
