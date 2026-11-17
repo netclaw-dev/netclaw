@@ -2507,7 +2507,7 @@ internal sealed class ChannelsConfigPersistenceMapper
         {
             var defaultChannelName = GetString(config, "Slack.DefaultChannelName");
             if (!string.IsNullOrWhiteSpace(defaultChannelName))
-                channels.Add(defaultChannelName.StartsWith('#') ? defaultChannelName : $"#{defaultChannelName}");
+                channels.Add(defaultChannelName.StartsWith('#', StringComparison.Ordinal) ? defaultChannelName : $"#{defaultChannelName}");
         }
 
         return [.. channels

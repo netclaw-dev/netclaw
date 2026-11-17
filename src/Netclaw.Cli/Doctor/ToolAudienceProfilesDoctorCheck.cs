@@ -233,7 +233,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
     {
         var text = root.Trim().Replace('\\', '/');
         var segments = text.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return text.StartsWith('/') ? ["/", .. segments] : segments;
+        return text.StartsWith('/', StringComparison.Ordinal) ? ["/", .. segments] : segments;
     }
 
     // A stored copy of a shipped default list does not follow later defaults. The daemon maps an
