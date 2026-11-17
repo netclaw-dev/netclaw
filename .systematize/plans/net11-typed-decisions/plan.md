@@ -321,41 +321,55 @@ Use this future execution goal text.
 
 **Files.**
 
-- [ ] Edit `src/Netclaw.Channels/ChannelLifecycleActor.cs` and add one closely related decision file only if needed.
-- [ ] Combine the flap and stable-reset contract cases into one sequence per transport. Preserve all Discord timeout fixtures.
-- [ ] Keep transport-specific registration and effects in the existing adapters.
+- [x] Edit `src/Netclaw.Channels/ChannelLifecycleActor.cs` and add one closely related decision file only if needed.
+- [x] Combine the flap and stable-reset contract cases into one sequence per transport. Preserve all Discord timeout fixtures.
+- [x] Keep transport-specific registration and effects in the existing adapters.
 
 **Build.**
 
-- [ ] Reconcile open PR #2795 before the first edit. Preserve its stop deadline only if it enters the base.
-- [ ] Extract pure retry-delay and stable-ready decisions. Keep phase and attempt identity in the current actor.
-- [ ] Pass the current delay, ready timestamp, and current time as values. Keep transport effects and timers in the actor.
-- [ ] Return the retry due time and next delay as one value. Add no lifecycle event or effect interpreter.
-- [ ] Preserve readiness distinctions, stale completion rejection, stability-window reset, explicit disconnect, and subscription disposal.
-- [ ] Delete the replaced decision branches. Do not duplicate the current transport base class with another framework.
+- [x] Reconcile open PR #2795 before the first edit. Preserve its stop deadline only if it enters the base.
+- [x] Extract pure retry-delay and stable-ready decisions. Keep phase and attempt identity in the current actor.
+- [x] Pass the current delay, ready timestamp, and current time as values. Keep transport effects and timers in the actor.
+- [x] Return the retry due time and next delay as one value. Add no lifecycle event or effect interpreter.
+- [x] Preserve readiness distinctions, stale completion rejection, stability-window reset, explicit disconnect, and subscription disposal.
+- [x] Delete the replaced decision branches. Do not duplicate the current transport base class with another framework.
 
 **You see.**
 
-- [ ] A connection that repeatedly drops grows the same delay. A stable connection resets the delay at the same boundary.
-- [ ] Old completion messages change no current attempt. Explicit disconnect schedules no new reconnect.
+- [x] A connection that repeatedly drops grows the same delay. A stable connection resets the delay at the same boundary.
+- [x] Old completion messages change no current attempt. Explicit disconnect schedules no new reconnect.
 
 **Verify, unit.** Verify each claim at its actual boundary. Reuse current-head evidence and preserve required repository gates.
 
-- [ ] Run the existing `GatewayLifecycleContractTests` implementations and `DiscordGatewayLifecycleRetryTimeoutTests`.
-- [ ] Add direct delay and stability cases. Retain actor cases for stale attempts, timeouts, readiness, and explicit disconnect.
-- [ ] Retain component integration proof for real actor timer cancellation, clean transport stop, subscription disposal, and readiness callbacks.
-- [ ] Retain each transport-specific assertion. Shared policy tests do not replace adapter conversion or effect proof.
-- [ ] Review the focused mutation scope for stale-attempt rejection and reconnect-after-disconnect prevention.
+- [x] Run the existing `GatewayLifecycleContractTests` implementations and `DiscordGatewayLifecycleRetryTimeoutTests`.
+- [x] Add direct delay and stability cases. Retain actor cases for stale attempts, timeouts, readiness, and explicit disconnect.
+- [x] Retain component integration proof for real actor timer cancellation, clean transport stop, subscription disposal, and readiness callbacks.
+- [x] Retain each transport-specific assertion. Shared policy tests do not replace adapter conversion or effect proof.
+- [x] Review the focused mutation scope for stale-attempt rejection and reconnect-after-disconnect prevention.
 - [ ] Run full required CI at the combined PR4 head and capture the final four-PR stack receipts.
 **Verify, live.**
 
-- [ ] Run gateway actor contract fixtures for real actor timers, stale completion, bounded stop, and subscription disposal.
-- [ ] Run the native `config-channels` tape and daemon lifecycle scenario for affected binary and configuration contracts.
+- [x] Run gateway actor contract fixtures for real actor timers, stale completion, transport stop, and subscription disposal. The base has no stop deadline.
+- [x] Run the native `config-channels` tape and daemon lifecycle scenario for affected binary and configuration contracts.
 
 **Verify, cost.**
 
-- [ ] Record fewer actor fixture starts for moved policy permutations. Preserve all transport-specific boundary assertions.
-- [ ] Add no standalone process probe or runtime benchmark framework.
+- [x] Record fewer actor fixture starts for moved policy permutations. Preserve all transport-specific boundary assertions.
+- [x] Add no standalone process probe or runtime benchmark framework.
+
+
+Local PR4 proof: 63 focused actor and policy cases passed. The linked xUnit 2 fixture passed 12 cases.
+The stale-attempt control failed at the old-result readiness assertion. The combined disconnect control exposed a fifth start on each transport.
+The restored source passed all three control cases. Stryker killed both selected stability comparison mutants.
+The prior four timing actor instances became two combined instances and one new stale-attempt instance.
+PR #2795 remained open at `5384367585306f34d56295e996d73cf4e811a76e`. This base has no stop deadline.
+The Linux x64 candidate at `c03cdc94f` passed the `config-channels` tape and daemon lifecycle scenario.
+The CLI reported version `0.28.3` and commit `c03cdc9`. The smoke harness removed its temporary root and released port 56259.
+These native checks cover configuration and daemon lifecycle. They do not connect to live gateway services.
+The parent restacked the unpublished slice onto PR3 repair `48b897c19d8cad1732a15414b4491b67927a0224` with `gh stack rebase --no-trunk`.
+All 11 code, test, and gate blobs match the tested candidate after that restack.
+Slopwatch, copyright headers, strict OpenSpec validation, and the whitespace check pass on the combined tree.
+Hosted CI must confirm the combined mutation group cost. The fast-runner target is 15 minutes and the hard timeout is 25 minutes.
 
 **Review gate.** None. No interaction-specific operator review applies. Independent code reviews remain required. PR4 preserves the interaction contract and is not review-gated. An intended interaction change requires a scope revision.
 
@@ -527,9 +541,9 @@ The focused build rebuilt product references with 20,359,421,952 bytes free unde
 | Slice | PR | Head | Actual base | Local state | Hosted state |
 |---|---|---|---|---|---|
 | PR1 | [2799](https://github.com/netclaw-dev/netclaw/pull/2799) | `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | `dev` at `76071cfe9e721dee864d60d1379a497d97f19414` | Complete | All required workflows pass |
-| PR2 | [2800](https://github.com/netclaw-dev/netclaw/pull/2800) | `9b2c84e5f18f562cd0c68840c2b2dae3f2228278` | PR1 at `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | Corpus, mutations, and two native tapes pass on prior source-equivalent head | Repair pushed; checks pending |
-| PR3 | Not submitted | Tested source candidate `3a2baecaa` | PR2 at `9b2c84e5f18f562cd0c68840c2b2dae3f2228278` | Local tests, controls, mutations, and both native tapes pass | Not submitted |
-| PR4 | Not submitted | Not created | Planned PR3 | Private source preparation | Not submitted |
+| PR2 | [2800](https://github.com/netclaw-dev/netclaw/pull/2800) | `9b2c84e5f18f562cd0c68840c2b2dae3f2228278` | PR1 at `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | Complete | All four applicable workflows pass |
+| PR3 | [2802](https://github.com/netclaw-dev/netclaw/pull/2802) | `48b897c19d8cad1732a15414b4491b67927a0224` | PR2 at `9b2c84e5f18f562cd0c68840c2b2dae3f2228278` | Retry proof and race repairs pass locally | Race repair CI pending |
+| PR4 | Submission next | Local candidate after the PR3 repair | PR3 at `48b897c19d8cad1732a15414b4491b67927a0224` | 63 focused tests, 12 linked tests, controls, two mutants, and native checks pass | Not submitted |
 
 PR1 remains open and has no automatic merge request.
 The parent prepared PR2 source in a separate checkout while the long native suite ran.

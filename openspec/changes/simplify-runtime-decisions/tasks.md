@@ -18,8 +18,8 @@
 
 ## 4. Extract gateway reconnect decisions
 
-- [ ] 4.1 Reconcile PR #2795 and extract the reconnect decision. Verify the actual base stop behavior and PR4 policy cases.
-- [ ] 4.2 Move shared policy permutations into direct tests. Retain timer, transport, subscription, and adapter contract proof.
+- [x] 4.1 Reconcile PR #2795 and extract the reconnect decision. Verify the actual base stop behavior and PR4 policy cases.
+- [x] 4.2 Move shared policy permutations into direct tests. Retain timer, transport, subscription, and adapter contract proof.
 - [ ] 4.3 Add and submit PR4 through `gh stack`. Verify its actual predecessor and combined-head checks.
 
 ## 5. Complete the verified handoff

@@ -68,6 +68,8 @@
              Link="Sessions/DeliveryRetryHandlerReminderTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Reminders/ReminderFireKeyTests.cs"
              Link="Reminders/ReminderFireKeyTests.cs" />
+    <Compile Include="../Netclaw.Actors.Tests/Channels/GatewayRetryPolicyTests.cs"
+             Link="Channels/GatewayRetryPolicyTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Channels/TurnContextRequesterTests.cs"
              Link="Channels/TurnContextRequesterTests.cs" />
     <Compile Include="../Netclaw.Actors.Tests/Channels/TurnContextChildControlTests.cs"
