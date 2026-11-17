@@ -21,7 +21,7 @@ Verify each claim at its actual boundary. Reuse current-head evidence and preser
 
 ## Delivery
 
-Use these branches in order. PR numbers do not exist yet.
+Use these branches in order. The queue records each actual PR.
 
 | Slice | Branch | Actual PR base | Required change |
 |---|---|---|---|
@@ -106,7 +106,7 @@ Use this future execution goal text.
 
 - [ ] Give one owner exclusive write access to the active stack worktree for one slice at a time.
 - [ ] Use `pstack-poteto-agent` for the owner. Use independent read-only reviewers for the combined diff and evidence.
-- [ ] Start PR2 after PR1 passes local checks. Start PR3 after PR2 passes. Start PR4 after PR3 passes.
+- [ ] Validate each successor after its predecessor passes local checks. Private source preparation can overlap in a separate checkout.
 - [ ] Keep only one writer in the stack checkout. Do not let reviews change files or share build outputs with another writer.
 - [ ] Preserve the primary checkout and its untracked `PLUGIN_STACK_REBASE_PLAN.md`.
 - [ ] Record the owner role, task scope, head SHA, fallback, and terminal report.
@@ -122,6 +122,8 @@ Use this future execution goal text.
 - [ ] Submit through `gh stack submit --auto --open --remote upstream` and retain the remote stack output.
 - [ ] Do not rename an upstream stack head. Use `feature/*` names from the start.
 - [ ] Reconcile each PR body with its final scope. Preserve actual newlines with `--body-file`.
+- [ ] Run long checks from an owned private launcher with a completion status file. Poll the owned process and artifacts.
+- [ ] Treat a lost launcher session as no exit receipt. Preserve output bytes before cleanup when a fresh comparison needs them.
 
 ### Verdict and handoff, for every PR
 
@@ -379,12 +381,112 @@ The Linux non-NativeShell suite passes 16,235 tests and skips 99 expected platfo
 The final linked configuration theory passes three cases after its test-only revision.
 The shared mutation invocation kills its eight existing mutants and the new link-check inversion.
 The isolated inversion control fails all three link cases because the unsafe code accepts each dangling link.
+
 Slopwatch reports zero issues. Copyright verification and the whitespace check pass.
 
 Incrementalist prints its version and exits 232 under both SDK 10.0.403 and SDK 11.
 This pre-existing tool result is not a successful execution claim. Required CI does not invoke that tool.
-The published artifact, native CLI, image, old-database, and hosted checks remain pending at this checkpoint.
-The next checkpoint records the published head and those actual results.
+The published binaries identify commit `db9b20a4756ac557c1ab5273e2972e5885ed8b04`.
+The actual image reaches healthy state and uses state owner `1654:1654`.
+Both standalone projects build with zero warnings and errors.
+
+All 29 native tapes and 10 scenarios pass their checks.
+The launch shell exits 143 because the existing cleanup matches its command line.
+The run home and owned services still disappear. A corrected file launcher then passes a one-tape cleanup check with exit zero.
+The native scenario cannot prove model recall because the smoke model returns fixed text.
+The database checks below prove history and turn continuity instead.
+
+The released .NET 10 binary is version `0.28.3`, source `584023bda9ab4a30c7f3f6d8fbd0a7091b5a88ae`.
+It creates a real completed turn, snapshots, and a title journal record.
+The normal case restores its untouched logical database into the same home and loads the latest snapshot.
+A second case selects its older snapshot to exercise the later title journal record.
+Both candidates join at turn one, retain all four old serialized history messages, and complete turn two once.
+Pending-work and authority recovery use the existing fixture suite rather than these two native cases.
+
+The parent retains receipts under `/tmp/netclaw-quality-artifacts-20261117/pr1`.
+The native log redacts generated pairing values. The harness deletes its temporary homes and credentials.
+Independent reviews accept the source, mutation guard, and bounded upgrade claims.
+Hosted checks and native release targets beyond Linux x64 remain unverified at this checkpoint.
+
+
+### Hosted runtime follow-up
+
+The initial PR1 head passes the Linux and macOS test jobs and every focused mutation group.
+The Windows build finds nine additional character comparisons in six CLI files.
+The fix adds explicit ordinal comparison and preserves the original character semantics.
+A clean CLI build with `InvariantGlobalization=false` passes with zero warnings and errors.
+Independent source review accepts the nine fixes. Slopwatch, headers, and the whitespace check pass.
+
+The parent pushes commit `4bb384446d3d61f186e494e2c067c693d3b3ffa8` to PR1 by fast-forward.
+The parent rebases the unpublished PR2 with `gh stack rebase --no-trunk --remote upstream`.
+The primary checkout remains on its unchanged `dev` branch.
+The macOS publish job in the first smoke run has no assigned runner or steps. It does not provide a code failure log.
+The new source push starts fresh hosted checks. No job retry or merge is requested.
+
+Wait for all hosted compile paths before another cold child corpus run after an SDK migration.
+Private source preparation can continue in isolated checkouts while that proof runs.
+The interrupted old-parent corpus results are not accepted as a completed comparison.
+Use the documented CPU-based parallel lane count for the next full comparison; lane state and files remain isolated.
+
+### Local authorization checkpoint
+
+The internal producers now return the existing four decision cases. The terminal DTO conversion is removed.
+The public record remains byte-identical to PR1. Its precompiled consumer produces identical output with the new assembly.
+The actor and mutation projects compile with zero warnings and errors.
+Focused actor tests pass 1,185 cases and skip three platform cases. Focused mutation-fixture tests pass 118 cases.
+The paired structured-file theory proves that a covering grant wins before advice, while a miss produces correction.
+
+The parent added a temporary fifth case as a compiler negative control.
+Five actual production switches failed with `CS8509`. The parent restored the source bytes after the expected failure.
+Slopwatch, copyright verification, and the whitespace check pass.
+The corpus, focused Stryker gates, native authorization tapes, and hosted checks remain pending.
+
+### Verified runtime and authorization checkpoints
+
+PR1 head `4bb384446d3d61f186e494e2c067c693d3b3ffa8` passes all five required hosted workflows.
+The hosted native smoke uses Linux and macOS binaries. The Linux image workflow passes.
+A prior macOS test attempt failed one `ConfigWatcherActorTests` case. The next attempt passed.
+The failure cause remains unproved. The unchanged watcher and test also exist on `dev`.
+The old database and local image evidence use `db9b20a4756ac557c1ab5273e2972e5885ed8b04`.
+PR1 adds only nine ordinal CLI comparisons after that head. The tested recovery and image boundaries stay unchanged.
+
+PR2 tested source commit `5d5372a92c30df67e43edf8da1be0638c6dc770b` has source tree `3df7cfd614ff7914f9b7a768999bd68cdd653997`.
+The full corpus compares it with PR1 head `4bb384446d3d61f186e494e2c067c693d3b3ffa8`.
+Both sides contain 1,646,555 decisions. The official comparison reports zero differences and exits zero on repeat.
+The outcome-direction check finds zero transitions across 639 rows.
+The exact mutation gates kill three order, three authority, and two evidence mutants.
+The reports also contain unrelated compile-error mutants outside the selected spans.
+
+The focused actor run passes 1,185 cases and skips three platform cases. Mutation fixtures pass 118 cases.
+The consent wire fixture covers journal text, event bytes, option keys, and v3 store bytes.
+The separate legacy and serialization run passes 101 cases: 73 serialization, six deployed V2, 12 legacy coordination,
+three SQLite, five child consent, and two abandonment cases.
+A precompiled public consumer produces the same output. An added closed case breaks five incomplete production switches.
+Linux x64 publication passes. The `approvals` and `mcp-permissions-save` tapes pass on the published binaries.
+The CLI SHA-256 is `8c7f3aacc85b64ab33cc06a0a9222b89d284d3ab0bacf57f00c8a2784ec27f09`.
+The daemon SHA-256 is `5b27e3ff972010d2ba965dbf7f9e5a8a913c77a5c15a16dc51758ed157c035c1`.
+The temporary native home was removed. No candidate daemon remained after the harness exited zero.
+
+The original corpus launcher session exited 143 while its runner and probe continued. The cause is unproved.
+A lock guard protected the run. The team preserved the candidate output before the runner removed it.
+The repeated official comparison obtained a separate exit-zero receipt.
+The retained gzip passed its integrity check and reproduced the uncompressed head SHA-256.
+All PR2 hosted checks remain pending until submission.
+
+## Current queue
+
+| Slice | PR | Head | Actual base | Local state | Hosted state |
+|---|---|---|---|---|---|
+| PR1 | [2799](https://github.com/netclaw-dev/netclaw/pull/2799) | `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | `dev` at `76071cfe9e721dee864d60d1379a497d97f19414` | Complete | All required workflows pass |
+| PR2 | Not submitted | Tested source `5d5372a92c30df67e43edf8da1be0638c6dc770b` | PR1 at `4bb384446d3d61f186e494e2c067c693d3b3ffa8` | Focused checks, corpus, mutations, and two native tapes pass | Not submitted |
+| PR3 | Not submitted | Not created | Planned PR2 | Private source preparation | Not submitted |
+| PR4 | Not submitted | Not created | Planned PR3 | Private source preparation | Not submitted |
+
+PR1 remains open and has no automatic merge request.
+The parent prepared PR2 source in a separate checkout while the long native suite ran.
+The parent used `gh stack add feature/closed-authorization` after PR1 local checks and submission.
+The parent then applied the reviewed private patch to that canonical stack branch.
+Only the canonical stack checkout now owns PR2 edits. Private preparation does not authorize early publication.
 
 ## Appendix A. Prototype evidence
 

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -93,7 +94,7 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.GetShellPreflightDecision(ShellTool(), context, args);
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
     }
 
@@ -110,7 +111,7 @@ public sealed class ToolApprovalGateTests
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
         var decision = complete.Decision;
-        Assert.True(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(decision);
         Assert.False(decision.NeedsApproval);
         Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
         Assert.Equal("git push", Assert.IsType<ShellCommandAnalysis>(complete.AuthorizedAnalysis).Source);
@@ -129,7 +130,7 @@ public sealed class ToolApprovalGateTests
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
         Assert.NotNull(complete.AuthorizedAnalysis);
-        Assert.True(complete.Decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(complete.Decision);
         Assert.False(complete.Decision.NeedsApproval);
         Assert.Equal(ToolAllowReason.PolicyAuto, complete.Decision.AllowReason);
     }
@@ -140,7 +141,7 @@ public sealed class ToolApprovalGateTests
         var analysis = new ShellCommandPolicy().Analyze("git status", workingDirectory: null);
 
         Assert.Throws<ArgumentException>(() => new ShellPolicyPreflightResult.Complete(
-            ToolAuthorizationDecision.Deny("hard_deny"),
+            AuthorizationDecision.Deny("hard_deny"),
             analysis));
     }
 
@@ -186,7 +187,7 @@ public sealed class ToolApprovalGateTests
             PersonalContext(),
             ToolInput.Create("Command", "rm -rf /"));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("hard_deny_system_destructive", decision.DenyReason);
     }
 
@@ -209,7 +210,7 @@ public sealed class ToolApprovalGateTests
             PersonalContext(),
             ToolInput.Create("Command", "cat /protected/secret.txt"));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("shell_references_protected_path", decision.DenyReason);
     }
 
@@ -234,7 +235,7 @@ public sealed class ToolApprovalGateTests
             context,
             ToolInput.Create("Command", TestShellEnvironment.ReadFileCommand(Path.Combine(dir.Path, "outside", "data.txt"))));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("shell_path_outside_trusted_roots", decision.DenyReason);
         Assert.False(decision.NeedsApproval);
     }
@@ -250,7 +251,7 @@ public sealed class ToolApprovalGateTests
             context,
             ToolInput.Create("Command", "git status"));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("internal_policy_failure", decision.DenyReason);
         Assert.Null(context.Cwd);
     }
@@ -288,8 +289,10 @@ public sealed class ToolApprovalGateTests
             PersonalContext(),
             ToolInput.Create("Command", "git push"));
 
-        Assert.True(decision.Allowed || decision.NeedsApproval);
-        Assert.Equal(needsApproval, decision.NeedsApproval);
+        if (needsApproval)
+            Assert.IsType<AuthorizationDecision.NeedsConsent>(decision);
+        else
+            Assert.IsType<AuthorizationDecision.Allowed>(decision);
     }
 
     [Fact]
@@ -328,13 +331,13 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
-        Assert.True(decision.NeedsApproval);
-        Assert.False(decision.ApprovalContext!.IsMessy);
-        var candidate = Assert.Single(decision.ApprovalContext.Candidates!);
+        var request = Assert.IsType<AuthorizationDecision.NeedsConsent>(decision).Request;
+        Assert.False(request.IsMessy);
+        var candidate = Assert.Single(request.Candidates!);
         Assert.Equal("rm", candidate.Verb);
         Assert.Equal(dir.Path, candidate.Directory);
         Assert.Contains(
-            decision.ApprovalContext.Options,
+            request.Options,
             option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
     }
 
@@ -346,10 +349,10 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
-        Assert.True(decision.NeedsApproval);
-        Assert.Contains("git add .", decision.ApprovalContext!.Patterns);
-        Assert.Contains("git commit -m fix", decision.ApprovalContext!.Patterns);
-        Assert.Contains("git push", decision.ApprovalContext.Patterns);
+        var request = Assert.IsType<AuthorizationDecision.NeedsConsent>(decision).Request;
+        Assert.Contains("git add .", request.Patterns);
+        Assert.Contains("git commit -m fix", request.Patterns);
+        Assert.Contains("git push", request.Patterns);
     }
 
     [Fact]
@@ -440,12 +443,12 @@ public sealed class ToolApprovalGateTests
                 "WorkingDirectory",
                 "/work"));
 
-        Assert.True(decision.NeedsApproval);
-        Assert.True(decision.ApprovalContext!.IsMessy);
-        Assert.Empty(decision.ApprovalContext.Candidates!);
+        var request = Assert.IsType<AuthorizationDecision.NeedsConsent>(decision).Request;
+        Assert.True(request.IsMessy);
+        Assert.Empty(request.Candidates!);
         Assert.Equal(
             [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
-            decision.ApprovalContext.Options.Select(static option => option.Key.Value));
+            request.Options.Select(static option => option.Key.Value));
     }
 
     [Fact]
@@ -468,7 +471,7 @@ public sealed class ToolApprovalGateTests
                 "WorkingDirectory",
                 "/work/project"));
 
-        Assert.True(decision.NeedsApproval);
+        var request = Assert.IsType<AuthorizationDecision.NeedsConsent>(decision).Request;
         Assert.Equal(
             [
                 ApprovalOptionKeys.ApproveOnce,
@@ -477,9 +480,9 @@ public sealed class ToolApprovalGateTests
                 ApprovalOptionKeys.ApproveAssignmentEverywhereV1,
                 ApprovalOptionKeys.Deny,
             ],
-            decision.ApprovalContext!.Options.Select(static option => option.Key.Value));
+            request.Options.Select(static option => option.Key.Value));
         Assert.DoesNotContain(
-            decision.ApprovalContext.Options,
+            request.Options,
             static option => option.Key.Value is
                 ApprovalOptionKeys.ApproveSession
                 or ApprovalOptionKeys.ApproveAlways
@@ -548,7 +551,7 @@ public sealed class ToolApprovalGateTests
             PersonalContext(),
             ToolInput.Create("Path", "/tmp/example.txt"));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("path_access_descriptor_missing", decision.DenyReason);
         Assert.Null(decision.ApprovalContext);
     }
@@ -580,7 +583,7 @@ public sealed class ToolApprovalGateTests
             PersonalContext(),
             ToolInput.Create("Path", paths.NetclawConfigPath));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("path_access_denied", decision.DenyReason);
         Assert.NotNull(decision.DenyMessage);
         Assert.Null(decision.ApprovalContext);
@@ -606,7 +609,7 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
-        Assert.True(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(decision);
         Assert.False(decision.NeedsApproval);
     }
 
@@ -629,7 +632,7 @@ public sealed class ToolApprovalGateTests
 
         if (mode == ToolApprovalMode.Deny)
         {
-            Assert.False(decision.Allowed);
+            Assert.IsType<AuthorizationDecision.Denied>(decision);
             Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
         }
         else
@@ -650,7 +653,7 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
-        Assert.True(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(decision);
         Assert.False(decision.NeedsApproval);
     }
 
@@ -669,7 +672,7 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
     }
 
@@ -731,7 +734,7 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.AuthorizeInvocation(McpTool("notion", "create-pages"), PersonalContext());
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
     }
 
@@ -772,20 +775,20 @@ public sealed class ToolApprovalGateTests
                 ["_rationale"] = "Create the requested report"
             });
 
-        Assert.True(decision.NeedsApproval);
-        Assert.Contains("destination_path=\"/Board/Quarterly Results\"", decision.ApprovalContext!.DisplayText);
-        Assert.Contains($"content=({content.Length} chars, 1000 lines)", decision.ApprovalContext.DisplayText);
-        Assert.DoesNotContain("_rationale", decision.ApprovalContext.DisplayText);
-        Assert.DoesNotContain("Create the requested report", decision.ApprovalContext.DisplayText);
+        var request = Assert.IsType<AuthorizationDecision.NeedsConsent>(decision).Request;
+        Assert.Contains("destination_path=\"/Board/Quarterly Results\"", request.DisplayText);
+        Assert.Contains($"content=({content.Length} chars, 1000 lines)", request.DisplayText);
+        Assert.DoesNotContain("_rationale", request.DisplayText);
+        Assert.DoesNotContain("Create the requested report", request.DisplayText);
         Assert.DoesNotContain(
-            decision.ApprovalContext.Options,
+            request.Options,
             option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
         Assert.Contains(
-            decision.ApprovalContext.Options,
+            request.Options,
             option => option.Key.Value == ApprovalOptionKeys.ApproveEverywhere
                       && option.Label == ApprovalOptionKeys.ApproveMcpToolLabel);
         Assert.DoesNotContain(
-            decision.ApprovalContext.Options,
+            request.Options,
             option => option.Label == ApprovalOptionKeys.ApproveEverywhereLabel);
     }
 
@@ -837,7 +840,7 @@ public sealed class ToolApprovalGateTests
             McpTool("notion", "search"),
             PersonalContext());
 
-        Assert.True(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(decision);
         Assert.False(decision.NeedsApproval);
     }
 
@@ -858,7 +861,7 @@ public sealed class ToolApprovalGateTests
             McpTool("notion", "create-pages"),
             PersonalContext());
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
     }
 
@@ -923,7 +926,7 @@ public sealed class ToolApprovalGateTests
         Assert.True(approval.NeedsApproval);
 
         var auto = policy.AuthorizeInvocation(McpTool("notion", "search"), PersonalContext());
-        Assert.True(auto.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(auto);
         Assert.False(auto.NeedsApproval);
     }
 
@@ -940,7 +943,7 @@ public sealed class ToolApprovalGateTests
             McpTool("notion", "create-pages"),
             PersonalContext());
 
-        Assert.True(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(decision);
         Assert.False(decision.NeedsApproval);
     }
 
@@ -996,12 +999,12 @@ public sealed class ToolApprovalGateTests
         var tool = new Netclaw.Actors.Tests.Memory.FakeNetclawTool("file_read", "content");
         var decision = policy.AuthorizeInvocation(tool, PersonalContext());
 
-        Assert.True(decision.NeedsApproval);
+        var request = Assert.IsType<AuthorizationDecision.NeedsConsent>(decision).Request;
         Assert.DoesNotContain(
-            decision.ApprovalContext!.Options,
+            request.Options,
             option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
         Assert.Contains(
-            decision.ApprovalContext.Options,
+            request.Options,
             option => option.Key.Value == ApprovalOptionKeys.ApproveEverywhere
                       && option.Label == ApprovalOptionKeys.ApproveEverywhereLabel);
     }
@@ -1053,7 +1056,7 @@ public sealed class ToolApprovalGateTests
                 ["command"] = TestShellEnvironment.ReadFileCommand(outsidePath)
             });
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("shell_path_outside_trusted_roots", decision.DenyReason);
     }
 
@@ -1131,7 +1134,7 @@ public sealed class ToolApprovalGateTests
                 ["command"] = $"cat \"{Path.Combine(trustedRoot, "project", "README.md")}\""
             });
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("shell_disabled", decision.DenyReason);
     }
 
@@ -1170,7 +1173,7 @@ public sealed class ToolApprovalGateTests
             context,
             ToolInput.Create("Path", target, "Content", "result"));
 
-        Assert.True(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(decision);
         Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
     }
 
@@ -1195,7 +1198,7 @@ public sealed class ToolApprovalGateTests
                 ["WorkingDirectory"] = workingDirectory
             });
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.False(decision.NeedsApproval);
         Assert.Equal("shell_path_outside_trusted_roots", decision.DenyReason);
     }
@@ -1222,7 +1225,7 @@ public sealed class ToolApprovalGateTests
                 ["WorkingDirectory"] = trustedRoot
             });
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.False(decision.NeedsApproval);
         Assert.Equal("shell_working_directory_outside_trust_zone", decision.DenyReason);
     }
@@ -1254,7 +1257,7 @@ public sealed class ToolApprovalGateTests
                 ["WorkingDirectory"] = workingDirectory
             });
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.False(decision.NeedsApproval);
         Assert.Equal("shell_path_outside_trusted_roots", decision.DenyReason);
     }
@@ -1297,7 +1300,7 @@ public sealed class ToolApprovalGateTests
             return;
         }
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("shell_path_outside_trusted_roots", decision.DenyReason);
     }
 
@@ -1320,7 +1323,7 @@ public sealed class ToolApprovalGateTests
                 ["workingDirectory"] = outsideDir
             });
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("shell_working_directory_outside_trust_zone", decision.DenyReason);
     }
 
@@ -1491,15 +1494,14 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
-        Assert.True(decision.NeedsApproval);
-        Assert.NotNull(decision.ApprovalContext);
+        var request = Assert.IsType<AuthorizationDecision.NeedsConsent>(decision).Request;
         // Under v2.1 path-extraction, the verb chain is the command head
         // only; the path is captured separately as the candidate's
         // directory (with the file-parent rule reducing the leaf file to
         // its parent directory).
-        Assert.Contains("cat", decision.ApprovalContext!.CandidateVerbs);
-        Assert.NotNull(decision.ApprovalContext.Candidates);
-        var candidate = Assert.Single(decision.ApprovalContext.Candidates!);
+        Assert.Contains("cat", request.CandidateVerbs);
+        Assert.NotNull(request.Candidates);
+        var candidate = Assert.Single(request.Candidates!);
         Assert.Equal("cat", candidate.Verb);
         Assert.NotNull(candidate.Directory);
         Assert.Equal(
@@ -1550,14 +1552,14 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
-        Assert.True(decision.NeedsApproval);
+        var request = Assert.IsType<AuthorizationDecision.NeedsConsent>(decision).Request;
         // Pipelines stay inside one approval unit, so the candidate is
         // the verb chain of the unit's first command (path-aware
         // "grep <first-arg>").
-        Assert.Contains(decision.ApprovalContext!.CandidateVerbs, v => v.StartsWith("grep", StringComparison.Ordinal));
+        Assert.Contains(request.CandidateVerbs, v => v.StartsWith("grep", StringComparison.Ordinal));
         // Button labels are fixed; Slack's 76-char and Discord's 80-char
         // button caps make dynamic labels structurally unsafe.
-        AssertFixedApprovalLabels(decision.ApprovalContext.Options);
+        AssertFixedApprovalLabels(request.Options);
     }
 
     [Fact]
@@ -1568,18 +1570,18 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
-        Assert.True(decision.NeedsApproval);
+        var request = Assert.IsType<AuthorizationDecision.NeedsConsent>(decision).Request;
         // ExtractVerbChain (post-ShellSyntaxTree-0.1.4) extracts greedily
         // through every verb-like token. `origin` and `main` have no slash,
         // dot, or flag prefix, so the chain extends through both. This is
         // the operator-friendly contract: persisted approvals key on the
         // specific arg shape (`git push origin main *`) rather than the
         // verb family (`git push *`), making them safer by construction.
-        Assert.Equal(["git push origin main"], decision.ApprovalContext!.CandidateVerbs);
-        var sessionOption = decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession);
+        Assert.Equal(["git push origin main"], request.CandidateVerbs);
+        var sessionOption = request.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, sessionOption.Label);
         Assert.DoesNotContain(
-            decision.ApprovalContext.Options,
+            request.Options,
             option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
     }
 

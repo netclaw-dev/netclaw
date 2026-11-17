@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -151,7 +152,7 @@ public class ToolRegistrationExtensionsTests
         var preflight = policy.AuthorizeInvocation(tool, context, arguments);
         var result = await tool.ExecuteAsync(arguments, context, TestContext.Current.CancellationToken);
 
-        Assert.True(preflight.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(preflight);
         Assert.Contains("Successfully wrote", result, StringComparison.Ordinal);
         Assert.Equal(
             "shared policy",

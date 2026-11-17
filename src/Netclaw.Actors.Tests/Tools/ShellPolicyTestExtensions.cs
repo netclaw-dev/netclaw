@@ -21,7 +21,7 @@ namespace Netclaw.Actors.Tests.Tools;
 internal static class ShellPolicyTestExtensions
 {
     /// <summary>The decision of a call that is not a shell call, before the grant lookup.</summary>
-    internal static ToolAuthorizationDecision AuthorizeInvocation(
+    internal static AuthorizationDecision AuthorizeInvocation(
         this ToolAccessPolicy policy,
         INetclawTool tool,
         ToolExecutionContext context,
@@ -48,24 +48,25 @@ internal static class ShellPolicyTestExtensions
         var mode = policy.GetApprovalMode(toolName, context, approvalArguments, matcher);
         return ToolAccessPolicy.ScreenApprovalModeDenial(mode)
             ?? (mode == ToolApprovalMode.Auto
-                ? ToolAuthorizationDecision.Allow(ToolAllowReason.PolicyAuto)
-                : policy.BuildNonShellConsentRequest(toolName, context, approvalArguments, matcher));
+                ? (AuthorizationDecision)AuthorizationDecision.Allow(ToolAllowReason.PolicyAuto)
+                : AuthorizationDecision.RequiresApproval(
+                    policy.BuildNonShellConsentRequest(toolName, context, approvalArguments, matcher).Request));
     }
 
     /// <summary>The decision of a shell call after the screens and the consent mode, before coverage.</summary>
-    internal static ToolAuthorizationDecision GetShellPreflightDecision(
+    internal static AuthorizationDecision GetShellPreflightDecision(
         this ToolAccessPolicy policy,
         INetclawTool tool,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments = null)
         => policy.AuthorizeShellPreflight(tool, context, arguments).GetDecision();
 
-    internal static ToolAuthorizationDecision GetDecision(this ShellPolicyPreflightResult result)
+    internal static AuthorizationDecision GetDecision(this ShellPolicyPreflightResult result)
         => result switch
         {
             ShellPolicyPreflightResult.Complete complete => complete.Decision,
             ShellPolicyPreflightResult.Continue continuation =>
-                ToolAuthorizationDecision.RequiresApproval(continuation.ApprovalContext),
+                AuthorizationDecision.RequiresApproval(continuation.ApprovalContext),
             _ => throw new ArgumentOutOfRangeException(nameof(result))
         };
 
@@ -82,7 +83,7 @@ internal static class ShellPolicyTestExtensions
         if (!string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal))
             throw new ArgumentException("Shell preflight requires the shell tool.", nameof(tool));
 
-        static ShellPolicyPreflightResult Stop(ToolAuthorizationDecision decision)
+        static ShellPolicyPreflightResult Stop(AuthorizationDecision decision)
             => ToolAccessPolicy.CompleteShellPreflight(decision, analysis: null, directoryScopes: null);
 
         var toolName = new ToolName(tool.Name);
@@ -151,8 +152,7 @@ internal static class AuthorizationDecisionTestExtensions
             AuthorizationDecision.Allowed => ToolAuthorizationOutcome.Allowed,
             AuthorizationDecision.NeedsConsent => ToolAuthorizationOutcome.RequiresApproval,
             AuthorizationDecision.CorrectionRequired => ToolAuthorizationOutcome.RequiresAgentCorrection,
-            AuthorizationDecision.Denied => ToolAuthorizationOutcome.Denied,
-            _ => throw new ArgumentOutOfRangeException(nameof(decision), decision, "Unknown authorization decision.")
+            AuthorizationDecision.Denied => ToolAuthorizationOutcome.Denied
         };
 
         public bool NeedsApproval => decision is AuthorizationDecision.NeedsConsent;

@@ -82,12 +82,12 @@ internal sealed class ToolAuthorizer
         ArgumentNullException.ThrowIfNull(context);
 
         if (_registry.GetByName(call.Name) is not { } tool)
-            return AuthorizationDecision.From(ToolAuthorizationDecision.Deny("tool_not_found"), analysis: null);
+            return AuthorizationDecision.Deny("tool_not_found");
 
         var isShell = string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal);
         var decision = isShell
             ? await AuthorizeShellAsync(new ShellCall(this, tool, call, context), ct)
-            : AuthorizationDecision.From(await DecideOtherAsync(new OtherCall(this, tool, call, context), ct), analysis: null);
+            : await DecideOtherAsync(new OtherCall(this, tool, call, context), ct);
         decision = DenyConsentWhenUnattended(decision, context);
         return isShell ? CorrectCommandTooLongToShow(ShowFullCommandText(decision)) : decision;
     }
@@ -179,7 +179,9 @@ internal sealed class ToolAuthorizer
         try
         {
             var decision = await DecideShellAsync(call, ct);
-            return AuthorizationDecision.From(decision, call.AuthorizedAnalysis(decision));
+            return decision is AuthorizationDecision.Allowed allowed
+                ? new AuthorizationDecision.Allowed(allowed.Reason, call.AuthorizedAnalysis, allowed.Matches, allowed.Trace)
+                : decision;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -195,9 +197,7 @@ internal sealed class ToolAuthorizer
                 "A shell rule failed for tool {ToolName}; the call is denied with {DenyReason}",
                 call.Tool.Name,
                 InternalPolicyFailure);
-            return AuthorizationDecision.From(
-                call.Complete(ToolAuthorizationDecision.Deny(InternalPolicyFailure)),
-                analysis: null);
+            return call.Complete(AuthorizationDecision.Deny(InternalPolicyFailure));
         }
     }
 
@@ -213,7 +213,7 @@ internal sealed class ToolAuthorizer
     // An attended consent request with a command too long to show then becomes
     // a correction (CorrectCommandTooLongToShow).
     // ---------------------------------------------------------------------
-    private async Task<ToolAuthorizationDecision> DecideShellAsync(ShellCall call, CancellationToken ct)
+    private async Task<AuthorizationDecision> DecideShellAsync(ShellCall call, CancellationToken ct)
     {
         var decision = AdmitAudience(call);
         decision ??= ShellCapability(call);
@@ -240,7 +240,7 @@ internal sealed class ToolAuthorizer
     // ---------------------------------------------------------------------
     // The rule order for every other tool.
     // ---------------------------------------------------------------------
-    private async Task<ToolAuthorizationDecision> DecideOtherAsync(OtherCall call, CancellationToken ct)
+    private async Task<AuthorizationDecision> DecideOtherAsync(OtherCall call, CancellationToken ct)
     {
         var decision = AdmitAudience(call);
         decision ??= BackgroundJobControl(call);
@@ -255,58 +255,58 @@ internal sealed class ToolAuthorizer
     }
 
     // Admission: may this audience use the tool (profile, MCP server and tool lists)?
-    private ToolAuthorizationDecision? AdmitAudience(ShellCall call)
+    private AuthorizationDecision? AdmitAudience(ShellCall call)
         => call.Finish(_policy.AdmitAudience(call.Tool, call.Context));
 
     // Admission: is shell enabled on this host, for this audience?
-    private ToolAuthorizationDecision? ShellCapability(ShellCall call)
+    private AuthorizationDecision? ShellCapability(ShellCall call)
         => call.Finish(_policy.EvaluateShellCapability(call.Context.Invocation));
 
     // Prohibition: the hard-deny list, before any grant lookup.
-    private ToolAuthorizationDecision? HardDeny(ShellCall call)
+    private AuthorizationDecision? HardDeny(ShellCall call)
         => call.Analysis is { } analysis ? call.Finish(_policy.ScreenHardDeny(analysis)) : null;
 
     // Prohibition: shell text that names a protected path, whatever the consent.
-    private ToolAuthorizationDecision? ProtectedPath(ShellCall call)
+    private AuthorizationDecision? ProtectedPath(ShellCall call)
         => call.Analysis is { } analysis ? call.Finish(_policy.ScreenProtectedShellText(analysis)) : null;
 
     // Filesystem authority: a ".." in the working directory.
-    private static ToolAuthorizationDecision? WorkingDirectoryParentSegment(ShellCall call)
+    private static AuthorizationDecision? WorkingDirectoryParentSegment(ShellCall call)
         => call.Finish(ToolAccessPolicy.ScreenShellWorkingDirectory(call.WorkingDirectory));
 
     // Prohibition and filesystem authority for each slice of a cd directory proof.
-    private ToolAuthorizationDecision? DirectoryProofScreen(ShellCall call)
+    private AuthorizationDecision? DirectoryProofScreen(ShellCall call)
         => call.DirectoryProof is { } proof
             ? call.Finish(_policy.ScreenDirectoryScopes(proof, call.Context))
             : null;
 
     // Prohibition and filesystem authority for each literal twin, as for a typed command (F1).
-    private ToolAuthorizationDecision? LiteralTwinScreen(ShellCall call)
+    private AuthorizationDecision? LiteralTwinScreen(ShellCall call)
         => call.LiteralTwins is { } twins
             ? call.Finish(_policy.ScreenLiteralTwins(twins, call.Context))
             : null;
 
     // Filesystem authority: the working directory and every known path must be inside a trusted root.
-    private ToolAuthorizationDecision? TrustedRoot(ShellCall call)
+    private AuthorizationDecision? TrustedRoot(ShellCall call)
         => call.Analysis is { } analysis
             ? call.Finish(_policy.ScreenShellTrustZone(analysis, call.WorkingDirectory, call.Context))
             : null;
 
     // Admission: a Deny consent mode.
-    private static ToolAuthorizationDecision? ApprovalModeDenial(ShellCall call)
+    private static AuthorizationDecision? ApprovalModeDenial(ShellCall call)
         => call.Finish(ToolAccessPolicy.ScreenApprovalModeDenial(call.Mode));
 
     // Owner decision (October 2026): a source with no command (x=1, a comment)
     // runs no program, so nothing can prompt. The screens above still apply.
     // With no grant store, the rule does not apply, as for the exemption.
-    private ToolAuthorizationDecision? NoCommand(ShellCall call)
+    private AuthorizationDecision? NoCommand(ShellCall call)
         => _approvalService is not null && call.Analysis is { ProvesNoCommand: true }
            && call.Approval?.Candidates.Any(static candidate => candidate.SourceCompoundRedirect is not null) != true
-            ? call.Finish(ToolAuthorizationDecision.Allow(ToolAllowReason.ApprovalExemptShellCandidates))
+            ? call.Finish(AuthorizationDecision.Allow(ToolAllowReason.ApprovalExemptShellCandidates))
             : null;
 
     // File authority precedes Auto for composed scratch redirects. The existing file-tool grants supply consent.
-    private async Task<ToolAuthorizationDecision?> FileToolGrantsAsync(ShellCall call, CancellationToken ct)
+    private async Task<AuthorizationDecision?> FileToolGrantsAsync(ShellCall call, CancellationToken ct)
     {
         var approval = call.CommandApproval;
 
@@ -330,7 +330,7 @@ internal sealed class ToolAuthorizer
         {
             if (!_policy.TryGetCompoundRedirectFileCalls(analysis, call.Context, out var compoundFileCalls))
             {
-                return call.Finish(ToolAuthorizationDecision.Deny(
+                return call.Finish(AuthorizationDecision.Deny(
                     "shell_redirect_unproved",
                     "Tool access denied: Netclaw cannot prove every compound redirect. The call did not run."));
             }
@@ -354,50 +354,49 @@ internal sealed class ToolAuthorizer
     }
 
     // Advice: a native tool replaces the shell call. Shell consent cannot authorize that replacement.
-    private static ToolAuthorizationDecision? NativeToolAdvice(ShellCall call)
+    private static AuthorizationDecision? NativeToolAdvice(ShellCall call)
         => call.Corrections?.Items.Any(static correction => correction is ToolCorrection.NativeToolSuggested) == true
-            ? call.Finish(ToolAuthorizationDecision.RequireAgentCorrection(call.Corrections))
+            ? call.Finish(AuthorizationDecision.RequireAgentCorrection(call.Corrections))
             : null;
 
     // Admission: Auto mode allows the call, after the agent receives any directory advice.
-    private static ToolAuthorizationDecision? AutomaticApprovalMode(ShellCall call)
+    private static AuthorizationDecision? AutomaticApprovalMode(ShellCall call)
     {
         if (call.Preflight is not ShellPolicyPreflightResult.Complete complete
-            || complete.Decision.AllowReason != ToolAllowReason.PolicyAuto)
+            || complete.Decision is not AuthorizationDecision.Allowed { Reason: ToolAllowReason.PolicyAuto })
         {
             return null;
         }
 
         return call.Finish(call.Corrections is { } corrections
-            ? ToolAuthorizationDecision.RequireAgentCorrection(corrections)
+            ? AuthorizationDecision.RequireAgentCorrection(corrections)
             : complete.Decision);
     }
 
     // Unresolved input: a call without command text gets one exact retry, or a consent request.
-    private static ToolAuthorizationDecision? CallWithoutCommandText(ShellCall call)
+    private static AuthorizationDecision? CallWithoutCommandText(ShellCall call)
     {
         if (call.Preflight is not ShellPolicyPreflightResult.Complete complete)
             return null;
 
         var decision = complete.Decision;
-        if (decision.NeedsApproval
-            && decision.ApprovalContext is { } approvalContext
+        if (decision is AuthorizationDecision.NeedsConsent { Request: var approvalContext }
             && OneTimeApprovalKeys.Matches(call.Context.Approval.OneTimeConsent, call.Call.Name, approvalContext))
         {
-            decision = ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
+            decision = AuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
         }
 
         return call.Finish(decision);
     }
 
     // Consent: the candidates must project to one policy view.
-    private static ToolAuthorizationDecision? MissingProjection(ShellCall call)
+    private static AuthorizationDecision? MissingProjection(ShellCall call)
         => call.Projection is null
-            ? call.Finish(ToolAuthorizationDecision.Deny(InternalPolicyFailure))
+            ? call.Finish(AuthorizationDecision.Deny(InternalPolicyFailure))
             : null;
 
     // Filesystem authority: every candidate path again, including the intent view of a causal list.
-    private ToolAuthorizationDecision? ProjectedTrustedRoot(ShellCall call)
+    private AuthorizationDecision? ProjectedTrustedRoot(ShellCall call)
         => call.Finish(_policy.EnforceProjectedShellFileProtection(
             call.Evaluation.CandidateStates
                 .Select(static state => (state.PathFacts, state.Candidate.SourceOccurrence))
@@ -408,19 +407,19 @@ internal sealed class ToolAuthorizer
     // Filesystem authority and admission for each redirect of a command that
     // runs no program: a proved target, the file_read rules for an input
     // redirect, and no Deny mode of the file tool.
-    private ToolAuthorizationDecision? NoProgramRedirects(ShellCall call)
+    private AuthorizationDecision? NoProgramRedirects(ShellCall call)
         => call.Finish(_policy.ScreenNoProgramRedirects(
             call.Evaluation.CandidateStates.Select(static state => (state.Candidate.Candidate, state.PathFacts)),
             call.Context));
 
     // Unresolved input: syntax without reusable candidates gets one exact retry, advice, or a Once-only prompt.
-    private static ToolAuthorizationDecision? UnresolvedInput(ShellCall call)
+    private static AuthorizationDecision? UnresolvedInput(ShellCall call)
         => ShellPolicyCoordinator.RequiresExactApproval(call.Evaluation.Projection)
             ? ShellPolicyCoordinator.CompleteOneTimeOrPrompt(call.Evaluation, call.Call.Name, call.Corrections)
             : null;
 
     // Consent: a stored grant, the side-effect exemption, or the reviewed-safe policy covers every candidate.
-    private async Task<ToolAuthorizationDecision?> CoveringGrantAsync(ShellCall call, CancellationToken ct)
+    private async Task<AuthorizationDecision?> CoveringGrantAsync(ShellCall call, CancellationToken ct)
     {
         await CoverOnceAsync(call, ct);
         return call.Evaluation.AllCovered
@@ -440,38 +439,38 @@ internal sealed class ToolAuthorizer
     }
 
     // Consent: a one-time answer, a store failure, advice, or a prompt for the uncovered candidates.
-    private static ToolAuthorizationDecision UncoveredCandidates(ShellCall call, CancellationToken ct)
+    private static AuthorizationDecision UncoveredCandidates(ShellCall call, CancellationToken ct)
         => ShellPolicyCoordinator.CompleteUncovered(call.Evaluation, call.Context, call.Call.Name, call.Corrections, ct);
 
     // Admission: may this audience use the tool (profile, MCP server and tool lists)?
-    private ToolAuthorizationDecision? AdmitAudience(OtherCall call)
+    private AuthorizationDecision? AdmitAudience(OtherCall call)
         => _policy.AdmitAudience(call.Tool, call.Context);
 
     // Admission: background job control needs shell capability, and the first shell consent covers it.
-    private ToolAuthorizationDecision? BackgroundJobControl(OtherCall call)
+    private AuthorizationDecision? BackgroundJobControl(OtherCall call)
         => call.Tool is not McpToolAdapter
            && string.Equals(call.Tool.Name, Jobs.CheckBackgroundJobTool.ToolName, StringComparison.Ordinal)
             ? _policy.AuthorizeBackgroundJobControl(call.Context)
             : null;
 
     // Filesystem authority and protection for a file tool path, including control-plane writes.
-    private ToolAuthorizationDecision? FilePathAccess(OtherCall call)
+    private AuthorizationDecision? FilePathAccess(OtherCall call)
         => call.Tool is McpToolAdapter
             ? null
             : _policy.PreflightStructuredPathAccess(call.Tool, call.Context.Invocation, call.Call.Arguments);
 
     // Admission: a Deny consent mode.
-    private static ToolAuthorizationDecision? ApprovalModeDenial(OtherCall call)
+    private static AuthorizationDecision? ApprovalModeDenial(OtherCall call)
         => ToolAccessPolicy.ScreenApprovalModeDenial(call.Mode);
 
     // Admission: Auto mode allows the call.
-    private static ToolAuthorizationDecision? AutomaticApprovalMode(OtherCall call)
+    private static AuthorizationDecision? AutomaticApprovalMode(OtherCall call)
         => call.Mode == ToolApprovalMode.Auto
-            ? ToolAuthorizationDecision.Allow(ToolAllowReason.PolicyAuto)
+            ? AuthorizationDecision.Allow(ToolAllowReason.PolicyAuto)
             : null;
 
     // Consent: one stored-grant lookup covers every candidate.
-    private async Task<ToolAuthorizationDecision?> CoveringToolGrantAsync(OtherCall call, CancellationToken ct)
+    private async Task<AuthorizationDecision?> CoveringToolGrantAsync(OtherCall call, CancellationToken ct)
     {
         var check = _approvalService is null
             ? StoredGrantCheck.NotRun
@@ -483,36 +482,36 @@ internal sealed class ToolAuthorizer
                 ct);
         call.RecordGrantCheck(check);
         return check.AllCovered
-            ? ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval)
+            ? AuthorizationDecision.Allow(ToolAllowReason.StoredApproval)
             : null;
     }
 
     // Consent: without the persistent store, only a one-time answer can cover a miss.
-    private static ToolAuthorizationDecision? StoreUnavailable(OtherCall call)
+    private static AuthorizationDecision? StoreUnavailable(OtherCall call)
     {
         if (!call.GrantCheck.StoreUnavailableForMiss)
             return null;
 
         return call.HasOneTimeConsent
-            ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
-            : ToolAuthorizationDecision.Deny("approval_store_unavailable");
+            ? AuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
+            : AuthorizationDecision.Deny("approval_store_unavailable");
     }
 
     // Consent: the operator's "Once" answer for this exact request.
-    private static ToolAuthorizationDecision? OneTimeConsent(OtherCall call)
+    private static AuthorizationDecision? OneTimeConsent(OtherCall call)
         => call.HasOneTimeConsent
-            ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
+            ? AuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
             : null;
 
     // Advice: write the file in the managed temporary directory instead.
-    private static ToolAuthorizationDecision? TemporaryDirectoryAdvice(OtherCall call)
-        => call.ConsentDecision.AgentCorrection is ToolCorrection.ManagedTemporaryDirectorySuggested temporary
-            ? ToolAuthorizationDecision.RequireAgentCorrection(temporary, call.Matches)
+    private static AuthorizationDecision? TemporaryDirectoryAdvice(OtherCall call)
+        => call.ConsentDecision.Advice is ToolCorrection.ManagedTemporaryDirectorySuggested temporary
+            ? AuthorizationDecision.RequireAgentCorrection(temporary, call.Matches)
             : null;
 
     // Consent: ask the operator.
-    private static ToolAuthorizationDecision ConsentRequest(OtherCall call)
-        => call.ConsentDecision;
+    private static AuthorizationDecision ConsentRequest(OtherCall call)
+        => AuthorizationDecision.RequiresApproval(call.ConsentDecision.Request);
 
     /// <summary>
     /// The call-local facts of one shell call. Each fact comes from its owning
@@ -678,16 +677,15 @@ internal sealed class ToolAuthorizer
         };
 
         /// <summary>Attaches the decision trace to a rule's decision. Returns null for null.</summary>
-        internal ToolAuthorizationDecision? Finish(ToolAuthorizationDecision? decision)
+        internal AuthorizationDecision? Finish(AuthorizationDecision? decision)
             => decision is null ? null : Complete(decision);
 
         /// <summary>Attaches the decision trace to a final decision.</summary>
-        internal ToolAuthorizationDecision Complete(ToolAuthorizationDecision decision)
+        internal AuthorizationDecision Complete(AuthorizationDecision decision)
             => ShellPolicyCoordinator.Complete(decision, [], _trace);
 
         /// <summary>The analysis that the process may execute, when the decision allows the call.</summary>
-        internal ShellCommandAnalysis? AuthorizedAnalysis(ToolAuthorizationDecision decision)
-            => decision.Outcome == ToolAuthorizationOutcome.Allowed ? PreflightAnalysis : null;
+        internal ShellCommandAnalysis? AuthorizedAnalysis => PreflightAnalysis;
     }
 
     /// <summary>The call-local facts of one call that is not a shell call.</summary>
@@ -701,7 +699,7 @@ internal sealed class ToolAuthorizer
             ToolAccessPolicy.GetApprovalArguments(tool, call.Arguments));
         private Lazy<IToolApprovalMatcher>? _matcher;
         private Lazy<ToolApprovalMode>? _mode;
-        private Lazy<ToolAuthorizationDecision>? _consentDecision;
+        private Lazy<ConsentCandidate>? _consentDecision;
         private StoredGrantCheck? _grantCheck;
 
         internal INetclawTool Tool => tool;
@@ -716,15 +714,14 @@ internal sealed class ToolAuthorizer
             authorizer._policy.GetApprovalMode(ToolName, context, _approvalArguments.Value, Matcher))).Value;
 
         /// <summary>The consent request decision, with any temporary-directory advice.</summary>
-        internal ToolAuthorizationDecision ConsentDecision => (_consentDecision ??= new(() =>
+        internal ConsentCandidate ConsentDecision => (_consentDecision ??= new(() =>
             authorizer._policy.BuildNonShellConsentRequest(
                 ToolName,
                 context,
                 _approvalArguments.Value,
                 Matcher))).Value;
 
-        internal ToolApprovalContext Request => ConsentDecision.ApprovalContext
-            ?? throw new InvalidOperationException("Approval decision missing approval context.");
+        internal ToolApprovalContext Request => ConsentDecision.Request;
 
         internal bool HasOneTimeConsent
             => OneTimeApprovalKeys.Matches(context.Approval.OneTimeConsent, call.Name, Request);

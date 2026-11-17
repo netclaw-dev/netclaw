@@ -1,13 +1,13 @@
 ## 1. Prepare the runtime baseline
 
 - [x] 1.1 Upgrade the SDK and applicable target frameworks. Verify restore, build, tools, and source-generator compatibility through PR1 in the canonical plan.
-- [ ] 1.2 Verify published binaries, native smoke, the actual image, and the old-database upgrade procedure. Retain the PR1 head and evidence receipts.
-- [ ] 1.3 Submit PR1 through `gh stack submit --auto --open --remote upstream`. Verify its base, labels, remote head, and required hosted checks.
+- [x] 1.2 Verify published binaries, native smoke, the actual image, and the old-database upgrade procedure. Retain the PR1 head and evidence receipts.
+- [x] 1.3 Submit PR1 through `gh stack submit --auto --open --remote upstream`. Verify its base, labels, remote head, and required hosted checks.
 
 ## 2. Consolidate authorization outcomes
 
-- [ ] 2.1 Replace duplicate internal outcome state with one closed result family. Verify public facade and executor contract compatibility through PR2.
-- [ ] 2.2 Preserve authority decisions. Verify zero corpus differences, the disposition matrix, wire fixtures, and the focused mutation gates in PR2.
+- [x] 2.1 Replace duplicate internal outcome state with one closed result family. Verify public facade and executor contract compatibility through PR2.
+- [x] 2.2 Preserve authority decisions. Verify zero corpus differences, the disposition matrix, wire fixtures, and the focused mutation gates in PR2.
 - [ ] 2.3 Add and submit PR2 through `gh stack`. Verify its actual predecessor and combined-head checks.
 
 ## 3. Extract delivery retry decisions

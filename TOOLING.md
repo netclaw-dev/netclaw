@@ -38,6 +38,12 @@ A `FakeToolExecutor` result does not prove that the real executor accepts those 
 
 ## Focused Mutation Tests
 
+The actor mutation configs set `language-version` to `Preview` for Stryker 5.0.0.
+Stryker 5.0.0 embeds a compiler that treats closed classes as preview.
+This option applies to mutation compilation. Production uses C# 15.
+The [Stryker 5.0 configuration](https://github.com/stryker-mutator/stryker-net/blob/6e77a3451bac4793e9c839c3ff4055c1b30ca3af/docs/configuration.md#language-version-string) documents the option.
+Stryker 5.1 ignores the option. Before a tool update, prove the new compiler handles every actor mutation gate.
+
 The no-progress guard adds focused targets to `tool-batch-readiness`.
 The delivered-cause target mutates `delivered.Cause == key` in `TurnStateTracker`.
 The gate requires its one equality mutant to run and die.
