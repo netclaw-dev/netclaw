@@ -177,26 +177,28 @@ No measured reduction in total test duration exists.
 
 | Dimension | Source-candidate result |
 |---|---|
-| Completeness | All four implementation slices and source-candidate hosted gates pass. The report-retention task remains before the archive. |
+| Completeness | All 15 implementation tasks are complete. The four source-candidate hosted gate sets pass. |
 | Correctness | Corpus, public consumer, fixed-byte fixtures, replay, negative controls, exact mutants, and native checks support the preserved contracts. |
 | Coherence | Existing actors retain state and effects. Local pure policies replace the selected branches. No framework or persistence model is added. |
 
 The change adds no capability or delta specification. Its metadata intentionally skips new specs.
+OpenSpec reports all 15 tasks complete. Strict validation passes before the archive; no specification sync is required.
 The proposal links the preserved PRD and capability requirements. The implementation changes no stated product policy.
 The report finds no unresolved source defect or contract divergence. Existing proof limits remain explicit above.
 All four source heads pass their applicable workflows. PR1, PR3, and PR4 each have 41 successful checks and one expected skip.
 PR2 has 40 successful checks and one expected skip. All four independent patch identities match the audited remote refs.
 The final documentation successor still needs fresh exact-head checks before handoff or merge.
 
-Before the original delivery goal is complete:
+Final publication and handoff use this procedure:
 
-- [x] Obtain all current-head hosted workflow results and the four final independent verdicts.
-- [ ] Use OpenSpec Verify and Archive for `simplify-runtime-decisions`. Preserve all 15 implementation tasks and the final report.
-- [ ] Push only the final documentation update to PR4. Verify its exact head and unchanged source blobs.
-- [ ] Audit heads, predecessors, labels, readiness, review threads, native stack membership, and automatic merge state.
-- [ ] Hand the four verified PR links and exact head receipts to the user.
+- Push only the final documentation update to PR4. Verify its exact head and unchanged source blobs.
+- Obtain fresh hosted checks at that final head. Retain the exact-head results in the final handoff receipt.
+- Audit heads, predecessors, labels, readiness, review threads, native stack membership, and automatic merge state.
+- Hand the four verified PR links and exact head receipts to the user before the separately authorized merge action.
+
+The final handoff receipt records execution of this procedure. The archived task file records the 15 completed implementation tasks.
 
 The local raw receipts stay under `/tmp/netclaw-quality-artifacts-20261117`; shipping verdicts use `/tmp/netclaw-quality-shipping-20261117`.
-The existing [OpenSpec change](../../../openspec/changes/simplify-runtime-decisions/proposal.md) links the preserved PRD and capability requirements.
+The archived [OpenSpec change](../../../openspec/changes/archive/2026-11-17-simplify-runtime-decisions/proposal.md) links the preserved PRD and capability requirements.
 Use [the engineering glossary](../../../docs/spec/GLOSSARY.md) and [tool authorization](../../../docs/architecture/tool-authorization.md) for shared contracts.
 The evidence does not constitute a release or native execution on every release target.

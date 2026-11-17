@@ -28,7 +28,7 @@ If discovery requires a behavior change, revise this proposal through OpenSpec b
 
 Source PRDs are PRD-001 FR-002, FR-003, FR-005, FR-008, and FR-011.
 PRD-002 SEC-001, SEC-003, SEC-006, SEC-007, and SEC-009 define preserved security guarantees.
-Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+Use the [engineering glossary](../../../../docs/spec/GLOSSARY.md) for shared terms.
 
 In scope are the SDK, target frameworks, release checks, internal decisions, affected tests, and current architecture documents.
 Out of scope are Akka.Durable adoption, a generic decider framework, new journal records, approval-store migration, reminder redesign, and passivation redesign.

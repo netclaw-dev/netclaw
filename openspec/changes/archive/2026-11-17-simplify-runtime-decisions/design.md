@@ -2,8 +2,8 @@
 
 See [the proposal](proposal.md) for motivation and scope.
 The baseline is `76071cfe9e721dee864d60d1379a497d97f19414`.
-The [canonical execution plan](../../../.systematize/plans/net11-typed-decisions/plan.md) owns PR boundaries, tasks, verification, and handoff authority.
-Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+The [canonical execution plan](../../../../.systematize/plans/net11-typed-decisions/plan.md) owns PR boundaries, tasks, verification, and handoff authority.
+Use the [engineering glossary](../../../../docs/spec/GLOSSARY.md) for shared terms.
 
 ## Goals / Non-Goals
 

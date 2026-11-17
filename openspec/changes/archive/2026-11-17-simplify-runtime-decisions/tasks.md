@@ -26,7 +26,7 @@
 
 - [x] 5.1 Audit independent verdicts and canonical plan receipts at each final head. Reuse valid exact-head hosted results rather than rerunning CI.
 - [x] 5.2 Prepare the final handoff package with four PR links and exact head receipts. Verify no merge or deployment occurs.
-- [ ] 5.3 Retain the implementation verification report and canonical plan in Git history.
+- [x] 5.3 Retain the implementation verification report and canonical plan in Git history.
 
 After these implementation tasks finish, use OpenSpec Verify and Archive. Then deliver the final handoff package.
 This order avoids a task that requires its own archive before it can finish.
