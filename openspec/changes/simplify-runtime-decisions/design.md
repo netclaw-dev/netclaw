@@ -17,7 +17,8 @@ Add no decider framework, new persistence boundary, or new consent policy.
 ### Keep one owner for each decision
 
 The actor owns execution. A pure function owns the selected retry or reconnect policy.
-The function consumes explicit values and returns the next state and requested actions.
+The function consumes explicit values and returns a typed decision.
+The current owner retains state unless a state replacement removes more complexity.
 The actor performs I/O, updates its owned state, and converts completion signals into correlated inputs.
 Preserve commit-before-effect order wherever the existing contract requires it.
 
@@ -32,8 +33,8 @@ Before
 
 After
   plan = decide(current retry facts, phase, failure)
-  actor adopts plan.nextState
-  actor executes plan.actions through its existing methods
+  actor applies the decision through its existing state owner
+  actor executes the required effects through its existing methods
 ```
 
 For example, current retryable feedback within the existing budget requests the same retry.
@@ -58,7 +59,8 @@ Do not make a new record durable solely because a test can inspect it.
 
 ### Preserve the public authorization boundary
 
-Use one closed internal result family and derive the public facade from that result.
+Use one closed internal result family. Keep the original public record as a compatibility boundary.
+Do not change its generated equality, hash, clone, or text behavior.
 Preserve the public `ToolAuthorizationDecision`, `IToolExecutor`, factories, properties, and executor exception behavior.
 In particular, preserve the existing public `Allowed` meaning while internal code uses explicit cases.
 An internal cleanup does not authorize a public API break.
@@ -95,4 +97,6 @@ The operator owns all merges and deployments.
 
 The exact baseline-database upgrade fixture and native release-host access require execution-time proof.
 These gaps block PR1 acceptance, not plan authorship.
-The canonical plan records their enabling steps and all unrun checks.
+The canonical plan records the existing infrastructure to use and all unrun checks.
+The user accepted focused verification instead of the blanket ten-live-lane template.
+Reuse existing actor fixtures and native smoke. Add no standalone process probe solely for a refactor.

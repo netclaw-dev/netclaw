@@ -278,7 +278,7 @@ public sealed class ReminderDefinitionStore
         var encoded = Uri.EscapeDataString(id.Value);
         var baseDir = Path.GetFullPath(directory);
         var candidate = Path.GetFullPath(Path.Combine(baseDir, $"{encoded}.json"));
-        var baseWithSep = baseDir.EndsWith(Path.DirectorySeparatorChar)
+        var baseWithSep = baseDir.EndsWith(Path.DirectorySeparatorChar, StringComparison.Ordinal)
             ? baseDir
             : baseDir + Path.DirectorySeparatorChar;
         if (!candidate.StartsWith(baseWithSep, StringComparison.Ordinal))

@@ -132,6 +132,47 @@ public sealed class DaemonConfigurationSourcesTests : IDisposable
         Assert.StartsWith("Couldn't read netclaw.json:", DaemonConfigurationSources.DescribeLoadFailure(error));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Configuration_sources_reject_dangling_links_and_accept_missing_or_readable_files(bool secrets, bool captured)
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+        var file = secrets ? paths.SecretsPath : paths.NetclawConfigPath;
+        File.WriteAllText(secrets ? paths.NetclawConfigPath : paths.SecretsPath, "{}");
+        var target = Path.Combine(_dir.Path, "target.json");
+
+        void Load(string? expected)
+        {
+            using var stream = captured ? new MemoryStream(Encoding.UTF8.GetBytes("{}")) : null;
+            var builder = new ConfigurationBuilder();
+            if (captured)
+                builder.AddNetclawDaemonSources(paths, stream);
+            else
+                builder.AddNetclawDaemonSources(paths);
+            Assert.Equal(expected, builder.Build()["LinkTest"]);
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.CreateSymbolicLink(file, target);
+            Assert.Throws<FileNotFoundException>(() => Load(null));
+            File.Delete(file);
+            Load(null);
+            File.CreateSymbolicLink(file, target);
+            File.WriteAllText(target, "{\"LinkTest\":\"loaded\"}");
+        }
+        else
+        {
+            Load(null);
+            File.WriteAllText(file, "{\"LinkTest\":\"loaded\"}");
+        }
+
+        Load("loaded");
+    }
+
     private static List<string> BindHttpAllowList(NetclawPaths paths)
     {
         var configuration = new ConfigurationBuilder().AddNetclawDaemonSources(paths).Build();

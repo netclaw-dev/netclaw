@@ -45,7 +45,7 @@ internal sealed class ProbeProgressReporter : IAsyncDisposable
                 var seconds = (int)TimeProvider.System.GetElapsedTime(start).TotalSeconds;
                 var line = $"  probing {endpoint} ... {seconds}s";
                 _lastLineWidth = Math.Max(_lastLineWidth, line.Length);
-                await System.Console.Error.WriteAsync("\r" + line + " ");
+                await System.Console.Error.WriteAsync(("\r" + line + " ").AsMemory(), CancellationToken.None);
                 await System.Console.Error.FlushAsync(ct);
             }
         }

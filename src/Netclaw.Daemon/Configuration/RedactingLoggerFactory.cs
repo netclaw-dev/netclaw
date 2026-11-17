@@ -246,7 +246,7 @@ internal static class TemplateMarkedValues
                 continue;
             }
 
-            var close = c == '{' ? template.IndexOf('}', position + 1) : -1;
+            var close = c == '{' ? template.IndexOf('}', position + 1, StringComparison.Ordinal) : -1;
             if (close < 0)
             {
                 text.Append(c);

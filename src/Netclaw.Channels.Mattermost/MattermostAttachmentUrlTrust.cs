@@ -15,7 +15,7 @@ internal static class MattermostAttachmentUrlTrust
     {
         // Append trailing slash to prevent subdomain bypass:
         // "https://mm.example.com" must not match "https://mm.example.com.evil.com/..."
-        var normalized = serverUrl.EndsWith('/')
+        var normalized = serverUrl.EndsWith('/', StringComparison.Ordinal)
             ? serverUrl
             : serverUrl + '/';
         return url.StartsWith(normalized, StringComparison.OrdinalIgnoreCase);

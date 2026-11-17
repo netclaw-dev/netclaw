@@ -391,7 +391,7 @@ public sealed class BrokenConfigCliTests : IDisposable
     {
         var expectedPrefix = $"Couldn't read {brokenFile}:";
 
-        foreach (var args in new[] { new[] { "mcp", "list" }, ["model", "list"], ["mcp", "add", "x", "--command", "echo"], ["config", "set", "Daemon.Port", "5200"] })
+        foreach (var args in new[] { new[] { "mcp", "list" }, ["model", "list"], ["mcp", "add", "x", "--command", "echo"], ["config", "set", "Daemon.Port", "5200"], ["memory", "backfill-embeddings"] })
         {
             var blocked = await RunAsync(args);
             Assert.Equal(1, blocked.ExitCode);

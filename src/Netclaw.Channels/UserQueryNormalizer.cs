@@ -15,6 +15,6 @@ public static class UserQueryNormalizer
     public static string StripLeadingAt(string query)
     {
         var normalized = query.Trim();
-        return normalized.StartsWith('@') ? normalized[1..].Trim() : normalized;
+        return normalized.StartsWith('@', StringComparison.Ordinal) ? normalized[1..].Trim() : normalized;
     }
 }

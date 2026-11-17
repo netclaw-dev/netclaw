@@ -61,8 +61,8 @@ internal readonly record struct CanonicalPath
         }
 
         if (style == ShellPathStyle.Windows
-                && (raw.StartsWith('\\') || raw.StartsWith('/') || raw.Contains(':', StringComparison.Ordinal))
-            || raw.StartsWith('~')
+                && (raw.StartsWith('\\', StringComparison.Ordinal) || raw.StartsWith('/', StringComparison.Ordinal) || raw.Contains(':', StringComparison.Ordinal))
+            || raw.StartsWith('~', StringComparison.Ordinal)
             || raw.StartsWith("$HOME", StringComparison.Ordinal)
             || raw.StartsWith("${HOME}", StringComparison.Ordinal)
             || raw.StartsWith("%USERPROFILE%", StringComparison.OrdinalIgnoreCase)
@@ -72,7 +72,7 @@ internal readonly record struct CanonicalPath
         }
 
         var separator = Separator(style);
-        var combined = normalizedBase.EndsWith(separator)
+        var combined = normalizedBase.EndsWith(separator, StringComparison.Ordinal)
             ? normalizedBase + raw
             : normalizedBase + separator + raw;
         if (!TryNormalize(combined, style, out normalized))
@@ -177,7 +177,7 @@ internal readonly record struct CanonicalPath
             return true;
 
         var separator = Separator(style);
-        var prefix = root.EndsWith(separator) ? root : root + separator;
+        var prefix = root.EndsWith(separator, StringComparison.Ordinal) ? root : root + separator;
         return candidate.StartsWith(prefix, comparison);
     }
 
@@ -237,7 +237,7 @@ internal readonly record struct CanonicalPath
         if (segments.Count == 0)
             return root;
 
-        return root.EndsWith(separator)
+        return root.EndsWith(separator, StringComparison.Ordinal)
             ? root + string.Join(separator, segments)
             : root + separator + string.Join(separator, segments);
     }
@@ -250,11 +250,11 @@ internal readonly record struct CanonicalPath
         if (!path.StartsWith("\\\\", StringComparison.Ordinal))
             return 0;
 
-        var serverEnd = path.IndexOf('\\', 2);
+        var serverEnd = path.IndexOf('\\', 2, StringComparison.Ordinal);
         if (serverEnd <= 2)
             return 0;
 
-        var shareEnd = path.IndexOf('\\', serverEnd + 1);
+        var shareEnd = path.IndexOf('\\', serverEnd + 1, StringComparison.Ordinal);
         return shareEnd < 0 ? path.Length : shareEnd + 1;
     }
 
@@ -264,7 +264,7 @@ internal readonly record struct CanonicalPath
         if (path == "/")
             return true;
 
-        if (path[0] != '/' || path.EndsWith('/') || path.Contains("//", StringComparison.Ordinal))
+        if (path[0] != '/' || path.EndsWith('/', StringComparison.Ordinal) || path.Contains("//", StringComparison.Ordinal))
             return false;
 
         return TryCountCanonicalSegments(path[1..], '/', out depth);

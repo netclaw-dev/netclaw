@@ -5,7 +5,7 @@
     <Company>Petabridge, LLC</Company>
     <PackageProjectUrl>https://netclaw.dev</PackageProjectUrl>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
-    <LangVersion>latest</LangVersion>
+    <LangVersion>15.0</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.28.3</VersionPrefix>
@@ -80,7 +80,7 @@
 - **CommunityToolkit.Aspire.Hosting.Ollama 13.6.1.** The package moves from 13.5.0 ([#2721](https://github.com/netclaw-dev/netclaw/pull/2721)).</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
-    <NetCoreTestVersion>net10.0</NetCoreTestVersion>
+    <NetCoreTestVersion>net11.0</NetCoreTestVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />

@@ -1,6 +1,6 @@
 ## 1. Prepare the runtime baseline
 
-- [ ] 1.1 Upgrade the SDK and applicable target frameworks. Verify restore, build, tools, and source-generator compatibility through PR1 in the canonical plan.
+- [x] 1.1 Upgrade the SDK and applicable target frameworks. Verify restore, build, tools, and source-generator compatibility through PR1 in the canonical plan.
 - [ ] 1.2 Verify published binaries, native smoke, the actual image, and the old-database upgrade procedure. Retain the PR1 head and evidence receipts.
 - [ ] 1.3 Submit PR1 through `gh stack submit --auto --open --remote upstream`. Verify its base, labels, remote head, and required hosted checks.
 
@@ -18,7 +18,7 @@
 
 ## 4. Extract gateway reconnect decisions
 
-- [ ] 4.1 Reconcile PR #2795 and extract the reconnect decision. Verify the preserved stop deadline and PR4 transition cases.
+- [ ] 4.1 Reconcile PR #2795 and extract the reconnect decision. Verify the actual base stop behavior and PR4 policy cases.
 - [ ] 4.2 Move shared policy permutations into direct tests. Retain timer, transport, subscription, and adapter contract proof.
 - [ ] 4.3 Add and submit PR4 through `gh stack`. Verify its actual predecessor and combined-head checks.
 

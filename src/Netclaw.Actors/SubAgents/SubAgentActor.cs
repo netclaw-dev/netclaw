@@ -1592,7 +1592,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 continue;
             }
 
-            if (inFence || trimmed.StartsWith('>'))
+            if (inFence || trimmed.StartsWith('>', StringComparison.Ordinal))
                 continue;
 
             builder.AppendLine(rawLine);

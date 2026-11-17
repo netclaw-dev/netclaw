@@ -42,4 +42,5 @@ Preserve public exception contracts until an explicit compatibility decision per
 
 Verify self-contained binaries, native dependencies, the Ubuntu image, the Aspire sample, and old journal replay on .NET 11.
 Preserve existing configuration, journal, snapshot, and wire formats.
+The .NET 11 x64 binaries require `x86-64-v2` hardware. The Linux Arm64 hardware minimum stays unchanged.
 Do not publish a release, merge a PR, or deploy as part of this plan.

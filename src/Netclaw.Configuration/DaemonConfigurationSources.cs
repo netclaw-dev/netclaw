@@ -16,7 +16,7 @@ public static class DaemonConfigurationSources
     /// netclaw.json, then secrets.json, then <c>NETCLAW_*</c> environment variables.
     /// </summary>
     public static IConfigurationBuilder AddNetclawDaemonSources(this IConfigurationBuilder builder, NetclawPaths paths)
-        => AddOverlays(builder.AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false), paths);
+        => AddOverlays(builder.AddNetclawJsonFile(paths.NetclawConfigPath), paths);
 
     /// <summary>
     /// Adds captured netclaw.json bytes, then the canonical overlays. A null stream means the optional file is absent.
@@ -42,8 +42,12 @@ public static class DaemonConfigurationSources
 
     private static IConfigurationBuilder AddOverlays(IConfigurationBuilder builder, NetclawPaths paths) =>
         builder
-            .AddJsonFile(paths.SecretsPath, optional: true, reloadOnChange: false)
+            .AddNetclawJsonFile(paths.SecretsPath)
             .AddEnvironmentVariables("NETCLAW_");
+
+    /// <summary>Adds an optional file but rejects a link with a missing target.</summary>
+    public static IConfigurationBuilder AddNetclawJsonFile(this IConfigurationBuilder builder, string file)
+        => builder.AddJsonFile(file, optional: new FileInfo(file).LinkTarget is null, reloadOnChange: false);
 
     /// <summary>
     /// One line for a netclaw.json or secrets.json that the JSON provider could not load:
@@ -58,7 +62,7 @@ public static class DaemonConfigurationSources
         {
             const string prefix = "Failed to load configuration from file '";
             if (e is InvalidDataException && e.Message.StartsWith(prefix, StringComparison.Ordinal)
-                && e.Message.IndexOf('\'', prefix.Length) is var end and > 0)
+                && e.Message.IndexOf('\'', prefix.Length, StringComparison.Ordinal) is var end and > 0)
             {
                 file = Path.GetFileName(e.Message[prefix.Length..end]);
                 break;

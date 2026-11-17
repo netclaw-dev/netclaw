@@ -64,7 +64,7 @@ public sealed class ProviderPluginFactory
                 var reason = ex is UriFormatException
                     ? $"{ex.Message.TrimEnd('.')}. Set Providers:{model.Provider}:Endpoint to a URL."
                     : ex.Message.TrimEnd();
-                if (!reason.EndsWith('.'))
+                if (!reason.EndsWith('.', StringComparison.Ordinal))
                     reason += ".";
 
                 return $"Invalid model configuration: model '{role}' uses provider '{model.Provider}', which cannot be used: {reason} Fix the Providers section of netclaw.json.";

@@ -171,17 +171,17 @@ public sealed class DiscordAddressResolver(
     private static string NormalizeUserQuery(string query)
     {
         var normalized = query.Trim();
-        if (normalized.StartsWith("<@", StringComparison.Ordinal) && normalized.EndsWith('>'))
+        if (normalized.StartsWith("<@", StringComparison.Ordinal) && normalized.EndsWith('>', StringComparison.Ordinal))
         {
             normalized = normalized[2..^1];
-            if (normalized.StartsWith('!'))
+            if (normalized.StartsWith('!', StringComparison.Ordinal))
                 normalized = normalized[1..];
 
             // A mention tag never carries stray whitespace, so the shared
             // strip-at helper's extra Trim() would be a no-op here. Kept
             // inline (not delegated) so a malformed tag with embedded
             // whitespace still matches today's untrimmed fallback exactly.
-            return normalized.StartsWith('@') ? normalized[1..].Trim() : normalized;
+            return normalized.StartsWith('@', StringComparison.Ordinal) ? normalized[1..].Trim() : normalized;
         }
 
         return UserQueryNormalizer.StripLeadingAt(normalized);
@@ -193,10 +193,10 @@ public sealed class DiscordAddressResolver(
         if (normalized.StartsWith("channel:", StringComparison.OrdinalIgnoreCase))
             normalized = normalized[8..].Trim();
 
-        if (normalized.StartsWith("<#", StringComparison.Ordinal) && normalized.EndsWith('>'))
+        if (normalized.StartsWith("<#", StringComparison.Ordinal) && normalized.EndsWith('>', StringComparison.Ordinal))
             normalized = normalized[2..^1];
 
-        return normalized.StartsWith('#') ? normalized[1..].Trim() : normalized;
+        return normalized.StartsWith('#', StringComparison.Ordinal) ? normalized[1..].Trim() : normalized;
     }
 
     private static bool MatchesUserQuery(DiscordLookupUser user, string query)

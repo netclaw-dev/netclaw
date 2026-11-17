@@ -67,5 +67,5 @@ internal sealed record ShellTemporaryDirectoryState(string? Problem)
         return reason;
     }
 
-    private static string WithPeriod(string text) => text.EndsWith('.') ? text : text + ".";
+    private static string WithPeriod(string text) => text.EndsWith('.', StringComparison.Ordinal) ? text : text + ".";
 }

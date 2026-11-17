@@ -358,8 +358,8 @@ internal sealed class SendChannelMessageTool(IChannelRegistry registry) : IChann
         };
 
     private static bool LooksLikeDisplayName(string value)
-        => value.StartsWith('#')
-           || value.StartsWith('@')
+        => value.StartsWith('#', StringComparison.Ordinal)
+           || value.StartsWith('@', StringComparison.Ordinal)
            || value.Any(char.IsWhiteSpace);
 
     private static bool IsDiscordSnowflake(string value)

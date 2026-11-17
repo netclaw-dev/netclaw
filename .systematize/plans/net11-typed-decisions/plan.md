@@ -4,9 +4,9 @@ Use the Poteto runtime contract at the installed `poteto-mode/references/codex-a
 Deliver .NET 11, closed authorization outcomes, pure delivery retries, and pure gateway reconnect decisions in PR1 through PR4.
 Preserve operator behavior, public contracts, configuration, wire formats, journal records, snapshots, and authority.
 Keep the current actor runtime. Add no Akka.Durable dependency or generic decider framework.
-The user requested this plan and selected a stop for review before implementation.
-The active Poteto template requires 40 live assignments across the four PRs. Native runs serialize and reuse valid exact-head smoke receipts.
-Their runtime is unmeasured. Three affected-path controls remain enabling work. Review this cost before execution.
+The user authorized execution after plan review and explicitly prohibited merges.
+The user accepted focused verification instead of blanket ten-lane smoke runs.
+Use required CI, focused mutations, compatibility checks, and affected native smoke. Add no standalone process probes.
 
 ## How to read this
 
@@ -17,7 +17,7 @@ The body is a how-to. The appendices explain the decisions and record the eviden
 Execution uses the installed `poteto-mode/playbooks/autopilot-stack.md` with the adaptations in Delivery.
 The parent owns publication. The operator owns every merge. Stop after the verified PR handoff.
 
-Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+Verify each claim at its actual boundary. Reuse current-head evidence and preserve required repository gates.
 
 ## Delivery
 
@@ -86,9 +86,9 @@ Do not replace the selected extension with Graphite or separate `gh pr create` c
 
 ### Arm the program
 
-- [x] Record the user's stop for review. Evidence is the scope answer in this task.
+- [x] Record execution authority and the no-merge boundary. Evidence is the user's proceed instruction.
 - [x] Create a goal for the plan. Evidence is the task goal receipt.
-- [ ] After explicit execution approval, create a goal with the objective below and retain its receipt.
+- [x] Create the delivery goal and retain its receipt. The user authorized implementation and stack submission.
 - [ ] Read repository guidance with `git show upstream/dev:AGENTS.md` and `git show upstream/dev:TOOLING.md`.
 - [ ] Do not use the template command `git show origin/main:`. This repository uses `upstream/dev`.
 - [ ] Read the installed execution, swarm, review, and relevant .NET skills by their actual paths.
@@ -123,12 +123,12 @@ Use this future execution goal text.
 - [ ] Do not rename an upstream stack head. Use `feature/*` names from the start.
 - [ ] Reconcile each PR body with its final scope. Preserve actual newlines with `--body-file`.
 
-### Verdict and merge, for every PR
+### Verdict and handoff, for every PR
 
 - [ ] Obtain one gates report and two independent diff reviews with distinct behavior and compatibility focuses.
-- [ ] Complete the ten live verification assignments below at the exact head. Queue work within the available agent capacity.
+- [ ] Run the focused boundary checks for the active slice at its exact head.
 - [ ] Reuse valid exact-head receipts from an already completed required smoke run. Do not rerun a scenario solely to fill another box.
-- [ ] Run the bounded cost comparison against the actual predecessor. Follow the Benchmark Checklist before measurement.
+- [ ] Record changed decision owners and actor fixture starts. Follow the Benchmark Checklist before any timing claim.
 - [ ] Assess automated review comments from source and runtime evidence. Reject unsupported findings with a concrete reason.
 - [ ] Verify the final hosted head, base, required checks, labels, and stack membership.
 - [ ] Stop at verified handoff. Keep all merges and deployments outside the execution goal.
@@ -147,7 +147,7 @@ Use this future execution goal text.
 - [ ] Add a disposable capture tape only if the existing harness lacks that frame.
 - [ ] Retain exit status, semantic assertions, logs, and the exact head beside the PNG. A screenshot alone proves no backend guarantee.
 - [ ] Use the named actor and contract fixtures for failure combinations that the public binary cannot inject.
-- [ ] Prepare the affected-path probes named by PR2 through PR4 before their live assignments run. Keep injection controls in test infrastructure only.
+- [ ] Reuse existing component and actor fixtures for failure injection. Add no standalone process driver.
 - [ ] Report those fixture runs as component integration proof. Do not label them as real external transport execution.
 - [ ] Remove every owned process and temporary home. Keep sanitized artifacts outside production data.
 - [ ] If a native host, driver, or failure control is absent, record the missing evidence. Do not mark that lane passed.
@@ -158,61 +158,51 @@ Use this future execution goal text.
 
 **Files.**
 
-- [ ] Edit `global.json`, `Directory.Build.props`, and supported project target frameworks.
-- [ ] Review `Directory.Packages.props`, Aspire SDK references, workflow setup, and release scripts.
-- [ ] Update active runtime statements in `PROJECT_CONTEXT.md`, `TOOLING.md`, `CONTRIBUTING.md`, and the sample README.
-- [ ] Keep `Netclaw.Tools.Generators` on `netstandard2.0` unless compiler-host proof supports a change.
-- [ ] Include this plan and the OpenSpec metadata in the root PR.
+- [x] Edit `global.json`, `Directory.Build.props`, and supported project target frameworks.
+- [x] Review `Directory.Packages.props`, Aspire SDK references, workflow setup, and release scripts.
+- [x] Update active runtime statements in `PROJECT_CONTEXT.md`, `TOOLING.md`, `CONTRIBUTING.md`, and the sample README.
+- [x] Keep `Netclaw.Tools.Generators` on `netstandard2.0` unless compiler-host proof supports a change.
+- [x] Include this plan and the OpenSpec metadata in the root PR.
 
 **Build.**
 
-- [ ] Select the installed stable SDK `11.0.100` and an explicit supported language baseline. Verify resolver behavior without SDK 10.
-- [ ] Retarget product, test, smoke, sample, benchmark, tool, and coordination-observer projects where applicable.
-- [ ] Change package versions only when restore or compatibility evidence requires them. Use the package-management skill and CLI.
-- [ ] Preserve Akka 1.5 package versions unless a demonstrated incompatibility requires a separately reviewed scope change.
+- [x] Select the installed stable SDK `11.0.100` and an explicit supported language baseline. Verify resolver behavior without SDK 10.
+- [x] Retarget product, test, smoke, sample, benchmark, tool, and coordination-observer projects where applicable.
+- [x] Change package versions only when restore or compatibility evidence requires them. Use the package-management skill and CLI.
+- [x] Preserve Akka 1.5 package versions unless a demonstrated incompatibility requires a separately reviewed scope change.
 - [ ] Preserve Ubuntu Docker bases and the macOS ARM64 compression exception. Verify the self-contained binaries they receive.
-- [ ] Add no runtime policy changes, type conversions, or new permanent test fixtures in PR1.
+- [x] Add no runtime policy changes, type conversions, or new permanent test fixtures in PR1.
 
 **You see.**
 
 - [ ] Existing commands and native smoke scenarios produce the same semantic results under .NET 11.
 - [ ] A .NET 11 daemon restores a database and snapshots created by the baseline .NET 10 binary.
 
-**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+**Verify, unit.** Verify each claim at its actual boundary. Reuse current-head evidence and preserve required repository gates.
 
-- [ ] Run `dotnet tool restore`, `dotnet restore`, `dotnet build -c Release`, and `dotnet test -c Release` under the shared lock.
+- [x] Run `dotnet tool restore`, `dotnet restore`, `dotnet build -c Release`, and `dotnet test -c Release` under the shared lock.
 - [ ] Run the source generator tests and fixed-byte serializer and legacy replay fixtures. Record executed test counts.
 - [ ] Run the native light smoke harness and the actual image startup check. Reuse exact-head lane receipts from that run without repetition.
-- [ ] Make `sessions-and-chat.sh` assert chat exit status and the deterministic reply before counting that lane as a pass.
-- [ ] Prove the smoke assertion rejects a failed chat. Keep this bounded harness repair in PR1 because the runtime gate depends on it.
+- [x] Make `sessions-and-chat.sh` assert chat exit status and the deterministic reply before counting that lane as a pass.
+- [x] Prove the smoke assertion rejects a failed chat. Keep this bounded harness repair in PR1 because the runtime gate depends on it.
 - [ ] Create an isolated baseline database, record a turn and snapshot, stop the baseline daemon, and reopen that home with the candidate.
 - [ ] Verify history, pending work, authority, and no duplicate completed turn. The exact upgrade-fixture recipe is enabling work before PR1 acceptance.
-- [ ] Publish Linux x64, Linux ARM64, Windows x64, and macOS ARM64 artifacts. Require native execution evidence for each supported runtime.
-- [ ] Keep the existing eval gate conditional. A TFM-only change does not require identity evals.
+- [ ] Verify required CI hosts and release artifact construction. Report unrun native release targets as limits rather than release acceptance.
+- [x] Keep the existing eval gate conditional. A TFM-only change does not require identity evals.
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured fast profile at the PR head, per the boot recipe.
+**Verify, live.**
 
-- [ ] Lane 1. Run `./scripts/smoke/run-smoke.sh help`. Save `PR1/lane-01.png`. Pass when the published CLI help command succeeds.
-- [ ] Lane 2. Run `./scripts/smoke/run-smoke.sh doctor`. Save `PR1/lane-02.png`. Pass when the doctor scenario produces its expected exit status and diagnostics.
-- [ ] Lane 3. Run `./scripts/smoke/run-smoke.sh daemon-lifecycle`. Save `PR1/lane-03.png`. Pass when the daemon starts, answers readiness, and stops under the correct home.
-- [ ] Lane 4. Run `./scripts/smoke/run-smoke.sh sessions-and-chat`. Save `PR1/lane-04.png`. Pass when the scripted chat completes with the expected session output.
-- [ ] Lane 5. Run `./scripts/smoke/run-smoke.sh approvals`. Save `PR1/lane-05.png`. Pass when the native approval tape preserves the expected consent controls.
-- [ ] Lane 6. Run `./scripts/smoke/run-smoke.sh pairing`. Save `PR1/lane-06.png`. Pass when the pairing scenario preserves accepted and rejected credential cases.
-- [ ] Lane 7. Run `./scripts/smoke/run-smoke.sh reminders`. Save `PR1/lane-07.png`. Pass when the reminder scenario reports the expected terminal result.
-- [ ] Lane 8. Run `./scripts/smoke/run-smoke.sh mcp-setup`. Save `PR1/lane-08.png`. Pass when the MCP scenario preserves discovery and permission behavior.
-- [ ] Lane 9. Run `./scripts/smoke/run-smoke.sh init-wizard`. Save `PR1/lane-09.png`. Pass when the native wizard saves the canonical configuration.
-- [ ] Lane 10. Run `./scripts/smoke/run-smoke.sh chat-admission-quit`. Save `PR1/lane-10.png`. Pass when the chat tape admits input and quits without a duplicate turn.
+- [ ] Run `./scripts/smoke/run-smoke.sh light` once against the published .NET 11 binaries.
+- [ ] Reuse successful exact-head smoke receipts. Capture failures and semantic assertions without credential output.
+- [ ] Verify the actual image startup and old database recovery with existing infrastructure.
 
-**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+**Verify, cost.**
 
-- [ ] Metric. Restore and test duration, published CLI startup duration, and the existing journal trace.
-- [ ] Probe. Capture five alternating baseline and head samples on the same host and configuration. Reuse existing native startup and test commands.
-- [ ] Baseline. Record the refreshed upstream base SHA used by PR1 before measurement. Keep `76071cfe9` only as the planning snapshot. Preserve SDK and RID metadata.
-- [ ] Rule. Reject an unexplained median regression above 15 percent. Treat overlapping noisy samples as inconclusive. Require unchanged journal semantics.
+- [ ] Add no permanent test fixtures for target-framework edits. Record supported-host results and unrun release-target limits.
 
 **Review gate.** None. No interaction-specific operator review applies. Independent code reviews remain required. PR1 preserves the interaction contract and is not review-gated. An intended interaction change requires a scope revision.
 
-**Merge.**
+**Handoff.**
 
 - [ ] Obtain the parent verdict and required CI at the exact head. Retain the head and actual predecessor SHA.
 - [ ] Verify the stack membership with `gh stack view --json`. Hand the PR to the operator and do not merge.
@@ -234,7 +224,7 @@ Use this future execution goal text.
 - [ ] Use one closed internal decision family with required payloads and exhaustive switch expressions.
 - [ ] Migrate internal rule producers and consumers together. Remove duplicate outcome state and redundant conversion logic.
 - [ ] Preserve `ToolAuthorizationDecision`, its public factories and properties, `IToolExecutor`, and public exception behavior.
-- [ ] Keep one adapter at each released boundary. Derive facade properties from the canonical result instead of storing parallel facts.
+- [ ] Retain the original public record and its generated semantics. Add an adapter only where a real public boundary requires one.
 - [ ] Preserve public `Allowed` semantics until a separately authorized compatibility change. Internal code uses explicit decision cases.
 - [ ] Preserve rule order, candidate coverage, exact shell analysis, launch reauthorization, and attended consent behavior.
 - [ ] Preserve the valid pre-coverage consent candidate that carries temporary-path advice. Do not confuse it with a final consent outcome.
@@ -246,7 +236,7 @@ Use this future execution goal text.
 - [ ] The same call receives the same allow, deny, consent, or correction outcome and the same reviewed scope.
 - [ ] An internal rule author updates one outcome model. Public callers retain their existing contract.
 
-**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+**Verify, unit.** Verify each claim at its actual boundary. Reuse current-head evidence and preserve required repository gates.
 
 - [ ] Run existing `ShellApprovalDispositionMatrixTests` for Bash and PowerShell.
 - [ ] Run `python3 scripts/authorization-corpus/run.py --base feature/net11-quality` after checking adapter compatibility.
@@ -257,33 +247,19 @@ Use this future execution goal text.
 - [ ] Test covered and uncovered temporary-path candidates so advice stays in the current position relative to grant coverage.
 - [ ] When the result shape moves an anchor, migrate the exact unsafe mutation and its kill expectation. Fail if it survives or does not run.
 - [ ] Run the full required CI suite at the combined head. Update the mapped system skill only if agent-visible guidance changes.
-- [ ] Prepare an authorization live probe through the existing smoke provider and native daemon harness.
-- [ ] Script an allowed session file read and a protected-file denial. Assert tool results and no denied side effect.
-- [ ] Add only test-side controls for those calls. The current smoke provider emits a fixed reply, so this control is an enabling task.
+**Verify, live.**
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured fast profile at the PR head, per the boot recipe.
+- [ ] Run existing authorization integration fixtures, the corpus differential, and focused mutation gates at the combined head.
+- [ ] Run the native `approvals` tape for its UI contract. Do not claim that its revoke screen proves execution authorization.
 
-- [ ] Lane 1. Run `./scripts/smoke/run-smoke.sh help`. Save `PR2/lane-01.png`. Pass when the published CLI help command succeeds.
-- [ ] Lane 2. Run `./scripts/smoke/run-smoke.sh doctor`. Save `PR2/lane-02.png`. Pass when the doctor scenario produces its expected exit status and diagnostics.
-- [ ] Lane 3. Run `./scripts/smoke/run-smoke.sh daemon-lifecycle`. Save `PR2/lane-03.png`. Pass when the daemon starts, answers readiness, and stops under the correct home.
-- [ ] Lane 4. Run `./scripts/smoke/run-smoke.sh sessions-and-chat`. Save `PR2/lane-04.png`. Pass when the scripted chat completes with the expected session output.
-- [ ] Lane 5. Run the proposed authorization live probe after its enabling task. Save `PR2/lane-05.png`. Pass when the allowed read succeeds and the protected read denies without a side effect.
-- [ ] Lane 6. Run `./scripts/smoke/run-smoke.sh pairing`. Save `PR2/lane-06.png`. Pass when the pairing scenario preserves accepted and rejected credential cases.
-- [ ] Lane 7. Run `./scripts/smoke/run-smoke.sh reminders`. Save `PR2/lane-07.png`. Pass when the reminder scenario reports the expected terminal result.
-- [ ] Lane 8. Run `./scripts/smoke/run-smoke.sh mcp-setup`. Save `PR2/lane-08.png`. Pass when the MCP scenario preserves discovery and permission behavior.
-- [ ] Lane 9. Run `./scripts/smoke/run-smoke.sh init-wizard`. Save `PR2/lane-09.png`. Pass when the native wizard saves the canonical configuration.
-- [ ] Lane 10. Run `./scripts/smoke/run-smoke.sh chat-admission-quit`. Save `PR2/lane-10.png`. Pass when the chat tape admits input and quits without a duplicate turn.
+**Verify, cost.**
 
-**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
-
-- [ ] Metric. Authorization corpus outcomes, policy evaluation cost, public contract differences, and journal trace.
-- [ ] Probe. Compare the same frozen corpus and fixed workload on PR1 and PR2. Collect five alternating samples after one warmup.
-- [ ] Baseline. Record the exact PR1 head and its corpus, runtime, and public contract results.
-- [ ] Rule. Require zero changed corpus outcomes and zero unapproved public or durable contract changes. Investigate a median cost increase above 15 percent.
+- [ ] Record removed duplicate internal outcome state and retained public compatibility adapters.
+- [ ] Make no speed claim without a controlled measurement. Add no new runtime benchmark gate.
 
 **Review gate.** None. No interaction-specific operator review applies. Independent code reviews remain required. PR2 preserves the interaction contract and is not review-gated. An intended interaction change requires a scope revision.
 
-**Merge.**
+**Handoff.**
 
 - [ ] Obtain the parent verdict and required CI at the exact head. Retain the head and actual predecessor SHA.
 - [ ] Verify the stack membership with `gh stack view --json`. Hand the PR to the operator and do not merge.
@@ -301,7 +277,7 @@ Use this future execution goal text.
 **Build.**
 
 - [ ] Replace split policy branches with a pure decision over the current retry facts, session phase, and feedback.
-- [ ] Return the next state and closed requested actions. Keep model calls, logs, notices, and persistence in the actor.
+- [ ] Return phase-specific actions from pure decisions. Keep the current state owner and all effects in the actor.
 - [ ] Preserve stale-turn rejection, the existing retry budget, routed-skill behavior, busy-phase behavior, and reminder attribution.
 - [ ] Keep the current event and snapshot fields. Do not journal actor-local decision steps.
 - [ ] Delete the old internal policy path at cutover. Keep no permanent shadow implementation.
@@ -312,7 +288,7 @@ Use this future execution goal text.
 - [ ] A current retryable failure requests the same retry. Stale feedback requests no retry.
 - [ ] Exhaustion reports the correct reminder once. A routed-skill turn never asks the main model to recreate its reply.
 
-**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+**Verify, unit.** Verify each claim at its actual boundary. Reuse current-head evidence and preserve required repository gates.
 
 - [ ] Run `dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj -c Release --filter "FullyQualifiedName~DeliveryRetryHandlerReminderTests|FullyQualifiedName~LlmSessionIntegrationTests"`.
 - [ ] Prove stale, exhausted, routed-skill, non-retryable, processing, compaction, and restart-drain outcomes through direct decisions.
@@ -320,33 +296,19 @@ Use this future execution goal text.
 - [ ] Before deleting a heavy case, map its guarantee to the replacement and demonstrate the same unsafe mutation fails.
 - [ ] Review the focused mutation scope and reuse the reminder post-failure target documented in `TOOLING.md`.
 - [ ] Run full required CI against PR2 plus PR3. Preserve all lifecycle and serialization assertions.
-- [ ] Prepare a test-only process probe that drives the production session with correlated delivery feedback.
-- [ ] Reuse the existing session fixture setup. Observe model request counts for current, stale, and exhausted feedback.
-- [ ] Keep feedback injection outside shipped endpoints. Until this control exists, the affected-path live assignment remains blocked.
+**Verify, live.**
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured fast profile at the PR head, per the boot recipe.
+- [ ] Retain actor proof for model call counts, stale feedback, reminder attribution, and replay and snapshot restore.
+- [ ] Run `chat-admission-quit` and `reminder-run` native tapes against the candidate binary.
 
-- [ ] Lane 1. Run `./scripts/smoke/run-smoke.sh help`. Save `PR3/lane-01.png`. Pass when the published CLI help command succeeds.
-- [ ] Lane 2. Run `./scripts/smoke/run-smoke.sh doctor`. Save `PR3/lane-02.png`. Pass when the doctor scenario produces its expected exit status and diagnostics.
-- [ ] Lane 3. Run `./scripts/smoke/run-smoke.sh daemon-lifecycle`. Save `PR3/lane-03.png`. Pass when the daemon starts, answers readiness, and stops under the correct home.
-- [ ] Lane 4. Run the proposed delivery feedback process probe after its enabling task. Save `PR3/lane-04.png`. Pass when current feedback retries within budget and stale or exhausted feedback starts no model call.
-- [ ] Lane 5. Run `./scripts/smoke/run-smoke.sh approvals`. Save `PR3/lane-05.png`. Pass when the native approval tape preserves the expected consent controls.
-- [ ] Lane 6. Run `./scripts/smoke/run-smoke.sh pairing`. Save `PR3/lane-06.png`. Pass when the pairing scenario preserves accepted and rejected credential cases.
-- [ ] Lane 7. Run `./scripts/smoke/run-smoke.sh reminders`. Save `PR3/lane-07.png`. Pass when the reminder scenario reports the expected terminal result.
-- [ ] Lane 8. Run `./scripts/smoke/run-smoke.sh mcp-setup`. Save `PR3/lane-08.png`. Pass when the MCP scenario preserves discovery and permission behavior.
-- [ ] Lane 9. Run `./scripts/smoke/run-smoke.sh init-wizard`. Save `PR3/lane-09.png`. Pass when the native wizard saves the canonical configuration.
-- [ ] Lane 10. Run `./scripts/smoke/run-smoke.sh chat-admission-quit`. Save `PR3/lane-10.png`. Pass when the chat tape admits input and quits without a duplicate turn.
+**Verify, cost.**
 
-**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
-
-- [ ] Metric. Actor fixture starts for the migrated matrix, focused suite duration, model call count, and journal trace.
-- [ ] Probe. Run the identical named behavior matrix against PR2 and PR3. Record five alternating samples and actual fixture starts.
-- [ ] Baseline. Record the exact PR2 head, matrix case IDs, expensive fixture count, and trace.
-- [ ] Rule. Require fewer actor fixture starts for the migrated matrix, unchanged behavior and journal trace, and no unexplained median regression above 15 percent.
+- [ ] Record which equivalent policy permutations move to direct tests and which actor fixtures remain.
+- [ ] Require fewer actor starts for the migrated matrix without lost guarantees. Add no standalone process probe.
 
 **Review gate.** None. No interaction-specific operator review applies. Independent code reviews remain required. PR3 preserves the interaction contract and is not review-gated. An intended interaction change requires a scope revision.
 
-**Merge.**
+**Handoff.**
 
 - [ ] Obtain the parent verdict and required CI at the exact head. Retain the head and actual predecessor SHA.
 - [ ] Verify the stack membership with `gh stack view --json`. Hand the PR to the operator and do not merge.
@@ -358,15 +320,15 @@ Use this future execution goal text.
 **Files.**
 
 - [ ] Edit `src/Netclaw.Channels/ChannelLifecycleActor.cs` and add one closely related decision file only if needed.
-- [ ] Extend existing gateway lifecycle contract and Discord timeout fixtures.
+- [ ] Combine the flap and stable-reset contract cases into one sequence per transport. Preserve all Discord timeout fixtures.
 - [ ] Keep transport-specific registration and effects in the existing adapters.
 
 **Build.**
 
-- [ ] Reconcile open PR #2795 before the first edit. Preserve its bounded transport-stop guarantee if it enters the base.
-- [ ] Model connection phase, attempt identity, retry delay, and stable-ready time as one decision state.
-- [ ] Pass the current time and normalized transport events as values. Keep transport instances and timer handles outside the decision.
-- [ ] Return required start, stop, retry, reply, and notification actions as closed data.
+- [ ] Reconcile open PR #2795 before the first edit. Preserve its stop deadline only if it enters the base.
+- [ ] Extract pure retry-delay and stable-ready decisions. Keep phase and attempt identity in the current actor.
+- [ ] Pass the current delay, ready timestamp, and current time as values. Keep transport effects and timers in the actor.
+- [ ] Return the retry due time and next delay as one value. Add no lifecycle event or effect interpreter.
 - [ ] Preserve readiness distinctions, stale completion rejection, stability-window reset, explicit disconnect, and subscription disposal.
 - [ ] Delete the replaced decision branches. Do not duplicate the current transport base class with another framework.
 
@@ -375,41 +337,27 @@ Use this future execution goal text.
 - [ ] A connection that repeatedly drops grows the same delay. A stable connection resets the delay at the same boundary.
 - [ ] Old completion messages change no current attempt. Explicit disconnect schedules no new reconnect.
 
-**Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
+**Verify, unit.** Verify each claim at its actual boundary. Reuse current-head evidence and preserve required repository gates.
 
 - [ ] Run the existing `GatewayLifecycleContractTests` implementations and `DiscordGatewayLifecycleRetryTimeoutTests`.
-- [ ] Add direct transition cases for stale start, stale timeout, transient failure, readiness, flapping, stable reset, and explicit disconnect.
+- [ ] Add direct delay and stability cases. Retain actor cases for stale attempts, timeouts, readiness, and explicit disconnect.
 - [ ] Retain component integration proof for real actor timer cancellation, clean transport stop, subscription disposal, and readiness callbacks.
 - [ ] Retain each transport-specific assertion. Shared policy tests do not replace adapter conversion or effect proof.
 - [ ] Review the focused mutation scope for stale-attempt rejection and reconnect-after-disconnect prevention.
 - [ ] Run full required CI at the combined PR4 head and capture the final four-PR stack receipts.
-- [ ] Prepare a test-only process probe from the current gateway contract setup with a deterministic transport.
-- [ ] Drive connect, drop, retry, stale completion, and explicit disconnect through the production actor. Observe its transport effect trace.
-- [ ] Keep this probe separate from external platform claims. Until its control exists, the affected-path live assignment remains blocked.
+**Verify, live.**
 
-**Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured fast profile at the PR head, per the boot recipe.
+- [ ] Run gateway actor contract fixtures for real actor timers, stale completion, bounded stop, and subscription disposal.
+- [ ] Run the native `config-channels` tape and daemon lifecycle scenario for affected binary and configuration contracts.
 
-- [ ] Lane 1. Run `./scripts/smoke/run-smoke.sh help`. Save `PR4/lane-01.png`. Pass when the published CLI help command succeeds.
-- [ ] Lane 2. Run `./scripts/smoke/run-smoke.sh doctor`. Save `PR4/lane-02.png`. Pass when the doctor scenario produces its expected exit status and diagnostics.
-- [ ] Lane 3. Run the proposed gateway process probe after its enabling task. Save `PR4/lane-03.png`. Pass when the effect trace preserves backoff, rejects stale completions, and schedules no reconnect after disconnect.
-- [ ] Lane 4. Run `./scripts/smoke/run-smoke.sh sessions-and-chat`. Save `PR4/lane-04.png`. Pass when the scripted chat completes with the expected session output.
-- [ ] Lane 5. Run `./scripts/smoke/run-smoke.sh approvals`. Save `PR4/lane-05.png`. Pass when the native approval tape preserves the expected consent controls.
-- [ ] Lane 6. Run `./scripts/smoke/run-smoke.sh pairing`. Save `PR4/lane-06.png`. Pass when the pairing scenario preserves accepted and rejected credential cases.
-- [ ] Lane 7. Run `./scripts/smoke/run-smoke.sh reminders`. Save `PR4/lane-07.png`. Pass when the reminder scenario reports the expected terminal result.
-- [ ] Lane 8. Run `./scripts/smoke/run-smoke.sh mcp-setup`. Save `PR4/lane-08.png`. Pass when the MCP scenario preserves discovery and permission behavior.
-- [ ] Lane 9. Run `./scripts/smoke/run-smoke.sh init-wizard`. Save `PR4/lane-09.png`. Pass when the native wizard saves the canonical configuration.
-- [ ] Lane 10. Run `./scripts/smoke/run-smoke.sh chat-admission-quit`. Save `PR4/lane-10.png`. Pass when the chat tape admits input and quits without a duplicate turn.
+**Verify, cost.**
 
-**Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
-
-- [ ] Metric. Actor fixture starts for shared policy permutations, reconnect action count, focused suite duration, and journal trace.
-- [ ] Probe. Compare the same event sequences and contract fixtures on PR3 and PR4 with five alternating samples.
-- [ ] Baseline. Record the exact PR3 head, case IDs, fixture starts, and reconnect trace.
-- [ ] Rule. Require fewer expensive fixture starts for moved permutations, unchanged transport effects, zero new journal records, and no unexplained median regression above 15 percent.
+- [ ] Record fewer actor fixture starts for moved policy permutations. Preserve all transport-specific boundary assertions.
+- [ ] Add no standalone process probe or runtime benchmark framework.
 
 **Review gate.** None. No interaction-specific operator review applies. Independent code reviews remain required. PR4 preserves the interaction contract and is not review-gated. An intended interaction change requires a scope revision.
 
-**Merge.**
+**Handoff.**
 
 - [ ] Obtain the parent verdict and required CI at the exact head. Retain the head and actual predecessor SHA.
 - [ ] Verify the stack membership with `gh stack view --json`. Hand the PR to the operator and do not merge.
@@ -422,6 +370,21 @@ Use this future execution goal text.
 - [ ] Keep the plan current while the stack remains active. Do not check off work that a future slice must complete.
 - [ ] Archive OpenSpec only after its implementation and required verification finish through the appropriate skill.
 - [ ] After later authorized merges, preserve the final plan in retained Git history before removing it from active context.
+
+
+### Local runtime checkpoint
+
+The Release build passes with zero errors and one ASPIRE010 warning.
+The Linux non-NativeShell suite passes 16,235 tests and skips 99 expected platform or opt-in cases.
+The final linked configuration theory passes three cases after its test-only revision.
+The shared mutation invocation kills its eight existing mutants and the new link-check inversion.
+The isolated inversion control fails all three link cases because the unsafe code accepts each dangling link.
+Slopwatch reports zero issues. Copyright verification and the whitespace check pass.
+
+Incrementalist prints its version and exits 232 under both SDK 10.0.403 and SDK 11.
+This pre-existing tool result is not a successful execution claim. Required CI does not invoke that tool.
+The published artifact, native CLI, image, old-database, and hosted checks remain pending at this checkpoint.
+The next checkpoint records the published head and those actual results.
 
 ## Appendix A. Prototype evidence
 
@@ -436,8 +399,8 @@ No stack, remote branch, PR, merge, or deployment was created during the plan ta
 The isolated planning worktree is `/home/petabridge/repositories/stannardlabs/netclaw-worktrees/net11-quality-20261117`.
 The primary checkout remains on `dev` with its pre-existing untracked plan file untouched.
 
-The exact .NET 10 database upgrade procedure, native RID execution, and sanitized terminal-frame recipe remain unproven.
-The authorization, delivery-feedback, and gateway process controls also remain unbuilt. Their dependent acceptance boxes stay unchecked.
+The .NET 10 database upgrade and native release-target execution remain unproven until their actual checks run.
+Use existing actor fixtures for policy failure injection. The focused-verification override removes the proposed standalone process controls.
 Prepare and run those procedures before the relevant PR can receive a verified verdict.
 
 ## Appendix B. Alternatives rejected
@@ -450,9 +413,20 @@ Do not add a generic internal decider framework. Each local function must remove
 Do not use a test-count or line-count reduction as the acceptance target.
 
 Laziness Protocol keeps this work local and excludes a new runtime framework.
-Model the Domain puts retry and reconnect decisions in explicit states with closed outcomes.
+Model the Domain uses phase-specific delivery outcomes and an explicit gateway retry schedule.
 Sequence Work into Verifiable Units makes the runtime upgrade the first independently verified slice.
 Test Behavior, Not Implementation retains real persistence, authority, and lifecycle proof after policy test migration.
+
+
+The authorization design retains the original public record and reuses the existing internal terminal hierarchy.
+A wrapper around the public record would require custom code to preserve generated record semantics.
+
+The delivery design keeps the current mutable handler and returns phase-specific actions from pure functions.
+A full reducer would change snapshot adapters and mutation selectors without a behavior requirement.
+
+The gateway design extracts delay and stability rules. The actor retains phase, attempt identity, and transport effects.
+A full lifecycle reducer would require broad adapter changes and another mechanism to coordinate the active Akka behavior.
+Combine the flap and stable-reset actor tests into one sequence per transport. Preserve both actual timer guarantees.
 
 ## Appendix C. Risks
 
@@ -472,17 +446,16 @@ PR4 overlaps open PR #2795, which changes the gateway stop timeout.
 Check the live head and merge state before the slice starts. Preserve any incorporated stop deadline.
 Other open changes cover child consent, session tool execution, and shell launch. Reconcile their actual diffs before edits.
 
-The Poteto plan template requires ten live assignments and the repeated verification rule for each PR.
-These assignments reuse existing smoke coverage. They do not require ten new permanent test fixtures.
-Generic smoke proves binary regression checks only. It does not establish the refactored policy behavior.
-The three affected-path probes are enabling work. Reuse existing fixtures and reject a new test framework.
-Count their maintenance cost when assessing the actual reduction. This plan promises no reduction in total review effort.
-Queue reviews within actual agent capacity. Run native smoke lanes serially because cleanup matches the daemon binary path.
+The user superseded the Poteto ten-lane template with focused verification.
+The original plan checker enforces that superseded template and does not validate the revised execution plan.
+Use strict OpenSpec validation, local link checks, independent review, and the actual repository gates.
+Reuse valid exact-head receipts. Native smoke runs remain serial because cleanup matches the daemon path.
+Queue reviews within actual agent capacity.
 Keep ports, process ownership, homes, and build outputs isolated.
 If the control driver or evidence capture cannot exercise a boundary, report the gap without replacing it with a screenshot.
 
-The cost thresholds are proposed acceptance gates. No runtime reduction or performance result exists yet.
-Run the Benchmark Checklist before collecting or interpreting samples. Diagnose noisy or incomparable samples rather than discarding inconvenient runs.
+No runtime reduction or performance result exists yet. Report structural test-cost changes separately from measured speed.
+Read the Benchmark Checklist before any performance measurement. No blanket benchmark gate applies to these refactors.
 
 ## Appendix D. Links and reading list
 

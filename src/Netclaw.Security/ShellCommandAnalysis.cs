@@ -562,7 +562,7 @@ internal static class ShellGlobPath
 
         return pathStyle == ShellPathStyle.Windows
             ? scope.AsSpan(firstGlob + 1).IndexOfAny('/', '\\') >= 0
-            : scope.IndexOf('/', firstGlob + 1) >= 0;
+            : scope.IndexOf('/', firstGlob + 1, StringComparison.Ordinal) >= 0;
     }
 }
 
