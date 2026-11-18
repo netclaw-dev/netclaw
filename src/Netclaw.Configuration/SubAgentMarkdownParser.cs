@@ -38,7 +38,7 @@ public static class SubAgentMarkdownParser
         if (closingIndex < 0)
             return null;
 
-        var firstNewline = content.IndexOf('\n', 0);
+        var firstNewline = content.IndexOf('\n', 0, StringComparison.Ordinal);
         if (firstNewline < 0 || firstNewline >= closingIndex)
             return null;
 
@@ -71,7 +71,7 @@ public static class SubAgentMarkdownParser
         if (closingIndex < 0)
             return content;
 
-        var bodyStart = content.IndexOf('\n', closingIndex + 4);
+        var bodyStart = content.IndexOf('\n', closingIndex + 4, StringComparison.Ordinal);
         return bodyStart < 0 ? string.Empty : content[(bodyStart + 1)..].TrimStart();
     }
 }

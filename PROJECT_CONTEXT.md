@@ -7,7 +7,7 @@
 ## What Netclaw Is
 
 Netclaw is an **always-on autonomous operations agent** that runs anywhere —
-from a Raspberry Pi to a cloud VM. It is a single-process .NET 10 application
+from a Raspberry Pi to a cloud VM. It is a single-process .NET 11 application
 built on Akka.Agents, communicating primarily through Slack. It is NOT just a
 chat assistant — it is an autonomous operations platform that can monitor,
 react, investigate, delegate work, and manage its own schedule.

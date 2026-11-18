@@ -221,7 +221,7 @@ internal static class DaemonPathEnvironmentFile
             return false;
 
         var binaryPath = ExtractFirstToken(execStart);
-        var lastSlash = binaryPath.LastIndexOf('/');
+        var lastSlash = binaryPath.LastIndexOf('/', StringComparison.Ordinal);
         if (lastSlash <= 0)
             return false;
 
@@ -243,7 +243,7 @@ internal static class DaemonPathEnvironmentFile
             return false;
 
         var value = directive[EnvironmentFilePrefix.Length..].Trim();
-        if (value.StartsWith('-'))
+        if (value.StartsWith('-', StringComparison.Ordinal))
             value = value[1..];
 
         environmentFilePath = value;

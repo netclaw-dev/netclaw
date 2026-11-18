@@ -103,8 +103,8 @@ public sealed class ShellExecutionEnvironment
         get
         {
             var separator = Math.Max(
-                ExecutablePath.LastIndexOf('/'),
-                ExecutablePath.LastIndexOf('\\'));
+                ExecutablePath.LastIndexOf('/', StringComparison.Ordinal),
+                ExecutablePath.LastIndexOf('\\', StringComparison.Ordinal));
             return separator < 0 ? ExecutablePath : ExecutablePath[(separator + 1)..];
         }
     }
@@ -228,8 +228,8 @@ public sealed class ShellExecutionEnvironment
             ? "pwsh.exe"
             : "powershell.exe";
         var separator = Math.Max(
-            executablePath.LastIndexOf('/'),
-            executablePath.LastIndexOf('\\'));
+            executablePath.LastIndexOf('/', StringComparison.Ordinal),
+            executablePath.LastIndexOf('\\', StringComparison.Ordinal));
         var executableName = separator < 0
             ? executablePath
             : executablePath[(separator + 1)..];

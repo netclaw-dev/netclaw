@@ -61,7 +61,7 @@ internal static class ShellGlobScope
         if (!segment.IsPattern)
             return string.Equals(segment.Text, name, StringComparison.OrdinalIgnoreCase);
 
-        if (name.StartsWith('.') && !segment.MayMatchDotEntry)
+        if (name.StartsWith('.', StringComparison.Ordinal) && !segment.MayMatchDotEntry)
             return false;
 
         return FileSystemName.MatchesSimpleExpression(
@@ -74,7 +74,7 @@ internal static class ShellGlobScope
     internal static ShellGlobReach ResolveReach(CanonicalPath coveringDirectory, ShellValueDomain.PathPattern pattern)
     {
         var glob = pattern.Glob!;
-        var hasTrailingSlash = pattern.Pattern.EndsWith('/');
+        var hasTrailingSlash = pattern.Pattern.EndsWith('/', StringComparison.Ordinal);
         var scopes = new HashSet<CanonicalPath> { coveringDirectory };
         var targets = new HashSet<ShellGlobTargetReach>();
         var complete = coveringDirectory.IsHostStyle;
@@ -244,7 +244,7 @@ internal static class ShellGlobScope
         string target)
     {
         const char separator = '/';
-        var prefix = coveringDirectory.EndsWith(separator)
+        var prefix = coveringDirectory.EndsWith(separator, StringComparison.Ordinal)
             ? coveringDirectory
             : coveringDirectory + separator;
         if (!target.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))

@@ -87,7 +87,7 @@ public static partial class ModelIdNormalizer
         }
 
         // Step 5: Trailing-segment stripping (catches build variant tags like -UD, -BPW4)
-        var lastDash = working.LastIndexOf('-');
+        var lastDash = working.LastIndexOf('-', StringComparison.Ordinal);
         if (lastDash > 0)
         {
             var withoutTrailing = working[..lastDash];

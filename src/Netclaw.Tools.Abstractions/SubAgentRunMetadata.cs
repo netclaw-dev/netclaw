@@ -57,7 +57,7 @@ public readonly record struct SubAgentScopeId(string Value)
     public bool TryGetRunId(out SubAgentRunId runId)
     {
         var marker = Value.LastIndexOf("/subagent/", StringComparison.Ordinal);
-        var separator = Value.LastIndexOf('/');
+        var separator = Value.LastIndexOf('/', StringComparison.Ordinal);
         if (marker < 0 || separator <= marker + "/subagent/".Length || separator == Value.Length - 1)
         {
             runId = default;

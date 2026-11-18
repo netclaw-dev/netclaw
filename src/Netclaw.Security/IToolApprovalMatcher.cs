@@ -1198,7 +1198,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return lastParent > 0
                && segments[..lastParent].Any(segment => literal
                    ? segment.Contains('{', StringComparison.Ordinal)
-                   : segment.StartsWith('~') || segment.AsSpan().IndexOfAny("$`*?[{") >= 0);
+                   : segment.StartsWith('~', StringComparison.Ordinal) || segment.AsSpan().IndexOfAny("$`*?[{") >= 0);
     }
 
     // The @file and provider-qualified forms name the path after the prefix.
@@ -1522,9 +1522,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     {
         var lastSeparator = pathStyle == ShellPathStyle.Windows
             ? token.LastIndexOfAny(['/', '\\'])
-            : token.LastIndexOf('/');
+            : token.LastIndexOf('/', StringComparison.Ordinal);
         var basename = token[(lastSeparator + 1)..];
-        var lastDot = basename.LastIndexOf('.');
+        var lastDot = basename.LastIndexOf('.', StringComparison.Ordinal);
         var hasExtension = lastDot > 0 && lastDot < basename.Length - 1;
         var isDotfile = basename.Length > 1 && basename[0] == '.';
         if (!hasExtension && !isDotfile || lastSeparator < 0)
@@ -1591,7 +1591,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var staticPrefix = path[..firstGlob];
         var separator = pathStyle == ShellPathStyle.Windows
             ? staticPrefix.LastIndexOfAny(['/', '\\'])
-            : staticPrefix.LastIndexOf('/');
+            : staticPrefix.LastIndexOf('/', StringComparison.Ordinal);
         var coveringPath = CoveringPath(staticPrefix, separator, pathStyle);
 
         if (!CanonicalPath.TryCreate(
@@ -1655,7 +1655,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         // An internal slash can also name a ref such as feature/x. Native
         // option and @file shapes supply the extra path evidence we need.
-        if (arg.IsFlag || arg.Raw.TrimStart('\'', '"').StartsWith('@'))
+        if (arg.IsFlag || arg.Raw.TrimStart('\'', '"').StartsWith('@', StringComparison.Ordinal))
             return true;
 
         // Collapse an ambiguous relative token to cwd only when its resolved
@@ -1683,7 +1683,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         var value = word.Trim('\'', '"');
         return IsPortableAnchoredPathWord(value)
-            || value.StartsWith('\\')
+            || value.StartsWith('\\', StringComparison.Ordinal)
             || value.StartsWith("~\\", StringComparison.Ordinal)
             || value.StartsWith(".\\", StringComparison.Ordinal)
             || value.StartsWith("..\\", StringComparison.Ordinal)
@@ -1695,7 +1695,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     private static bool IsPortableAnchoredPathWord(string word)
         => word is "~" or "." or ".."
-           || word.StartsWith('/')
+           || word.StartsWith('/', StringComparison.Ordinal)
            || word.StartsWith("~/", StringComparison.Ordinal)
            || word.StartsWith("./", StringComparison.Ordinal)
            || word.StartsWith("../", StringComparison.Ordinal);
@@ -1864,7 +1864,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     {
         var separator = pathStyle == ShellPathStyle.Windows
             ? target.LastIndexOfAny(['/', '\\'])
-            : target.LastIndexOf('/');
+            : target.LastIndexOf('/', StringComparison.Ordinal);
         if (separator < 0)
             return null;
         if (separator == 0)
@@ -2033,7 +2033,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     {
         var isWindows = pathStyle == ShellPathStyle.Windows;
         if (string.IsNullOrWhiteSpace(word)
-            || word.StartsWith('-')
+            || word.StartsWith('-', StringComparison.Ordinal)
             || word.Contains("://", StringComparison.Ordinal))
         {
             return false;
@@ -2042,7 +2042,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (!isWindows && word[0] == '/'
             || word.StartsWith("./", StringComparison.Ordinal)
             || word.StartsWith("../", StringComparison.Ordinal)
-            || word.StartsWith('~')
+            || word.StartsWith('~', StringComparison.Ordinal)
             || word.StartsWith("$HOME", StringComparison.Ordinal)
             || word.StartsWith("${HOME}", StringComparison.Ordinal)
             || isWindows
@@ -2063,7 +2063,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (colon >= 0 && colon < firstSeparator && (!isWindows || colon != 1 || !char.IsAsciiLetter(word[0])))
             return false;
 
-        if (word.StartsWith('@') && word.IndexOf('/', 1) == word.LastIndexOf('/'))
+        if (word.StartsWith('@', StringComparison.Ordinal) && word.IndexOf('/', 1, StringComparison.Ordinal) == word.LastIndexOf('/', StringComparison.Ordinal))
             return false;
 
         if ((word.StartsWith("s/", StringComparison.Ordinal) || word.StartsWith("y/", StringComparison.Ordinal))

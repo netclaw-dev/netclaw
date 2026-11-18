@@ -104,7 +104,7 @@ internal static class SkillSyncHelpers
             return null;
 
         var normalized = path.Trim().Replace('\\', '/');
-        if (normalized.Length == 0 || normalized.StartsWith('/') || normalized.EndsWith('/'))
+        if (normalized.Length == 0 || normalized.StartsWith('/', StringComparison.Ordinal) || normalized.EndsWith('/', StringComparison.Ordinal))
             return null;
 
         var segments = normalized.Split('/');
@@ -213,7 +213,7 @@ internal static class SkillSyncHelpers
             foreach (var dir in Directory.GetDirectories(feedDir))
             {
                 var dirName = Path.GetFileName(dir);
-                if (string.IsNullOrEmpty(dirName) || dirName.StartsWith('.') || present.Contains(dirName))
+                if (string.IsNullOrEmpty(dirName) || dirName.StartsWith('.', StringComparison.Ordinal) || present.Contains(dirName))
                     continue;
 
                 if ((File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0)

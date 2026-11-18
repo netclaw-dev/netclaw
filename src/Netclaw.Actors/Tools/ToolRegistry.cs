@@ -599,7 +599,7 @@ public sealed class ToolRegistry
         var fullName = NormalizeSearchText(tool.Name);
 
         var shortName = fullName;
-        var slashIndex = tool.Name.LastIndexOf('/');
+        var slashIndex = tool.Name.LastIndexOf('/', StringComparison.Ordinal);
         if (slashIndex >= 0 && slashIndex + 1 < tool.Name.Length)
         {
             shortName = NormalizeSearchText(tool.Name[(slashIndex + 1)..]);

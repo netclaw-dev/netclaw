@@ -321,7 +321,7 @@ public static class ApprovalPatternMatching
         out string worktreeProgram)
     {
         worktreeProgram = string.Empty;
-        if (!programPath.StartsWith('/'))
+        if (!programPath.StartsWith('/', StringComparison.Ordinal))
             return false;
 
         // The lexical path can name a file that does not exist yet. Its nearest

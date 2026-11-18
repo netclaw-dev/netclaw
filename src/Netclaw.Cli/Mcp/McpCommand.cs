@@ -1084,7 +1084,7 @@ internal static class McpCommand
     private static bool TryReadNewServerName(string raw, TextWriter writer, out McpServerName serverName)
     {
         serverName = default;
-        if (raw.StartsWith('-') || raw == "help")
+        if (raw.StartsWith('-', StringComparison.Ordinal) || raw == "help")
         {
             writer.WriteLine($"Error: '{raw}' is not a valid server name. A name must not start with '-' and must not be 'help'. "
                 + "Run `netclaw mcp --help` for usage.");
@@ -1452,7 +1452,7 @@ internal static class McpCommand
                     WriteToolsHelp(writer);
                     return 0;
                 default:
-                    if (serverNameRaw is null && !args[i].StartsWith('-'))
+                    if (serverNameRaw is null && !args[i].StartsWith('-', StringComparison.Ordinal))
                         serverNameRaw = args[i];
                     break;
             }

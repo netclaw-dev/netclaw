@@ -143,7 +143,7 @@ internal static class LoopbackHostOriginPolicy
             return false;
 
         // An IPv6 literal must have brackets in a Host header, and a name or IPv4 literal must not.
-        var bracketed = name.StartsWith('[') && name.EndsWith(']');
+        var bracketed = name.StartsWith('[', StringComparison.Ordinal) && name.EndsWith(']', StringComparison.Ordinal);
         var text = bracketed ? name[1..^1] : name;
         return text.Contains(':', StringComparison.Ordinal) == bracketed && LoopbackHostName.IsStrictLoopback(text);
     }

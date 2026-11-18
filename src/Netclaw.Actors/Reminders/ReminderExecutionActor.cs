@@ -504,7 +504,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
         else if (string.Equals(transport, "mattermost", StringComparison.OrdinalIgnoreCase)
                  && address is { Length: > 0 })
         {
-            if (address.StartsWith('@'))
+            if (address.StartsWith('@', StringComparison.Ordinal))
             {
                 destinationKind = "direct_message";
                 destinationId = address[1..];

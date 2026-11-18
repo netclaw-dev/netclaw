@@ -39,7 +39,7 @@ internal static class CliConfigPreflight
         foreach (var file in new[] { paths.NetclawConfigPath, paths.SecretsPath })
         {
             if (!TryDescribeUnreadableFile(file, out _, out _))
-                builder.AddJsonFile(file, optional: true, reloadOnChange: false);
+                builder.AddNetclawJsonFile(file);
         }
 
         return builder.AddEnvironmentVariables("NETCLAW_");
@@ -73,7 +73,7 @@ internal static class CliConfigPreflight
 
         try
         {
-            new ConfigurationBuilder().AddJsonFile(file, optional: true, reloadOnChange: false).Build();
+            new ConfigurationBuilder().AddNetclawJsonFile(file).Build();
         }
         catch (Exception ex)
         {

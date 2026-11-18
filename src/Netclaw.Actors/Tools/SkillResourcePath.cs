@@ -27,7 +27,7 @@ internal static class SkillResourcePath
         }
 
         normalized = path.Trim().Replace('\\', '/');
-        if (normalized.Length == 0 || normalized.StartsWith('/') || normalized.EndsWith('/'))
+        if (normalized.Length == 0 || normalized.StartsWith('/', StringComparison.Ordinal) || normalized.EndsWith('/', StringComparison.Ordinal))
         {
             error = SkillResourcePathError.NotRelativeFile;
             return false;

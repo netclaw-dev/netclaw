@@ -581,7 +581,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         if (string.IsNullOrWhiteSpace(channelId.Value))
             return false;
 
-        return channelId.Value.StartsWith('D');
+        return channelId.Value.StartsWith('D', StringComparison.Ordinal);
     }
 
     private static SlackEventId BuildEventId(

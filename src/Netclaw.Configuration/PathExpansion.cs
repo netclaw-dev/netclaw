@@ -46,7 +46,7 @@ public static class PathExpansion
 
         var expanded = trimmed;
 
-        if (expanded.StartsWith('~'))
+        if (expanded.StartsWith('~', StringComparison.Ordinal))
         {
             expanded = expanded.Length == 1
                 ? home

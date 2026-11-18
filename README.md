@@ -129,6 +129,10 @@ The installer adds Netclaw to your User PATH. The `-Component cli|daemon`,
 `-Channel beta`, `-Version`, and `-SkipShell` options work the same way as their
 Linux counterparts (download the script and run it with the flag).
 
+The .NET 11 binaries require an `x86-64-v2` CPU on x64 hosts.
+The Linux Arm64 hardware minimum stays unchanged.
+See the [.NET 11 hardware requirements](https://learn.microsoft.com/en-us/dotnet/core/compatibility/jit/11/minimum-hardware-requirements).
+
 **Docker** (multi-arch: amd64/arm64):
 
 ```bash

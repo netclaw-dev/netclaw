@@ -227,7 +227,7 @@ public sealed class BackgroundJobDefinitionStore
                 // it. Never touch anything outside the jobs directory.
                 var root = Path.GetFullPath(_directory);
                 var fullDir = Path.GetFullPath(outputDir);
-                var prefix = root.EndsWith(Path.DirectorySeparatorChar)
+                var prefix = root.EndsWith(Path.DirectorySeparatorChar, StringComparison.Ordinal)
                     ? root
                     : root + Path.DirectorySeparatorChar;
                 if (!fullDir.StartsWith(prefix, StringComparison.Ordinal))

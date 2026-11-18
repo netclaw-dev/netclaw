@@ -24,7 +24,7 @@ One `dotnet run` brings up four resources:
 
 ## Prerequisites
 
-- .NET 10 SDK (matching `global.json` at the repo root).
+- .NET 11 SDK (matching `global.json` at the repo root).
 - Docker. Linux is the smoothest experience; Docker Desktop on macOS and
   Windows works but Aspire's container-network model is rougher on those
   platforms.

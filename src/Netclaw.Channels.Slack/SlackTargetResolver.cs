@@ -155,7 +155,7 @@ public sealed class SlackTargetResolver(
             return ChannelAddressResolutionResult.Unsupported($"Slack destination resolver does not support address kind '{request.AddressKind}'.");
 
         var raw = request.Query.Trim();
-        if (raw.StartsWith('#'))
+        if (raw.StartsWith('#', StringComparison.Ordinal))
             raw = raw[1..].Trim();
 
         if (IsSlackChannelId(raw))

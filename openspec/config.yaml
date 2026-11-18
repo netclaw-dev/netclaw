@@ -2,7 +2,7 @@ schema: spec-driven
 
 context: |
   Project: Netclaw
-  Runtime: .NET 10, single-process host
+  Runtime: .NET 11, single-process host
   Core architecture: Akka.NET actor sessions with PostgreSQL persistence
   Primary channel: Slack Socket Mode
   Tool integration: local tools plus MCP server support in MVP

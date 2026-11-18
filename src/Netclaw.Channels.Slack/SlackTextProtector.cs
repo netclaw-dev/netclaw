@@ -164,7 +164,7 @@ public static partial class SlackTextProtector
             return url;
 
         var scopeStart = scopeIndex + scopeMarker.Length;
-        var scopeEnd = url.IndexOf('&', scopeStart);
+        var scopeEnd = url.IndexOf('&', scopeStart, StringComparison.Ordinal);
         if (scopeEnd < 0)
             scopeEnd = url.Length;
 

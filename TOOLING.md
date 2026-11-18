@@ -2,7 +2,7 @@
 
 ## Runtime and Build
 
-- `.NET SDK`: pinned by `global.json` (currently .NET 10 line)
+- `.NET SDK`: pinned by `global.json` (currently .NET 11 line)
 - `dotnet` CLI: build, test, run, restore, local tool execution
 - local tools configured in `.config/dotnet-tools.json`
 - solution scaffold: `Netclaw.slnx` with `src/Akka.Agents` and
@@ -68,7 +68,7 @@ The table retains earlier group measurements. Gate notes below describe later ad
 | `authorization-and-directory` | `tool-authorization` (5.8), `approval-directory` (5.2) | 11.3 |
 | `guard-and-authority` | `skill-manage-guard` (4.6), `no-program` (5.1), `input-one-authority` (3.2), `skill-remove` (2.0 local; hosted cost pending) | About 15.3 with the local addition |
 | `shell-consent` | `shell-once-identity` (2.3 local), `compound-redirect` (2.2 local), `thinking-settings` (74 mutants, three invocations, 6.8 local) | 11.3 local; hosted time pending |
-| `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9), `secrets-plaintext-leaf` (8 mutants, one invocation, 2 to 3, estimate) | 10 to 11 (estimate) |
+| `stop-proof` | `stop-proof` (81 mutants, two invocations, 6.9), `secrets-plaintext-leaf` (9 mutants, one invocation, 2 to 3, estimate) | 10 to 11 (estimate) |
 | `shell-command-analysis-a` | 131 Security mutants and 27 Actors mutants | [11m28s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616567) |
 | `shell-command-analysis-b` | 198 Security mutants | Prior 172-mutant run: [11m03s](https://github.com/netclaw-dev/netclaw/actions/runs/40006783408/job/120596616477) |
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
@@ -182,6 +182,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `HeadlessChannel` stop rule (`EndsRun`) | `netclaw chat -p` ends a run only on a failed turn or on the first completed turn that reports no open child run; a skipped turn with an open run and a turn with one of two open runs each get the right decision (SPEC-004, "Waiting for child runs"). The gate does not cover the missing-field case: `SessionOutputDtoMapper.FromDto` maps a missing field to an empty list, outside the mutated span, and ordinary tests cover it | 3 killed | `./scripts/run-headless-stop-rule-mutations.sh` |
 | `SessionState.GetOpenChildRunIds` and `SessionState.GetExecutableChildRuns` | The list in `TurnCompleted.OpenChildRunIds` holds every run that has no notice, or whose notice input is still pending, and no run that the legacy reader quarantined, in acceptance order. A run missing from the list ends a headless run early and loses the child result. A run that stays in the list makes the run wait for ever (SPEC-004, "Waiting for child runs") | 4 killed | `./scripts/run-open-child-runs-mutations.sh` |
 | `SecretsFileWriter.IsPlaintextLeaf` and `SecretsFileWriter.ShouldEncrypt` (`// <secrets-plaintext-leaf>`) | secrets.json encrypts every string leaf except `Providers.<name>.OAuthTokenExpiry`, a path of exactly three segments that matches without case. A mutant that encrypts the date stops the daemon at startup. A mutant that skips another leaf leaves a credential unencrypted at rest | 8 killed | `./scripts/run-secrets-plaintext-leaf-mutations.sh` |
+| `DaemonConfigurationSources.AddNetclawJsonFile` optional-file expression | A dangling file passed to this helper must fail instead of loading defaults. Missing files remain optional | 1 killed | `./scripts/run-secrets-plaintext-leaf-mutations.sh` |
 | `SessionToolWorkflow.IsChildConsentPaused`, `SessionToolWorkflow.RefusesChildStart`, the pause hold of `SessionToolWorkflow.PlanNewInputAbandonment`, the pause rules of the `SessionInputFlow.DrainBufferedBatch` drain (`PassesPause`, `IsHeldByPause`, `MoveHeldInputBehind`), the hold rule `ChildConsentPause.Holds` that the drain and the recovery share, and `TurnContext.IsChildConsentNotice` | Design D5 of child-approval-events-and-parent-pause: an open child consent request pauses the session, and an answered request does not. While paused, a `spawn_agent` start is refused and a slash start of a person is accepted; automated input and a child result notice wait in Ready and in the drain, never join a running turn, and run after the last close; a person input runs; a replay continues its turn. An approval notice needs the principal `VerifiedAutomation`, the authenticity `LocalProcess`, and the source kind and sender `child-consent`, so a webhook cannot pose as one; a notice is never held, never joins a turn, and nothing joins a notice turn | 36 killed | `./scripts/run-child-consent-mutations.sh` |
 | The guard of `SessionToolWorkflow.TryResolveTextResponse` and the count rule of `PendingApprovalLookup.Resolve` | Design D7 of child-approval-events-and-parent-pause: when a child prompt is among two or more prompts that the sender can answer, a text answer resolves none, and the session and the channel tell the sender to use the buttons; text that answers no prompt keeps the option-unavailable reply; with parent prompts only, the session resolves the latest prompt and the channels the earliest | 15 killed | `./scripts/run-text-answer-guard-mutations.sh` |
 | `TurnContext.HasSameRequester`, `SessionState.RequireNoticeRun`, restart-resume partition, `TurnContext.CanControlChildRunOf`, reminder report and retry state, child approval close, and the continuing-turn notice scan in `SessionInputFlow` | These targets protect child ownership, notice admission, restart order, child control, one-time reminder reports, retry links, and approval cleanup. The continuing-turn scan skips a queued notice while it finds a replay or owner input. | 74 killed | `./scripts/run-child-owner-and-report-mutations.sh` |
@@ -501,6 +502,8 @@ The script selects the policy in `SecretsFileWriter.cs` between `// <secrets-pla
 `// </secrets-plaintext-leaf>`. The span holds `IsPlaintextLeaf` and `ShouldEncrypt`. The selector
 rejects a missing or repeated marker before Stryker starts. It runs one Stryker invocation, with
 `Netclaw.Actors.MutationTests` as the test project and `Netclaw.Configuration.csproj` as the mutated project.
+The same invocation also selects the optional-file expression in `DaemonConfigurationSources.cs`.
+The gate requires the link-check inversion to be killed. It rejects a missing mutant.
 
 `SecretsFileWriter` encrypts every string leaf of secrets.json except `Providers.<name>.OAuthTokenExpiry`.
 The configuration binder reads that leaf as a date and cannot read ciphertext. The path must have exactly
@@ -513,7 +516,7 @@ three segments, and the segments match without case. `SecretsPlaintextLeafMutati
 
 Stryker makes eight mutants in the span: the length check, the early `return false`, the `&&`, two
 string literals, the `||` in `ShouldEncrypt`, and two removals of `!`. The gate fails for a survivor, a compile
-error, or a mutant outside the span. The count test sits in its own statement. Stryker rolls back a whole
+error, or an unexpected tested mutant. The count test sits in its own statement. Stryker rolls back a whole
 statement when its `Count()` to `Sum()` mutant does not compile, and a count test inside one expression
 would lose the length mutant.
 

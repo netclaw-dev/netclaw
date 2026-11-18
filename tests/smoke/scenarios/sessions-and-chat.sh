@@ -10,7 +10,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seed_and_start_daemon
 
 log "Sending a headless prompt to create a session..."
-nc chat -p "Say hello in one word" || true
+if first_output="$(nc chat -p "Say hello in one word")"; then
+  echo "$first_output"
+  if [[ "$first_output" == *"Netclaw smoke response."* ]]; then
+    pass "headless chat: returned the smoke model response"
+  else
+    fail "headless chat: expected the smoke model response"
+  fi
+else
+  fail "headless chat: command failed"
+fi
 
 log "Checking session catalog via REST API..."
 sessions_output="$(run_timed "$STEP_TIMEOUT_SECONDS" curl -fsS "${DAEMON_BASE_URL}/api/sessions" 2>/dev/null || true)"
