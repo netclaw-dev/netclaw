@@ -917,6 +917,43 @@ Leaks today:
   (`PendingApprovalLookup`) and the session workflow. The text answer guard has
   the same two layers.
 
+`ChannelSessionBindingActor<TPromptId>` owns the Slack, Discord, and Mattermost prompt projections, replay, and shared approval flow.
+The provider actor supplies transport operations and typed message handlers.
+The common actor keeps one actor-local prompt list and the existing durable prompt events.
+It does not add a journal event or a journal write.
+
+Each provider actor owns its ordered live admission path.
+It calls common gate and classifier operations at the required point, prepares attachments, and constructs a complete `ChannelInput`.
+The input retains its actual contents, target, principal, provenance, and executable-text boundary.
+`PrepareLiveInputAsync` owns the common deferred-history state. `WriteLiveInputAsync` owns queue admission and the pending cursor update.
+The provider creates the write deadline after history work. Slack links that deadline to its inbound deadline.
+Discord and Mattermost retain their independent write deadline.
+The common actor keeps its pipeline handle, cursor, hydration flags, and delivery failure state private.
+
+The conversation actor applies its existing ACL before this schematic flow:
+
+```text
+Discord and Mattermost:
+  restart gate -> text approval -> scan -> queue check -> contents -> deferred history -> enqueue
+Slack:
+  text approval -> scan -> contents -> restart gate -> queue and stale checks -> deferred history -> enqueue
+```
+
+The schematic omits timeout, empty-content, and transport details. Each provider entrypoint preserves those steps and their required order.
+The common actor selects no provider policy through a channel identity check.
+An accepted input keeps its original principal and provenance.
+A detector rejection adds no input to the queue.
+
+The common actor checks a trusted turn's session identity before it checks ingress or offers the input to the queue.
+It copies the original source authority and uses the original sender as the acknowledgement target.
+The session acknowledges durable admission. A queue write alone does not prove durable admission.
+An allowed reminder keeps its principal and delivery target.
+A wrong-session reminder receives a Nack and adds no input.
+
+Transport operations return a complete success or failure result.
+The common actor holds the first failed output result until the completed turn.
+A notice does not change the active turn's delivery result.
+
 `SessionToolWorkflow` owns the session-local approval records, live wait channel, active batch tracker, and temporary correction state.
 It validates the original requester and offered answer. It selects which unanswered calls can resume after recovery.
 `SessionInputFlow` retains the current turn context. The workflow retains the original authority for each unresolved prompt.

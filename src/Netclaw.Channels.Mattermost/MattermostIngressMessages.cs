@@ -8,7 +8,6 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Tools;
-using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels.Mattermost;
 
@@ -54,23 +53,3 @@ public sealed record StartMattermostProactiveThread(
     MattermostUserId? DirectMessageUserId = null) : INoSerializationVerificationNeeded;
 
 public sealed record MattermostProactiveThreadAck(SessionId SessionId) : INoSerializationVerificationNeeded;
-
-internal sealed class PendingApprovalRequest : Netclaw.Channels.PendingApprovalRequest<MattermostPostId>
-{
-    public PendingApprovalRequest(ToolInteractionRequest request) : base(request)
-    {
-    }
-
-    public PendingApprovalRequest(
-        ToolCallId callId,
-        string? requesterSenderId,
-        PrincipalClassification? requesterPrincipal,
-        IReadOnlyList<string> optionKeys,
-        MattermostPostId? promptPostId,
-        ToolInteractionLifetime lifetime,
-        string? toolName = null,
-        string? displayText = null)
-        : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptPostId, lifetime, toolName, displayText)
-    {
-    }
-}
