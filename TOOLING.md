@@ -147,6 +147,17 @@ The 2026-10-23 local run took 2 minutes 18 seconds and killed its one selected s
 Add a gate to the lightest group when its measured cost fits the timeout and the Windows test duration.
 Use another group under the same job definition when no existing group has that capacity.
 
+The `session-binding` gate uses the xUnit v3 contract suite and one Stryker worker.
+Its command supplies Stryker 5's selector variable across xUnit's child-process boundary.
+The 2026-11-18 local run took 1 minute 58 seconds and killed the one selected identity mutant.
+A direct source inversion also failed the intended authority assertion.
+The corrected gate also selects the common output-lifetime predicate.
+Its four equality and conjunction mutants must execute and die. The actor-incarnation and failed-replacement cases supply that proof.
+The corrected warm local invocation takes 3 minutes 46 seconds and kills all five selected mutants.
+That duration includes Stryker analysis, build, instrumentation, and test execution. It does not measure a cold hosted runner.
+Hosted CI must verify the combined group cost before acceptance.
+The gate runs in `loopback-host-origin`. Hosted CI must verify the group's cost within the current budget.
+
 Focused mutation tests prove that deterministic tests reject a specific unsafe
 change at a security, authority, or load-bearing reliability boundary. They do not measure general code
 coverage. They do not replace positive and negative behavior tests.
@@ -155,6 +166,8 @@ coverage. They do not replace positive and negative behavior tests.
 
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
+| `ChannelSessionBindingActor.HandleTrustedReminderAsync` session comparison | A trusted turn for another session receives a Nack before the ingress check or queue write. The selected contract also checks closed ingress, unchanged source authority, and the original acknowledgement target. | 1 killed | `./scripts/run-session-binding-mutations.sh` |
+| `ChannelSessionBindingActor.IsCurrentPipeline` incarnation, initialized state, and generation | Old output and termination cannot affect a replacement, a failed replacement, or a fresh actor incarnation. The controlled drain case rejects old text before transport effects. | 4 killed | `./scripts/run-session-binding-mutations.sh` |
 | `SkillCommand.RunRemoveAsync` source, local endpoint, file boundary, and directory boundary | Removal requires a known native source, the local daemon, and two paths within the skills root without links below it. | 5 required | `./scripts/run-skill-remove-mutations.sh` |
 | `ChatClientActor.Start` (`// chat-close-dispatch-expiry:begin` to `end`) | Issue #2642, PRD-004: a held bind reply permits text dispatch at 1.5 seconds after Close, but refuses it at two seconds | 2 killed | `./scripts/run-chat-close-dispatch-expiry-mutations.sh` |
 | `PathAccessPolicy.AddSessionRoots`, `PathAccessPolicy.IsReadableByAudience`, `PathAccessPolicy.GetEffectiveAccess`, `PathAccessPolicy.IsInOtherTemporaryKeyFolder`, and `ManagedTemporaryEnvironment.CheckFolder` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected; issue #2554: a Personal read or attach follows the write profile and no other audience, operation, or write mode does (write `All` gives `All`, write `Roots` adds its roots, write `None` adds nothing, and a read profile of mode `All` stays `All`); the managed temporary key folder is a session root and the shared base is not; a Team or Public root over the base does not reach another key folder; the shell launch is refused when the base or the key folder is missing, a link, owned by another user, or open to a group or others | 30 killed | `./scripts/run-path-access-mutations.sh` |

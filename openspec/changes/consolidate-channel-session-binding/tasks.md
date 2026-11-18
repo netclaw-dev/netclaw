@@ -18,13 +18,13 @@
 
 - [x] 3.1 If the reproduction confirms the hazard, reject obsolete output before effects and verify replacement, failed replacement, and actor-incarnation cases.
 - [x] 3.2 Apply Akka analysis before concurrency analysis and verify each accepted race correction with deterministic observations.
-- [ ] 3.3 Review focused mutation scope, retain the identity gate, and add a narrow reliability target only when its intended unsafe mutation fails deterministically.
-- [ ] 3.4 Run the combined provider and appropriate handle-consumer suites, Slopwatch, headers, whitespace, and strict OpenSpec checks.
+- [x] 3.3 Review focused mutation scope, retain the identity gate, and add a narrow reliability target only when its intended unsafe mutation fails deterministically.
+- [x] 3.4 Run the combined provider and appropriate handle-consumer suites, Slopwatch, headers, whitespace, and strict OpenSpec checks.
 
 ## 4. Deliver the corrected stack
 
-- [ ] 4.1 Update canonical owner documentation and the test assertion map, then verify them against the actual final source.
-- [ ] 4.2 Report net production, test, support, and total line accounts without a runtime-speed claim.
-- [ ] 4.3 Update existing dependent PRs through actual gh stack commands and verify every combined slice and its standalone description.
+- [x] 4.1 Update canonical owner documentation and the test assertion map, then verify them against the actual final source.
+- [x] 4.2 Report net production, test, support, and total line accounts without a runtime-speed claim.
+- [x] 4.3 Update existing dependent PRs through actual gh stack commands and verify every combined slice and its standalone description.
 - [ ] 4.4 Complete independent final source review and current-head hosted checks with no merge, queue, or auto-merge request.
 - [ ] 4.5 Verify the final task and design evidence and retain the review handoff.
