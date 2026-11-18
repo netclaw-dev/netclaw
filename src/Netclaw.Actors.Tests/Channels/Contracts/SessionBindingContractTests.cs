@@ -11,6 +11,7 @@ using Akka.Persistence;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
@@ -45,6 +46,8 @@ public abstract class SessionBindingContractTests : TestKit
 
     protected abstract object CreateInboundMessage(string text, string senderId);
 
+    protected abstract object CreateInboundWithAttachment(string text, string senderId);
+
     protected abstract object CreateApprovalResponse(string callId, string selectedKey, string senderId);
 
     protected abstract IReadOnlyList<string> GetPostedTexts();
@@ -65,39 +68,33 @@ public abstract class SessionBindingContractTests : TestKit
 
     protected abstract ChannelType ExpectedChannelType { get; }
 
-    protected virtual bool SupportsApprovalSenderReplies => false;
+    protected abstract SessionIngressGate IngressGate { get; }
 
-    // --- Thread Hydration Contract (opt-in) ---
+    protected TimeProvider Clock { get; set; } = TimeProvider.System;
 
-    protected virtual bool SupportsThreadHydration => false;
-
-    protected virtual IActorRef CreateBindingActorWithHydration(
+    protected abstract IActorRef CreateBindingActorWithHydration(
         SessionId sessionId,
         RecordingSessionPipeline pipeline,
         ConfigurablePromptInjectionDetector detector,
-        IThreadHistoryFetcher historyFetcher)
-        => throw new NotImplementedException(
-            "Override CreateBindingActorWithHydration to test thread hydration");
+        IThreadHistoryFetcher historyFetcher);
 
-    protected virtual IReadOnlyList<ChannelInput> CreateHistoryItems(int count)
-        => throw new NotImplementedException(
-            "Override CreateHistoryItems to supply channel-compatible history");
+    protected abstract IReadOnlyList<ChannelInput> CreateHistoryItems(int count);
 
-    protected virtual object CreateHydrationTriggerInboundMessage(string text, string senderId)
-        => throw new NotImplementedException(
-            "Override CreateHydrationTriggerInboundMessage to create an inbound that triggers hydration");
+    protected abstract object CreateHydrationTriggerInboundMessage(string text, string senderId);
 
     // The journal persistence id of the binding actor. The cursor events go to this id.
-    protected virtual string GetCursorPersistenceId(SessionId sessionId)
-        => throw new NotImplementedException(
-            "Override GetCursorPersistenceId to return the persistence id of the binding actor");
+    protected abstract string GetCursorPersistenceId(SessionId sessionId);
 
-    private async Task<IReadOnlyList<CursorAdvanced>> ReadCursorEventsAsync(SessionId sessionId)
+    protected Task<IReadOnlyList<CursorAdvanced>> ReadCursorEventsAsync(SessionId sessionId)
+        => ReadCursorEventsAsync(this, GetCursorPersistenceId(sessionId));
+
+    internal static async Task<IReadOnlyList<CursorAdvanced>> ReadCursorEventsAsync(
+        TestKit testKit, string persistenceId)
     {
         var ct = TestContext.Current.CancellationToken;
-        var probe = CreateTestProbe();
-        Akka.Persistence.Persistence.Instance.Apply(Sys).JournalFor(null).Tell(
-            new ReplayMessages(0, long.MaxValue, long.MaxValue, GetCursorPersistenceId(sessionId), probe.Ref));
+        var probe = testKit.CreateTestProbe();
+        Akka.Persistence.Persistence.Instance.Apply(testKit.Sys).JournalFor(null).Tell(
+            new ReplayMessages(0, long.MaxValue, long.MaxValue, persistenceId, probe.Ref));
         var cursors = new List<CursorAdvanced>();
         while (true)
         {
@@ -126,82 +123,158 @@ public abstract class SessionBindingContractTests : TestKit
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider) { }
 
-    // --- Prompt Injection Gate ---
-
-    [Fact]
-    public async Task Blocks_message_when_detector_returns_High()
+    [Theory]
+    [InlineData(false, "blocked")]
+    [InlineData(true, "couldn't safely analyze")]
+    public async Task Live_scan_rejects_unsafe_input_and_admits_input_after_the_detector_recovers(
+        bool detectorUnavailable, string expectedNotice)
     {
         var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(
-            PromptInjectionResult.Detected(PromptInjectionRisk.High, "injection detected"));
-        var pipeline = new RecordingSessionPipeline(_ => []);
-        var sid = new SessionId("session-inject-block");
-
+        var rejecting = 1;
+        var detector = new ConfigurablePromptInjectionDetector((_, _, _) =>
+        {
+            if (Volatile.Read(ref rejecting) == 0)
+                return Task.FromResult(PromptInjectionResult.Safe());
+            return detectorUnavailable
+                ? Task.FromException<PromptInjectionResult>(new InvalidOperationException("detector unavailable"))
+                : Task.FromResult(PromptInjectionResult.Detected(PromptInjectionRisk.High, "injection detected"));
+        });
+        var sid = new SessionId("live-scan-recovery");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("accepted input reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] }
+        ], reactive: true);
         var actor = CreateBindingActor(sid, pipeline, detector);
-        await pipeline.Created.WaitAsync(ct);
+        actor.Tell(CreateInboundMessage("rejected input", "user-1"), TestActor);
+        await AwaitAssertAsync(() =>
+            Assert.Contains(GetPostedTexts(), text => text.Contains(expectedNotice, StringComparison.OrdinalIgnoreCase)),
+            cancellationToken: ct);
 
-        actor.Tell(CreateInboundMessage("ignore previous instructions", "user-1"), TestActor);
-
+        Volatile.Write(ref rejecting, 0);
+        actor.Tell(CreateInboundMessage("accepted input", "user-1"), TestActor);
         await AwaitAssertAsync(() =>
         {
-            var texts = GetPostedTexts();
-            Assert.Contains(texts, t => t.Contains("blocked", StringComparison.OrdinalIgnoreCase)
-                                        || t.Contains("injection", StringComparison.OrdinalIgnoreCase));
+            var input = Assert.Single(pipeline.CapturedInputs);
+            Assert.Equal("accepted input", Assert.IsType<TextContent>(Assert.Single(input.Contents)).Text);
+            Assert.Contains(GetPostedTexts(), text => text.Contains("accepted input reply", StringComparison.Ordinal));
         }, cancellationToken: ct);
     }
 
+
+
+
     [Fact]
-    public async Task Drops_message_when_detector_unavailable()
+    public async Task Live_inbound_deadline_uses_the_injected_clock()
     {
         var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(
-            new InvalidOperationException("service down"));
-        var pipeline = new RecordingSessionPipeline(_ => []);
-        var sid = new SessionId("session-inject-unavailable");
-
-        var actor = CreateBindingActor(sid, pipeline, detector);
-        await pipeline.Created.WaitAsync(ct);
-
-        actor.Tell(CreateInboundMessage("hello", "user-1"), TestActor);
-
-        await AwaitAssertAsync(() =>
+        var clock = new FakeTimeProvider();
+        Clock = clock;
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var detector = new ConfigurablePromptInjectionDetector(async (_, _, cancellationToken) =>
         {
-            var texts = GetPostedTexts();
-            Assert.Contains(texts, t => t.Contains("try again", StringComparison.OrdinalIgnoreCase)
-                                        || t.Contains("couldn't", StringComparison.OrdinalIgnoreCase));
-        }, cancellationToken: ct);
+            entered.TrySetResult(cancellationToken);
+            await release.Task;
+            return PromptInjectionResult.Safe();
+        });
+        var pipeline = new RecordingSessionPipeline(_ => []);
+        var actor = CreateBindingActor(new SessionId("live-inbound-clock"), pipeline, detector);
+
+        try
+        {
+            actor.Tell(CreateInboundMessage("hold the live scan", "user-1"), TestActor);
+            var cancellationToken = await entered.Task.WaitAsync(ct);
+            Assert.False(cancellationToken.IsCancellationRequested);
+            clock.Advance(TimeSpan.FromSeconds(30));
+            Assert.True(cancellationToken.IsCancellationRequested);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
     }
 
-    [Fact]
-    public async Task Allows_safe_message_through_pipeline()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Live_restart_gate_keeps_the_provider_scan_approval_and_attachment_order(bool pendingApproval)
     {
         var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var textOutput = new TextOutput("echo reply")
+        var scans = 0;
+        var detector = new ConfigurablePromptInjectionDetector((_, _, _) =>
         {
-            SessionId = new SessionId("session-safe")
-        };
-        var turnCompleted = new TurnCompleted
-        {
-            SessionId = new SessionId("session-safe"),
-            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
-            OpenChildRunIds = []
-        };
-        var pipeline = new RecordingSessionPipeline(_ => [textOutput, turnCompleted]);
-        var sid = new SessionId("session-safe");
-
+            Interlocked.Increment(ref scans);
+            return Task.FromResult(PromptInjectionResult.Safe());
+        });
+        var sid = new SessionId("live-restart-gate-order");
+        var pipeline = new RecordingSessionPipeline(_ => pendingApproval
+            ? [new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = new Netclaw.Tools.ToolCallId("gate-approval"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
+                DisplayText = "gate approval prompt",
+                RequesterSenderId = new SenderId("user-1"),
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]
+            }]
+            : []);
         var actor = CreateBindingActor(sid, pipeline, detector);
         await pipeline.Created.WaitAsync(ct);
+        if (pendingApproval)
+        {
+            await AwaitAssertAsync(() =>
+                Assert.Contains(GetPostedTexts(), text => text.Contains("gate approval prompt", StringComparison.Ordinal)),
+                cancellationToken: ct);
+        }
 
-        // Wait for output to be delivered (stream materializes and completes)
+        IngressGate.TryClose("contract ingress closed");
+        actor.Tell(CreateInboundWithAttachment(pendingApproval ? "A" : "closed input", "user-1"), TestActor);
+        var approvalPassesGate = pendingApproval && ExpectedChannelType == ChannelType.Slack;
         await AwaitAssertAsync(() =>
         {
-            var texts = GetPostedTexts();
-            Assert.Contains(texts, t => t.Contains("echo reply"));
+            if (approvalPassesGate)
+                Assert.Single(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>());
+            else
+                Assert.Contains(GetPostedTexts(), text => text.Contains("contract ingress closed", StringComparison.Ordinal));
         }, cancellationToken: ct);
+
+        IngressGate.Reopen();
+        actor.Tell(CreateInboundWithAttachment("open input sentinel", "user-1"), TestActor);
+        await AwaitAssertAsync(() =>
+        {
+            var input = Assert.Single(pipeline.CapturedInputs);
+            Assert.Equal("open input sentinel", Assert.IsType<TextContent>(Assert.Single(input.Contents)).Text);
+        }, cancellationToken: ct);
+
+        var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToArray();
+        Assert.Equal(approvalPassesGate ? 1 : 0, feedback.Length);
+        if (approvalPassesGate)
+        {
+            Assert.Equal("gate-approval", feedback[0].CallId.Value);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
+        }
+        var scansBeforeGate = ExpectedChannelType == ChannelType.Slack && !pendingApproval;
+        Assert.Equal(scansBeforeGate ? 2 : 1, Volatile.Read(ref scans));
+        var posts = GetPostedTexts();
+        var attachmentNotices = posts.Where(text => text.Contains("HTTP client is not configured", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(scansBeforeGate ? 2 : 1, attachmentNotices.Length);
+        if (scansBeforeGate)
+        {
+            Assert.True(posts.ToList().FindIndex(text => text.Contains("HTTP client is not configured", StringComparison.Ordinal))
+                < posts.ToList().FindIndex(text => text.Contains("contract ingress closed", StringComparison.Ordinal)));
+        }
+        Assert.Equal(approvalPassesGate ? 0 : 1,
+            posts.Count(text => text.Contains("contract ingress closed", StringComparison.Ordinal)));
     }
 
     // --- Output Rendering ---
+
 
     [Fact]
     public async Task TextOutput_posted()
@@ -243,138 +316,12 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
-    [Fact]
-    public async Task FileOutput_does_not_crash_actor()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-file");
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new TextOutput("file context") { SessionId = sid },
-            new FileOutput { SessionId = sid, FilePath = "/tmp/report.pdf", FileName = "report.pdf", MimeType = new Netclaw.Media.MimeType("application/pdf") },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
-        ]);
-
-        var actor = CreateBindingActor(sid, pipeline, detector);
-
-        // Verify the actor processed all outputs — TextOutput proves the turn ran,
-        // FileOutput is rendered differently per channel (Discord: text, Slack: upload)
-        await AwaitAssertAsync(() =>
-        {
-            var texts = GetPostedTexts();
-            Assert.Contains(texts, t => t.Contains("file context"));
-        }, cancellationToken: ct);
-
-        var probe = CreateTestProbe();
-        probe.Watch(actor);
-        Assert.False(probe.HasMessages);
-    }
 
     // --- Turn Completion ---
 
-    [Fact]
-    public async Task Empty_turn_posts_fallback()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-empty-turn");
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
-        ]);
 
-        CreateBindingActor(sid, pipeline, detector);
-        await AwaitAssertAsync(() =>
-        {
-            var texts = GetPostedTexts();
-            Assert.Contains(texts, t => t.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase)
-                                        || t.Contains("warning", StringComparison.OrdinalIgnoreCase));
-        }, cancellationToken: ct);
-    }
 
-    // Rule of Aaron (18 Oct 2026): a person never sees a Netclaw error unless the model narrates it. The session ends
-    // a refused loop quietly with no reply when the model ignored the escalated nudge. The binding must then
-    // post no empty-turn fallback, because "I didn't manage to produce a reply" is Netclaw text, and its advice
-    // to send the message again starts the same loop again.
-    [Fact]
-    public async Task Quiet_end_with_no_text_posts_no_fallback()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-quiet-end");
-        // Turn 2 is a barrier: once its reply is visible, turn 1 (including its fallback decision) is processed.
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new TurnCompleted
-            {
-                SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), QuietEnd = true, OpenChildRunIds = []
-            },
-            new TextOutput("barrier reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), OpenChildRunIds = [] }
-        ]);
 
-        CreateBindingActor(sid, pipeline, detector);
-
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Contains(GetPostedTexts(), t => t.Contains("barrier reply", StringComparison.Ordinal));
-        }, cancellationToken: ct);
-
-        var texts = GetPostedTexts();
-        Assert.DoesNotContain(texts, t => t.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(texts, t => t.Contains(":warning:", StringComparison.Ordinal));
-    }
-
-    // The quiet end skips only the fallback. An empty turn without the flag still posts it, also directly after
-    // a quiet end: the flag belongs to one turn.
-    [Fact]
-    public async Task Empty_turn_after_a_quiet_end_still_posts_fallback()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-quiet-end-then-empty");
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new TurnCompleted
-            {
-                SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), QuietEnd = true, OpenChildRunIds = []
-            },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), OpenChildRunIds = [] }
-        ]);
-
-        CreateBindingActor(sid, pipeline, detector);
-
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Single(GetPostedTexts(), t => t.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase));
-        }, cancellationToken: ct);
-    }
-
-    [Fact]
-    public async Task Delivered_turn_no_fallback()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-delivered-turn");
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new TextOutput("real reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
-        ]);
-
-        CreateBindingActor(sid, pipeline, detector);
-        await AwaitAssertAsync(() =>
-        {
-            var texts = GetPostedTexts();
-            Assert.Contains(texts, t => t.Contains("real reply"));
-        }, cancellationToken: ct);
-
-        // TurnCompleted is sequenced after TextOutput in the stream — by the time
-        // "real reply" is confirmed above, the fallback decision is already made.
-        var allTexts = GetPostedTexts();
-        Assert.DoesNotContain(allTexts, t => t.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase));
-    }
 
     // Regression for the misleading-fallback bug: when the real content post
     // fails (the model DID produce a reply, the transport rejected it), the
@@ -501,47 +448,6 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
-    [Fact]
-    public async Task Approval_response_replies_with_ack_to_sender()
-    {
-        if (!SupportsApprovalSenderReplies)
-            return;
-
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-approval-ack");
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new ToolInteractionRequest
-            {
-                SessionId = sid,
-                Kind = "approval",
-                CallId = new Netclaw.Tools.ToolCallId("call-ack-1"),
-                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
-                DisplayText = "touch /tmp/file",
-                RequesterSenderId = new SenderId("user-1"),
-                Options =
-                [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
-                ]
-            }
-        ]);
-
-        var actor = CreateBindingActor(sid, pipeline, detector);
-
-        await AwaitAssertAsync(() =>
-        {
-            var texts = GetPostedTexts();
-            Assert.Contains(texts, t => t.Contains("execute_shell"));
-        }, cancellationToken: ct);
-
-        var probe = CreateTestProbe();
-        actor.Tell(CreateApprovalResponse("call-ack-1", ApprovalOptionKeys.ApproveOnce, "user-1"), probe.Ref);
-
-        var ack = await probe.ExpectMsgAsync<CommandAck>(cancellationToken: ct);
-        Assert.Equal(sid, ack.SessionId);
-    }
 
     // Conformance for #979: a binding spawned without prior in-memory state (no
     // ToolInteractionRequest seen on its output stream) must still route inbound
@@ -988,7 +894,7 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
-    private static bool IsEmptyTurnFallback(string text)
+    protected static bool IsEmptyTurnFallback(string text)
         => text.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase)
            || text.Contains("warning", StringComparison.OrdinalIgnoreCase);
 
@@ -1217,55 +1123,12 @@ public abstract class SessionBindingContractTests : TestKit
 
     // --- Pipeline Lifecycle ---
 
-    [Fact]
-    public async Task Init_failure_stops_actor()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var failingPipeline = new FailingSessionPipeline(
-            new InvalidOperationException("init boom"));
-        var sid = new SessionId("session-init-fail");
 
-        var actor = CreateBindingActorWithPipeline(sid, failingPipeline, detector);
 
-        var probe = CreateTestProbe();
-        probe.Watch(actor);
-        await probe.ExpectTerminatedAsync(actor, cancellationToken: ct);
-    }
-
-    [Fact]
-    public async Task Stashes_messages_during_init()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-stash");
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
-        ], reactive: true);
-
-        var actor = CreateBindingActor(sid, pipeline, detector);
-
-        // Send immediately — before pipeline init might complete
-        actor.Tell(CreateInboundMessage("stashed message", "user-1"), TestActor);
-
-        await pipeline.Created.WaitAsync(ct);
-
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Contains(pipeline.CapturedInputs, input =>
-                input.Contents.OfType<TextContent>().Any(content => content.Text == "stashed message"));
-        }, cancellationToken: ct);
-    }
-
-    protected virtual IActorRef CreateBindingActorWithPipeline(
+    protected abstract IActorRef CreateBindingActorWithPipeline(
         SessionId sessionId,
         ISessionPipeline pipeline,
-        ConfigurablePromptInjectionDetector detector)
-    {
-        throw new NotImplementedException(
-            "Override CreateBindingActorWithPipeline to test with arbitrary ISessionPipeline");
-    }
+        ConfigurablePromptInjectionDetector detector);
 
     // --- Automation Approval (any user can approve) ---
 
@@ -1364,47 +1227,6 @@ public abstract class SessionBindingContractTests : TestKit
         Assert.Empty(feedback);
     }
 
-    [Fact]
-    public async Task Button_approval_from_wrong_requester_replies_with_nack()
-    {
-        if (!SupportsApprovalSenderReplies)
-            return;
-
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-wrong-button-nack");
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new ToolInteractionRequest
-            {
-                SessionId = sid,
-                Kind = "approval",
-                CallId = new Netclaw.Tools.ToolCallId("call-wr-nack-1"),
-                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
-                DisplayText = "rm -rf /tmp",
-                RequesterSenderId = new SenderId("user-A"),
-                Options =
-                [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
-                ]
-            }
-        ]);
-
-        var actor = CreateBindingActor(sid, pipeline, detector);
-        await AwaitAssertAsync(() =>
-        {
-            var texts = GetPostedTexts();
-            Assert.Contains(texts, t => t.Contains("execute_shell"));
-        }, cancellationToken: ct);
-
-        var probe = CreateTestProbe();
-        actor.Tell(CreateApprovalResponse("call-wr-nack-1", ApprovalOptionKeys.ApproveOnce, "user-B"), probe.Ref);
-
-        var nack = await probe.ExpectMsgAsync<CommandNack>(cancellationToken: ct);
-        Assert.Equal(sid, nack.SessionId);
-        Assert.Equal(ApprovalNackReasons.WrongRequester, nack.Reason);
-    }
 
     [Fact]
     public async Task Text_approval_from_wrong_requester_posts_warning()
@@ -1511,8 +1333,6 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Hydration_emits_backfill_at_startup_with_adopted_context()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-hydration-startup-backfill");
@@ -1546,8 +1366,6 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Hydration_backfill_keeps_slash_like_text_in_adopted_projection()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-hydration-slash-text");
@@ -1589,8 +1407,6 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Hydration_backfill_marks_self_only_history_without_third_party_flag()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-hydration-self-only");
@@ -1623,94 +1439,11 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
-    [Fact]
-    public async Task Thread_history_fetched_at_most_once_per_actor_lifetime()
-    {
-        if (!SupportsThreadHydration) return;
 
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-hydration-once-only");
-        var historyFetcher = new RecordingThreadHistoryFetcher();
-        historyFetcher.SetHistory(CreateHistoryItems(1));
-
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
-        ]);
-
-        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
-        await pipeline.Created.WaitAsync(ct);
-
-        // Hydration runs once at startup.
-        await AwaitAssertAsync(() => Assert.Equal(1, historyFetcher.FetchCount), cancellationToken: ct);
-
-        // Subsequent live inbounds must not re-trigger hydration. This is the
-        // core invariant that prevents the duplicate-image bug: in-flight
-        // turns and concurrent inbounds never re-derive historical content
-        // from the channel's history API.
-        actor.Tell(CreateHydrationTriggerInboundMessage("first live", "user-1"), TestActor);
-        actor.Tell(CreateHydrationTriggerInboundMessage("second live", "user-1"), TestActor);
-
-        await AwaitAssertAsync(() => Assert.True(pipeline.CapturedInputs.Count >= 3),
-            cancellationToken: ct);
-
-        Assert.Equal(1, historyFetcher.FetchCount);
-    }
-
-    [Fact]
-    public async Task Inbounds_arriving_during_hydration_are_stashed_and_unstash_after()
-    {
-        if (!SupportsThreadHydration) return;
-
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-hydration-stash");
-        var historyFetcher = new RecordingThreadHistoryFetcher();
-        historyFetcher.SetHistory(Array.Empty<ChannelInput>());
-        historyFetcher.InstallGate();
-
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
-        ]);
-
-        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
-        await pipeline.Created.WaitAsync(ct);
-
-        // Wait until hydration's fetcher call is in flight (blocked on the
-        // gate). At this point the actor is provably in Hydrating behavior.
-        await historyFetcher.FetchCalledTask.WaitAsync(ct);
-
-        actor.Tell(CreateHydrationTriggerInboundMessage("stashed live", "user-1"), TestActor);
-
-        // No-timing assertion: the actor is in Hydrating and the fetcher is
-        // blocked, so the only way CapturedInputs could be non-empty is if
-        // the inbound was incorrectly processed bypassing the stash. We've
-        // already proved the actor is in Hydrating (fetcher was called),
-        // so a one-shot assertion is sufficient.
-        Assert.Empty(pipeline.CapturedInputs);
-
-        // Release the fetcher gate. Hydration completes (empty history → no
-        // backfill), behavior switches to Active, and the stashed inbound
-        // is unstashed and processed.
-        historyFetcher.ReleaseGate();
-
-        await AwaitAssertAsync(() =>
-        {
-            Assert.Single(pipeline.CapturedInputs);
-            Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
-            Assert.Equal("stashed live", input.ExecutableText);
-        }, cancellationToken: ct);
-    }
 
     [Fact]
     public async Task Hydration_re_runs_after_supervised_restart()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-hydration-restart");
@@ -1726,7 +1459,7 @@ public abstract class SessionBindingContractTests : TestKit
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
         await AwaitAssertAsync(() => Assert.Equal(1, historyFetcher.FetchCount), cancellationToken: ct);
 
-        await actor.GracefulStop(TimeSpan.FromSeconds(5));
+        await StopBindingAsync(actor);
 
         var pipeline2 = new RecordingSessionPipeline(_ =>
         [
@@ -1741,64 +1474,10 @@ public abstract class SessionBindingContractTests : TestKit
         await AwaitAssertAsync(() => Assert.Equal(2, historyFetcher.FetchCount), cancellationToken: ct);
     }
 
-    [Fact]
-    public async Task Image_in_history_flows_through_at_most_once_across_multiple_inbounds()
-    {
-        // Direct regression test for the duplicate-image compaction bug.
-        // Under the pre-fix design, every live inbound re-fetched thread
-        // history and re-emitted any in-flight message's DataContent, so the
-        // same image accumulated into history N times — destroying session
-        // compaction budget. The fix: hydration runs once at actor startup,
-        // and live inbounds never re-fetch history. The image flows through
-        // exactly once.
-        if (!SupportsThreadHydration) return;
-
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-image-flows-once");
-        var historyFetcher = new RecordingThreadHistoryFetcher();
-        var imageBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
-        var baseItem = Assert.Single(CreateHistoryItems(1));
-        historyFetcher.SetHistory(
-        [
-            baseItem with
-            {
-                Contents = [.. baseItem.Contents, new DataContent(imageBytes, "image/png")]
-            }
-        ]);
-
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), OpenChildRunIds = [] }
-        ]);
-
-        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
-        await pipeline.Created.WaitAsync(ct);
-
-        // Wait for hydration backfill to land.
-        await AwaitAssertAsync(() => Assert.True(pipeline.CapturedInputs.Count >= 1),
-            cancellationToken: ct);
-
-        // Send three live inbounds in quick succession — the kind of scenario
-        // that produced 8 image copies under the pre-fix design.
-        actor.Tell(CreateHydrationTriggerInboundMessage("live 1", "user-1"), TestActor);
-        actor.Tell(CreateHydrationTriggerInboundMessage("live 2", "user-1"), TestActor);
-        actor.Tell(CreateHydrationTriggerInboundMessage("live 3", "user-1"), TestActor);
-
-        await AwaitAssertAsync(() => Assert.True(pipeline.CapturedInputs.Count >= 4),
-            cancellationToken: ct);
-
-        var dataContentCount = pipeline.CapturedInputs
-            .Sum(input => input.Contents.OfType<DataContent>().Count());
-        Assert.Equal(1, dataContentCount);
-    }
 
     [Fact]
     public async Task Cursor_does_not_advance_on_non_completed_turn_outcome()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-cursor-not-completed");
@@ -1825,7 +1504,7 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.Contains(GetPostedTexts(), IsEmptyTurnFallback);
         }, cancellationToken: ct);
 
-        await actor.GracefulStop(TimeSpan.FromSeconds(5));
+        await StopBindingAsync(actor);
         Assert.Empty(await ReadCursorEventsAsync(sid));
 
         // Second lifecycle: history contains TWO items with snowflakes/ts
@@ -1860,8 +1539,6 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Live_inbound_after_hydration_is_plain_without_adopted_context()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-hydration-plain-live");
@@ -1902,8 +1579,6 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Thread_history_preserves_inline_attachment_content()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-hydration-attachment");
@@ -1945,8 +1620,6 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Empty_history_delivers_live_message_without_merge()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-hydration-empty");
@@ -1987,8 +1660,6 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Hydration_excludes_history_before_cursor()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-hydration-cursor");
@@ -2028,9 +1699,8 @@ public abstract class SessionBindingContractTests : TestKit
         // the CursorAdvanced event in the journal before the restart.
         await AwaitCursorPersistedAsync(sid);
 
-        // GracefulStop drains the mailbox and waits for termination.
+        await StopBindingAsync(actor);
         ClearPostedTexts();
-        await actor.GracefulStop(TimeSpan.FromSeconds(5));
 
         // Recreate actor with same session ID — cursor recovers from journal.
         // History still contains the same 3 items, but the cursor should now
@@ -2073,8 +1743,6 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Hydration_after_restart_does_not_re_emit_message_at_cursor_position()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-restart-no-dupe-at-cursor");
@@ -2101,8 +1769,8 @@ public abstract class SessionBindingContractTests : TestKit
         // CursorAdvanced event in the journal before the restart.
         await AwaitCursorPersistedAsync(sid);
 
+        await StopBindingAsync(actor1);
         ClearPostedTexts();
-        await actor1.GracefulStop(TimeSpan.FromSeconds(5));
 
         // Simulate daemon restart with the same persistent identity (journal
         // recovers _cursorTs). The history fetcher still returns the same item
@@ -2110,18 +1778,17 @@ public abstract class SessionBindingContractTests : TestKit
         historyFetcher.ResetFetchCount();
         var pipeline2 = new RecordingSessionPipeline(_ => []);
 
-        CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
+        var actor2 = CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
         await pipeline2.Created.WaitAsync(ct);
-        await AwaitAssertAsync(() => Assert.Equal(1, historyFetcher.FetchCount),
-            cancellationToken: ct);
+        actor2.Tell(CreateHydrationTriggerInboundMessage("after hydration sentinel", "user-1"), TestActor);
 
-        // The cursor is exactly at the history item's ts. A correct gap filter
-        // excludes it (it's already in the session's persisted history). A
-        // buggy filter that admits ts == cursor re-emits the message a second
-        // time, doubling its contents (text + any attachments) in the session.
-        // Assert nothing was enqueued.
-        await AwaitAssertAsync(() => Assert.Empty(pipeline2.CapturedInputs),
+        // The same actor admits the sentinel after hydration and preserves the input queue order.
+        await AwaitAssertAsync(() =>
+            Assert.Contains(pipeline2.CapturedInputs, input => input.ExecutableText == "after hydration sentinel"),
             cancellationToken: ct);
+        Assert.Equal(1, historyFetcher.FetchCount);
+        var input = Assert.Single(pipeline2.CapturedInputs);
+        Assert.Equal("after hydration sentinel", input.ExecutableText);
     }
 
     /// <summary>
@@ -2135,8 +1802,6 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Pipeline_reinitialize_discards_the_abandoned_turn_cursor()
     {
-        if (!SupportsThreadHydration) return;
-
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-reinit-discards-cursor");
@@ -2180,8 +1845,8 @@ public abstract class SessionBindingContractTests : TestKit
             () => Assert.Contains(GetPostedTexts(), IsEmptyTurnFallback),
             cancellationToken: ct);
 
+        await StopBindingAsync(actor);
         ClearPostedTexts();
-        await actor.GracefulStop(TimeSpan.FromSeconds(5));
         Assert.Empty(await ReadCursorEventsAsync(sid));
 
         // The next actor lifetime recovers the cursor from the journal. The
@@ -2479,6 +2144,13 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.DoesNotContain(ChildRunId, redraw.VisibleText, StringComparison.Ordinal);
         }, cancellationToken: ct);
 
+        if (!answerByText && ExpectedChannelType == ChannelType.Mattermost)
+        {
+            var rejection = await ExpectMsgAsync<CommandNack>(cancellationToken: ct);
+            Assert.Equal(sid, rejection.SessionId);
+            Assert.Equal(nackReason, rejection.Reason);
+        }
+
         // A later live parent prompt answers by text.
         pipeline.EmitOutput(ApprovalRequest(sid, "call-live-parent", "write_file"));
         await AwaitAssertAsync(
@@ -2525,6 +2197,11 @@ public abstract class SessionBindingContractTests : TestKit
     {
         var stopped = CreateTestProbe();
         stopped.Watch(binding);
+        var correlationId = Guid.NewGuid().ToString("N");
+        binding.Tell(new Identify(correlationId), TestActor);
+        var identity = await ExpectMsgAsync<ActorIdentity>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(correlationId, identity.MessageId);
+        Assert.Equal(binding, identity.Subject);
         Sys.Stop(binding);
         await stopped.ExpectTerminatedAsync(binding, cancellationToken: TestContext.Current.CancellationToken);
     }

@@ -9,11 +9,43 @@ namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 
 internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
 {
-    public List<DiscordPostMessage> Posts { get; } = [];
-    public List<(DiscordReplyChannelId ThreadId, string Name)> ThreadRenames { get; } = [];
-    public List<(DiscordReplyChannelId ChannelId, DiscordMessageId MessageId, string Text, bool RemoveComponents)> Updates { get; } = [];
-    public List<DiscordReplyChannelId> TypingTriggers { get; } = [];
-    public List<DiscordFileUpload> Uploads { get; } = [];
+    private readonly object _lock = new();
+    private readonly List<DiscordPostMessage> _posts = [];
+    private readonly List<(DiscordReplyChannelId ThreadId, string Name)> _threadRenames = [];
+    private readonly List<(DiscordReplyChannelId ChannelId, DiscordMessageId MessageId, string Text, bool RemoveComponents)> _updates = [];
+    private readonly List<DiscordReplyChannelId> _typingTriggers = [];
+    private readonly List<DiscordFileUpload> _uploads = [];
+
+    public IReadOnlyList<DiscordPostMessage> Posts
+    {
+        get { lock (_lock) return _posts.ToArray(); }
+    }
+
+    public void ClearPosts()
+    {
+        lock (_lock) _posts.Clear();
+    }
+
+    public IReadOnlyList<(DiscordReplyChannelId ThreadId, string Name)> ThreadRenames
+    {
+        get { lock (_lock) return _threadRenames.ToArray(); }
+    }
+
+    public IReadOnlyList<(DiscordReplyChannelId ChannelId, DiscordMessageId MessageId, string Text, bool RemoveComponents)> Updates
+    {
+        get { lock (_lock) return _updates.ToArray(); }
+    }
+
+    public IReadOnlyList<DiscordReplyChannelId> TypingTriggers
+    {
+        get { lock (_lock) return _typingTriggers.ToArray(); }
+    }
+
+    public IReadOnlyList<DiscordFileUpload> Uploads
+    {
+        get { lock (_lock) return _uploads.ToArray(); }
+    }
+
     public Exception? ThrowOnPost { get; set; }
     public Exception? ThrowOnUpload { get; set; }
     // Throws on the next post only, then auto-clears. Lets a test fail a content
@@ -42,7 +74,7 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
         if (ThrowInOrderOnPosts.TryDequeue(out var orderedEx))
             throw orderedEx;
 
-        Posts.Add(message);
+        lock (_lock) _posts.Add(message);
 
         var messageId = new DiscordMessageId($"msg-{Interlocked.Increment(ref _messageCounter)}");
         DiscordPostResult result;
@@ -61,20 +93,20 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
 
     public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
     {
-        ThreadRenames.Add((threadChannelId, name));
+        lock (_lock) _threadRenames.Add((threadChannelId, name));
         return Task.CompletedTask;
     }
 
     public Task UpdateMessageAsync(DiscordReplyChannelId channelId, DiscordMessageId messageId, string text,
         bool removeComponents = false, CancellationToken cancellationToken = default)
     {
-        Updates.Add((channelId, messageId, text, removeComponents));
+        lock (_lock) _updates.Add((channelId, messageId, text, removeComponents));
         return Task.CompletedTask;
     }
 
     public Task TriggerTypingAsync(DiscordReplyChannelId channelId, CancellationToken cancellationToken = default)
     {
-        TypingTriggers.Add(channelId);
+        lock (_lock) _typingTriggers.Add(channelId);
         return Task.CompletedTask;
     }
 
@@ -83,7 +115,7 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
         if (ThrowOnUpload is { } ex)
             throw ex;
 
-        Uploads.Add(upload);
+        lock (_lock) _uploads.Add(upload);
         var messageId = new DiscordMessageId($"file-{Interlocked.Increment(ref _messageCounter)}");
         return Task.FromResult<DiscordMessageId?>(messageId);
     }

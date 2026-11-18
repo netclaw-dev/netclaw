@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
+using Akka.Persistence;
 using Akka.Persistence.Hosting;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
@@ -15,6 +16,7 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Actors.Tests.Channels.Contracts;
 
@@ -22,6 +24,8 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     : SessionBindingContractTests(output)
 {
     private RecordingDiscordReplyClient _replyClient = new();
+
+    protected override SessionIngressGate IngressGate { get; } = new();
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
@@ -46,8 +50,8 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         var options = new DiscordChannelOptions();
         var deps = new DiscordGatewayDependencies(
             Pipeline: pipeline,
-            IngressGate: null,
-            TimeProvider: TimeProvider.System,
+            IngressGate: IngressGate,
+            TimeProvider: Clock,
             Options: options,
             DefaultChannelId: null,
             ChannelRegistry: TestChannelRegistries.DiscordWithProcessingRenderer(_replyClient),
@@ -85,6 +89,12 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Text: text,
             ReceivedAt: TimeProvider.System.GetUtcNow());
 
+    protected override object CreateInboundWithAttachment(string text, string senderId)
+        => ((DiscordThreadInbound)CreateInboundMessage(text, senderId)) with
+        {
+            Attachments = [new DiscordFileReference("gate.txt", "text/plain", 1, "https://cdn.discordapp.com/gate")]
+        };
+
     protected override object CreateApprovalResponse(string callId, string selectedKey, string senderId)
         => new DiscordApprovalResponse(
             ChannelId: new DiscordChannelId("ch-test"),
@@ -97,7 +107,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         => _replyClient.Posts.Select(p => p.Text).ToList();
 
     protected override void ClearPostedTexts()
-        => _replyClient.Posts.Clear();
+        => _replyClient.ClearPosts();
 
     protected override void SetReplyClientThrows(Exception ex)
         => _replyClient.ThrowOnPost = ex;
@@ -118,8 +128,6 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
 
     protected override IReadOnlyList<RenderedPrompt> GetPromptRedraws()
         => _replyClient.Updates.ToList().Select(update => new RenderedPrompt(update.Text, !update.RemoveComponents)).ToList();
-
-    protected override bool SupportsThreadHydration => true;
 
     protected override string GetCursorPersistenceId(SessionId sessionId)
         => $"discord-session-cursor-{Uri.EscapeDataString(sessionId.Value)}";
@@ -154,6 +162,99 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         }
 
         return items;
+    }
+
+    [Theory]
+    [InlineData("000900000000000000001", "000900000000000000001")]
+    [InlineData("corrupt-cursor", "000900000000000000001")]
+    [InlineData("000900000000000000001", "corrupt-cursor")]
+    public async Task Old_cursor_journal_normalizes_snowflakes_and_keeps_the_last_valid_position(
+        string firstCursor, string lastCursor)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sid = new SessionId("old-discord/cursor % identity");
+        var seeder = Sys.ActorOf(Props.Create(() => new CursorJournalSeeder(GetCursorPersistenceId(sid))));
+        var stored = Enumerable.Repeat(firstCursor, 9).Append(lastCursor).ToArray();
+        foreach (var cursor in stored)
+            await seeder.Ask<Akka.Done>(new CursorAdvanced(cursor), TimeSpan.FromSeconds(15), ct);
+        var stopped = CreateTestProbe();
+        stopped.Watch(seeder);
+        Sys.Stop(seeder);
+        await stopped.ExpectTerminatedAsync(seeder, cancellationToken: ct);
+
+        var history = new RecordingThreadHistoryFetcher();
+        history.SetHistory(CreateHistoryItems(3));
+        var pipeline = new RecordingSessionPipeline(_ => []);
+        CreateBindingActorWithHydration(sid, pipeline,
+            new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()), history);
+
+        await AwaitAssertAsync(() =>
+        {
+            var input = Assert.Single(pipeline.CapturedInputs);
+            Assert.Equal("900000000000000002", input.MessageId);
+            Assert.False(input.HasAdoptedContext);
+            Assert.DoesNotContain(input.Contents.OfType<Microsoft.Extensions.AI.TextContent>(),
+                content => content.Text.Contains("history message 0", StringComparison.Ordinal)
+                    || content.Text.Contains("history message 1", StringComparison.Ordinal));
+        }, cancellationToken: ct);
+        Assert.Equal(stored, (await ReadCursorEventsAsync(sid)).Select(cursor => cursor.Cursor).ToArray());
+    }
+
+    [Fact]
+    public async Task A_mention_during_a_turn_skips_history_that_the_completed_cursor_can_exclude()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sid = new SessionId("mention-rearm-guard");
+        var history = new RecordingThreadHistoryFetcher();
+        var root = CreateHistoryItems(1)[0];
+        history.SetHistory([root]);
+        var pipeline = new RecordingSessionPipeline(_ => []);
+        var actor = CreateActorCore(sid, pipeline,
+            new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()), history,
+            new DiscordChannelOptions
+            {
+                MentionRequiredInThreadByChannel = new(StringComparer.Ordinal) { ["ch-test"] = true }
+            });
+        await AwaitAssertAsync(() => Assert.Single(pipeline.CapturedInputs), cancellationToken: ct);
+
+        history.SetHistory([root, root with
+        {
+            MessageId = "950000000000000000",
+            Contents = [new Microsoft.Extensions.AI.TextContent("chatter during the turn")]
+        }]);
+        var duringTurn = (DiscordThreadInbound)CreateHydrationTriggerInboundMessage("during turn", "user-1");
+        actor.Tell(duringTurn, TestActor);
+        await AwaitAssertAsync(() => Assert.Equal(2, pipeline.CapturedInputs.Count), cancellationToken: ct);
+        Assert.Equal(1, history.FetchCount);
+
+        pipeline.EmitOutput(new TurnCompleted
+        {
+            SessionId = sid, TurnNumber = new TurnNumber(1), Outcome = TurnOutcome.Completed, OpenChildRunIds = []
+        });
+        await AwaitAssertAsync(async () =>
+            Assert.Contains(await ReadCursorEventsAsync(sid), cursor => cursor.Cursor == duringTurn.EventId.Value),
+            cancellationToken: ct);
+        actor.Tell(CreateHydrationTriggerInboundMessage("idle mention", "user-1"), TestActor);
+        await AwaitAssertAsync(() => Assert.Equal(3, pipeline.CapturedInputs.Count), cancellationToken: ct);
+        Assert.Equal(2, history.FetchCount);
+        var last = pipeline.CapturedInputs.Last();
+        Assert.False(last.HasAdoptedContext);
+        Assert.Equal("idle mention", Assert.IsType<Microsoft.Extensions.AI.TextContent>(Assert.Single(last.Contents)).Text);
+    }
+
+    private sealed class CursorJournalSeeder : ReceivePersistentActor
+    {
+        public CursorJournalSeeder(string persistenceId)
+        {
+            PersistenceId = persistenceId;
+            Command<CursorAdvanced>(cursor =>
+            {
+                var replyTo = Sender;
+                Persist(cursor, _ => replyTo.Tell(Akka.Done.Instance));
+            });
+        }
+
+        public override string PersistenceId { get; }
     }
 
     private long _hydrationEventCounter;
@@ -211,8 +312,8 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     {
         var deps = new DiscordGatewayDependencies(
             Pipeline: pipeline,
-            IngressGate: null,
-            TimeProvider: TimeProvider.System,
+            IngressGate: IngressGate,
+            TimeProvider: Clock,
             Options: options ?? new DiscordChannelOptions(),
             DefaultChannelId: null,
             ChannelRegistry: TestChannelRegistries.DiscordWithProcessingRenderer(_replyClient),
