@@ -139,8 +139,14 @@ public sealed class ReminderDeniedRunSettlementTests : TestKit, IAsyncDisposable
 
     private async Task AwaitHistoryAsync(ReminderId id, int count)
         => await AwaitAssertAsync(async () =>
-            Assert.Equal(count, (await _historyStore.ReadAsync(id, 50)).Count),
-            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        {
+            var manager = ActorRegistry.For(Sys).Get<ReminderManagerActorKey>();
+            var history = await manager.Ask<ReminderHistoryResponse>(
+                new GetReminderHistoryQuery(id, 50, new ReminderAudienceAuthorizationContext(TrustAudience.Personal, "Operator/test")),
+                TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.True(history.Found);
+            Assert.Equal(count, history.Records.Count);
+        }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
     private int DeniedAlerts(ReminderId id)
         => _sink.Alerts.Count(a => a.Category == AlertType.ReminderExecutionFailed && a.Source == id.Value);

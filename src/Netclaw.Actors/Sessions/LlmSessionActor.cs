@@ -1979,68 +1979,67 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
 
     private void HandleDeliveryFailedWhenReady(DeliveryFailed msg)
     {
-        if (_deliveryRetry.EligibleTurnNumber != msg.TurnNumber)
+        var decision = DeliveryRetryHandler.DecideReady(
+            msg.TurnNumber, msg.FailureKind, _deliveryRetry.EligibleTurnNumber,
+            _deliveryRetry.IsRoutedSkill(msg.TurnNumber), _deliveryRetry.RetryCount);
+
+        switch (decision)
         {
-            _log.Warning(
-                "Ignoring stale delivery feedback channel={Channel} turn={Turn} eligibleTurn={EligibleTurn}",
-                msg.ChannelType,
-                msg.TurnNumber,
-                _deliveryRetry.EligibleTurnNumber?.ToString() ?? "none");
-            return;
+            case ReadyDeliveryDecision.Stale:
+                _log.Warning(
+                    "Ignoring stale delivery feedback channel={Channel} turn={Turn} eligibleTurn={EligibleTurn}",
+                    msg.ChannelType,
+                    msg.TurnNumber,
+                    _deliveryRetry.EligibleTurnNumber?.ToString() ?? "none");
+                return;
+
+            case ReadyDeliveryDecision.RoutedSkill:
+                _log.Warning(
+                    "Not retrying routed-skill turn channel={Channel} turn={Turn} kind={FailureKind}",
+                    msg.ChannelType,
+                    msg.TurnNumber,
+                    msg.FailureKind);
+                _deliveryRetry.Exhaust();
+                ReportReminderPostFailure(msg);
+                return;
+
+            case ReadyDeliveryDecision.AddNudgeAndReport:
+                _log.Warning(
+                    "Non-retryable delivery failure channel={Channel} turn={Turn} kind={FailureKind}; injecting context for next turn",
+                    msg.ChannelType,
+                    msg.TurnNumber,
+                    msg.FailureKind);
+                _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
+                ReportReminderPostFailure(msg);
+                return;
+
+            case ReadyDeliveryDecision.BudgetSpent:
+                _log.Warning(
+                    "Delivery retry budget exhausted channel={Channel} turn={Turn} kind={FailureKind}",
+                    msg.ChannelType,
+                    msg.TurnNumber,
+                    msg.FailureKind);
+                _deliveryRetry.Exhaust();
+                ReportReminderPostFailure(msg);
+                return;
+
+            case ReadyDeliveryDecision.Retry:
+                _deliveryRetry.RecordRetry();
+                _log.Warning(
+                    "Retrying after delivery failure channel={Channel} turn={Turn} kind={FailureKind} attempt={Attempt}",
+                    msg.ChannelType,
+                    msg.TurnNumber,
+                    msg.FailureKind,
+                    _deliveryRetry.RetryCount);
+                _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
+                _modelContext.ResetForNewTurn(); // Delivery feedback changed context — resolve recall fresh
+                FireLlmCall();
+                TransitionTo(SessionPhase.Processing);
+                return;
+
+            default:
+                throw new InvalidOperationException($"Unknown delivery decision: {decision}.");
         }
-
-        // A sub-agent produced the reply of a routed-skill turn. A retry would ask the main model for a
-        // reply that it never wrote, so the first report is the final failure. This holds live, after
-        // replay, and after a snapshot restore, because the mark is part of all three.
-        if (DeliveryRetryHandler.IsRetryable(msg) && _deliveryRetry.IsRoutedSkill(msg.TurnNumber))
-        {
-            _log.Warning(
-                "Not retrying routed-skill turn channel={Channel} turn={Turn} kind={FailureKind}",
-                msg.ChannelType,
-                msg.TurnNumber,
-                msg.FailureKind);
-            _deliveryRetry.Exhaust();
-            ReportReminderPostFailure(msg);
-            return;
-        }
-
-        if (!DeliveryRetryHandler.IsRetryable(msg))
-        {
-            _log.Warning(
-                "Non-retryable delivery failure channel={Channel} turn={Turn} kind={FailureKind}; injecting context for next turn",
-                msg.ChannelType,
-                msg.TurnNumber,
-                msg.FailureKind);
-            _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
-            ReportReminderPostFailure(msg);
-            return;
-        }
-
-        if (_deliveryRetry.RetryCount >= DeliveryRetryHandler.MaxRetries)
-        {
-            _log.Warning(
-                "Delivery retry budget exhausted channel={Channel} turn={Turn} kind={FailureKind}",
-                msg.ChannelType,
-                msg.TurnNumber,
-                msg.FailureKind);
-            _deliveryRetry.Exhaust();
-            ReportReminderPostFailure(msg);
-            return;
-        }
-
-        _deliveryRetry.RecordRetry();
-
-        _log.Warning(
-            "Retrying after delivery failure channel={Channel} turn={Turn} kind={FailureKind} attempt={Attempt}",
-            msg.ChannelType,
-            msg.TurnNumber,
-            msg.FailureKind,
-            _deliveryRetry.RetryCount);
-
-        _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
-        _modelContext.ResetForNewTurn(); // Delivery feedback changed context — resolve recall fresh
-        FireLlmCall();
-        TransitionTo(SessionPhase.Processing);
     }
 
     /// <summary>
@@ -2051,46 +2050,46 @@ public sealed partial class LlmSessionActor : ReceivePersistentActor, IWithTimer
     /// </summary>
     private void HandleDeliveryFailedWithoutRetry(DeliveryFailed msg, string phase)
     {
-        if (RestartDrainRequested)
-        {
-            _log.Info("Reporting delivery feedback while restart drain is pending");
-            ReportReminderPostFailure(msg);
-            return;
-        }
+        var decision = DeliveryRetryHandler.DecideBusy(
+            msg.FailureKind, _phase.Current == SessionPhase.Compacting, RestartDrainRequested);
 
-        if (!DeliveryRetryHandler.IsRetryable(msg))
+        switch (decision)
         {
-            if (_phase.Current == SessionPhase.Compacting)
-            {
-                // Apply(SessionCompacted) builds the history again from the state saved when compaction started.
-                // A nudge added now would vanish, so the alert and the Error log are the only signal here.
+            case BusyDeliveryDecision.Drain:
+                _log.Info("Reporting delivery feedback while restart drain is pending");
+                break;
+
+            case BusyDeliveryDecision.CompactionDropsNudge:
                 _log.Warning(
                     "Non-retryable delivery feedback while {Phase} channel={Channel} turn={Turn} kind={FailureKind}; adds no nudge, because compaction rebuilds the history",
                     phase,
                     msg.ChannelType,
                     msg.TurnNumber,
                     msg.FailureKind);
-                ReportReminderPostFailure(msg);
-                return;
-            }
+                break;
 
-            _log.Warning(
-                "Non-retryable delivery feedback while {Phase} channel={Channel} turn={Turn} kind={FailureKind}; injecting context",
-                phase,
-                msg.ChannelType,
-                msg.TurnNumber,
-                msg.FailureKind);
-            _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
-            ReportReminderPostFailure(msg);
-            return;
+            case BusyDeliveryDecision.AddNudge:
+                _log.Warning(
+                    "Non-retryable delivery feedback while {Phase} channel={Channel} turn={Turn} kind={FailureKind}; injecting context",
+                    phase,
+                    msg.ChannelType,
+                    msg.TurnNumber,
+                    msg.FailureKind);
+                _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
+                break;
+
+            case BusyDeliveryDecision.NoRetry:
+                _log.Warning(
+                    "Ignoring retryable delivery feedback while {Phase} channel={Channel} turn={Turn}",
+                    phase,
+                    msg.ChannelType,
+                    msg.TurnNumber);
+                break;
+
+            default:
+                throw new InvalidOperationException($"Unknown delivery decision: {decision}.");
         }
 
-        // The session does not retry while it handles another input, so this reply stays undelivered.
-        _log.Warning(
-            "Ignoring retryable delivery feedback while {Phase} channel={Channel} turn={Turn}",
-            phase,
-            msg.ChannelType,
-            msg.TurnNumber);
         ReportReminderPostFailure(msg);
     }
 

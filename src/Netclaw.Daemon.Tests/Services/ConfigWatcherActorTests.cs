@@ -30,6 +30,7 @@ public sealed class ConfigWatcherActorTests(ITestOutputHelper output) : TestKit(
     private readonly RejectedConfigState _rejected = new();
     private readonly RestartCoordinator _restart = new();
     private readonly ApplicationLifetime _lifetime = new();
+    private readonly TestSubscription _subscription = new();
     private IEnumerable<ILlmProviderPlugin> _plugins = [];
     private NetclawPaths Paths => new(_directory.Path);
     private const string Models = "\"Models\": { \"Definitions\": { \"d\": { \"Provider\": \"p\", \"ModelId\": \"m\" } }, \"Roles\": { \"Main\": \"d\" } }";
@@ -57,9 +58,12 @@ public sealed class ConfigWatcherActorTests(ITestOutputHelper output) : TestKit(
         return ConfigReloadBaseline.HashNetclawJson(ConfigReloadBaseline.ReadNetclawJson(Paths));
     }
 
-    private IActorRef CreateActor(string? loadedHash) => Sys.ActorOf(Props.Create(() => new ConfigWatcherActor(
-        Paths, new ConfigReloadBaseline(loadedHash, new Dictionary<string, string?>()), _restart, _rejected,
-        _plugins, new FakeCapabilityResolver(null), NullLoggerFactory.Instance, TimeProvider.System, _lifetime)));
+    private IActorRef CreateActor(string? loadedHash) => CreateActor(loadedHash, (_, _) => _subscription);
+
+    private IActorRef CreateActor(string? loadedHash, Func<string, IActorRef, IDisposable> subscribe) =>
+        Sys.ActorOf(Props.Create(() => new ConfigWatcherActor(
+            Paths, new ConfigReloadBaseline(loadedHash, new Dictionary<string, string?>()), _restart, _rejected,
+            _plugins, new FakeCapabilityResolver(null), NullLoggerFactory.Instance, TimeProvider.System, _lifetime, subscribe)));
 
     private Task SettleAsync(IActorRef actor)
         => actor.Ask<ActorIdentity>(new Identify(1), Deadline, TestContext.Current.CancellationToken);
@@ -161,6 +165,7 @@ public sealed class ConfigWatcherActorTests(ITestOutputHelper output) : TestKit(
             await WatchAsync(actor);
             Sys.Stop(actor);
             await ExpectTerminatedAsync(actor, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(1, _subscription.DisposeCount);
             _lifetime.NotifyStarted();
             ((TestScheduler)Sys.Scheduler).Advance(Debounce);
             Assert.Null(_rejected.Reason);
@@ -188,6 +193,30 @@ public sealed class ConfigWatcherActorTests(ITestOutputHelper output) : TestKit(
         Assert.Equal(0, _restart.Count);
         await AdvanceAsync(actor, Debounce / 2);
         Assert.Equal(1, _restart.Count);
+    }
+
+    [Fact]
+    public async Task An_accepted_event_before_an_ignored_event_still_requests_a_restart()
+    {
+        var actor = CreateActor(WriteCandidate("{}", null));
+        _rejected.Reject(PriorRejection);
+        actor.Tell(HostStarted.Instance);
+        actor.Tell(new ConfigChanged(WatcherChangeTypes.Changed, "netclaw.json", null));
+        actor.Tell(new ConfigChanged(WatcherChangeTypes.Changed, "secrets.json", null));
+        await AdvanceAsync(actor, Debounce);
+
+        Assert.Equal(1, _restart.Count);
+        Assert.Null(_rejected.Reason);
+    }
+
+    [Fact]
+    public async Task Subscription_failure_stops_the_host()
+    {
+        var actor = CreateActor(WriteCandidate("{}", null), (_, _) => throw new IOException("Test subscription failure."));
+        await _lifetime.Stopped.Task.WaitAsync(Deadline, TestContext.Current.CancellationToken);
+        await WatchAsync(actor);
+        await ExpectTerminatedAsync(actor, Deadline, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(0, _subscription.DisposeCount);
     }
 
     [Fact]
@@ -261,9 +290,17 @@ public sealed class ConfigWatcherActorTests(ITestOutputHelper output) : TestKit(
         public CancellationToken ApplicationStarted => _started.Token;
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
+        public TaskCompletionSource Stopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void NotifyStarted() => _started.Cancel();
-        public void StopApplication() => throw new InvalidOperationException("The test actor could not start its watcher.");
+        public void StopApplication() => Stopped.TrySetResult();
         public void Dispose() => _started.Dispose();
+    }
+
+    private sealed class TestSubscription : IDisposable
+    {
+        private int _disposeCount;
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
+        public void Dispose() => Interlocked.Increment(ref _disposeCount);
     }
 
     private sealed class RestartCoordinator : IDaemonRestartCoordinator

@@ -64,8 +64,9 @@ internal sealed class ConfigWatcherActor : ReceiveActor, IWithTimers
     private readonly ILoggerFactory _loggerFactory;
     private readonly TimeProvider _timeProvider;
     private readonly IHostApplicationLifetime _applicationLifetime;
+    private readonly Func<string, IActorRef, IDisposable> _subscribeFileEvents;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
-    private FileSystemWatcher? _watcher;
+    private IDisposable? _watcher;
     private CancellationTokenRegistration _applicationStartedRegistration;
     private (string Reason, string? Content)? _lastRejection;
     private bool _hostStarted;
@@ -81,7 +82,8 @@ internal sealed class ConfigWatcherActor : ReceiveActor, IWithTimers
         IModelCapabilityResolver capabilities,
         ILoggerFactory loggerFactory,
         TimeProvider timeProvider,
-        IHostApplicationLifetime applicationLifetime)
+        IHostApplicationLifetime applicationLifetime,
+        Func<string, IActorRef, IDisposable> subscribeFileEvents)
     {
         _paths = paths;
         _baseline = baseline;
@@ -92,6 +94,7 @@ internal sealed class ConfigWatcherActor : ReceiveActor, IWithTimers
         _loggerFactory = loggerFactory;
         _timeProvider = timeProvider;
         _applicationLifetime = applicationLifetime;
+        _subscribeFileEvents = subscribeFileEvents;
 
         Receive<ConfigChanged>(OnConfigChanged);
         Receive<Status.Failure>(failure => StopHost(failure.Cause));
@@ -116,16 +119,7 @@ internal sealed class ConfigWatcherActor : ReceiveActor, IWithTimers
         try
         {
             Directory.CreateDirectory(_paths.ConfigDirectory);
-            _watcher = new FileSystemWatcher(_paths.ConfigDirectory)
-            {
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName
-            };
-            _watcher.Changed += (_, e) => self.Tell(new ConfigChanged(e.ChangeType, e.Name, null));
-            _watcher.Created += (_, e) => self.Tell(new ConfigChanged(e.ChangeType, e.Name, null));
-            _watcher.Deleted += (_, e) => self.Tell(new ConfigChanged(e.ChangeType, e.Name, null));
-            _watcher.Renamed += (_, e) => self.Tell(new ConfigChanged(e.ChangeType, e.Name, e.OldName));
-            _watcher.Error += (_, e) => self.Tell(new Status.Failure(e.GetException()));
-            _watcher.EnableRaisingEvents = true;
+            _watcher = _subscribeFileEvents(_paths.ConfigDirectory, self);
             _log.Info("Config hot-reload watching: {ConfigDir}", _paths.ConfigDirectory);
         }
         catch (Exception ex)
@@ -297,7 +291,29 @@ internal static class ConfigWatcherActorHostingExtensions
     public static AkkaConfigurationBuilder WithConfigWatcherActor(this AkkaConfigurationBuilder builder) =>
         builder.StartActors((system, registry, resolver) =>
         {
-            var actor = system.ActorOf(resolver.Props<ConfigWatcherActor>(), "config-watcher");
+            var actor = system.ActorOf(resolver.Props<ConfigWatcherActor>(
+                (Func<string, IActorRef, IDisposable>)SubscribeFileEvents), "config-watcher");
             registry.Register<ConfigWatcherActor>(actor);
         });
+
+    private static IDisposable SubscribeFileEvents(string directory, IActorRef target)
+    {
+        var watcher = new FileSystemWatcher(directory);
+        try
+        {
+            watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName;
+            watcher.Changed += (_, e) => target.Tell(new ConfigWatcherActor.ConfigChanged(e.ChangeType, e.Name, null));
+            watcher.Created += (_, e) => target.Tell(new ConfigWatcherActor.ConfigChanged(e.ChangeType, e.Name, null));
+            watcher.Deleted += (_, e) => target.Tell(new ConfigWatcherActor.ConfigChanged(e.ChangeType, e.Name, null));
+            watcher.Renamed += (_, e) => target.Tell(new ConfigWatcherActor.ConfigChanged(e.ChangeType, e.Name, e.OldName));
+            watcher.Error += (_, e) => target.Tell(new Status.Failure(e.GetException()));
+            watcher.EnableRaisingEvents = true;
+            return watcher;
+        }
+        catch
+        {
+            watcher.Dispose();
+            throw;
+        }
+    }
 }

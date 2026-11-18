@@ -3,23 +3,97 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Channels;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
 /// <summary>
 /// Spec: <c>netclaw-session</c>, "A failed post on a reminder turn is visible to the operator".
-/// The handler answers two questions for a failure report. Which reminder started the named turn?
-/// Did the session report that turn already? A wrong answer sends an alert for the wrong fire, or two alerts
-/// for one reply. The mutation test project links this class, so a focused Stryker target can reuse it.
+/// The mutation project compiles this fixture with xUnit 2.
 /// </summary>
 public sealed class DeliveryRetryHandlerReminderTests
 {
     private static readonly ReminderId FireA = new("check-pr:1712000000000");
     private static readonly ReminderId FireB = new("nightly:1712000600000");
+
+    [Theory]
+    [InlineData("content rejected", DeliveryFailureKind.ContentRejected, false, 0, (int)ReadyDeliveryDecision.Retry)]
+    [InlineData("message too large", DeliveryFailureKind.MessageTooLarge, false, 0, (int)ReadyDeliveryDecision.Retry)]
+    [InlineData("unsupported content", DeliveryFailureKind.UnsupportedContent, false, 0, (int)ReadyDeliveryDecision.Retry)]
+    [InlineData("second retry", DeliveryFailureKind.ContentRejected, false, 1, (int)ReadyDeliveryDecision.Retry)]
+    [InlineData("budget spent", DeliveryFailureKind.ContentRejected, false, 2, (int)ReadyDeliveryDecision.BudgetSpent)]
+    [InlineData("budget exceeded", DeliveryFailureKind.ContentRejected, false, 3, (int)ReadyDeliveryDecision.BudgetSpent)]
+    [InlineData("routed skill", DeliveryFailureKind.MessageTooLarge, true, 0, (int)ReadyDeliveryDecision.RoutedSkill)]
+    [InlineData("routed skill before budget", DeliveryFailureKind.ContentRejected, true, 2, (int)ReadyDeliveryDecision.RoutedSkill)]
+    [InlineData("transport failure", DeliveryFailureKind.TransportFailure, false, 0, (int)ReadyDeliveryDecision.AddNudgeAndReport)]
+    [InlineData("permission denied", DeliveryFailureKind.PermissionDenied, false, 0, (int)ReadyDeliveryDecision.AddNudgeAndReport)]
+    [InlineData("unknown failure", DeliveryFailureKind.Unknown, false, 0, (int)ReadyDeliveryDecision.AddNudgeAndReport)]
+    [InlineData("unrecognized failure", (DeliveryFailureKind)99, false, 0, (int)ReadyDeliveryDecision.AddNudgeAndReport)]
+    [InlineData("non-retryable routed skill", DeliveryFailureKind.Unknown, true, 2, (int)ReadyDeliveryDecision.AddNudgeAndReport)]
+    public void Ready_feedback_selects_the_action_for_the_current_turn(
+        string _, DeliveryFailureKind kind, bool routedSkill, int retryCount, int expected)
+    {
+        var turn = new TurnNumber(5);
+
+        Assert.Equal((ReadyDeliveryDecision)expected,
+            DeliveryRetryHandler.DecideReady(turn, kind, turn, routedSkill, retryCount));
+    }
+
+    [Theory]
+    [InlineData("no eligible turn", null, DeliveryFailureKind.ContentRejected, true, 2)]
+    [InlineData("earlier eligible turn", 4, DeliveryFailureKind.ContentRejected, false, 0)]
+    [InlineData("later eligible turn", 6, DeliveryFailureKind.ContentRejected, true, 2)]
+    [InlineData("non-retryable stale turn", 4, DeliveryFailureKind.Unknown, true, 2)]
+    public void Ready_stale_feedback_is_rejected_before_any_other_decision(
+        string _, int? eligible, DeliveryFailureKind kind, bool routedSkill, int retryCount)
+    {
+        var eligibleTurn = eligible is { } value ? new TurnNumber(value) : (TurnNumber?)null;
+
+        Assert.Equal(ReadyDeliveryDecision.Stale,
+            DeliveryRetryHandler.DecideReady(new TurnNumber(5), kind, eligibleTurn, routedSkill, retryCount));
+    }
+
+    [Theory]
+    [InlineData("processing retryable", DeliveryFailureKind.ContentRejected, false, false, (int)BusyDeliveryDecision.NoRetry)]
+    [InlineData("compacting retryable", DeliveryFailureKind.MessageTooLarge, true, false, (int)BusyDeliveryDecision.NoRetry)]
+    [InlineData("processing unsupported", DeliveryFailureKind.UnsupportedContent, false, false, (int)BusyDeliveryDecision.NoRetry)]
+    [InlineData("processing transport", DeliveryFailureKind.TransportFailure, false, false, (int)BusyDeliveryDecision.AddNudge)]
+    [InlineData("processing permission", DeliveryFailureKind.PermissionDenied, false, false, (int)BusyDeliveryDecision.AddNudge)]
+    [InlineData("processing unknown", DeliveryFailureKind.Unknown, false, false, (int)BusyDeliveryDecision.AddNudge)]
+    [InlineData("processing unrecognized", (DeliveryFailureKind)99, false, false, (int)BusyDeliveryDecision.AddNudge)]
+    [InlineData("compacting transport", DeliveryFailureKind.TransportFailure, true, false, (int)BusyDeliveryDecision.CompactionDropsNudge)]
+    [InlineData("compacting unknown", DeliveryFailureKind.Unknown, true, false, (int)BusyDeliveryDecision.CompactionDropsNudge)]
+    [InlineData("drain retryable", DeliveryFailureKind.ContentRejected, false, true, (int)BusyDeliveryDecision.Drain)]
+    [InlineData("drain during compaction", DeliveryFailureKind.Unknown, true, true, (int)BusyDeliveryDecision.Drain)]
+    [InlineData("drain non-retryable", DeliveryFailureKind.PermissionDenied, false, true, (int)BusyDeliveryDecision.Drain)]
+    public void Busy_feedback_selects_the_action_for_the_phase(
+        string _, DeliveryFailureKind kind, bool compacting, bool restartDrainRequested, int expected)
+    {
+        Assert.Equal((BusyDeliveryDecision)expected,
+            DeliveryRetryHandler.DecideBusy(kind, compacting, restartDrainRequested));
+    }
+
+    [Theory]
+    [InlineData(DeliveryFailureKind.Unknown)]
+    [InlineData((DeliveryFailureKind)99)]
+    public void Unknown_failure_gives_the_model_the_existing_guidance(DeliveryFailureKind kind)
+    {
+        var failure = new DeliveryFailed
+        {
+            SessionId = new SessionId("test-channel/unknown-failure"),
+            TurnNumber = new TurnNumber(5),
+            ChannelType = ChannelType.Slack,
+            FailureKind = kind,
+            ErrorMessage = "Unexpected channel error"
+        };
+
+        Assert.Contains("unknown delivery error", DeliveryRetryHandler.BuildNudge(failure), StringComparison.OrdinalIgnoreCase);
+    }
 
     [Fact]
     public void ReminderOf_names_the_reminder_for_the_recorded_turn_only()
