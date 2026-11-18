@@ -80,8 +80,8 @@ The table retains earlier group measurements. Gate notes below describe later ad
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally), `stopped-turn-continuation` (10 mutants, one invocation, 2.5 locally) | 13.5 to 14.5 (estimate; hosted measurement required) |
-| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry`; `gateway-retry-stability`; `session-binding` | 7m24s before the session gate; revised group measurement pending |
-| `loopback-host-origin` | `loopback-host-origin` (two invocations), `curation-same-name` (one invocation) | Separate group measurement pending |
+| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry`; `gateway-retry-stability`; `session-binding` | [13m36s](https://github.com/netclaw-dev/netclaw/actions/runs/44392067815/job/135112327443) |
+| `loopback-host-origin` | `loopback-host-origin` (two invocations), `curation-same-name` (one invocation) | [9m57s](https://github.com/netclaw-dev/netclaw/actions/runs/44392067815/job/135112327171) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local), `child-resume-gate` (62 mutants, one invocation; local time below) | 9 to 11 (estimate) |
 
 The approval-directory gate includes one retained-hop producer target in `FileSystemAuthority.FollowLinkChainCore`.
@@ -156,8 +156,8 @@ Its four equality and conjunction mutants must execute and die. The actor-incarn
 The corrected warm local invocation takes 3 minutes 46 seconds and kills all five selected mutants.
 That duration includes Stryker analysis, build, instrumentation, and test execution. It does not measure a cold hosted runner.
 The successful combined group took [15 minutes 6 seconds](https://github.com/netclaw-dev/netclaw/actions/runs/44369912526/job/135033762922), above the 15-minute budget.
-The gate now joins the existing `child-owner-and-report` group, which took 7 minutes 24 seconds before this addition.
-Its invocation within the prior group took 2 minutes 56 seconds. Hosted CI must verify both revised group costs before acceptance.
+The gate now joins the existing `child-owner-and-report` group, which takes [13 minutes 36 seconds](https://github.com/netclaw-dev/netclaw/actions/runs/44392067815/job/135112327443).
+The separate loopback group takes [9 minutes 57 seconds](https://github.com/netclaw-dev/netclaw/actions/runs/44392067815/job/135112327171). Both complete jobs meet the 15-minute budget.
 The job timeout remains 25 minutes.
 
 Focused mutation tests prove that deterministic tests reject a specific unsafe

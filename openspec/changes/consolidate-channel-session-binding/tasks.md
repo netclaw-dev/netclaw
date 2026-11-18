@@ -26,5 +26,5 @@
 - [x] 4.1 Update canonical owner documentation and the test assertion map, then verify them against the actual final source.
 - [x] 4.2 Report net production, test, support, and total line accounts without a runtime-speed claim.
 - [x] 4.3 Update existing dependent PRs through actual gh stack commands and verify every combined slice and its standalone description.
-- [ ] 4.4 Complete independent final source review and current-head hosted checks with no merge, queue, or auto-merge request.
-- [ ] 4.5 Verify the final task and design evidence and retain the review handoff.
+- [x] 4.4 Complete independent final source review and current-head hosted checks with no merge, queue, or auto-merge request.
+- [x] 4.5 Verify the final task and design evidence and retain the review handoff.
