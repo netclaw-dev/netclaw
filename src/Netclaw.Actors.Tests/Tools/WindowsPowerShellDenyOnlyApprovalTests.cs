@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Protocol;
 using Netclaw.Security;
@@ -37,7 +38,7 @@ public sealed class WindowsPowerShellDenyOnlyApprovalTests
             PersonalContext(),
             ToolInput.Create("Command", command));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.False(decision.NeedsApproval);
         Assert.Equal("hard_deny_self_destructive", decision.DenyReason);
     }
@@ -53,7 +54,7 @@ public sealed class WindowsPowerShellDenyOnlyApprovalTests
             ToolInput.Create("Command", "Write-Output ok; $item++"));
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        Assert.True(complete.Decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(complete.Decision);
         Assert.False(complete.Decision.NeedsApproval);
         Assert.Equal(ToolAllowReason.PolicyAuto, complete.Decision.AllowReason);
         Assert.False(Assert.IsType<ShellCommandAnalysis>(complete.AuthorizedAnalysis).IsResolved);

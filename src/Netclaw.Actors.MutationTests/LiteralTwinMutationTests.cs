@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Authorization.Consent;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -100,7 +101,7 @@ public sealed class LiteralTwinMutationTests : IDisposable
 
         var denied = Screen(access, "for v in fetch status; do git $v; done", CreateContext());
 
-        Assert.Equal("hard_deny_custom_deny", denied?.DenyReason);
+        Assert.Equal("hard_deny_custom_deny", Assert.IsType<AuthorizationDecision.Denied>(denied).Reason);
     }
 
     public void Dispose()
@@ -111,7 +112,7 @@ public sealed class LiteralTwinMutationTests : IDisposable
 
     private static readonly ToolName ShellToolName = new(ShellTool.ToolName);
 
-    private ToolAuthorizationDecision? Screen(ToolAccessPolicy access, string command, ToolExecutionContext context)
+    private AuthorizationDecision? Screen(ToolAccessPolicy access, string command, ToolExecutionContext context)
     {
         var analysis = access.ShellCommandPolicy.Analyze(command, WorkingDirectory);
         Assert.True(access.TryProjectLiteralTwins(analysis, out var twins));

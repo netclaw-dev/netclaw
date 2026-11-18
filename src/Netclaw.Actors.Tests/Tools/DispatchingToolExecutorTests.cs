@@ -1660,7 +1660,7 @@ public partial class DispatchingToolExecutorTests : IDisposable
             builder.AddCoverage(candidate, new Coverage.ReviewedSafe(ReviewedSafeRoot.Real));
         }
 
-        var decision = ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy);
+        var decision = AuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy);
         var trace = builder.Complete(decision);
 
         Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
@@ -1714,7 +1714,7 @@ public partial class DispatchingToolExecutorTests : IDisposable
             SourceOccurrence: null);
         builder.AddCoverage(candidate, new Coverage.ReviewedSafe(ReviewedSafeRoot.Real));
         var trace = builder.Complete(
-            ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy));
+            AuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy));
 
         var call = new FunctionCallContent("call-malicious-trace", ShellTool.ToolName);
         var context = CreateInteractivePersonalContext("signalr/malicious-trace");
@@ -1763,7 +1763,7 @@ public partial class DispatchingToolExecutorTests : IDisposable
 
         builder.AddActorEvidence(candidate, actorMatch);
         var trace = builder.Complete(
-            ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy));
+            AuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy));
 
         Assert.Equal(traceReason, trace.Rows[0].Reason);
         Assert.Equal(ShellPolicyTraceOutcome.Uncovered, trace.Rows[0].Outcome);
@@ -3809,13 +3809,14 @@ public partial class DispatchingToolExecutorTests : IDisposable
         Assert.True(nativeTool.SupportsManagedTemporaryDirectory);
         Assert.Equal(FileWriteTool.ToolName, nativeTool.Correction.ToolName.Value);
 
-        var correctedNativeDecision = policy.AuthorizeInvocation(
-            fileWriteTool,
+        var correctedNativeDecision = policy.BuildNonShellConsentRequest(
+            new ToolName(fileWriteTool.Name),
             context,
-            ToolInput.Create("Path", nativePath, "Content", "P2 output"));
-        Assert.True(correctedNativeDecision.NeedsApproval);
+            ToolInput.Create("Path", nativePath, "Content", "P2 output"),
+            policy.SelectApprovalMatcher(fileWriteTool));
+        Assert.NotNull(correctedNativeDecision.Request);
         var nativeTemporary = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(
-            correctedNativeDecision.AgentCorrection);
+            correctedNativeDecision.Advice);
         Assert.Equal(shellTemporary.Target, nativeTemporary.Target);
 
         Assert.Collection(
@@ -4030,23 +4031,30 @@ public partial class DispatchingToolExecutorTests : IDisposable
             executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));
     }
 
-    [Fact]
-    public async Task Structured_file_temporary_correction_becomes_common_result_after_approval_miss()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Structured_file_temporary_advice_follows_grant_coverage(bool covered)
     {
+        using var directory = new DisposableTempDir();
+        var output = Path.Combine(directory.Path, "netclaw-structured-output.txt");
         var config = CreateApprovalGatedShellConfig();
         config.AudienceProfiles.Personal.ApprovalPolicy!.ToolOverrides[FileWriteTool.ToolName] =
             ToolApprovalMode.Approval;
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment, config);
-        var executor = new DispatchingToolExecutor(
-            registry,
-            policy,
-            new FixedApprovalService(new ToolApprovalCheckResult([FileWriteTool.ToolName], [])));
+        var candidate = new ApprovalCandidate(FileWriteTool.ToolName, Directory: null);
+        var match = new ToolApprovalMatch(FileWriteTool.ToolName, GrantScope.Everywhere.Instance);
+        var approval = new ToolApprovalCheckResult(
+            covered ? [] : [FileWriteTool.ToolName],
+            covered ? [match] : [])
+        {
+            CandidateChecks = [new ToolApprovalCandidateCheck(candidate, covered ? match : null)]
+        };
+        var executor = new DispatchingToolExecutor(registry, policy, new FixedApprovalService(approval));
         var call = CreateToolCall(
             "call-structured-temporary-correction",
             FileWriteTool.ToolName,
-            ToolInput.Create(
-                "Path", Path.Combine(Path.GetTempPath(), "netclaw-structured-output.txt"),
-                "Content", "unused"));
+            ToolInput.Create("Path", output, "Content", "unused"));
         var context = CreateInteractivePersonalContext("signalr/structured-temporary-correction");
 
         var decision = await executor.EvaluateAuthorizationAsync(
@@ -4054,10 +4062,22 @@ public partial class DispatchingToolExecutorTests : IDisposable
             context,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
-        Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
-        await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
-            executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));
+        if (covered)
+        {
+            var allowed = Assert.IsType<AuthorizationDecision.Allowed>(decision);
+            Assert.Equal(ToolAllowReason.StoredApproval, allowed.Reason);
+            Assert.Equal(match, Assert.Single(allowed.Matches));
+            await executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken);
+        }
+        else
+        {
+            var correction = Assert.IsType<AuthorizationDecision.CorrectionRequired>(decision);
+            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(Assert.Single(correction.Corrections.Items));
+            Assert.Empty(correction.Matches);
+            await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
+                executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
+            Assert.False(File.Exists(output));
+        }
     }
 
     [Fact]

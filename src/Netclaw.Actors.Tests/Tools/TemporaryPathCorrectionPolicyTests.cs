@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -163,7 +164,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
             PosixSession,
             explicitWorkingDirectory: PosixTemp);
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Null(decision.AgentCorrection);
         Assert.StartsWith("hard_deny_", decision.DenyReason, StringComparison.Ordinal);
     }
@@ -179,7 +180,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
             explicitWorkingDirectory: PosixTemp,
             deniedPaths: ["/tmp/protected"]);
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Null(decision.AgentCorrection);
         Assert.Equal("shell_references_protected_path", decision.DenyReason);
     }
@@ -232,7 +233,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
             explicitWorkingDirectory: PosixTemp,
             approvalMode: ToolApprovalMode.Auto);
 
-        Assert.True(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(decision);
         Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
         Assert.Null(decision.ApprovalContext);
     }
@@ -407,7 +408,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
         }
     }
 
-    private static ToolAuthorizationDecision Evaluate(
+    private static AuthorizationDecision Evaluate(
         ShellExecutionEnvironment environment,
         string tempRoot,
         string command,
@@ -491,7 +492,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
             context.Invocation);
         return correction is null
             ? preflight.GetDecision()
-            : ToolAuthorizationDecision.RequireAgentCorrection(correction);
+            : AuthorizationDecision.RequireAgentCorrection(new ToolCorrectionCollection([correction]));
     }
 
     private static ShellExecutionEnvironment BashEnvironment()

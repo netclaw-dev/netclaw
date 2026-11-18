@@ -17,7 +17,7 @@ namespace Netclaw.Actors.Authorization;
 /// call, the per-candidate coverage trace. The payload types are the existing
 /// consent and advice types, so a case adds no second copy of a fact.
 /// </remarks>
-internal abstract record AuthorizationDecision
+internal closed record AuthorizationDecision
 {
     private AuthorizationDecision(
         IReadOnlyList<ToolApprovalMatch> matches,
@@ -65,52 +65,45 @@ internal abstract record AuthorizationDecision
         string? Message,
         ShellPolicyDecisionTrace Trace) : AuthorizationDecision([], Trace);
 
-    /// <summary>
-    /// Converts the value that the rule components return today into a case.
-    /// </summary>
-    /// <param name="decision">The completed decision of the rule that decided.</param>
-    /// <param name="analysis">The authorized shell analysis for an allowed shell call, otherwise null.</param>
-    /// <exception cref="InvalidOperationException">
-    /// The decision lacks the data that its outcome requires, or a consent request carries advice.
-    /// </exception>
-    internal static AuthorizationDecision From(
-        ToolAuthorizationDecision decision,
-        ShellCommandAnalysis? analysis)
-    {
-        ArgumentNullException.ThrowIfNull(decision);
-        if (analysis is not null && decision.Outcome != ToolAuthorizationOutcome.Allowed)
-            throw new InvalidOperationException("Only an allowed decision can carry a shell analysis.");
+    internal static Allowed Allow(ToolAllowReason reason)
+        => new(reason, null, [], ShellPolicyDecisionTrace.Empty);
 
-        return decision.Outcome switch
+    internal static Allowed Allow(ToolAllowReason reason, IReadOnlyList<ToolApprovalMatch> matches)
+        => new(reason, null, [.. matches], ShellPolicyDecisionTrace.Empty);
+
+    internal static Denied Deny(string reason, string? message = null)
+        => new(reason, message, ShellPolicyDecisionTrace.Empty);
+
+    internal static NeedsConsent RequiresApproval(ToolApprovalContext request)
+        => new(request, [], ShellPolicyDecisionTrace.Empty);
+
+    internal static NeedsConsent RequiresApproval(ToolApprovalContext request, IReadOnlyList<ToolApprovalMatch> matches)
+        => new(request, [.. matches], ShellPolicyDecisionTrace.Empty);
+
+    internal static CorrectionRequired RequireAgentCorrection(ToolCorrection correction, IReadOnlyList<ToolApprovalMatch> matches)
+        => RequireAgentCorrection(new ToolCorrectionCollection([correction]), matches);
+
+    internal static CorrectionRequired RequireAgentCorrection(ToolCorrectionCollection corrections)
+        => new(corrections, [], ShellPolicyDecisionTrace.Empty);
+
+    internal static CorrectionRequired RequireAgentCorrection(ToolCorrectionCollection corrections, IReadOnlyList<ToolApprovalMatch> matches)
+        => new(corrections, [.. matches], ShellPolicyDecisionTrace.Empty);
+
+    internal AuthorizationDecision WithApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)
+        => this switch
         {
-            ToolAuthorizationOutcome.Allowed => new Allowed(
-                decision.AllowReason
-                ?? throw new InvalidOperationException("Allowed decision missing an allow reason."),
-                analysis,
-                decision.ApprovalMatches,
-                decision.ShellPolicyTrace),
-            ToolAuthorizationOutcome.RequiresApproval => decision.AgentCorrections is null
-                ? new NeedsConsent(
-                    decision.ApprovalContext
-                    ?? throw new InvalidOperationException("Approval decision missing approval context."),
-                    decision.ApprovalMatches,
-                    decision.ShellPolicyTrace)
-                // Advice and a prompt are exclusive. Fail loudly instead of dropping the advice.
-                : throw new InvalidOperationException("A consent request cannot carry agent advice."),
-            ToolAuthorizationOutcome.RequiresAgentCorrection => new CorrectionRequired(
-                decision.AgentCorrections
-                ?? throw new InvalidOperationException("Agent correction decision missing correction facts."),
-                decision.ApprovalMatches,
-                decision.ShellPolicyTrace),
-            ToolAuthorizationOutcome.Denied => new Denied(
-                decision.DenyReason
-                ?? throw new InvalidOperationException("Denied decision missing a deny reason."),
-                decision.DenyMessage,
-                decision.ShellPolicyTrace),
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(decision),
-                decision.Outcome,
-                "Unknown authorization outcome.")
+            Allowed allowed => new Allowed(allowed.Reason, allowed.Analysis, [.. matches], allowed.Trace),
+            NeedsConsent consent => new NeedsConsent(consent.Request, [.. matches], consent.Trace),
+            CorrectionRequired correction => correction,
+            Denied denied => denied
         };
-    }
+
+    internal AuthorizationDecision WithShellPolicyTrace(ShellPolicyDecisionTrace trace)
+        => this switch
+        {
+            Allowed allowed => new Allowed(allowed.Reason, allowed.Analysis, allowed.Matches, trace),
+            NeedsConsent consent => new NeedsConsent(consent.Request, consent.Matches, trace),
+            CorrectionRequired correction => new CorrectionRequired(correction.Corrections, correction.Matches, trace),
+            Denied denied => new Denied(denied.Reason, denied.Message, trace)
+        };
 }

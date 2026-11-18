@@ -508,8 +508,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             AuthorizationDecision.NeedsConsent consent => throw new ToolApprovalRequiredException(consent.Request),
             AuthorizationDecision.CorrectionRequired correction =>
                 throw new ToolCorrectionRequiredException(correction.Corrections),
-            AuthorizationDecision.Denied denied => throw new ToolAccessDeniedException(denied.Reason, denied.Message),
-            var unknown => throw new ArgumentOutOfRangeException(nameof(toolCall), unknown, "Unknown authorization decision.")
+            AuthorizationDecision.Denied denied => throw new ToolAccessDeniedException(denied.Reason, denied.Message)
         };
 
     private void LogAuthorizationDecision(

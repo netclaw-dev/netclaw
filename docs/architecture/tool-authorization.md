@@ -32,13 +32,13 @@ shell call, it ends when the process starts. The result is one
 
 | Outcome | What it means | Code value |
 | --- | --- | --- |
-| Allowed | The tool runs. | `ToolAuthorizationOutcome.Allowed` |
-| Requires consent | The call waits for an operator answer. | `ToolAuthorizationOutcome.RequiresApproval` |
-| Requires correction | The model must author a different call. | `ToolAuthorizationOutcome.RequiresAgentCorrection` |
-| Denied | The call does not run, and no answer can change that. | `ToolAuthorizationOutcome.Denied` |
+| Allowed | The tool runs. | `AuthorizationDecision.Allowed` |
+| Requires consent | The call waits for an operator answer. | `AuthorizationDecision.NeedsConsent` |
+| Requires correction | The model must author a different call. | `AuthorizationDecision.CorrectionRequired` |
+| Denied | The call does not run, and no answer can change that. | `AuthorizationDecision.Denied` |
 
 The code values are in
-[`ToolAuthorizationDecision.cs`](../../src/Netclaw.Actors/Tools/ToolAuthorizationDecision.cs).
+[`AuthorizationDecision.cs`](../../src/Netclaw.Actors/Authorization/AuthorizationDecision.cs).
 
 In scope:
 
@@ -113,11 +113,10 @@ Notes on the diagram:
 - "Correctable" ends this attempt. The model authors a new call, which starts a
   new [authorization attempt](../spec/GLOSSARY.md#authorization-attempt).
 - A non-shell tool has one candidate: the tool name.
-- Today, the code has no type for each stage. One decision record
-  (`ToolAuthorizationDecision`) and one mutable bag (`ToolApprovalAttempt` in
-  [`ToolExecutionContext.cs`](../../src/Netclaw.Tools.Abstractions/ToolExecutionContext.cs))
-  carry the stages. **Planned:** one closed type per stage (consolidation PRs 5
-  and 6).
+- The internal `AuthorizationDecision` holds one terminal outcome. A call-local
+  consent candidate holds the request and any advice until the grant check ends.
+  `ToolApprovalAttempt` in [`ToolExecutionContext.cs`](../../src/Netclaw.Tools.Abstractions/ToolExecutionContext.cs)
+  holds the attempt state.
 
 ## 3. The contexts
 
@@ -1334,7 +1333,7 @@ See [TA-10](../../openspec/specs/tool-authorization/spec.md#requirement-ta-10-co
 | --- | --- |
 | Question | Can the model fix this call itself, so that no prompt is necessary? |
 | Classes | [`TemporaryPathCorrectionPolicy`](../../src/Netclaw.Actors/Tools/TemporaryPathCorrectionPolicy.cs), [`ManagedTemporaryCorrection`](../../src/Netclaw.Actors/Tools/ManagedTemporaryCorrection.cs), [`NativeToolShellCorrectionDetector`](../../src/Netclaw.Actors/Tools/NativeToolShellCorrectionDetector.cs), correction selection in `ShellPolicyCoordinator` |
-| Published contract | `ToolAuthorizationDecision` with outcome `RequiresAgentCorrection` and a list of `ToolCorrection` values. |
+| Published contract | `AuthorizationDecision.CorrectionRequired` holds a list of `ToolCorrection` values. |
 | Must not know | It must not be an input to authority. |
 | Data | Call-local. The managed-temp retry key is call-local state in `ToolApprovalAttempt`. |
 | Rules | [TA-9](../../openspec/specs/tool-authorization/spec.md#requirement-ta-9-agent-correction-precedes-a-prompt-and-grants-no-authority) |
