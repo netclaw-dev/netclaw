@@ -119,6 +119,56 @@ public sealed class MattermostGatewayLifecycleContractTests(ITestOutputHelper ou
         Assert.Equal(1, ForwardedIngressCount);
     }
 
+    [Fact]
+    public async Task A_late_start_result_cannot_complete_a_new_connect()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var transport = new FakeMattermostGatewayTransport();
+        var sink = new RecordingGatewayEventSink();
+        var actor = ActorOfAsTestActorRef<MattermostNetGatewayLifecycleActor>(
+            MattermostNetGatewayLifecycleActor.CreateProps(
+                transport, new FakeTimeProvider(), sink, NullLogger.Instance));
+        var firstCaller = CreateTestProbe();
+        var disconnectCaller = CreateTestProbe();
+        var secondCaller = CreateTestProbe();
+        var snapshotCaller = CreateTestProbe();
+
+        // The synchronous dispatcher and inline task completion put the old result before the snapshot request.
+        await Task.Run(() =>
+        {
+            var firstStart = transport.DeferNextStart();
+            TaskCompletionSource<MattermostBotIdentity>? secondStart = null;
+            try
+            {
+                actor.Tell(new MattermostNetGatewayLifecycleActor.Connect("https://mattermost.test", "test-token"), firstCaller.Ref);
+                Assert.Equal(1, transport.StartCount);
+
+                actor.Tell(MattermostNetGatewayLifecycleActor.Disconnect.Instance, disconnectCaller.Ref);
+                var canceled = firstCaller.ExpectMsg<Status.Failure>(cancellationToken: ct);
+                Assert.IsType<OperationCanceledException>(canceled.Cause);
+                disconnectCaller.ExpectMsg<MattermostGatewaySnapshot>(cancellationToken: ct);
+
+                secondStart = transport.DeferNextStart();
+                actor.Tell(new MattermostNetGatewayLifecycleActor.Connect("https://mattermost.test", "test-token"), secondCaller.Ref);
+                Assert.Equal(2, transport.StartCount);
+
+                firstStart.SetResult(new MattermostBotIdentity("bot-old", "old"));
+                actor.Tell(MattermostNetGatewayLifecycleActor.GetSnapshot.Instance, snapshotCaller.Ref);
+                Assert.False(snapshotCaller.ExpectMsg<MattermostGatewaySnapshot>(cancellationToken: ct).IsReady);
+
+                secondStart.SetResult(new MattermostBotIdentity("bot-new", "new"));
+                var connected = secondCaller.ExpectMsg<MattermostGatewaySnapshot>(cancellationToken: ct);
+                Assert.True(connected.IsReady);
+                Assert.Equal(new MattermostUserId("bot-new"), connected.BotUserId);
+            }
+            finally
+            {
+                firstStart.TrySetCanceled();
+                secondStart?.TrySetCanceled();
+            }
+        }, ct);
+    }
+
     private static LifecycleSnapshotView ToView(MattermostGatewaySnapshot snapshot) =>
         new(snapshot.IsConnected, snapshot.IsReady, snapshot.HealthDetail);
 
@@ -171,6 +221,7 @@ public sealed class MattermostGatewayLifecycleContractTests(ITestOutputHelper ou
         private Func<MattermostGatewayDisconnect, Task>? _disconnected;
         private Func<string, Task>? _logReceived;
         private TaskCompletionSource? _pendingStop;
+        private TaskCompletionSource<MattermostBotIdentity>? _nextStart;
 
         public event Func<MattermostGatewayMessage, Task> MessageReceived
         {
@@ -245,7 +296,19 @@ public sealed class MattermostGatewayLifecycleContractTests(ITestOutputHelper ou
         {
             StartCount++;
             IsConnected = true;
+            var pending = _nextStart;
+            _nextStart = null;
+            if (pending is not null)
+                return pending.Task;
+
             return Task.FromResult(new MattermostBotIdentity("bot-1", "netclaw"));
+        }
+
+        public TaskCompletionSource<MattermostBotIdentity> DeferNextStart()
+        {
+            var pending = new TaskCompletionSource<MattermostBotIdentity>();
+            _nextStart = pending;
+            return pending;
         }
 
         public Task StopAsync()

@@ -193,7 +193,7 @@ jobs:
           - group: session-reliability
             gates: tool-batch-readiness headless-stop-rule open-child-runs local-control-proof stopped-turn-continuation
           - group: child-owner-and-report
-            gates: child-owner-and-report chat-close-dispatch-expiry
+            gates: child-owner-and-report chat-close-dispatch-expiry gateway-retry-stability
           - group: loopback-host-origin
             gates: loopback-host-origin curation-same-name
           - group: child-consent

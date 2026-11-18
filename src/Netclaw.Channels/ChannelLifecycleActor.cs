@@ -32,17 +32,6 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
     where TSnapshot : IGatewaySnapshot
     where TConnectCommand : class
 {
-    private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(5);
-
-    /// <summary>
-    /// How long a connection must hold Ready before a subsequent failure
-    /// resets the retry backoff to zero. A ready→drop flap inside this window
-    /// keeps the previous backoff growing instead of reconnecting with zero
-    /// delay forever.
-    /// </summary>
-    private static readonly TimeSpan BackoffResetStabilityWindow = TimeSpan.FromSeconds(60);
-
     private readonly string _channelDisplayName;
     private readonly string _disconnectedDetail;
     private readonly string _notReadyDetail;
@@ -469,20 +458,13 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
     }
 
     /// <summary>
-    /// Resets the retry backoff to zero only when the connection had been
-    /// Ready for at least <see cref="BackoffResetStabilityWindow"/>. The reset
-    /// decision is deferred to the failure edge — a connect success alone does
-    /// not reset — so a ready→drop flap inside the window keeps the previous
-    /// backoff growing (5s → … → 5min) instead of hammering the server with
-    /// zero-delay reconnects forever.
+    /// Resets the retry delay at the failure edge only after a stable Ready period.
+    /// A connect success alone does not reset the delay. This prevents repeated immediate retries.
     /// </summary>
     private void ResetRetryDelayIfStable()
     {
-        if (_readyEnteredAt is { } readyEnteredAt
-            && _timeProvider.GetUtcNow() - readyEnteredAt >= BackoffResetStabilityWindow)
-        {
-            _retryDelay = TimeSpan.Zero;
-        }
+        if (_readyEnteredAt is { } readyEnteredAt)
+            _retryDelay = GatewayRetryPolicy.DelayAfterReady(_retryDelay, readyEnteredAt, _timeProvider.GetUtcNow());
 
         _readyEnteredAt = null;
     }
@@ -494,12 +476,11 @@ public abstract class ChannelLifecycleActor<TSnapshot, TConnectCommand> : Receiv
             return;
 
         CancelRetryTimer();
+        var schedule = GatewayRetryPolicy.NextSchedule(_retryDelay);
         _retryTimer = Context.System.Scheduler.ScheduleTellOnceCancelable(
-            _retryDelay, Self, RetryConnect.Instance, ActorRefs.NoSender);
+            schedule.DueAfter, Self, RetryConnect.Instance, ActorRefs.NoSender);
 
-        _retryDelay = _retryDelay == TimeSpan.Zero
-            ? InitialRetryDelay
-            : TimeSpan.FromTicks(Math.Min(_retryDelay.Ticks * 2, MaxRetryDelay.Ticks));
+        _retryDelay = schedule.NextDelay;
     }
 
     private void CancelRetryTimer()

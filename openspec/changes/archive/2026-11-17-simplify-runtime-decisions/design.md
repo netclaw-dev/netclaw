@@ -2,8 +2,8 @@
 
 See [the proposal](proposal.md) for motivation and scope.
 The baseline is `76071cfe9e721dee864d60d1379a497d97f19414`.
-The [canonical execution plan](../../../.systematize/plans/net11-typed-decisions/plan.md) owns PR boundaries, tasks, verification, and handoff authority.
-Use the [engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+The [canonical execution plan](../../../../.systematize/plans/net11-typed-decisions/plan.md) owns PR boundaries, tasks, verification, and handoff authority.
+Use the [engineering glossary](../../../../docs/spec/GLOSSARY.md) for shared terms.
 
 ## Goals / Non-Goals
 
@@ -50,7 +50,7 @@ An explicit disconnect cannot schedule another automatic reconnect.
 | Session actor and retry owner | Actor-local | Hold live retry state and execute the selected actions. |
 | Retry decision function | Call-local | Derive an outcome from explicit values without I/O or hidden mutation. |
 | Gateway actor | Actor-local | Own clients, subscriptions, timers, and pending replies. |
-| Reconnect decision function | Call-local | Select transitions and actions from state, input identity, and time. |
+| Reconnect decision function | Call-local | Calculate the retry schedule and reset delay from explicit timestamps. |
 | `ToolAuthorizer` and its current rule owners | Call-local | Preserve ordered authority decisions and exact evidence. |
 | Public authorization facade | Call-local | Preserve released factory, property, and exception contracts. |
 
@@ -81,7 +81,7 @@ Map each removed integration case to its retained guarantee and a replacement th
 - PR1 can expose SDK, analyzer, native dependency, or source-generator incompatibility. Verify actual release artifacts before acceptance.
 - PR2 can accidentally change public facade semantics or rule order. Require public consumer proof and zero corpus differences.
 - PR3 can lose reminder attribution or snapshot recovery. Preserve existing durable facts and real restore tests.
-- PR4 overlaps the gateway stop-timeout PR. Reconcile the actual base and retain the bounded stop guarantee.
+- PR4 overlaps the gateway stop-timeout PR. Reconcile the actual base and preserve any stop deadline that it contains.
 - Pure tests cannot prove effect order across persistence or the real transport. Retain those boundary tests.
 
 ## Migration Plan
@@ -95,8 +95,8 @@ The operator owns all merges and deployments.
 
 ## Open Questions
 
-The exact baseline-database upgrade fixture and native release-host access require execution-time proof.
-These gaps block PR1 acceptance, not plan authorship.
-The canonical plan records the existing infrastructure to use and all unrun checks.
+The baseline database procedure passes with the released .NET 10 binary and the .NET 11 candidate.
+Hosted validation covers Linux, Windows, and macOS test hosts. Hosted smoke covers Linux and macOS binaries.
+The canonical plan records the exact evidence and native release targets that remain outside this PR acceptance.
 The user accepted focused verification instead of the blanket ten-live-lane template.
 Reuse existing actor fixtures and native smoke. Add no standalone process probe solely for a refactor.

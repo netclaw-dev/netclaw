@@ -80,7 +80,7 @@ The table retains earlier group measurements. Gate notes below describe later ad
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally), `stopped-turn-continuation` (10 mutants, one invocation, 2.5 locally) | 13.5 to 14.5 (estimate; hosted measurement required) |
-| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry` (two mutants, one CLI invocation) | [8m14s](https://github.com/netclaw-dev/netclaw/actions/runs/40069130760/job/120798739243) |
+| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry` (two mutants, one CLI invocation); `gateway-retry-stability` (one Channels invocation) | [8m14s](https://github.com/netclaw-dev/netclaw/actions/runs/40069130760/job/120798739243) |
 | `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local), `child-resume-gate` (62 mutants, one invocation; local time below) | 9 to 11 (estimate) |
 
@@ -261,6 +261,21 @@ A cold CI runner should take two to four minutes.
 
 The harness uses xUnit 2 because Stryker's VSTest adapter does not support xUnit 3 correctly.
 The script requires `perl` and `jq`, which the Linux CI image supplies.
+
+### Gateway retry stability mutation target
+
+Run `./scripts/run-gateway-retry-stability-mutations.sh` to check the retry reset boundary.
+The target selects only `readyDuration >= StabilityWindow` in `GatewayRetryPolicy`.
+The linked `GatewayRetryPolicyTests` cover 59,999 ms and 60,000 ms.
+The gate expects two killed comparison mutants and requires the strict `>` replacement to be killed.
+A missing target, compile error, survivor, or unexpected active mutant fails the gate.
+The local run killed both selected mutants: `readyDuration < StabilityWindow` and `readyDuration > StabilityWindow`.
+
+CI assigns this invocation to `child-owner-and-report`.
+The cited 8m14s job predates this target and any new targets in the stack.
+A separate invocation usually costs 1.5 to 2 minutes.
+The combined group cost remains provisional until the stack runs in CI.
+The group must stay at 15 minutes or less on a fast runner. The job timeout is 25 minutes.
 
 ### Chat Close Dispatch Expiry Gate
 

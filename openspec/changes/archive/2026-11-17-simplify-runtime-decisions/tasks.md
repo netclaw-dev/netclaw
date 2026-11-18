@@ -8,22 +8,26 @@
 
 - [x] 2.1 Replace duplicate internal outcome state with one closed result family. Verify public facade and executor contract compatibility through PR2.
 - [x] 2.2 Preserve authority decisions. Verify zero corpus differences, the disposition matrix, wire fixtures, and the focused mutation gates in PR2.
-- [ ] 2.3 Add and submit PR2 through `gh stack`. Verify its actual predecessor and combined-head checks. PR2 is open; hosted checks remain pending.
+- [x] 2.3 Add and submit PR2 through `gh stack`. Verify its actual predecessor and combined-head checks.
 
 ## 3. Extract delivery retry decisions
 
 - [x] 3.1 Extract the pure retry decision and remove the replaced branches. Verify all PR3 positive and negative cases without changed journal records.
 - [x] 3.2 Move only equivalent policy permutations into direct tests. Verify the same unsafe mutation fails and fewer actor fixtures execute.
-- [ ] 3.3 Add and submit PR3 through `gh stack`. Verify its actual predecessor and combined-head checks.
+- [x] 3.3 Add and submit PR3 through `gh stack`. Verify its actual predecessor and combined-head checks.
 
 ## 4. Extract gateway reconnect decisions
 
-- [ ] 4.1 Reconcile PR #2795 and extract the reconnect decision. Verify the actual base stop behavior and PR4 policy cases.
-- [ ] 4.2 Move shared policy permutations into direct tests. Retain timer, transport, subscription, and adapter contract proof.
-- [ ] 4.3 Add and submit PR4 through `gh stack`. Verify its actual predecessor and combined-head checks.
+- [x] 4.1 Reconcile PR #2795 and extract the reconnect decision. Verify the actual base stop behavior and PR4 policy cases.
+- [x] 4.2 Move shared policy permutations into direct tests. Retain timer, transport, subscription, and adapter contract proof.
+- [x] 4.3 Add and submit PR4 through `gh stack`. Verify its actual predecessor and combined-head checks.
 
 ## 5. Complete the verified handoff
 
-- [ ] 5.1 Audit independent verdicts and canonical plan receipts at each final head. Reuse valid exact-head hosted results rather than rerunning CI.
-- [ ] 5.2 Hand the four PR links and exact head receipts to the operator. Verify no merge or deployment occurs.
-- [ ] 5.3 After implementation verification, use OpenSpec Verify and Archive. Retain the final canonical plan in Git history.
+- [x] 5.1 Audit independent verdicts and canonical plan receipts at each final head. Reuse valid exact-head hosted results rather than rerunning CI.
+- [x] 5.2 Prepare the final handoff package with four PR links and exact head receipts. Verify no merge or deployment occurs.
+- [x] 5.3 Retain the implementation verification report and canonical plan in Git history.
+
+After these implementation tasks finish, use OpenSpec Verify and Archive. Then deliver the final handoff package.
+This order avoids a task that requires its own archive before it can finish.
+The canonical plan retains the final current-head CI and handoff requirements.
