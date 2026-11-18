@@ -195,7 +195,9 @@ jobs:
           - group: child-owner-and-report
             gates: child-owner-and-report chat-close-dispatch-expiry gateway-retry-stability
           - group: loopback-host-origin
-            gates: loopback-host-origin curation-same-name session-binding
+            gates: loopback-host-origin curation-same-name
+          - group: session-binding
+            gates: session-binding
           - group: child-consent
             gates: child-consent text-answer-guard child-resume-gate
 

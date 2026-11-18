@@ -81,7 +81,8 @@ The table retains earlier group measurements. Gate notes below describe later ad
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally), `stopped-turn-continuation` (10 mutants, one invocation, 2.5 locally) | 13.5 to 14.5 (estimate; hosted measurement required) |
 | `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry` (two mutants, one CLI invocation); `gateway-retry-stability` (one Channels invocation) | [8m14s](https://github.com/netclaw-dev/netclaw/actions/runs/40069130760/job/120798739243) |
-| `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
+| `loopback-host-origin` | `loopback-host-origin` (two invocations), `curation-same-name` (one invocation) | Separate group measurement pending |
+| `session-binding` | five required mutants, one invocation | [2m56s within the prior combined group](https://github.com/netclaw-dev/netclaw/actions/runs/44369912526/job/135033762922); separate group measurement pending |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local), `child-resume-gate` (62 mutants, one invocation; local time below) | 9 to 11 (estimate) |
 
 The approval-directory gate includes one retained-hop producer target in `FileSystemAuthority.FollowLinkChainCore`.
@@ -155,8 +156,9 @@ The corrected gate also selects the common output-lifetime predicate.
 Its four equality and conjunction mutants must execute and die. The actor-incarnation and failed-replacement cases supply that proof.
 The corrected warm local invocation takes 3 minutes 46 seconds and kills all five selected mutants.
 That duration includes Stryker analysis, build, instrumentation, and test execution. It does not measure a cold hosted runner.
-Hosted CI must verify the combined group cost before acceptance.
-The gate runs in `loopback-host-origin`. Hosted CI must verify the group's cost within the current budget.
+The successful combined group took [15 minutes 6 seconds](https://github.com/netclaw-dev/netclaw/actions/runs/44369912526/job/135033762922), above the 15-minute budget.
+The gate now has its own `session-binding` group. Its invocation within the prior group took 2 minutes 56 seconds.
+Hosted CI must verify both separate group costs before acceptance. The job timeout remains 25 minutes.
 
 Focused mutation tests prove that deterministic tests reject a specific unsafe
 change at a security, authority, or load-bearing reliability boundary. They do not measure general code
