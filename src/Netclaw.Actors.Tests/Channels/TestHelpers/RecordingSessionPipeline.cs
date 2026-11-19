@@ -26,6 +26,8 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     private SessionPipelineOptions? _capturedOptions;
     private SharedKillSwitch? _killSwitch;
     private Channel<SessionOutput>? _laterOutputs;
+    private TaskCompletionSource? _creationGate;
+
 
     /// <summary>
     /// Creates a recording pipeline.
@@ -53,6 +55,13 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
 
     public SessionPipelineOptions? CapturedOptions => Volatile.Read(ref _capturedOptions);
     public Task<SessionPipelineOptions> Created => _created.Task;
+
+    public void InstallCreationGate() =>
+        _creationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void ReleaseCreationGate() =>
+        (_creationGate ?? throw new InvalidOperationException("No creation gate exists.")).SetResult();
+
     public IReadOnlyList<IWithSessionId> RecordedFeedback
     {
         get { lock (_feedbackLock) return _recordedFeedback.ToList(); }
@@ -102,7 +111,7 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
             throw new InvalidOperationException("The output stream did not accept the output.");
     }
 
-    public Task<MaterializedSession> CreateAsync(
+    public async Task<MaterializedSession> CreateAsync(
         SessionId sessionId,
         SessionPipelineOptions options,
         IMaterializer? materializer = null,
@@ -111,6 +120,8 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         Interlocked.Increment(ref _createCount);
         Volatile.Write(ref _capturedOptions, options);
         _created.TrySetResult(options);
+        if (_creationGate is { } creationGate)
+            await creationGate.Task.WaitAsync(cancellationToken);
 
         var killSwitch = KillSwitches.Shared($"recording-{sessionId.Value}");
         Volatile.Write(ref _killSwitch, killSwitch);
@@ -174,7 +185,7 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
                 .Via(killSwitch.Flow<SessionOutput>());
         }
 
-        return Task.FromResult(new MaterializedSession(input, output, killSwitch));
+        return new MaterializedSession(input, output, killSwitch);
     }
 
     public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)

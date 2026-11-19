@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
+using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
@@ -28,9 +29,11 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
     private int _actorCounter;
     private readonly List<Netclaw.Tests.Utilities.TestSessionTempDirectory> _testTempDirs = [];
 
+    protected override SessionIngressGate IngressGate { get; } = new();
+
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
-        builder.WithInMemoryJournal().WithInMemorySnapshotStore().WithNetclawSerialization();
+        builder.WithInMemoryJournal().WithInMemorySnapshotStore().WithNetclawSerialization().WithSerializationVerification();
     }
 
     protected override IActorRef CreateBindingActor(
@@ -67,6 +70,12 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             },
             Text: text,
             ReceivedAt: TimeProvider.System.GetUtcNow());
+
+    protected override object CreateInboundWithAttachment(string text, string senderId)
+        => ((SlackThreadInbound)CreateInboundMessage(text, senderId)) with
+        {
+            Files = [new SlackFileReference("file-gate", "gate.txt", "text/plain", 1, "https://files.slack.com/gate")]
+        };
 
     protected override object CreateApprovalResponse(string callId, string selectedKey, string senderId)
         => new SlackApprovalResponse(
@@ -105,8 +114,6 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
                 .OfType<SlackNet.Blocks.SectionBlock>()
                 .Select(block => block.Text is SlackNet.Blocks.Markdown markdown ? markdown.Text : string.Empty))),
             (update.Blocks ?? []).Any(block => block is SlackNet.Blocks.ActionsBlock))).ToList();
-
-    protected override bool SupportsThreadHydration => true;
 
     protected override string GetCursorPersistenceId(SessionId sessionId)
         => $"slack-thread-cursor-{Uri.EscapeDataString(sessionId.Value)}";
@@ -175,30 +182,9 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         IThreadHistoryFetcher? historyFetcher = null,
         IChannelRegistry? channelRegistry = null)
     {
-        var testTemp = TestSlackGatewayDeps.NewTestPaths();
-        _testTempDirs.Add(testTemp);
-        var paths = testTemp.Paths;
-        var deps = new SlackGatewayDependencies(
-            Pipeline: pipeline,
-            IngressGate: null,
-            ActorSystem: Sys,
-            TimeProvider: TimeProvider.System,
-            Options: new SlackChannelOptions
-            {
-                Enabled = true,
-                AllowDirectMessages = true,
-                BotToken = new SensitiveString("xoxb-fake")
-            },
-            BotUserId: new SlackUserId("UBOT"),
-            DefaultChannelId: null,
-            ChannelRegistry: channelRegistry ?? TestChannelRegistries.SlackWithProcessingRenderer(_replyClient),
-            ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner(),
-            ThreadHistoryFetcher: historyFetcher ?? EmptyThreadHistoryFetcher.Instance,
-            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
-            ModelCapabilities: TestSlackGatewayDeps.DefaultTextOnlyModel,
-            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(paths),
-            PromptInjectionDetector: detector);
+        var deps = CreateDependencies(pipeline, detector,
+            historyFetcher ?? EmptyThreadHistoryFetcher.Instance,
+            channelRegistry ?? TestChannelRegistries.SlackWithProcessingRenderer(_replyClient));
 
         var suffix = string.IsNullOrEmpty(nameSuffix) ? "" : $"-{nameSuffix}";
         var name = $"slack-thread-contract{suffix}-{Interlocked.Increment(ref _actorCounter)}";
@@ -207,6 +193,63 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             new SlackChannelId("C-test"),
             new SlackThreadTs("1000.1"),
             deps), name);
+    }
+
+    private SlackGatewayDependencies CreateDependencies(
+        ISessionPipeline pipeline,
+        ConfigurablePromptInjectionDetector detector,
+        IThreadHistoryFetcher historyFetcher,
+        IChannelRegistry channelRegistry)
+    {
+        var testTemp = TestSlackGatewayDeps.NewTestPaths();
+        _testTempDirs.Add(testTemp);
+        var paths = testTemp.Paths;
+        return new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            IngressGate: IngressGate,
+            ActorSystem: Sys,
+            TimeProvider: Clock,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ChannelRegistry: channelRegistry,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: historyFetcher,
+            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestSlackGatewayDeps.DefaultTextOnlyModel,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(paths),
+            PromptInjectionDetector: detector);
+    }
+
+    [Fact]
+    public async Task Missing_required_history_fetcher_reports_the_guard_and_valid_history_initializes()
+    {
+        var pipeline = new RecordingSessionPipeline(_ => []);
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var dependencies = CreateDependencies(pipeline, detector,
+            null!, TestChannelRegistries.SlackWithProcessingRenderer(_replyClient));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => new SlackThreadBindingActor(
+            new SessionId("missing-history-fetcher"), new SlackChannelId("C-test"),
+            new SlackThreadTs("1000.1"), dependencies));
+        Assert.Equal("SlackGatewayDependencies.ThreadHistoryFetcher is not wired; "
+            + "Slack thread history hydration cannot be silently disabled.", exception.Message);
+        Assert.Equal(0, pipeline.CreateCount);
+
+        var actor = CreateActorCore(new SessionId("valid-history-fetcher"), pipeline, detector,
+            historyFetcher: EmptyThreadHistoryFetcher.Instance);
+        await pipeline.Created.WaitAsync(TestContext.Current.CancellationToken);
+        actor.Tell(CreateInboundMessage("valid history sentinel", "user-1"), TestActor);
+        await AwaitAssertAsync(() =>
+            Assert.Equal("valid history sentinel", Assert.Single(pipeline.CapturedInputs).ExecutableText),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(1, pipeline.CreateCount);
     }
 
     [Fact]

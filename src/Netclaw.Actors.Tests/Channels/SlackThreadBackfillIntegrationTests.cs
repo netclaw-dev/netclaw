@@ -21,6 +21,7 @@ using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Sessions;
+using Netclaw.Channels;
 using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
@@ -872,13 +873,29 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit, IAsyncDisposa
             Hidden: false,
             IsDirectMessage: false));
 
-        // The stale event must be dropped — call count must not increase.
-        // AwaitAssertAsync repeatedly re-asserts during the duration; if the
-        // count rises, the assertion fails on retry and the test fails.
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.AppMention,
+            EventId: new SlackEventId("C_STALE:6000.6"),
+            ChannelId: new SlackChannelId("C_STALE"),
+            ThreadTs: new SlackThreadTs("6000.0"),
+            EventTs: new SlackEventTs("6000.6"),
+            UserId: new SlackUserId("U_USER"),
+            BotId: null,
+            Text: "<@UBOT> after stale sentinel",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: false));
+
+        // The gateway and the thread actor preserve the stale event and sentinel order.
         await AwaitAssertAsync(() =>
-        {
-            Assert.Equal(callsBeforeStale, _chatClient.CallCount);
-        }, duration: TimeSpan.FromSeconds(2), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Contains(_chatClient.ReceivedMessagesByCall, messages =>
+                messages.LastOrDefault(message => message.Role == AiChatRole.User)?.Contents
+                    .OfType<TextContent>().Any(content => content.Text.Contains("after stale sentinel", StringComparison.Ordinal)) == true),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(callsBeforeStale + 1, _chatClient.CallCount);
+        Assert.DoesNotContain(_chatClient.ReceivedMessagesByCall, messages =>
+            messages.LastOrDefault(message => message.Role == AiChatRole.User)?.Contents
+                .OfType<TextContent>().Any(content => content.Text.Contains("stale event", StringComparison.Ordinal)) == true);
     }
 
     [Fact]
@@ -1009,11 +1026,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit, IAsyncDisposa
     [Fact]
     public async Task Tap_on_mention_re_hydrates_on_the_same_live_actor()
     {
-        // With MentionRequiredInThread on for the channel, a second mention on the
-        // SAME live binding actor re-runs thread-history hydration to catch up on
-        // the gap the tap held — unlike the default once-per-runtime path
-        // (Backfill_runs_once_per_runtime...), where the second live inbound is
-        // fetch-free. fetchCount goes 1 → 2 with no restart.
+        // An empty startup fetch prevents a backfill turn from racing with the first live mention.
         var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
         var httpClient = new HttpClient(_httpHandler);
 
@@ -1021,7 +1034,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit, IAsyncDisposa
         var countingFetcher = new SlackThreadHistoryFetcher(
             (channelId, threadTs, limit, cursor, ct) =>
             {
-                Interlocked.Increment(ref fetchCount);
+                if (Interlocked.Increment(ref fetchCount) == 1)
+                    return Task.FromResult(new SlackNet.WebApi.ConversationMessagesResponse { Messages = [] });
                 return FakeRepliesFetcher(channelId, threadTs, limit, cursor, ct);
             },
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
@@ -1059,7 +1073,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit, IAsyncDisposa
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-tap-rehydrate");
 
-        // First mention — the actor materializes and runs one-shot hydration (fetch #1).
+        // Startup fetches an empty history. The first mention fetches its gap as fetch two.
         gateway.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
             EventId: new SlackEventId("C_TAP:9000.5"),
@@ -1073,17 +1087,18 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit, IAsyncDisposa
             Hidden: false,
             IsDirectMessage: false));
 
-        // Wait for the first turn to reply, so its cursor clears before the second
-        // mention — the re-hydration guard requires no in-flight turn.
-        await AwaitAssertAsync(() =>
+        var sessionId = SessionIdFormat.Build("C_TAP", "9000.0");
+        var persistenceId = $"slack-thread-cursor-{Uri.EscapeDataString(sessionId.Value)}";
+        await AwaitAssertAsync(async () =>
         {
             Assert.True(_replyClient.PostedMessages.Count >= 1, "Expected the first turn to post a reply");
+            var cursors = await Contracts.SessionBindingContractTests.ReadCursorEventsAsync(this, persistenceId);
+            Assert.Contains(cursors, cursor => cursor.Cursor == "9000.5");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(1, fetchCount);
+        Assert.Equal(2, Volatile.Read(ref fetchCount));
 
-        // Second mention on the SAME live actor. With the tap on, it re-arms
-        // hydration and re-fetches the gap (fetch #2) — no restart needed.
+        // The second idle mention on the same actor fetches the gap a third time.
         gateway.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
             EventId: new SlackEventId("C_TAP:9000.9"),
@@ -1099,7 +1114,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit, IAsyncDisposa
 
         await AwaitAssertAsync(() =>
         {
-            Assert.Equal(2, fetchCount);
+            Assert.Equal(3, Volatile.Read(ref fetchCount));
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
     }
 
