@@ -5,10 +5,6 @@
     <!-- Nuget package versions -->
     <AkkaHostingVersion>1.5.75</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.73</AkkaPersistenceSqlHostingVersion>
-    <!-- Akka.Reminders is now an official Akka.NET module and shares the Akka.NET
-         version number. It requires Akka.Cluster.Hosting 1.5.75, so AkkaHostingVersion
-         must stay at or above this value. -->
-    <AkkaRemindersVersion>1.5.75</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.20.1</OpenTelemetryVersion>
     <SlackNetVersion>0.18.0</SlackNetVersion>
     <DiscordNetVersion>3.20.2</DiscordNetVersion>
@@ -36,8 +32,8 @@
     <PackageVersion Include="Akka.Persistence" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="Akka.Persistence.Hosting" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="$(AkkaPersistenceSqlHostingVersion)" />
-    <PackageVersion Include="Akka.Reminders" Version="$(AkkaRemindersVersion)" />
-    <PackageVersion Include="Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
+    <PackageVersion Include="Akka.Reminders" Version="$(AkkaHostingVersion)" />
+    <PackageVersion Include="Akka.Reminders.Sqlite" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="Akka.TestKit" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="Anthropic" Version="13.3.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.13.0" />
