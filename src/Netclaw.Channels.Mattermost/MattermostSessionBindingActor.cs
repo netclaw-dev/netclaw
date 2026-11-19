@@ -20,52 +20,22 @@ using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 using IOPath = System.IO.Path;
+using PendingApprovalRequest = Netclaw.Channels.PendingApprovalRequest<Netclaw.Channels.Mattermost.MattermostPostId>;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Channels.Mattermost;
 
-internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IWithTimers
+internal sealed class MattermostSessionBindingActor : ChannelSessionBindingActor<MattermostPostId>
 {
-    private readonly SessionId _sessionId;
     private readonly MattermostChannelId _channelId;
     private readonly MattermostRootPostId _rootPostId;
 
-    private const string EmptyTurnFallbackText =
-        ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
-    private const string LiveInjectionBlockedWarning =
-        ":warning: Message blocked by prompt-injection policy.";
-    private const string LiveDetectorUnavailableWarning =
-        ":warning: I couldn't safely analyze your message -- please try again in a moment.";
-    private const string BackfillDetectorWarning =
-        ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
 
     private const int MaxMattermostPostLength = 16_000;
 
     private readonly MattermostGatewayDependencies _dependencies;
-    private readonly IPromptInjectionDetector _promptInjectionDetector;
-    private readonly SessionPipelineHandle _handle;
-    private readonly ILoggingAdapter _log;
 
-    // Null when the gateway supplies no thread-history fetcher. That is a real
-    // runtime state (an instance without history access), not a disabled check:
-    // with no fetcher there is no gap to hydrate, so both hydration paths no-op.
-    private readonly ThreadGapHydrationEngine? _hydrationEngine;
-    private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
-    private readonly ApprovalResponseFlow<PendingApprovalRequest, MattermostPostId> _approvalFlow;
-    private readonly ChannelOutputEngine<PendingApprovalRequest, MattermostPostId> _outputEngine;
-
-    // The first failed post of the turn in flight. The binding reports it once at
-    // TurnCompleted, with the number of the turn that the post belongs to.
-    // Actor-local; it lives for one turn.
-    private (DeliveryFailureKind Kind, string Message)? _heldFailedPost;
-    // True only while a post of turn output runs. Actor-local.
-    private bool _holdOutputFailures;
-    private readonly SafeTransportCall _safeCall;
-
-    private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan ReinitializeDelay = TimeSpan.FromSeconds(2);
-    private static readonly object ReinitializeTimerKey = new();
     // A Mattermost client clears a typing pulse after about five seconds (the
     // server default for TimeBetweenUserTypingUpdatesMilliseconds). The repeat
     // interval stays below that window so a long turn stays visible. See
@@ -84,117 +54,32 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private static readonly object TypingPulseTimerKey = new();
     private bool _processingIndicatorActive;
     private DateTimeOffset _typingPulseDeadline;
-    private string? _cursorPostId;
-
-    // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
-    // found no authorized trigger to anchor a turn. This is the proactive-thread
-    // case: the binding actor's lifetime began when the agent posted the thread
-    // root, so the one-shot hydration ran before any authorized human inbound
-    // existed. While set, the first authorized inbound performs the deferred
-    // hydration instead of taking the fetch-free path; it is cleared once that
-    // hydration completes.
-    private bool _hydrationPending;
-
-    public ITimerScheduler Timers { get; set; } = null!;
 
     public MattermostSessionBindingActor(
         SessionId sessionId,
         MattermostChannelId channelId,
         MattermostRootPostId rootPostId,
-        MattermostGatewayDependencies dependencies)
+        MattermostGatewayDependencies dependencies) : base(
+            sessionId,
+            dependencies.Pipeline,
+            dependencies.PromptInjectionDetector ?? throw new InvalidOperationException(
+                "MattermostGatewayDependencies.PromptInjectionDetector is not wired; "
+                + "prompt-injection scanning cannot be silently disabled."),
+            dependencies.IngressGate,
+            dependencies.TimeProvider,
+            dependencies.ThreadHistoryFetcher,
+            ChannelType.Mattermost,
+            channelId.Value,
+            StringComparer.Ordinal,
+            Context.GetLogger()
+                .WithContext("Adapter", "mattermost")
+                .WithContext(NetclawLogProperties.SessionId, sessionId.Value)
+                .WithContext("MattermostChannelId", channelId.Value)
+                .WithContext("MattermostRootPostId", rootPostId.Value))
     {
-        _sessionId = sessionId;
         _channelId = channelId;
         _rootPostId = rootPostId;
         _dependencies = dependencies;
-        // Fail loud rather than substituting a no-op detector — a no-op reports
-        // every input as safe, silently disabling injection scanning. A null
-        // here means broken gateway wiring.
-        _promptInjectionDetector = dependencies.PromptInjectionDetector
-            ?? throw new InvalidOperationException(
-                "MattermostGatewayDependencies.PromptInjectionDetector is not wired; "
-                + "prompt-injection scanning cannot be silently disabled.");
-
-        _log = Context.GetLogger()
-            .WithContext("Adapter", "mattermost")
-            .WithContext(NetclawLogProperties.SessionId, _sessionId.Value)
-            .WithContext("MattermostChannelId", _channelId.Value)
-            .WithContext("MattermostRootPostId", _rootPostId.Value);
-
-        _handle = new SessionPipelineHandle(_dependencies.Pipeline, _log, "mattermost-session");
-
-        _safeCall = new SafeTransportCall(
-            ChannelType.Mattermost,
-            _dependencies.TimeProvider,
-            HoldFailedPostAsync);
-
-        _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, MattermostPostId>(
-            // Mattermost post IDs are lexicographically sortable strings.
-            cursorComparer: StringComparer.Ordinal,
-            pendingRequests: _pendingApprovalRequests,
-            createPendingRequest: request => new PendingApprovalRequest(request),
-            isApprovalRequest: request => string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase),
-            renderTextOutput: textOutput => textOutput.Text,
-            renderErrorOutput: error => $":warning: {error.Message}",
-            postTextAsync: PostOutputTextAsync,
-            uploadFileAsync: UploadOutputFileAsync,
-            postApprovalPromptAsync: SafeReplyWithApprovalPromptAsync,
-            readPromptIdValue: promptPostId => promptPostId.Value,
-            onApprovalPromptFailedAsync: SendApprovalPromptUnavailableAsync,
-            redrawClosedPromptAsync: RedrawClosedApprovalPromptAsync,
-            persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
-            handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
-            advanceCursor: AdvanceCursor,
-            postEmptyTurnFallbackAsync: PostEmptyTurnFallbackAsync,
-            onEmptyTurnSuppressedAsync: ReportHeldFailedPostAsync);
-
-        if (_dependencies.ThreadHistoryFetcher is { } historyFetcher)
-        {
-            _hydrationEngine = new ThreadGapHydrationEngine(
-                sessionId: _sessionId,
-                channelType: ChannelType.Mattermost,
-                historyFetcher: historyFetcher,
-                injectionDetector: _promptInjectionDetector,
-                classifierSourceContext: "mattermost-backfill",
-                // Mattermost post IDs are lexicographically sortable strings.
-                cursorComparer: StringComparer.Ordinal,
-                cursorKeySelector: messageId => string.IsNullOrEmpty(messageId) ? null : messageId,
-                isAuthorizedSender: IsAuthorizedSender,
-                log: _log,
-                readCursor: () => _cursorPostId,
-                readInputQueue: () => _handle.InputQueue,
-                readIngressClosedReason: () => _dependencies.IngressGate?.ClosedReason,
-                warnBackfillDetectorUnavailableAsync: () => SafeReplyAsync(BackfillDetectorWarning),
-                onBackfillEnqueued: _outputEngine.AdvancePendingCursorForEnqueuedTurn,
-                setHydrationPending: pending => _hydrationPending = pending);
-        }
-
-        _approvalFlow = new ApprovalResponseFlow<PendingApprovalRequest, MattermostPostId>(
-            sessionId: _sessionId,
-            channelType: ChannelType.Mattermost,
-            channelName: "Mattermost",
-            pipeline: _dependencies.Pipeline,
-            operationTimeout: OperationTimeout,
-            pendingRequests: _pendingApprovalRequests,
-            hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
-            postNoticeAsync: text => SafeReplyAsync(text),
-            persistPromptCleared: callId => Persist(
-                new PendingApprovalPromptCleared { CallId = callId.Value },
-                ApplyPendingApprovalPromptCleared),
-            renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
-            redrawClosedPromptAsync: RedrawClosedApprovalPromptAsync,
-            log: _log);
-
-        Recover<CursorAdvanced>(ApplyCursorAdvanced);
-        Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
-        Recover<PendingApprovalPromptCleared>(ApplyPendingApprovalPromptCleared);
-        // After journal replay completes, queue a one-shot hydration. The
-        // self-tell lands in the mailbox after InitializePipeline (from
-        // PreStart), so the actor finishes pipeline init first, then
-        // transitions into Hydrating and processes PerformHydration.
-        Recover<RecoveryCompleted>(_ => Self.Tell(PerformHydration.Instance));
-
-        Initializing();
     }
 
     public override string PersistenceId => $"mattermost-session-cursor-{Uri.EscapeDataString(_sessionId.Value)}";
@@ -210,83 +95,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             rootPostId,
             dependencies));
 
-    protected override void PreStart()
-    {
-        Self.Tell(InitializePipeline.Instance);
-        base.PreStart();
-    }
-
-    protected override void PostStop()
-    {
-        // The timer scheduler cancels the typing pulse timer when the actor stops.
-        _handle.Dispose();
-        base.PostStop();
-    }
-
-    private SessionPipelineOptions BuildOptions() => new()
-    {
-        ChannelType = ChannelType.Mattermost,
-        Filter = OutputFilter.Text | OutputFilter.Files | OutputFilter.ProcessingState
-    };
-
-    private void Initializing()
-    {
-        CommandAsync<InitializePipeline>(async _ =>
-        {
-            try
-            {
-                await EnsureInitializedAsync();
-                Become(Hydrating);
-                // RecoveryCompleted can beat pipeline initialization on slower
-                // dispatchers and get stashed here. Move it into Hydrating so
-                // one-shot hydration cannot strand the actor in startup; live
-                // inbounds are re-stashed by Hydrating until hydration finishes.
-                Stash.UnstashAll();
-            }
-            catch (Exception ex)
-            {
-                _log.Error(ex, "Failed to initialize Mattermost session pipeline; stopping actor");
-                Context.Stop(Self);
-            }
-        });
-
-        CommandAny(msg =>
-        {
-            if (msg is not InitializePipeline)
-                Stash.Stash();
-        });
-    }
-
-    private void Hydrating()
-    {
-        CommandAsync<PerformHydration>(async _ =>
-        {
-            try
-            {
-                if (_hydrationEngine is { } engine)
-                    await engine.PerformOneShotHydrationAsync();
-            }
-            catch (Exception ex)
-            {
-                _log.Warning(ex, "Thread history hydration threw; continuing without backfill");
-            }
-            finally
-            {
-                Become(Active);
-                Stash.UnstashAll();
-            }
-        });
-
-        CommandAny(_ => Stash.Stash());
-    }
-
-    private void Active()
+    protected override void RegisterProviderCommands()
     {
         CommandAsync<MattermostThreadInbound>(HandleInboundAsync);
         CommandAsync<MattermostApprovalResponse>(HandleApprovalResponseAsync);
-        CommandAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
-        CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
-
         CommandAsync<SendTypingPulse>(async _ =>
         {
             if (!_processingIndicatorActive)
@@ -308,130 +120,62 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 SessionId = _sessionId
             });
         });
-
-        Command<OutputStreamTerminated>(msg =>
-        {
-            if (msg.Generation != _handle.Generation)
-                return;
-
-            var reason = msg.Cause is null
-                ? "completed"
-                : $"faulted: {msg.Cause.Message}";
-
-            _log.Warning("Output stream terminated ({Reason}); reinitializing pipeline", reason);
-            Self.Tell(new ReinitializePipeline(reason));
-        });
-
-        CommandAsync<ReinitializePipeline>(async msg =>
-        {
-            // The binding abandons its record of the turn in flight, and the
-            // new subscription does not replay the processing state. Stop the
-            // pulses here so a lost ProcessingStateOutput(false) cannot leave
-            // the thread in the typing state.
-            StopTypingPulses();
-            _heldFailedPost = null;
-            _outputEngine.ResetForPipelineReinitialize();
-            await _handle.ReinitializeAsync(
-                msg.Reason,
-                () => Timers.StartSingleTimer(
-                    ReinitializeTimerKey,
-                    new ReinitializePipeline("retry after failed reinit"),
-                    ReinitializeDelay));
-        });
     }
 
-    private async Task HandleSessionDeactivatedAsync()
-    {
-        StopTypingPulses();
-        await _handle.DrainAsync();
-        Context.Stop(Self);
-    }
+    protected override void BeforeDrain() => StopTypingPulses();
+    protected override void BeforePipelineReinitialize() => StopTypingPulses();
+    protected override TimeSpan InitializationTimeout => TimeSpan.FromSeconds(15);
+    protected override void PersistCursor(CursorAdvanced value, Action<CursorAdvanced> apply) => Persist(value, apply);
 
-    private async Task EnsureInitializedAsync()
-    {
-        if (_handle.IsInitialized)
-            return;
-
-        var self = Self;
-        using var initCts = new CancellationTokenSource(PipelineInitTimeout);
-        await _handle.InitializeWithChannelAsync(
-            Context,
-            _sessionId,
-            BuildOptions(),
-            output => self.Tell(new OutputReceived(output)),
-            (generation, cause) => self.Tell(new OutputStreamTerminated(generation, cause)),
-            initCts.Token);
-    }
-
-    private static readonly TimeSpan InboundProcessingTimeout = TimeSpan.FromSeconds(30);
+    protected override MattermostPostId ParsePromptId(string value) => new(value);
+    protected override string FormatPromptId(MattermostPostId value) => value.Value;
+    protected override string? NormalizeCursor(string? value) => string.IsNullOrEmpty(value) ? null : value;
 
     private async Task HandleInboundAsync(MattermostThreadInbound message)
     {
-        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
+        if (!await AcceptIngressAsync())
         {
-            _log.Info("Rejecting Mattermost inbound message while restart drain is active");
-            await SafeReplyAsync(ingressClosedReason);
             return;
         }
 
-        var hasAttachments = message.Attachments is { Count: > 0 };
-        if (string.IsNullOrWhiteSpace(message.Text) && !hasAttachments)
+        if (string.IsNullOrWhiteSpace(message.Text) && message.Attachments is not { Count: > 0 })
+        {
             return;
+        }
 
         if (!string.IsNullOrWhiteSpace(message.Text)
-            && await TryHandleTextApprovalResponseAsync(message))
+            && await _approvalFlow.TryHandleTextApprovalResponseAsync(message.Text, message.SenderId.Value))
         {
             return;
         }
 
-        using var inboundCts = new CancellationTokenSource(InboundProcessingTimeout);
+        using var inbound = new CancellationTokenSource(TimeSpan.FromSeconds(30), _dependencies.TimeProvider);
+        if (!await ScanLiveTextAsync(message.Text, inbound.Token))
+        {
+            return;
+        }
 
+        if (!InputQueueReady())
+        {
+            return;
+        }
+
+        var contents = new List<AIContent>();
         if (!string.IsNullOrWhiteSpace(message.Text))
         {
-            var classification = await PromptClassifier.ClassifyAsync(
-                _promptInjectionDetector, message.Text, "mattermost-live", _log, inboundCts.Token);
-            switch (classification.Outcome)
-            {
-                case ClassificationOutcome.Block:
-                    _log.Warning("Blocked Mattermost message due to prompt injection risk: {Reason}", classification.Reason);
-                    ChannelTelemetry.For(ChannelType.Mattermost).RecordEventDropped("prompt_injection_high");
-                    await SafeReplyAsync(LiveInjectionBlockedWarning);
-                    return;
-
-                case ClassificationOutcome.DetectorUnavailable:
-                    _log.Warning("Prompt injection detector unavailable for live message -- dropping");
-                    ChannelTelemetry.For(ChannelType.Mattermost).RecordEventDropped("prompt_injection_detector_unavailable");
-                    await SafeReplyAsync(LiveDetectorUnavailableWarning);
-                    return;
-
-                case ClassificationOutcome.Allow:
-                    break;
-            }
+            contents.Add(new TextContent(message.Text));
         }
 
-        var writer = _handle.InputQueue;
-        if (writer is null)
+        if (message.Attachments is { Count: > 0 } attachments)
         {
-            _log.Warning("Input queue is not initialized; dropping inbound message");
+            await ProcessInboundAttachmentsAsync(attachments, message.Audience, contents, inbound.Token);
+        }
+
+        if (contents.Count == 0)
+        {
             return;
         }
 
-        var liveContents = new List<AIContent>();
-        if (!string.IsNullOrWhiteSpace(message.Text))
-            liveContents.Add(new TextContent(message.Text));
-
-        if (hasAttachments)
-            await ProcessInboundAttachmentsAsync(message.Attachments!, message.Audience, liveContents, inboundCts.Token);
-
-        if (liveContents.Count == 0)
-            return;
-
-        // Live inbound path is fetch-free. Thread history is hydrated once per
-        // actor lifetime by the hydration engine (driven by the
-        // RecoveryCompleted handler); the only exception is a deferred
-        // hydration, which the engine completes on the first authorized
-        // inbound. By the time we get here the session already has the
-        // historical context it needs.
         var input = new ChannelInput
         {
             SenderId = new SenderId(message.SenderId.Value),
@@ -441,70 +185,36 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             Boundary = TrustBoundary.TrustedInstance,
             Principal = message.Principal,
             Provenance = message.Provenance,
-            Contents = liveContents,
+            Contents = contents,
             ReceivedAt = message.ReceivedAt,
             ExecutableText = message.Text,
             DefaultDeliveryTarget = BuildDefaultDeliveryTarget()
         };
-
-        // Re-arm thread-history hydration on a tap-gated mention so the gap the
-        // tap held since the last completed turn is backfilled. Under
-        // MentionRequiredInThread the conversation actor forwards only mentions here,
-        // so every inbound is a deliberate re-entry. _turnInFlight guards against a
-        // re-arm while a prior turn is still processing, preserving the PR #733
-        // no-duplicate invariant; the deferred hydration no-ops on an empty gap.
-        //
-        // Two accepted trade-offs of reusing the existing backfill (vs. a new
-        // drop-tracking side channel): (1) one thread-history fetch per mention on an
-        // active thread even when nothing accumulated — the actor cannot know the gap
-        // is empty without fetching, and mention-gating makes mentions deliberate so
-        // the cost is bounded; (2) a mention arriving while a turn is in flight takes
-        // the fetch-free path, so chatter in that window is adopted on the next idle
-        // mention, not this one (and can be skipped if the cursor later advances past
-        // it under rapid concurrent mentions).
-        if (!_hydrationPending
-            && !_outputEngine.TurnInFlight
-            && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
-        {
-            _hydrationPending = true;
-        }
-
-        if (_hydrationPending
-            && IsAuthorizedSender(message.SenderId.Value)
-            && _hydrationEngine is { } engine)
-        {
-            input = await engine.ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
-        }
+        input = await PrepareLiveInputAsync(input,
+            _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value), inbound.Token);
 
         try
         {
-            using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await writer.WriteAsync(input, writeCts.Token);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordMessageEnqueued();
-
-            var eventId = message.EventId.Value;
-            _outputEngine.AdvancePendingCursorForEnqueuedTurn(string.IsNullOrEmpty(eventId) ? null : eventId);
+            using var write = new CancellationTokenSource(OperationTimeout, _dependencies.TimeProvider);
+            await WriteLiveInputAsync(input, write.Token);
         }
         catch (OperationCanceledException)
         {
             _log.Warning("Timed out enqueueing message for session {0}", _sessionId.Value);
-            Self.Tell(new ReinitializePipeline("input queue write timeout"));
+            RequestPipelineReinitialization("input queue write timeout");
         }
         catch (ChannelClosedException)
         {
             _log.Warning("Input queue closed for session {0}", _sessionId.Value);
-            Self.Tell(new ReinitializePipeline("input queue closed"));
+            RequestPipelineReinitialization("input queue closed");
         }
     }
 
     // Mattermost authorization basis for adopted-context: an empty AllowedUserIds
     // list means the instance is unrestricted; otherwise the sender must be listed.
-    private bool IsAuthorizedSender(string senderId)
+    protected override bool IsAuthorizedSender(string senderId)
         => _dependencies.Options.AllowedUserIds.Length == 0
             || _dependencies.Options.AllowedUserIds.Contains(senderId, StringComparer.Ordinal);
-
-    private Task<bool> TryHandleTextApprovalResponseAsync(MattermostThreadInbound message)
-        => _approvalFlow.TryHandleTextApprovalResponseAsync(message.Text, message.SenderId.Value);
 
     // The Mattermost interactive-message webhook asks the binding over HTTP and
     // waits for the session's verdict, so this is the one channel that registers
@@ -520,13 +230,13 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             respondSynchronously: response => ReplyIfExpected(replyTo, response));
     }
 
-    private async Task RedrawClosedApprovalPromptAsync(PendingApprovalRequest pending, string closeText)
+    protected override async Task RedrawClosedApprovalPromptAsync(PendingApprovalRequest pending, string closeText)
     {
         var postId = pending.PromptId ?? throw new InvalidOperationException("A closed prompt redraw needs its post.");
         try
         {
             var closed = MattermostApprovalPromptBuilder.BuildClosedAttachment(closeText);
-            using var cts = new CancellationTokenSource(OperationTimeout);
+            using var cts = new CancellationTokenSource(OperationTimeout, _dependencies.TimeProvider);
             await _dependencies.ReplyClient.UpdatePostAsync(postId, closed.Text ?? string.Empty, [closed], cts.Token);
         }
         catch (Exception ex)
@@ -536,7 +246,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
     }
 
-    private async Task TryResolveApprovalPromptAsync(
+    protected override async Task TryResolveApprovalPromptAsync(
         MattermostPostId? promptPostId,
         ToolInteractionRequest? request,
         Netclaw.Tools.ToolCallId callId,
@@ -562,7 +272,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                     toolName: persistedToolName,
                     displayText: persistedDisplayText);
 
-            using var cts = new CancellationTokenSource(OperationTimeout);
+            using var cts = new CancellationTokenSource(OperationTimeout, _dependencies.TimeProvider);
             await _dependencies.ReplyClient.UpdatePostAsync(
                 postId,
                 resolvedAttachment.Text ?? string.Empty,
@@ -579,72 +289,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
     }
 
-    private async Task HandleTrustedReminderAsync(DeliverTrustedSessionTurn message)
-    {
-        var ackTarget = Sender;
-
-        if (message.SessionId != _sessionId)
-        {
-            _log.Warning(
-                "Dropping DeliverTrustedSessionTurn with mismatching session id actual={Actual} expected={Expected}",
-                message.SessionId.Value, _sessionId.Value);
-            ackTarget.Tell(CommandNack.For(_sessionId, "Session id mismatch"));
-            return;
-        }
-
-        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
-        {
-            _log.Info("Rejecting Mode B reminder while restart drain is active");
-            ackTarget.Tell(CommandNack.For(_sessionId, ingressClosedReason));
-            return;
-        }
-
-        var writer = _handle.InputQueue;
-        if (writer is null)
-        {
-            _log.Warning("Input queue is not initialized; rejecting Mode B reminder");
-            ackTarget.Tell(CommandNack.For(_sessionId, "Mattermost session pipeline not initialized"));
-            return;
-        }
-
-        var input = new ChannelInput
-        {
-            SenderId = message.Source.SenderId,
-            ChannelId = _channelId.Value,
-            MessageId = message.Source.MessageId,
-            Audience = message.Source.Audience,
-            Boundary = message.Source.Boundary,
-            Principal = message.Source.Principal,
-            Provenance = message.Source.Provenance,
-            Contents = [new TextContent(message.Content)],
-            ReceivedAt = _dependencies.TimeProvider.GetUtcNow(),
-            DefaultDeliveryTarget = BuildDefaultDeliveryTarget(),
-            RequestedDeliveryTarget = message.Source.RequestedDeliveryTarget,
-            ReminderId = message.Source.ReminderId,
-            AckTarget = ackTarget
-        };
-
-        try
-        {
-            using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await writer.WriteAsync(input, writeCts.Token);
-            _log.Debug(
-                "reminder_mode_b_dispatch session={Session} reminder={Reminder}",
-                _sessionId.Value, message.Source.ReminderId);
-        }
-        catch (OperationCanceledException)
-        {
-            _log.Warning("Timed out enqueueing Mode B reminder for session {0}", _sessionId.Value);
-            ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline enqueue timeout"));
-        }
-        catch (ChannelClosedException)
-        {
-            _log.Warning("Input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
-            ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline input queue closed"));
-        }
-    }
-
-    private ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget()
+    protected override ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget()
         => new(
             ChannelType.Mattermost.ToWireValue(),
             "destination",
@@ -652,28 +297,13 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             _channelId.Value,
             _rootPostId.Value);
 
-    private async Task HandleOutputReceivedAsync(OutputReceived msg)
-    {
-        if (msg.Output is SessionDeactivated)
-        {
-            await HandleSessionDeactivatedAsync();
-            return;
-        }
-
-        var clearedPrompts = await _outputEngine.HandleOutputAsync(msg.Output);
-        if (msg.Output is TurnCompleted)
-            _heldFailedPost = null;
-        if (clearedPrompts.Count > 0)
-            PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
-    }
-
     /// <summary>
     /// Handles the outputs the shared engine leaves to the channel. Mattermost
     /// cannot rename threads, so a <c>SessionTitleOutput</c> has no effect. A
     /// <c>ProcessingStateOutput</c> drives a native typing pulse for the
     /// channel and its thread root.
     /// </summary>
-    private async Task HandleChannelSpecificOutputAsync(SessionOutput output)
+    protected override async Task HandleChannelSpecificOutputAsync(SessionOutput output)
     {
         switch (output)
         {
@@ -734,7 +364,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         try
         {
-            using var cts = new CancellationTokenSource(TypingPulseTimeout);
+            using var cts = new CancellationTokenSource(TypingPulseTimeout, _dependencies.TimeProvider);
             await _dependencies.ChannelRegistry.RenderOutputAsync(request, cts.Token);
         }
         catch (Exception ex) when (!output.IsRequired)
@@ -756,7 +386,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             _rootPostId.Value);
     }
 
-    private async Task<MattermostPostId?> SafeReplyWithApprovalPromptAsync(ToolInteractionRequest request)
+    protected override async Task<MattermostPostId?> PostApprovalPromptAsync(ToolInteractionRequest request)
     {
         var callbackUrl = _dependencies.CallbackUrl;
 
@@ -844,13 +474,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
     }
 
-    /// <summary>
-    /// Posts <paramref name="text"/> (chunked) to Mattermost. Returns true only
-    /// when every chunk posted successfully; false if any chunk failed (after
-    /// holding the failure for the session). Callers that gate
-    /// reminder delivery confirmation on real delivery must honor the result.
-    /// </summary>
-    private Task<bool> SafeReplyAsync(string text)
+    protected override Task<TransportResult> PostTextAsync(string text)
         => _safeCall.PostChunkedAsync(
             text,
             MaxMattermostPostLength,
@@ -868,28 +492,27 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             FileIds: fileIds,
             Attachments: attachments);
 
-    private async Task<bool> SafeUploadFileAsync(FileOutput file)
+    protected override async Task<TransportResult> UploadFileAsync(FileOutput file)
     {
         // A missing file never reaches the transport, so it carries no transport
         // telemetry and a different failure kind.
         if (!File.Exists(file.FilePath))
         {
             _log.Warning("File not found for upload: {Path}", file.FilePath);
-            await HoldFailedPostAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
-            return false;
+            return new TransportResult.Failure(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
         }
 
         var uploaded = await _safeCall.InvokeAsync(
             async () =>
             {
-                using var uploadCts = new CancellationTokenSource(OperationTimeout);
+                using var uploadCts = new CancellationTokenSource(OperationTimeout, _dependencies.TimeProvider);
                 var fileId = await _dependencies.ReplyClient.UploadFileAsync(
                     _channelId,
                     file.FilePath,
                     file.FileName,
                     uploadCts.Token);
 
-                using var postCts = new CancellationTokenSource(OperationTimeout);
+                using var postCts = new CancellationTokenSource(OperationTimeout, _dependencies.TimeProvider);
                 var postMessage = BuildPostMessage($":paperclip: {file.FileName}", fileIds: [fileId]);
                 await _dependencies.ReplyClient.PostReplyAsync(postMessage, postCts.Token);
             },
@@ -901,130 +524,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                     _log.Error(ex, "Failed to upload file {FileName} to Mattermost thread", file.FileName);
             });
 
-        if (uploaded)
+        if (uploaded is TransportResult.Success)
             _log.Info("Uploaded file to Mattermost thread: {FileName}", file.FileName);
 
         return uploaded;
-    }
-
-    /// <summary>
-    /// Keeps the first failed post of the turn. The binding learns the turn
-    /// number only when <c>TurnCompleted</c> arrives, so it reports the failure
-    /// then (see <see cref="ReportHeldFailedPostAsync"/>). A report now would
-    /// carry the number of the previous turn, and the session would drop it as
-    /// stale feedback. A failed post that is not turn output is not held.
-    /// </summary>
-    private Task HoldFailedPostAsync(DeliveryFailureKind failureKind, string errorMessage)
-    {
-        if (_holdOutputFailures)
-            _heldFailedPost ??= (failureKind, errorMessage);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Tells the session about the held failure with the number of the
-    /// completed turn. The engine runs this only for a turn with a failed post
-    /// and no posted output.
-    /// </summary>
-    private async Task ReportHeldFailedPostAsync(TurnCompleted completed)
-    {
-        if (_heldFailedPost is not { } held)
-            return;
-
-        _heldFailedPost = null;
-        await SendDeliveryFailedAsync(completed.TurnNumber, held.Kind, held.Message);
-    }
-
-    /// <summary>
-    /// Posts turn output text for the shared engine. Only a failed post of turn
-    /// output is held for the turn report (see <see cref="HoldFailedPostAsync"/>).
-    /// A failed post of any other kind, such as a warning or an approval prompt,
-    /// only logs, so it cannot replace the failure of the next turn.
-    /// </summary>
-    private async Task<bool> PostOutputTextAsync(string text)
-    {
-        _holdOutputFailures = true;
-        try { return await SafeReplyAsync(text); }
-        finally { _holdOutputFailures = false; }
-    }
-
-    /// <summary>Uploads turn output for the shared engine. See <see cref="PostOutputTextAsync"/>.</summary>
-    private async Task<bool> UploadOutputFileAsync(FileOutput file)
-    {
-        _holdOutputFailures = true;
-        try { return await SafeUploadFileAsync(file); }
-        finally { _holdOutputFailures = false; }
-    }
-
-    /// <summary>
-    /// Posts the empty-turn fallback. A failed fallback post is a failed post
-    /// of the turn that the fallback answers, so it reports that turn.
-    /// </summary>
-    private async Task PostEmptyTurnFallbackAsync(TurnCompleted completed)
-    {
-        _heldFailedPost = null;
-        await PostOutputTextAsync(EmptyTurnFallbackText);
-        await ReportHeldFailedPostAsync(completed);
-    }
-
-    private async Task SendDeliveryFailedAsync(TurnNumber turnNumber, DeliveryFailureKind failureKind, string errorMessage)
-    {
-        try
-        {
-            await _dependencies.Pipeline.SendFeedbackAsync(new DeliveryFailed
-            {
-                SessionId = _sessionId,
-                TurnNumber = turnNumber,
-                ChannelType = ChannelType.Mattermost,
-                FailureKind = failureKind,
-                ErrorMessage = errorMessage
-            });
-        }
-        catch (Exception ex)
-        {
-            // A dead feedback pipe means the session never learns the turn
-            // failed. Rethrow so supervision tears this actor down. The parent
-            // conversation actor stops it; the next inbound re-creates it with
-            // a fresh pipeline. Slack's parent restarts its binding eagerly.
-            // Both paths replace the dead pipeline instead of leaving a zombie.
-            _log.Error(ex, "Failed to send delivery feedback to session; propagating to trigger pipeline reinit");
-            throw;
-        }
-    }
-
-    /// <summary>
-    /// Tells the session that the approval prompt could not be posted. The
-    /// session refuses the call with <c>approval_prompt_unavailable</c>, so the
-    /// call does not run and the model does not read the failure as a user
-    /// decision. The requester sender ID passes the session's requester check.
-    /// </summary>
-    private async Task SendApprovalPromptUnavailableAsync(ToolInteractionRequest request)
-    {
-        var callId = request.CallId;
-        _log.Warning(
-            "Refusing {CallId} ({ToolName}) because the approval prompt could not be posted",
-            callId,
-            request.ToolName);
-
-        var pending = _pendingApprovalRequests.LastOrDefault(p =>
-            p.CallId == callId);
-        if (pending is not null)
-            _pendingApprovalRequests.Remove(pending);
-
-        try
-        {
-            await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
-            {
-                SessionId = _sessionId,
-                CallId = callId,
-                SelectedKey = ApprovalOptionKeys.PromptUnavailableKey,
-                SenderId = request.RequesterSenderId ?? new SenderId(string.Empty)
-            });
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to send prompt-unavailable feedback for call {CallId}", callId);
-        }
     }
 
     private void ReplyIfExpected(IActorRef replyTo, object response)
@@ -1035,7 +538,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         replyTo.Tell(response);
     }
 
-    private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(10);
 
     private async Task ProcessInboundAttachmentsAsync(
         IReadOnlyList<MattermostFileReference> files,
@@ -1048,7 +550,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             _log.Warning(
                 "Mattermost HTTP client is not configured; rejecting {Count} inbound attachment(s)",
                 files.Count);
-            await SafeReplyAsync(":warning: I can't download attachments right now -- HTTP client is not configured.");
+            await PostTextAsync(":warning: I can't download attachments right now -- HTTP client is not configured.");
             return;
         }
 
@@ -1062,7 +564,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 files.Count,
                 policy.MaxFilesPerMessage,
                 audience);
-            await SafeReplyAsync(
+            await PostTextAsync(
                 $":warning: I can only accept up to {policy.MaxFilesPerMessage} attachments per message. " +
                 "Please split your upload and try again. Text content was delivered.");
             return;
@@ -1109,7 +611,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             var joined = rejections.Count == 1
                 ? rejections[0]
                 : ":warning: Some attachments were not accepted:\n  - " + string.Join("\n  - ", rejections);
-            await SafeReplyAsync(joined);
+            await PostTextAsync(joined);
         }
     }
 
@@ -1160,56 +662,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     internal static List<string> ChunkMessage(string text) =>
         MessageChunker.Chunk(text, MaxMattermostPostLength);
-
-    private void AdvanceCursor(string candidatePostId)
-    {
-        if (_cursorPostId is not null && string.CompareOrdinal(candidatePostId, _cursorPostId) <= 0)
-        {
-            _log.Debug("Session cursor did not advance session={Session} postId={PostId}",
-                _sessionId.Value, candidatePostId);
-            return;
-        }
-
-        Persist(new CursorAdvanced(candidatePostId), ApplyCursorAdvanced);
-    }
-
-    private void ApplyCursorAdvanced(CursorAdvanced advanced)
-    {
-        _cursorPostId = advanced.Cursor;
-
-        if (!IsRecovering && LastSequenceNr > 1 && LastSequenceNr % 10 == 0)
-            DeleteMessages(LastSequenceNr - 1);
-    }
-
-    private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
-    {
-        _outputEngine.MarkApprovalRequestObserved();
-        PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest, MattermostPostId>(
-            _pendingApprovalRequests,
-            tracked,
-            wrapPromptId: value => new MattermostPostId(value),
-            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, lifetime, toolName, displayText) =>
-                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, lifetime, toolName, displayText));
-    }
-
-    private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
-        => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest, MattermostPostId>(_pendingApprovalRequests, cleared);
-
-    private sealed record InitializePipeline
-    {
-        public static readonly InitializePipeline Instance = new();
-    }
-
-    private sealed record PerformHydration
-    {
-        public static readonly PerformHydration Instance = new();
-    }
-
-    private sealed record OutputReceived(SessionOutput Output);
-
-    private sealed record OutputStreamTerminated(int Generation, Exception? Cause);
-
-    private sealed record ReinitializePipeline(string Reason);
 
     private sealed record SendTypingPulse
     {

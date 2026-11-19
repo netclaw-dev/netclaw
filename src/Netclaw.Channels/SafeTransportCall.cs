@@ -9,76 +9,67 @@ using Netclaw.Channels.Telemetry;
 
 namespace Netclaw.Channels;
 
-/// <summary>
-/// Wraps one outbound transport call in the delivery bookkeeping every channel
-/// binding actor applies to it: measure the call, record reply telemetry for
-/// the channel, and on failure log, record the failure, and pass it to the
-/// channel's notifier. The notifier tells the session now or holds the failure
-/// until the turn completes.
-/// </summary>
-/// <remarks>
-/// The delivery-failure notifier is required and its exceptions propagate. A
-/// dead feedback pipe means the session never learns the turn failed, so the
-/// error must reach the actor and let supervision restart it — see PR #2004.
-/// This type therefore never wraps the notifier in a catch of its own.
-/// </remarks>
+public abstract class TransportResult
+{
+    private TransportResult() { }
+    public sealed class Success : TransportResult { }
+    public sealed class Failure(DeliveryFailureKind kind, string message) : TransportResult
+    {
+        public DeliveryFailureKind Kind { get; } = kind;
+        public string Message { get; } = message;
+    }
+}
+
 public sealed class SafeTransportCall
 {
     private readonly ChannelType _channelType;
     private readonly TimeProvider _timeProvider;
-    private readonly Func<DeliveryFailureKind, string, Task> _notifyDeliveryFailedAsync;
 
     /// <param name="channelType">Telemetry category for the channel.</param>
     /// <param name="timeProvider">Clock for the call duration.</param>
-    /// <param name="notifyDeliveryFailedAsync">Handles a failed delivery: tells the session or holds the failure.</param>
     public SafeTransportCall(
         ChannelType channelType,
-        TimeProvider timeProvider,
-        Func<DeliveryFailureKind, string, Task> notifyDeliveryFailedAsync)
+        TimeProvider timeProvider)
     {
         _channelType = channelType;
         _timeProvider = timeProvider;
-        _notifyDeliveryFailedAsync = notifyDeliveryFailedAsync;
     }
 
     /// <summary>
-    /// Runs one transport call. Returns <c>true</c> on success; on failure
-    /// returns <c>false</c> after the notifier ran.
+    /// Runs one transport call and returns its result.
     /// </summary>
     /// <param name="callAsync">The transport call.</param>
     /// <param name="logFailure">
     /// Writes the channel's own failure log line. Each channel keeps its
     /// wording and its level, so this callback owns the log call.
     /// </param>
-    public async Task<bool> InvokeAsync(Func<Task> callAsync, Action<Exception> logFailure)
+    public async Task<TransportResult> InvokeAsync(Func<Task> callAsync, Action<Exception> logFailure)
     {
         var startedAt = _timeProvider.GetTimestamp();
         try
         {
             await callAsync();
             ChannelTelemetry.For(_channelType).RecordReplyPosted(ElapsedMs(startedAt));
-            return true;
+            return new TransportResult.Success();
         }
         catch (Exception ex)
         {
             var duration = ElapsedMs(startedAt);
             logFailure(ex);
             ChannelTelemetry.For(_channelType).RecordReplyFailed(duration);
-            await _notifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-            return false;
+            return new TransportResult.Failure(DeliveryFailureKind.TransportFailure, ex.Message);
         }
     }
 
     /// <summary>
     /// Splits <paramref name="text"/> into transport-sized chunks and posts
-    /// them in order. Returns <c>true</c> only when every chunk posted; stops at
-    /// the first failed chunk.
+    /// them in order and stops at the first failed chunk.
     /// </summary>
     /// <param name="text">The text to post.</param>
     /// <param name="maxChunkLength">The transport's message length ceiling.</param>
     /// <param name="postChunkAsync">Posts one chunk.</param>
     /// <param name="logFailure">Writes the channel's own failure log line.</param>
-    public async Task<bool> PostChunkedAsync(
+    public async Task<TransportResult> PostChunkedAsync(
         string text,
         int maxChunkLength,
         Func<string, Task> postChunkAsync,
@@ -86,11 +77,12 @@ public sealed class SafeTransportCall
     {
         foreach (var chunk in MessageChunker.Chunk(text, maxChunkLength))
         {
-            if (!await InvokeAsync(() => postChunkAsync(chunk), logFailure))
-                return false;
+            var result = await InvokeAsync(() => postChunkAsync(chunk), logFailure);
+            if (result is TransportResult.Failure)
+                return result;
         }
 
-        return true;
+        return new TransportResult.Success();
     }
 
     private double ElapsedMs(long startedAt)

@@ -8,7 +8,6 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Tools;
-using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Channels.Discord;
 
@@ -61,23 +60,3 @@ public sealed record StartProactiveThread(
 /// <see cref="StartProactiveThread"/>.
 /// </summary>
 public sealed record ProactiveThreadAck(SessionId SessionId) : INoSerializationVerificationNeeded;
-
-internal sealed class PendingApprovalRequest : Netclaw.Channels.PendingApprovalRequest<DiscordMessageId>
-{
-    public PendingApprovalRequest(ToolInteractionRequest request) : base(request)
-    {
-    }
-
-    public PendingApprovalRequest(
-        ToolCallId callId,
-        string? requesterSenderId,
-        PrincipalClassification? requesterPrincipal,
-        IReadOnlyList<string> optionKeys,
-        DiscordMessageId? promptMessageId,
-        ToolInteractionLifetime lifetime,
-        string? toolName = null,
-        string? displayText = null)
-        : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptMessageId, lifetime, toolName, displayText)
-    {
-    }
-}
