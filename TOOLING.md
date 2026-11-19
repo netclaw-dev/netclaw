@@ -80,8 +80,8 @@ The table retains earlier group measurements. Gate notes below describe later ad
 | `shell-assignment-and-paths` | `shell-assignment` (6.2 to 9.4), `path-access` (2.4 to 3.2; six spans since #2554, one local run took 2.9 and a hosted run is not measured yet) | 9 to 13 |
 | `config-read-and-admission` | `shell-config-read` (5.3 to 8.4), `tool-authorizer-order` (2.8 to 3.5), `mcp-artifact-admission` (2.2) | 10.5 to 14.5 |
 | `session-reliability` | `tool-batch-readiness` (3.5 to 3.9), `headless-stop-rule` (3.3 to 3.5), `open-child-runs` (2.9 to 3.4), `local-control-proof` (about 1 locally), `stopped-turn-continuation` (10 mutants, one invocation, 2.5 locally) | 13.5 to 14.5 (estimate; hosted measurement required) |
-| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry` (two mutants, one CLI invocation); `gateway-retry-stability` (one Channels invocation) | [8m14s](https://github.com/netclaw-dev/netclaw/actions/runs/40069130760/job/120798739243) |
-| `loopback-host-origin` | `loopback-host-origin` (two invocations, 4.3 to 6.6) | 4.5 to 7 (estimate) |
+| `child-owner-and-report` | one Actors invocation for the owner, control, report, close, and drain-scan spans; `chat-close-dispatch-expiry`; `gateway-retry-stability`; `session-binding` | [13m36s](https://github.com/netclaw-dev/netclaw/actions/runs/44392067815/job/135112327443) |
+| `loopback-host-origin` | `loopback-host-origin` (two invocations), `curation-same-name` (one invocation) | [9m57s](https://github.com/netclaw-dev/netclaw/actions/runs/44392067815/job/135112327171) |
 | `child-consent` | `child-consent` (36 mutants, one invocation, about 3, estimate), `text-answer-guard` (15 mutants, two invocations, 3.6 local), `child-resume-gate` (62 mutants, one invocation; local time below) | 9 to 11 (estimate) |
 
 The approval-directory gate includes one retained-hop producer target in `FileSystemAuthority.FollowLinkChainCore`.
@@ -147,6 +147,19 @@ The 2026-10-23 local run took 2 minutes 18 seconds and killed its one selected s
 Add a gate to the lightest group when its measured cost fits the timeout and the Windows test duration.
 Use another group under the same job definition when no existing group has that capacity.
 
+The `session-binding` gate uses the xUnit v3 contract suite and one Stryker worker.
+Its command supplies Stryker 5's selector variable across xUnit's child-process boundary.
+The 2026-11-18 local run took 1 minute 58 seconds and killed the one selected identity mutant.
+A direct source inversion also failed the intended authority assertion.
+The corrected gate also selects the common output-lifetime predicate.
+Its four equality and conjunction mutants must execute and die. The actor-incarnation and failed-replacement cases supply that proof.
+The corrected warm local invocation takes 3 minutes 46 seconds and kills all five selected mutants.
+That duration includes Stryker analysis, build, instrumentation, and test execution. It does not measure a cold hosted runner.
+The successful combined group took [15 minutes 6 seconds](https://github.com/netclaw-dev/netclaw/actions/runs/44369912526/job/135033762922), above the 15-minute budget.
+The gate now joins the existing `child-owner-and-report` group, which takes [13 minutes 36 seconds](https://github.com/netclaw-dev/netclaw/actions/runs/44392067815/job/135112327443).
+The separate loopback group takes [9 minutes 57 seconds](https://github.com/netclaw-dev/netclaw/actions/runs/44392067815/job/135112327171). Both complete jobs meet the 15-minute budget.
+The job timeout remains 25 minutes.
+
 Focused mutation tests prove that deterministic tests reject a specific unsafe
 change at a security, authority, or load-bearing reliability boundary. They do not measure general code
 coverage. They do not replace positive and negative behavior tests.
@@ -155,6 +168,8 @@ coverage. They do not replace positive and negative behavior tests.
 
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
+| `ChannelSessionBindingActor.HandleTrustedReminderAsync` session comparison | A trusted turn for another session receives a Nack before the ingress check or queue write. The selected contract also checks closed ingress, unchanged source authority, and the original acknowledgement target. | 1 killed | `./scripts/run-session-binding-mutations.sh` |
+| `ChannelSessionBindingActor.IsCurrentPipeline` incarnation, initialized state, and generation | Old output and termination cannot affect a replacement, a failed replacement, or a fresh actor incarnation. The controlled drain case rejects old text before transport effects. | 4 killed | `./scripts/run-session-binding-mutations.sh` |
 | `SkillCommand.RunRemoveAsync` source, local endpoint, file boundary, and directory boundary | Removal requires a known native source, the local daemon, and two paths within the skills root without links below it. | 5 required | `./scripts/run-skill-remove-mutations.sh` |
 | `ChatClientActor.Start` (`// chat-close-dispatch-expiry:begin` to `end`) | Issue #2642, PRD-004: a held bind reply permits text dispatch at 1.5 seconds after Close, but refuses it at two seconds | 2 killed | `./scripts/run-chat-close-dispatch-expiry-mutations.sh` |
 | `PathAccessPolicy.AddSessionRoots`, `PathAccessPolicy.IsReadableByAudience`, `PathAccessPolicy.GetEffectiveAccess`, `PathAccessPolicy.IsInOtherTemporaryKeyFolder`, and `ManagedTemporaryEnvironment.CheckFolder` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected; issue #2554: a Personal read or attach follows the write profile and no other audience, operation, or write mode does (write `All` gives `All`, write `Roots` adds its roots, write `None` adds nothing, and a read profile of mode `All` stays `All`); the managed temporary key folder is a session root and the shared base is not; a Team or Public root over the base does not reach another key folder; the shell launch is refused when the base or the key folder is missing, a link, owned by another user, or open to a group or others | 30 killed | `./scripts/run-path-access-mutations.sh` |

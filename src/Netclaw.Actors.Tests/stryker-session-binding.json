@@ -1,0 +1,20 @@
+{
+  "stryker-config": {
+    "project": "Netclaw.Channels.csproj",
+    "configuration": "Debug",
+    "language-version": "Preview",
+    "coverage-analysis": "off",
+    "break-on-initial-test-failure": true,
+    "test-case-filter": "FullyQualifiedName~Trusted_turn_checks_session_and_ingress_then_preserves_authority_and_ack_target|FullyQualifiedName~Pipeline_reinitialize_rejects_old_output_that_arrives_during_drain|FullyQualifiedName~Stale_output_is_rejected_after_failed_replacement_or_actor_restart",
+    "reporters": [
+      "progress",
+      "json"
+    ],
+    "thresholds": {
+      "high": 100,
+      "low": 100,
+      "break": 100
+    },
+    "concurrency": 1
+  }
+}

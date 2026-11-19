@@ -4,7 +4,7 @@ This directory contains abstract test base classes that define the behavioral sp
 
 ## Why contracts?
 
-Slack and Discord implement identical security logic independently: ACL policies, prompt injection gating, approval flows, failure notifications, and session lifecycle. A security fix in one channel must be verified in the other. Contract tests enforce this by running the same assertions against every channel adapter.
+Slack, Discord, and Mattermost share the session lifecycle and admission owner. Their transport operations, ACLs, and route policies retain provider contracts. Common lifecycle facts execute once through the Mattermost fixture. Provider boundary facts still execute for each relevant adapter.
 
 ## Test inventory
 
@@ -14,13 +14,13 @@ Slack and Discord implement identical security logic independently: ACL policies
 | `AclPolicyContractTests` | 16 | No | ACL allow/deny, audience resolution, principal classification, provenance |
 | `GatewayRoutingContractTests` | 3 | Yes | Message routing, duplicate event filtering, ACL enforcement at gateway |
 | `RoutingPolicyContractTests` | 11 | No | Inbound routing policy: mention gating, thread continuation/rehydration, DM matrix, empty content |
-| `SessionBindingContractTests` | 16 | Yes | Prompt injection gate, approval flows, output rendering, failure notification, pipeline lifecycle |
+| `SessionBindingContractTests` | Use test discovery | Yes | Live admission, approvals, cursor recovery, output, and provider boundaries |
 | `ChannelHealthContractTests` | 3 | Yes | `IChannel.GetHealthAsync`: healthy when connected+ready, disconnected with a reason, degraded when disabled |
 | `SnapshotChannelHealthContractTests` | +2 | Yes | Snapshot transports only (Discord, Mattermost): degraded when connected-but-not-ready, health detail propagated from the transport snapshot. Slack's socket-mode transport is binary and implements only the base health contract |
 | `ChannelShutdownContractTests` | 1 | No | `IChannel.StopAsync` must not propagate a failing transport disconnect — shutdown teardown races (dead actor system on SIGTERM) are expected, and a throw becomes a false `daemon-main` crash. Fixtures wire a timing-out fake transport and assert `StopAsync` completes |
 | `GatewayLifecycleContractTests` | 9 | Yes | Discord and Mattermost share these tests. They cover ingress admission, reconnect, transport subscriptions, readiness, backoff, explicit disconnect, and timer cancellation. `Akka.TestKit.TestScheduler` drives retry and timeout timers with virtual time. Slack has no lifecycle actor. |
 
-Total: **59 contract assertions per channel** (16 ACL + 3 gateway + 11 routing policy + 16 session binding + 3 health + 10 shared prompt classification), plus 2 extra health assertions for snapshot-transport channels and 9 lifecycle assertions for channels with a gateway lifecycle actor.
+Use test discovery for current case counts. The session suites combine common lifecycle proof with real provider boundary cases.
 
 Run `rg -c '^    \[Fact\]' src/Netclaw.Actors.Tests/Channels/Contracts/GatewayLifecycleContractTests.cs` to count the shared lifecycle cases.
 
@@ -109,7 +109,43 @@ public sealed class ExampleRoutingPolicyContractTests : RoutingPolicyContractTes
 
 ### 4. Session binding contract: `{Channel}SessionBindingContractTests`
 
-Subclass `SessionBindingContractTests`. This is the largest contract — it tests the full actor lifecycle.
+Subclass `SessionBindingContractTests` and implement its required factories. The fixture has no capability flags that turn assertions into no-ops.
+
+The production `ChannelSessionBindingActor` owns the common state. The Mattermost fixture executes these shared facts once:
+
+| Shared rule | Retained test methods |
+|---|---|
+| Initialization and stash | `Init_failure_stops_actor`, `Stashes_messages_during_init` |
+| Hydration lifecycle | `Thread_history_fetched_at_most_once_per_actor_lifetime`, `Inbounds_arriving_during_hydration_are_stashed_and_unstash_after`, `Image_in_history_flows_through_at_most_once_across_multiple_inbounds` |
+| Turn completion | `Empty_turn_posts_fallback`, `Quiet_end_with_no_text_posts_no_fallback`, `Empty_turn_after_a_quiet_end_still_posts_fallback`, `Delivered_turn_no_fallback` |
+| Trusted admission | `Trusted_turn_checks_session_and_ingress_then_preserves_authority_and_ack_target` |
+
+The two synchronous approval reply facts now reside in the Mattermost fixture. Slack and Discord no longer execute empty versions of those facts.
+The shared scan theory replaces separate rejection and safe-input cases. It proves rejection, recovery, the accepted queue input, and its reply.
+The old file-survival fact observed only an earlier text post. Actual provider upload tests prove file delivery. `TextOutput_posted` retains the earlier text assertion.
+
+Keep provider cursor order, journal replay, principal metadata, prompt identity, file, failure, and activity contracts.
+Keep the new mention test that checks history during a turn and after cursor completion.
+The fallback and Slack mention tests wait for output or journal barriers. A text post alone does not prove turn completion.
+
+Provider entrypoints own admission order. The common actor owns lifecycle and engine state.
+The gate theory proves scan, text approval, and attachment order with positive controls.
+The cursor-replay and stale-event tests wait for a later admitted sentinel before they inspect the complete captured sequence.
+The initialization test gates pipeline creation. The hydration test requires backfill before live input.
+The required Slack history test checks its exact diagnostic and a valid input through the initialized actor.
+The injected-clock test advances time only after the detector receives its cancellation token.
+Restart tests confirm actor termination through DeathWatch before they create a replacement.
+A mailbox reply does not replace the cursor journal acknowledgement.
+
+The output tests first send a current envelope and an identity request through the same probe.
+They require the post after the identity reply, before any lifecycle change.
+The later assertions still exercise real stream callbacks.
+The controlled drain test releases old stream output during the real handle drain.
+It drives the existing private lifecycle message through one test helper.
+It proves reset, drain, output rejection, and replacement behavior; it does not prove an external queue-failure trigger.
+The two identity rows also check failed replacement and an actual actor restart.
+They use a current output barrier before they accept negative transport assertions.
+The shared Discord reply fake returns synchronized snapshots of actor-written collections.
 
 ```csharp
 public sealed class ExampleSessionBindingContractTests(ITestOutputHelper output)
