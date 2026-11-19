@@ -1427,7 +1427,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     _credentialStore.AdoptClientIdentity(oauthCache, registered);
             }
 
-            var transport = CreateTransport(name, entry, oauthCache, authorizationFlow);
+            var transport = new DiscardedSendObservingClientTransport(
+                CreateTransport(name, entry, oauthCache, authorizationFlow),
+                _logger);
             var client = await _clientRuntime.CreateAsync(
                 transport,
                 BuildClientOptions(authorizationFlow, notificationLease, entry.Transport is "stdio"),
