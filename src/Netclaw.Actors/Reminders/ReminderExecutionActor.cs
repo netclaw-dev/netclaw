@@ -160,7 +160,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
                     // only as the final TextOutput, so subscribe to both.
                     Filter = OutputFilter.Text | OutputFilter.TextStreaming | OutputFilter.ToolCalls
                 },
-                output => self.Tell(new ExecutionOutput(output)),
+                (_, output) => self.Tell(new ExecutionOutput(output)),
                 (_, failure) => self.Tell(new OutputStreamTerminated(failure)));
 
             var prompt = BuildPrompt(_definition);
@@ -324,7 +324,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
                 ChannelType = Channels.ChannelType.Reminder,
                 Filter = OutputFilter.Text | OutputFilter.TextStreaming | OutputFilter.ToolCalls
             },
-            output => self.Tell(new ExecutionOutput(output)),
+            (_, output) => self.Tell(new ExecutionOutput(output)),
             (_, failure) => self.Tell(new OutputStreamTerminated(failure)));
 
         _expectedReminderDeliveryKey = source.ReminderId;

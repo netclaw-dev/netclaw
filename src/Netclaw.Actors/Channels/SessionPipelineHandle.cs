@@ -41,7 +41,7 @@ public sealed class SessionPipelineHandle
     private IActorContext? _storedContext;
     private SessionId? _storedSessionId;
     private SessionPipelineOptions? _storedOptions;
-    private Action<SessionOutput>? _storedOnOutput;
+    private Action<int, SessionOutput>? _storedOnOutput;
     private Action<int, Exception?>? _storedOnStreamTerminated;
 
     public SessionPipelineHandle(
@@ -54,7 +54,7 @@ public sealed class SessionPipelineHandle
         _materializerNamePrefix = materializerNamePrefix;
     }
 
-    /// <summary>The current pipeline generation, for <c>OutputStreamTerminated</c> filtering.</summary>
+    /// <summary>The current pipeline generation, for output and termination filtering.</summary>
     public int Generation => _pipelineGeneration;
 
     /// <summary>The <see cref="System.Threading.Channels.ChannelWriter{T}"/> for actors to write input.
@@ -73,7 +73,7 @@ public sealed class SessionPipelineHandle
         IActorContext context,
         SessionId sessionId,
         SessionPipelineOptions options,
-        Action<SessionOutput> onOutput,
+        Action<int, SessionOutput> onOutput,
         Action<int, Exception?> onStreamTerminated,
         CancellationToken cancellationToken = default)
     {
@@ -108,7 +108,7 @@ public sealed class SessionPipelineHandle
         var outputTerminated = materialized.Output
             .WatchTermination((_, done) => done)
             .ToMaterialized(
-                Sink.ForEach<SessionOutput>(onOutput).ObservingFault(),
+                Sink.ForEach<SessionOutput>(output => onOutput(generation, output)).ObservingFault(),
                 Keep.Left)
             .Run(materializer);
 

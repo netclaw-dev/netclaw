@@ -32,6 +32,7 @@ internal abstract class ChannelSessionBindingActor<TPromptId> : ReceivePersisten
     private bool _hydrationPending;
     private readonly List<PendingApprovalRequest<TPromptId>> _pendingApprovalRequests = [];
     private string? _cursor;
+    private readonly Guid _incarnation = Guid.NewGuid();
     private readonly ISessionPipeline _pipeline;
     private readonly IPromptInjectionDetector _detector;
     private readonly SessionIngressGate? _ingressGate;
@@ -230,7 +231,7 @@ internal abstract class ChannelSessionBindingActor<TPromptId> : ReceivePersisten
         CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
         Command<OutputStreamTerminated>(msg =>
         {
-            if (msg.Generation != _handle.Generation)
+            if (!IsCurrentPipeline(msg.Incarnation, msg.Generation))
                 return;
             var reason = msg.Cause is null ? "completed" : $"faulted: {msg.Cause.Message}";
             _log.Warning("Output stream terminated ({Reason}); reinitializing pipeline", reason);
@@ -238,6 +239,7 @@ internal abstract class ChannelSessionBindingActor<TPromptId> : ReceivePersisten
         });
         CommandAsync<ReinitializePipeline>(async msg =>
         {
+            Timers.Cancel(ReinitializeTimerKey);
             BeforePipelineReinitialize();
             _heldFailedPost = null;
             _outputEngine.ResetForPipelineReinitialize();
@@ -316,13 +318,14 @@ internal abstract class ChannelSessionBindingActor<TPromptId> : ReceivePersisten
         if (_handle.IsInitialized)
             return;
         var self = Self;
+        var incarnation = _incarnation;
         using var initCts = new CancellationTokenSource(InitializationTimeout, _timeProvider);
         await _handle.InitializeWithChannelAsync(
             Context,
             _sessionId,
             BuildOptions(),
-            output => self.Tell(new OutputReceived(output)),
-            (generation, cause) => self.Tell(new OutputStreamTerminated(generation, cause)),
+            (generation, output) => self.Tell(new OutputReceived(incarnation, generation, output)),
+            (generation, cause) => self.Tell(new OutputStreamTerminated(incarnation, generation, cause)),
             initCts.Token);
     }
 
@@ -384,8 +387,14 @@ internal abstract class ChannelSessionBindingActor<TPromptId> : ReceivePersisten
         }
     }
 
+    private bool IsCurrentPipeline(Guid incarnation, int generation) =>
+        incarnation == _incarnation && _handle.IsInitialized && generation == _handle.Generation;
+
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
     {
+        if (!IsCurrentPipeline(msg.Incarnation, msg.Generation))
+            return;
+
         if (msg.Output is SessionDeactivated)
         {
             BeforeDrain();
@@ -522,7 +531,7 @@ internal abstract class ChannelSessionBindingActor<TPromptId> : ReceivePersisten
         public static readonly PerformHydration Instance = new();
     }
 
-    private sealed record OutputReceived(SessionOutput Output) : INoSerializationVerificationNeeded;
-    private sealed record OutputStreamTerminated(int Generation, Exception? Cause) : INoSerializationVerificationNeeded;
+    private sealed record OutputReceived(Guid Incarnation, int Generation, SessionOutput Output) : INoSerializationVerificationNeeded;
+    private sealed record OutputStreamTerminated(Guid Incarnation, int Generation, Exception? Cause) : INoSerializationVerificationNeeded;
     private sealed record ReinitializePipeline(string Reason) : INoSerializationVerificationNeeded;
 }

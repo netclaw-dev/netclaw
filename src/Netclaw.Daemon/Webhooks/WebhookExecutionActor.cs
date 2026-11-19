@@ -84,7 +84,7 @@ internal sealed class WebhookExecutionActor : ReceiveActor
                     Filter = OutputFilter.TextStreaming | OutputFilter.ToolCalls,
                     PromptOverlay = _invocation.Route.BuildPromptOverlay()
                 },
-                output => self.Tell(new ExecutionOutput(output)),
+                (_, output) => self.Tell(new ExecutionOutput(output)),
                 (_, failure) => self.Tell(new OutputStreamTerminated(failure)));
 
             await inputWriter.WriteAsync(new ChannelInput

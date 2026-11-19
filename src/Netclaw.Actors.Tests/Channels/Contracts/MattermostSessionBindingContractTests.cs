@@ -710,6 +710,197 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
     }
 
     [Fact]
+    public async Task Pipeline_reinitialize_rejects_old_output_that_arrives_during_drain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sid = new SessionId("session-reinit-stale-output");
+        var firstIncarnation = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generation = 0;
+        var pipeline = new RecordingSessionPipeline(_ =>
+        {
+            firstIncarnation.TrySetResult(ReadCurrentActorIncarnation());
+            return Interlocked.Increment(ref generation) == 1
+                ? []
+                :
+                [
+                    new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] },
+                    new TextOutput("replacement output barrier") { SessionId = sid }
+                ];
+        });
+        pipeline.InstallDrainOutput(new TextOutput("old output during drain") { SessionId = sid });
+        var actor = CreateBindingActor(sid, pipeline,
+            new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()));
+        await pipeline.Created.WaitAsync(ct);
+        actor.Tell(CreateInboundMessage("drain pipeline ready", "user-1"), TestActor);
+        await AwaitAssertAsync(() =>
+            Assert.Contains(pipeline.CapturedInputs, input => input.ExecutableText == "drain pipeline ready"),
+            cancellationToken: ct);
+        await AssertCurrentOutputAcceptedAsync(actor, sid, await firstIncarnation.Task.WaitAsync(ct));
+
+        // This private protocol stimulus isolates the real reset and drain sequence from external reinitialize triggers.
+        actor.Tell(CreatePipelineReinitializeCommand(), TestActor);
+        await pipeline.DrainStarted.WaitAsync(ct);
+        pipeline.ReleaseDrainOutput();
+
+        await AwaitAssertAsync(() =>
+            Assert.Contains(GetPostedTexts(), text => text.Contains("replacement output barrier", StringComparison.Ordinal)),
+            cancellationToken: ct);
+        Assert.Equal(2, pipeline.CreateCount);
+        Assert.DoesNotContain(GetPostedTexts(), text => text.Contains("old output during drain", StringComparison.Ordinal));
+        Assert.Single(GetPostedTexts(), IsEmptyTurnFallback);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Stale_output_is_rejected_after_failed_replacement_or_actor_restart(bool restartActor)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var temp = new Netclaw.Tests.Utilities.DisposableTempDir();
+        var filePath = Path.Join(temp.Path, "output.txt");
+        await File.WriteAllTextAsync(filePath, "controlled file output", ct);
+        var sid = new SessionId("session-stale-output-identity");
+        var firstIncarnation = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var currentIncarnation = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var creations = 0;
+        var failReplacement = restartActor ? 0 : 1;
+        var pipeline = new RecordingSessionPipeline(_ =>
+        {
+            var incarnation = ReadCurrentActorIncarnation();
+            if (Interlocked.Increment(ref creations) == 1)
+                firstIncarnation.SetResult(incarnation);
+            else if (Volatile.Read(ref failReplacement) == 1)
+                throw new InvalidOperationException("controlled replacement creation failure");
+            else
+                currentIncarnation.TrySetResult(incarnation);
+            return [];
+        });
+        var actor = CreateBindingActor(sid, pipeline,
+            new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()));
+        var probe = CreateTestProbe();
+        probe.Watch(actor);
+        var oldIncarnation = await firstIncarnation.Task.WaitAsync(ct);
+        actor.Tell(CreateInboundMessage("original pipeline ready", "user-1"), probe.Ref);
+        await AwaitAssertAsync(() =>
+            Assert.Contains(pipeline.CapturedInputs, input => input.ExecutableText == "original pipeline ready"),
+            cancellationToken: ct);
+        await AssertCurrentOutputAcceptedAsync(actor, sid, oldIncarnation);
+
+        if (restartActor)
+        {
+            var internalActor = (IInternalActorRef)actor;
+            internalActor.Suspend();
+            internalActor.Restart(new InvalidOperationException("controlled actor restart"));
+            Assert.NotEqual(oldIncarnation, await currentIncarnation.Task.WaitAsync(ct));
+            actor.Tell(CreateInboundMessage("new incarnation ready", "user-1"), probe.Ref);
+            await AwaitAssertAsync(() =>
+                Assert.Contains(pipeline.CapturedInputs, input => input.ExecutableText == "new incarnation ready"),
+                cancellationToken: ct);
+        }
+        else
+        {
+            actor.Tell(CreatePipelineReinitializeCommand(), probe.Ref);
+            actor.Tell(new Identify("failed replacement barrier"), probe.Ref);
+            Assert.Equal(actor, (await probe.ExpectMsgAsync<ActorIdentity>(cancellationToken: ct)).Subject);
+        }
+
+        SessionOutput[] oldOutputs =
+        [
+            new TextOutput("abandoned output") { SessionId = sid },
+            new FileOutput { SessionId = sid, FilePath = filePath, FileName = "abandoned.txt", MimeType = new MimeType("text/plain") },
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1), OpenChildRunIds = [] },
+            new SessionDeactivated { SessionId = sid }
+        ];
+        var creationsBeforeOldCallbacks = pipeline.CreateCount;
+        // Both actor incarnations start at generation one. The failed replacement retains generation one without an initialized handle.
+        foreach (var output in oldOutputs)
+            actor.Tell(CreateBindingProtocolMessage("OutputReceived", oldIncarnation, 1, output), probe.Ref);
+        actor.Tell(CreateBindingProtocolMessage("OutputStreamTerminated", oldIncarnation, 1,
+            new InvalidOperationException("abandoned stream failure")), probe.Ref);
+        actor.Tell(new Identify("first stale output barrier"), probe.Ref);
+        Assert.Equal(actor, (await probe.ExpectMsgAsync<ActorIdentity>(cancellationToken: ct)).Subject);
+        actor.Tell(new Identify("second stale output barrier"), probe.Ref);
+        Assert.Equal(actor, (await probe.ExpectMsgAsync<ActorIdentity>(cancellationToken: ct)).Subject);
+        Assert.Equal(creationsBeforeOldCallbacks, pipeline.CreateCount);
+        Assert.Empty(GetPostedTexts());
+        Assert.Empty(_replyClient.Uploads);
+
+        if (!restartActor)
+        {
+            Volatile.Write(ref failReplacement, 0);
+            actor.Tell(CreatePipelineReinitializeCommand(), probe.Ref);
+            await currentIncarnation.Task.WaitAsync(ct);
+            actor.Tell(CreateInboundMessage("restored pipeline ready", "user-1"), probe.Ref);
+            await AwaitAssertAsync(() =>
+                Assert.Contains(pipeline.CapturedInputs, input => input.ExecutableText == "restored pipeline ready"),
+                cancellationToken: ct);
+        }
+
+        pipeline.EmitOutput(new FileOutput
+        {
+            SessionId = sid, FilePath = filePath, FileName = "current.txt", MimeType = new MimeType("text/plain")
+        });
+        pipeline.EmitOutput(new TextOutput("current output barrier") { SessionId = sid });
+        await AwaitAssertAsync(() =>
+            Assert.Contains(GetPostedTexts(), text => text.Contains("current output barrier", StringComparison.Ordinal)),
+            cancellationToken: ct);
+        Assert.Single(_replyClient.Uploads);
+
+        if (!restartActor)
+        {
+            var creationsAfterRecovery = pipeline.CreateCount;
+            ((Akka.TestKit.TestScheduler)Sys.Scheduler).Advance(TimeSpan.FromSeconds(2));
+            actor.Tell(new Identify("first canceled retry barrier"), probe.Ref);
+            Assert.Equal(actor, (await probe.ExpectMsgAsync<ActorIdentity>(cancellationToken: ct)).Subject);
+            actor.Tell(new Identify("second canceled retry barrier"), probe.Ref);
+            Assert.Equal(actor, (await probe.ExpectMsgAsync<ActorIdentity>(cancellationToken: ct)).Subject);
+            Assert.Equal(creationsAfterRecovery, pipeline.CreateCount);
+        }
+    }
+
+    private async Task AssertCurrentOutputAcceptedAsync(IActorRef actor, SessionId sessionId, Guid incarnation)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var probe = CreateTestProbe();
+        const string marker = "current output control";
+        var correlationId = Guid.NewGuid().ToString("N");
+        actor.Tell(CreateBindingProtocolMessage("OutputReceived", incarnation, 1,
+            new TextOutput(marker) { SessionId = sessionId }), probe.Ref);
+        actor.Tell(new Identify(correlationId), probe.Ref);
+        var identity = await probe.ExpectMsgAsync<ActorIdentity>(cancellationToken: ct);
+        Assert.Equal(correlationId, identity.MessageId);
+        Assert.Equal(actor, identity.Subject);
+        Assert.Contains(GetPostedTexts(), text => text.Contains(marker, StringComparison.Ordinal));
+        ClearPostedTexts();
+    }
+
+    private static Guid ReadCurrentActorIncarnation()
+    {
+        // CreateAsync calls the factory on the actor thread before its first incomplete await.
+        var cell = typeof(ActorCell).GetProperty("Current", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)?.GetValue(null)
+            ?? throw new InvalidOperationException("The pipeline factory has no current actor cell.");
+        var actor = typeof(ActorCell).GetProperty("Actor", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(cell)
+            ?? throw new InvalidOperationException("The pipeline factory has no current actor instance.");
+        var field = actor.GetType().BaseType?.GetField("_incarnation", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("The session actor has no incarnation field.");
+        return (Guid)(field.GetValue(actor)
+            ?? throw new InvalidOperationException("The session actor has no incarnation value."));
+    }
+
+    private static object CreatePipelineReinitializeCommand()
+        => CreateBindingProtocolMessage("ReinitializePipeline", "controlled old-output drain");
+
+    private static object CreateBindingProtocolMessage(string name, params object[] arguments)
+    {
+        var baseType = typeof(ChannelSessionBindingActor<MattermostPostId>);
+        var commandDefinition = baseType.GetNestedType(name, System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException($"The session actor has no {name} message.");
+        var commandType = commandDefinition.MakeGenericType(typeof(MattermostPostId));
+        return Activator.CreateInstance(commandType, arguments)
+            ?? throw new InvalidOperationException($"The {name} message could not be created.");
+    }
+
+    [Fact]
     public async Task Init_failure_stops_actor()
     {
         var ct = TestContext.Current.CancellationToken;

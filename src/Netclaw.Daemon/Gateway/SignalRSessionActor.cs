@@ -247,7 +247,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             Context,
             _sessionId,
             BuildOptions(),
-            output => self.Tell(new OutputReceived(output)),
+            (_, output) => self.Tell(new OutputReceived(output)),
             (gen, cause) => self.Tell(new OutputStreamTerminated(gen, cause)),
             initCts.Token);
     }

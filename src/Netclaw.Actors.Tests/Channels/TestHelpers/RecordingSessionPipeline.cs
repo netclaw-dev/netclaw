@@ -27,7 +27,9 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     private SharedKillSwitch? _killSwitch;
     private Channel<SessionOutput>? _laterOutputs;
     private TaskCompletionSource? _creationGate;
-
+    private SessionOutput? _drainOutput;
+    private readonly TaskCompletionSource _drainStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _releaseDrainOutput = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>
     /// Creates a recording pipeline.
@@ -61,6 +63,13 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
 
     public void ReleaseCreationGate() =>
         (_creationGate ?? throw new InvalidOperationException("No creation gate exists.")).SetResult();
+
+    public Task DrainStarted => _drainStarted.Task;
+
+    // The output tail remains after shutdown until the test releases it.
+    public void InstallDrainOutput(SessionOutput output) => _drainOutput = output;
+
+    public void ReleaseDrainOutput() => _releaseDrainOutput.SetResult();
 
     public IReadOnlyList<IWithSessionId> RecordedFeedback
     {
@@ -117,7 +126,7 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         IMaterializer? materializer = null,
         CancellationToken cancellationToken = default)
     {
-        Interlocked.Increment(ref _createCount);
+        var generation = Interlocked.Increment(ref _createCount);
         Volatile.Write(ref _capturedOptions, options);
         _created.TrySetResult(options);
         if (_creationGate is { } creationGate)
@@ -185,7 +194,36 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
                 .Via(killSwitch.Flow<SessionOutput>());
         }
 
+        if (generation == 1 && _drainOutput is { } drainOutput)
+        {
+            output = output.WatchTermination((materialized, completion) =>
+            {
+                _ = ObserveDrainAsync(completion);
+                return materialized;
+            }).Concat(Source.UnfoldAsync<int, SessionOutput>(0, async state =>
+            {
+                if (state != 0)
+                    return default;
+                await _drainStarted.Task.WaitAsync(cancellationToken);
+                await _releaseDrainOutput.Task.WaitAsync(cancellationToken);
+                return (1, drainOutput);
+            }));
+        }
+
         return new MaterializedSession(input, output, killSwitch);
+    }
+
+    private async Task ObserveDrainAsync(Task completion)
+    {
+        try
+        {
+            await completion;
+            _drainStarted.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            _drainStarted.TrySetException(exception);
+        }
     }
 
     public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)

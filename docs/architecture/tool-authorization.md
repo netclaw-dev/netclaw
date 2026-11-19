@@ -953,6 +953,9 @@ A wrong-session reminder receives a Nack and adds no input.
 Transport operations return a complete success or failure result.
 The common actor holds the first failed output result until the completed turn.
 A notice does not change the active turn's delivery result.
+The common output receiver checks actor incarnation, pipeline initialization, and captured generation before it applies any output effect.
+These identities are actor-local. They add no durable event or grant.
+Old output cannot post a message, advance a cursor, clear a prompt, or stop the replacement actor.
 
 `SessionToolWorkflow` owns the session-local approval records, live wait channel, active batch tracker, and temporary correction state.
 It validates the original requester and offered answer. It selects which unanswered calls can resume after recovery.
