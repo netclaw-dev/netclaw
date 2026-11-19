@@ -144,6 +144,13 @@ internal sealed class DiscordNetGatewayLifecycleActor :
     /// <summary>Discord's start does not imply readiness; wait up to 30s for Discord.Net's READY event.</summary>
     protected override TimeSpan? ReadySignalTimeout => TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Discord.Net's <c>StopAsync</c> awaits a WebSocket close handshake. After
+    /// a socket-exhaustion event the handshake can never complete, and the
+    /// actor would otherwise sit in Disconnecting forever with no retry armed.
+    /// </summary>
+    protected override TimeSpan? StopTimeout => TimeSpan.FromSeconds(30);
+
     protected override bool IsTransportConnected => _client.ConnectionState == ConnectionState.Connected;
 
     protected override bool HasBotIdentity => _botUserId is not null && _botMentionTag is not null;
