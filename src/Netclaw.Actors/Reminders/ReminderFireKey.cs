@@ -28,7 +28,7 @@ public readonly record struct ReminderFireKey(ReminderId DefinitionId, long Fire
         if (text is null)
             return false;
 
-        var separator = text.LastIndexOf(':');
+        var separator = text.LastIndexOf(':', StringComparison.Ordinal);
         if (separator <= 0 || text.IndexOf(':', StringComparison.Ordinal) != separator)
             return false;
 

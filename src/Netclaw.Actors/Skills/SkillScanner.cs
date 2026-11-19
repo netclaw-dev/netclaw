@@ -80,7 +80,7 @@ public static partial class SkillScanner
 
             // Skip README and hidden files
             if (fileName.Equals("README.md", StringComparison.OrdinalIgnoreCase)
-                || fileName.StartsWith('.'))
+                || fileName.StartsWith('.', StringComparison.Ordinal))
                 continue;
 
             var entry = ParseFlatSkillFile(mdFile, rootFull, issues, allowSymlinks, strictNameMatch, allowFrontmatterlessFlatFiles);
@@ -117,7 +117,7 @@ public static partial class SkillScanner
             var subDirName = Path.GetFileName(subDir);
 
             // Skip hidden directories except known skill tier directories
-            if (subDirName.StartsWith('.') && !IsAllowedHiddenDirectory(subDirName))
+            if (subDirName.StartsWith('.', StringComparison.Ordinal) && !IsAllowedHiddenDirectory(subDirName))
                 continue;
 
             foreach (var nestedDir in Directory.GetDirectories(subDir))
@@ -479,7 +479,7 @@ public static partial class SkillScanner
         if (closingIndex < 0)
             return content;
 
-        var bodyStart = content.IndexOf('\n', closingIndex + 4);
+        var bodyStart = content.IndexOf('\n', closingIndex + 4, StringComparison.Ordinal);
         return bodyStart < 0 ? string.Empty : content[(bodyStart + 1)..].TrimStart();
     }
 

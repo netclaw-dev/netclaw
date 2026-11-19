@@ -175,8 +175,8 @@ internal static class ReminderCommand
     /// </summary>
     private static string FormatNextFire(string nextFire)
     {
-        var open = nextFire.LastIndexOf('(');
-        if (open >= 0 && nextFire.EndsWith(')'))
+        var open = nextFire.LastIndexOf('(', StringComparison.Ordinal);
+        if (open >= 0 && nextFire.EndsWith(')', StringComparison.Ordinal))
             return nextFire[(open + 1)..^1];
 
         return string.Equals(nextFire, "unknown", StringComparison.Ordinal) ? "-" : nextFire;

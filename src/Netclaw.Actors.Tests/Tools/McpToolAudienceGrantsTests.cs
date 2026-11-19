@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -142,7 +143,7 @@ public sealed class McpToolAudienceGrantsTests
             CreateMcpTool("memorizer", "store"),
             CreateExecutionContext(TrustAudience.Team));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("mcp_tool_not_allowed_for_audience_profile", decision.DenyReason);
     }
 
@@ -160,7 +161,7 @@ public sealed class McpToolAudienceGrantsTests
             CreateMcpTool("memorizer", "search_memories"),
             CreateExecutionContext(TrustAudience.Team));
 
-        Assert.True(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Allowed>(decision);
     }
 
     [Fact]
@@ -174,7 +175,7 @@ public sealed class McpToolAudienceGrantsTests
             CreateMcpTool("memorizer", "search_memories"),
             CreateExecutionContext(TrustAudience.Team));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("mcp_server_not_allowed_for_audience_profile", decision.DenyReason);
     }
 

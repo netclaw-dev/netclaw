@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -88,7 +89,7 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
             PersonalContext(),
             ToolInput.Create("Command", $"cat {Path.Combine(deniedRoot, "secret.txt")}"));
 
-        Assert.False(deniedDecision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(deniedDecision);
         Assert.Equal("shell_references_protected_path", deniedDecision.DenyReason);
 
         // A command that touches a path outside the protected set is NOT denied
@@ -123,7 +124,7 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
             PersonalContext(),
             ToolInput.Create("Command", @"Get-Content C:\protected\config\secret.txt"));
 
-        Assert.False(decision.Allowed);
+        Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Equal("shell_references_protected_path", decision.DenyReason);
     }
 

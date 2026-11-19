@@ -24,6 +24,7 @@ using Netclaw.Tools;
 using FakeChatClient = Netclaw.Actors.Tests.Sessions.FakeChatClient;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
+using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Actors.Tests.Reminders;
 
@@ -304,11 +305,15 @@ public sealed class ReminderPreflightGrantTests : LlmSessionTestBase
             ReminderDeadline.Infinite,
             new ReminderPayload { Id = id }));
 
-        var history = Host.Services.GetRequiredService<ReminderHistoryStore>();
+        var manager = ActorRegistry.Get<ReminderManagerActorKey>();
         HistoryRecord? fired = null;
         await AwaitAssertAsync(async () =>
         {
-            fired = Assert.Single(await history.ReadAsync(id, 10));
+            var history = await manager.Ask<ReminderHistoryResponse>(
+                new GetReminderHistoryQuery(id, 10, new ReminderAudienceAuthorizationContext(TrustAudience.Personal, "Operator/test")),
+                TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.True(history.Found);
+            fired = Assert.Single(history.Records);
         }, TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
         return fired!;
     }

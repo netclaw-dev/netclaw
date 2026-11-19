@@ -967,10 +967,13 @@ public class ReminderManagerActorTests : TestKit, IAsyncDisposable
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         // No delivery result follows the acknowledgement. The run must still end in success.
-        var historyStore = new ReminderHistoryStore(_tempDir.Paths);
         await AwaitAssertAsync(async () =>
         {
-            var record = Assert.Single(await historyStore.ReadAsync(definition.Id, 10));
+            var history = await manager.Ask<ReminderHistoryResponse>(
+                new GetReminderHistoryQuery(definition.Id, 10, OperatorAuthorization),
+                TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+            Assert.True(history.Found);
+            var record = Assert.Single(history.Records);
             Assert.Equal("ok", record.Status);
             Assert.Equal(0, _definitionStore.Get(definition.Id)!.ConsecutiveFailures);
             var health = await manager.Ask<ReminderHealthResponse>(

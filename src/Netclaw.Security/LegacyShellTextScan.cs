@@ -278,7 +278,7 @@ internal static class LegacyShellTextScan
         foreach (var token in tokens)
         {
             var trimmed = TrimShellPunctuation(token);
-            if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith('-'))
+            if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith('-', StringComparison.Ordinal))
                 continue;
 
             if (!trimmed.Contains("://", StringComparison.Ordinal)

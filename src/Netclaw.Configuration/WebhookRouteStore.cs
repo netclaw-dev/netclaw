@@ -130,7 +130,7 @@ public sealed class WebhookRouteStore
         var webhooksRootPath = Path.GetFullPath(_paths.WebhooksDirectory);
         var path = Path.GetFullPath(Path.Combine(webhooksRootPath, $"{normalizedRouteName}.json"));
 
-        var rootPrefix = webhooksRootPath.EndsWith(Path.DirectorySeparatorChar)
+        var rootPrefix = webhooksRootPath.EndsWith(Path.DirectorySeparatorChar, StringComparison.Ordinal)
             ? webhooksRootPath
             : webhooksRootPath + Path.DirectorySeparatorChar;
 

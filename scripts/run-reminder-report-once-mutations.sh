@@ -26,32 +26,34 @@ spans="$(
       ["_retryPending = false;\n    }\n\n    /// <summary>\n    /// Mark the given turn", 1],
       ["_retryPending = false;\n    }\n\n    /// <summary>\n    /// Which reminder fire", 1],
       ["_retryPending = true;", 1],
-      ["_retryPending ? _recordedTurnReminder : null", 2]
+      ["_retryPending ? _recordedTurnReminder : null", 2],
+      ["eligible != turn", 1, "retry-stale"]
     );
     for $target (@targets) {
-      ($marker, $count) = @$target;
+      ($marker, $count, $name) = @$target;
+      $name //= "report-once";
       $start = index($_, $marker);
-      die "A report-once boundary is missing or duplicated.\n"
+      die "A delivery retry or report boundary is missing or duplicated.\n"
         if $start < 0 || index($_, $marker, $start + 1) >= 0;
       $first = 1 + (substr($_, 0, $start) =~ tr/\n/\n/);
       $last = $first + ($marker =~ tr/\n/\n/);
-      print "$start ", $start + length($marker), " $first $last $count\n";
+      print "$start ", $start + length($marker), " $first $last $count $name\n";
     }
   ' "$repo_root/$source_file"
 )"
 
 mutate_args=()
 expected_total=0
-while read -r span_start span_end first last count; do
+while read -r span_start span_end first last count name; do
   mutate_args+=(--mutate "${source_file#src/Netclaw.Actors/}{$span_start..$span_end}")
   expected_total=$((expected_total + count))
 done <<< "$spans"
 
 if [[ "$collect_mode" == "--collect" ]]; then
-  while read -r span_start span_end first last count; do
+  while read -r span_start span_end first last count name; do
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "${source_file#src/Netclaw.Actors/}" "$repo_root/$source_file" \
-      "$first" "$last" "$count" report-once "$span_start:$span_end"
+      "$first" "$last" "$count" "$name" "$span_start:$span_end"
   done <<< "$spans"
   exit 0
 fi
@@ -66,16 +68,26 @@ fi
 )
 
 report="$output_path/reports/mutation-report.json"
-while read -r span_start span_end first last count; do
+while read -r span_start span_end first last count name; do
   jq -e --arg source "$repo_root/$source_file" \
     --argjson first "$first" --argjson last "$last" --argjson count "$count" '
     [(.files[$source].mutants // [])[] | select(.status != "Ignored" and .status != "CompileError")
       | select(.location.start.line >= $first and .location.start.line <= $last)] as $mutants
     | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
   ' "$report" > /dev/null || {
-    echo "Expected $count killed report-once mutants in $source_file at lines $first-$last." >&2
+    echo "Expected $count killed $name mutants in $source_file at lines $first-$last." >&2
     exit 1
   }
+  if [[ "$name" == "retry-stale" ]]; then
+    jq -e --arg source "$repo_root/$source_file" --argjson line "$first" '
+      [(.files[$source].mutants // [])[]
+        | select(.location.start.line == $line and .mutatorName == "Equality mutation"
+          and .replacement == "eligible == turn" and .status == "Killed")] | length == 1
+    ' "$report" > /dev/null || {
+      echo "Expected the killed stale-turn equality inversion." >&2
+      exit 1
+    }
+  fi
 done <<< "$spans"
 
 # Unrelated compiler errors can precede the source filter. Target errors still fail above.
@@ -83,6 +95,6 @@ jq -e --argjson count "$expected_total" '
   [.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")]
   | length == $count
 ' "$report" > /dev/null || {
-  echo "Expected exactly $expected_total report-once mutants." >&2
+  echo "Expected exactly $expected_total delivery retry and report mutants." >&2
   exit 1
 }

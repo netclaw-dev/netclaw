@@ -398,7 +398,7 @@ public sealed class ExposureModeStepView : IWizardStepView
         // Bracket-wrap raw IPv6 addresses for URL syntax. Use IPAddress.TryParse rather
         // than a colon-substring check so a typo like 'hostname:port' isn't treated as IPv6.
         var displayHost = host;
-        if (!host.StartsWith('[')
+        if (!host.StartsWith('[', StringComparison.Ordinal)
             && IPAddress.TryParse(host, out var parsed)
             && parsed.AddressFamily == AddressFamily.InterNetworkV6)
         {

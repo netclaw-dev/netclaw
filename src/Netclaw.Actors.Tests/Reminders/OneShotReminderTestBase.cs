@@ -75,7 +75,7 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
     private protected ReminderManagerActorTests.TestNotificationSink Alerts { get; } = new();
     protected RunModePipeline Pipeline { get; } = new();
 
-    /// <summary>The Akka.Reminders storage. A test can make its occurrence status query fail.</summary>
+    /// <summary>The Akka.Reminders storage with test controls for status and Nack.</summary>
     protected FaultableReminderStorage ReminderStorage { get; } = new();
     protected EnvelopeTapProbe Envelopes { get; } = new();
     protected ReminderDefinitionStore Definitions { get; private set; } = null!;
@@ -360,16 +360,15 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
 
     // ── Runs ──
 
-    /// <summary>
-    /// Waits for <paramref name="count"/> history rows, and then for the manager to finish the settlement
-    /// that follows the append. The manager appends the row first and settles in the same message handler.
-    /// </summary>
+    /// <summary>Waits for the manager to settle the run and return its history.</summary>
     protected async Task AwaitSettledRunAsync(ReminderId id, int count)
     {
-        await AwaitAssertAsync(
-            async () => Assert.Equal(count, (await History.ReadAsync(id, 50)).Count),
-            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
-        await BarrierAsync();
+        await AwaitAssertAsync(async () =>
+        {
+            var history = await HistoryAsync(id, OperatorCaller);
+            Assert.True(history.Found);
+            Assert.Equal(count, history.Records.Count);
+        }, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>Waits until the scheduler has delivered <paramref name="count"/> envelopes, and the manager has handled them.</summary>
@@ -629,15 +628,24 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
     }
 
     /// <summary>
-    /// The in-memory Akka.Reminders storage with one fault: a test makes the occurrence status query fail.
-    /// The scheduler then replies <c>Error</c>, as it does for a damaged SQLite file or a storage timeout.
-    /// Every other call goes to the real in-memory storage.
+    /// Wraps in-memory storage. A test can fail a status query or hold a Nack lookup.
     /// </summary>
     protected sealed class FaultableReminderStorage : IConditionalReminderMutationStorage
     {
         private readonly InMemoryReminderStorage _inner = new();
         private int _failuresLeft;
         private int _statusQueries;
+        private TaskCompletionSource? _nackEntered;
+        private TaskCompletionSource? _releaseNack;
+
+        public Task HoldNextNack()
+        {
+            _nackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _releaseNack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _nackEntered.Task;
+        }
+
+        public void ReleaseNack() => _releaseNack!.TrySetResult();
 
         /// <summary>The number of occurrence status queries that reached the storage.</summary>
         public int StatusQueryCount => Volatile.Read(ref _statusQueries);
@@ -697,8 +705,17 @@ public abstract class OneShotReminderTestBase : TestKit, IAsyncDisposable
         public Task<IReadOnlyList<ScheduledReminder>> GetTimedOutAckRemindersAsync(DateTimeOffset now, ReminderBatchSize maxCount, CancellationToken ct = default)
             => _inner.GetTimedOutAckRemindersAsync(now, maxCount, ct);
 
-        public Task<ScheduledReminder?> GetAwaitingAckReminderAsync(ReminderEntity entity, ReminderKey key, DateTimeOffset dueTimeUtc, CancellationToken ct = default)
-            => _inner.GetAwaitingAckReminderAsync(entity, key, dueTimeUtc, ct);
+        public async Task<ScheduledReminder?> GetAwaitingAckReminderAsync(ReminderEntity entity, ReminderKey key, DateTimeOffset dueTimeUtc, CancellationToken ct = default)
+        {
+            if (_nackEntered is { } entered && _releaseNack is { } release)
+            {
+                _nackEntered = null;
+                entered.TrySetResult();
+                await release.Task.WaitAsync(ct);
+            }
+
+            return await _inner.GetAwaitingAckReminderAsync(entity, key, dueTimeUtc, ct);
+        }
 
         public Task<DateTimeOffset?> GetNextAwaitingAckDeadlineAsync(CancellationToken ct = default)
             => _inner.GetNextAwaitingAckDeadlineAsync(ct);

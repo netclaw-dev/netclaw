@@ -302,7 +302,7 @@ public abstract class GatewayLifecycleContractTests : TestKit
     }
 
     [Fact]
-    public async Task Flapping_connection_grows_retry_backoff()
+    public async Task Flapping_grows_backoff_and_stable_ready_resets_it()
     {
         var actor = CreateLifecycleActor();
         await ConnectAsync(actor);
@@ -330,37 +330,31 @@ public abstract class GatewayLifecycleContractTests : TestKit
         Assert.Equal(2, TransportStartCount); // retry must NOT have fired yet
 
         AdvanceScheduler(TimeSpan.FromSeconds(5));
-        await AwaitAssertAsync(
-            () => Assert.Equal(3, TransportStartCount),
-            cancellationToken: TestContext.Current.CancellationToken);
-    }
-
-    [Fact]
-    public async Task Stable_ready_period_resets_retry_backoff()
-    {
-        var actor = CreateLifecycleActor();
-        await ConnectAsync(actor);
-
-        // Grow the backoff to 5s with one quick flap.
-        await RaiseRuntimeDisconnectAsync(actor, "flap");
-        await AwaitCleanReconnectSettledAsync(actor, expectedCleanReconnects: 1);
-        AdvanceScheduler(TimeSpan.FromSeconds(1));
         await AwaitAssertAsync(async () =>
         {
-            Assert.Equal(2, TransportStartCount);
+            Assert.Equal(3, TransportStartCount);
             Assert.True((await GetSnapshotAsync(actor)).IsReady);
         }, duration: SnapshotAssertTimeout, cancellationToken: TestContext.Current.CancellationToken);
 
-        // Hold Ready past the stability window, then drop: the backoff must
-        // reset, so the next retry fires immediately instead of after 5s.
+        // A stable Ready period resets the grown delay before the next retry.
         AdvanceTimeProvider(TimeSpan.FromSeconds(61));
         await RaiseRuntimeDisconnectAsync(actor, "drop after stable period");
-        await AwaitCleanReconnectSettledAsync(actor, expectedCleanReconnects: 2);
+        await AwaitCleanReconnectSettledAsync(actor, expectedCleanReconnects: 3);
 
         AdvanceScheduler(TimeSpan.FromSeconds(1));
-        await AwaitAssertAsync(
-            () => Assert.Equal(3, TransportStartCount),
-            cancellationToken: TestContext.Current.CancellationToken);
+        await AwaitAssertAsync(async () =>
+        {
+            Assert.Equal(4, TransportStartCount);
+            Assert.True((await GetSnapshotAsync(actor)).IsReady);
+        }, duration: SnapshotAssertTimeout, cancellationToken: TestContext.Current.CancellationToken);
+
+        await RaiseRuntimeDisconnectAsync(actor, "drop before operator disconnect");
+        await AwaitCleanReconnectSettledAsync(actor, expectedCleanReconnects: 4);
+        await DisconnectAsync(actor);
+
+        AdvanceScheduler(TimeSpan.FromMinutes(6));
+        Assert.False((await GetSnapshotAsync(actor)).IsReady);
+        Assert.Equal(4, TransportStartCount);
     }
 
     [Fact]

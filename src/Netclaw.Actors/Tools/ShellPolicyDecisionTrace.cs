@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -208,7 +209,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             (coverage as Coverage.Stored)?.GrantedAt));
     }
 
-    internal ShellPolicyDecisionTrace Complete(ToolAuthorizationDecision decision)
+    internal ShellPolicyDecisionTrace Complete(AuthorizationDecision decision)
     {
         if (_completedTrace is not null)
             return _completedTrace;
@@ -287,25 +288,22 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         _truncated = true;
     }
 
-    private static ShellPolicyTraceRow ToCompletionRow(ToolAuthorizationDecision decision)
+    private static ShellPolicyTraceRow ToCompletionRow(AuthorizationDecision decision)
     {
-        var (outcome, reason) = decision.Outcome switch
+        var (outcome, reason) = decision switch
         {
-            ToolAuthorizationOutcome.Allowed => (
+            AuthorizationDecision.Allowed allowed => (
                 ShellPolicyTraceOutcome.Allow,
-                ToTraceReason(decision.AllowReason)),
-            ToolAuthorizationOutcome.RequiresApproval => (
+                ToTraceReason(allowed.Reason)),
+            AuthorizationDecision.NeedsConsent => (
                 ShellPolicyTraceOutcome.RequiresApproval,
                 ShellPolicyTraceReason.UncoveredCandidates),
-            ToolAuthorizationOutcome.RequiresAgentCorrection => (
+            AuthorizationDecision.CorrectionRequired => (
                 ShellPolicyTraceOutcome.RequiresAgentCorrection,
                 ShellPolicyTraceReason.AgentCorrection),
-            ToolAuthorizationOutcome.Denied => (
+            AuthorizationDecision.Denied denied => (
                 ShellPolicyTraceOutcome.Deny,
-                ToTraceReason(decision.DenyReason)),
-            _ => (
-                ShellPolicyTraceOutcome.Deny,
-                ShellPolicyTraceReason.InternalPolicyFailure),
+                ToTraceReason(denied.Reason))
         };
         return new ShellPolicyTraceRow(
             ShellPolicyTraceStage.Completion,

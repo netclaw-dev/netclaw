@@ -2,6 +2,7 @@
   "stryker-config": {
     "project": "Netclaw.Actors.csproj",
     "configuration": "Release",
+    "language-version": "Preview",
     "coverage-analysis": "off",
     "break-on-initial-test-failure": true,
     "reporters": [

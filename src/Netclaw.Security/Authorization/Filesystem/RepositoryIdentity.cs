@@ -186,7 +186,7 @@ internal sealed record RepositoryIdentity(
         if (!head.StartsWith(Prefix, StringComparison.Ordinal)
             || head.Contains("..", StringComparison.Ordinal)
             || head.Contains("@{", StringComparison.Ordinal)
-            || head.EndsWith('.'))
+            || head.EndsWith('.', StringComparison.Ordinal))
         {
             return false;
         }
@@ -213,8 +213,8 @@ internal sealed record RepositoryIdentity(
         string baseDirectory,
         bool directoryTarget)
     {
-        if (!directoryTarget && (pointer.EndsWith(Path.DirectorySeparatorChar)
-                                 || pointer.EndsWith(Path.AltDirectorySeparatorChar)))
+        if (!directoryTarget && (pointer.EndsWith(Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                                 || pointer.EndsWith(Path.AltDirectorySeparatorChar, StringComparison.Ordinal)))
             return true;
 
         var authoredPath = Path.IsPathFullyQualified(pointer)
@@ -274,7 +274,7 @@ internal sealed record RepositoryIdentity(
         var content = File.ReadAllText(path);
         value = content.EndsWith("\r\n", StringComparison.Ordinal)
             ? content[..^2]
-            : content.EndsWith('\n')
+            : content.EndsWith('\n', StringComparison.Ordinal)
                 ? content[..^1]
                 : content;
         return value.Length > 0

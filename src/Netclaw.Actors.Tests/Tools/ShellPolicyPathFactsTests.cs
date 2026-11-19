@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Authorization.Consent;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -467,7 +468,7 @@ public sealed class ShellPolicyPathFactsTests
 
         Assert.Equal(mutation == "duplicate", evaluation.IsCovered(candidate.Id));
         var coveredRows = evaluation.Complete(
-                ToolAuthorizationDecision.Deny("internal_policy_failure"))
+                AuthorizationDecision.Deny("internal_policy_failure"))
             .ShellPolicyTrace.Rows
             .Where(static row => row.Outcome == ShellPolicyTraceOutcome.Covered)
             .ToArray();
@@ -523,7 +524,7 @@ public sealed class ShellPolicyPathFactsTests
         Assert.Null(evaluation.PersistentStoreFailure);
         Assert.Empty(evaluation.ApprovalMatches);
         var trace = evaluation.Complete(
-            ToolAuthorizationDecision.Deny("internal_policy_failure"))
+            AuthorizationDecision.Deny("internal_policy_failure"))
             .ShellPolicyTrace;
         Assert.DoesNotContain(
             trace.Rows,

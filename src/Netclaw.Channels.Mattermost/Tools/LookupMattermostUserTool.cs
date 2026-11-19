@@ -66,7 +66,7 @@ public sealed partial class LookupMattermostUserTool : NetclawTool<LookupMatterm
         var query = args.Query.Trim();
 
         // Strip leading @ if present (users often type @username)
-        if (query.StartsWith('@'))
+        if (query.StartsWith('@', StringComparison.Ordinal))
             query = query[1..];
 
         var sb = new StringBuilder();

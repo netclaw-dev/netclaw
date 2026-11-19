@@ -1,6 +1,7 @@
 {
   "stryker-config": {
     "configuration": "Release",
+    "language-version": "Preview",
     "coverage-analysis": "off",
     "reporters": [
       "progress",

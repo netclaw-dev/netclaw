@@ -71,7 +71,7 @@ public sealed class SearXngBackend : ISearchBackend
                 // HTML body on 200 = format silently ignored by some configurations.
                 // Same actionable cause as 403; same terminal error.
                 if (contentType.Contains("text/html", StringComparison.OrdinalIgnoreCase)
-                    || body.TrimStart().StartsWith('<'))
+                    || body.TrimStart().StartsWith('<', StringComparison.Ordinal))
                     return new SearchBackendResult.Error(FormatErrorMessage);
 
                 try

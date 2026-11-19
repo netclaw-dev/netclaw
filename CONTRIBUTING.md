@@ -153,7 +153,7 @@ Netclaw uses a **daemon + thin client** architecture:
 - **Gall's Law:** build the simplest working system first — single-process
   runtime, actor-driven, persistence-backed
 - **Default-deny security:** explicit ACL and policy checks everywhere
-- **.NET 10 runtime baseline** with Google Protobuf for persistence serialization
+- **.NET 11 runtime baseline** with Google Protobuf for persistence serialization
 - **Session identity is Slack thread:** `{channelId}/{threadTs}`
 - **MCP server integration** included from the start
 

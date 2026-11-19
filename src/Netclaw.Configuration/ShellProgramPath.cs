@@ -53,10 +53,10 @@ public static class ShellProgramPath
     {
         ArgumentNullException.ThrowIfNull(programWord);
         absolutePath = string.Empty;
-        if (!IsPath(programWord) || programWord.StartsWith('~'))
+        if (!IsPath(programWord) || programWord.StartsWith('~', StringComparison.Ordinal))
             return false;
 
-        if (programWord.StartsWith('/'))
+        if (programWord.StartsWith('/', StringComparison.Ordinal))
         {
             absolutePath = NormalizeAbsolute(programWord);
             return true;
@@ -77,7 +77,7 @@ public static class ShellProgramPath
     public static string NormalizeAbsolute(string absolutePath)
     {
         ArgumentNullException.ThrowIfNull(absolutePath);
-        if (!absolutePath.StartsWith('/'))
+        if (!absolutePath.StartsWith('/', StringComparison.Ordinal))
             throw new ArgumentException("The path must be an absolute POSIX path.", nameof(absolutePath));
 
         var segments = new List<string>();
@@ -125,7 +125,7 @@ public static class ShellProgramPath
     public static string? NormalizeRelative(string relativePath)
     {
         ArgumentNullException.ThrowIfNull(relativePath);
-        if (!IsPath(relativePath) || relativePath.StartsWith('/') || relativePath.StartsWith('~'))
+        if (!IsPath(relativePath) || relativePath.StartsWith('/', StringComparison.Ordinal) || relativePath.StartsWith('~', StringComparison.Ordinal))
             return null;
 
         var segments = new List<string>();
@@ -144,7 +144,7 @@ public static class ShellProgramPath
             }
         }
 
-        return segments.Count == 0 || relativePath.EndsWith('/')
+        return segments.Count == 0 || relativePath.EndsWith('/', StringComparison.Ordinal)
             ? null
             : CurrentDirectoryPrefix + string.Join('/', segments);
     }
@@ -194,8 +194,8 @@ public static class ShellProgramPath
     {
         ArgumentNullException.ThrowIfNull(programWord);
         return IsPath(programWord)
-               && !programWord.StartsWith('/')
-               && !programWord.StartsWith('~')
+               && !programWord.StartsWith('/', StringComparison.Ordinal)
+               && !programWord.StartsWith('~', StringComparison.Ordinal)
                && programWord.AsSpan().IndexOfAny(ShellSyntaxCharacters) < 0;
     }
 
@@ -259,10 +259,10 @@ public static class ShellProgramPath
                 : null;
         }
 
-        if (program.StartsWith('~'))
+        if (program.StartsWith('~', StringComparison.Ordinal))
             return null;
 
-        if (program.StartsWith('/'))
+        if (program.StartsWith('/', StringComparison.Ordinal))
             return NormalizeAbsolute(program);
 
         if (entry.Directory is { } directory)
@@ -278,5 +278,5 @@ public static class ShellProgramPath
     }
 
     private static bool IsPosixAbsolute(string path)
-        => path.StartsWith('/') && !path.Contains('\\', StringComparison.Ordinal);
+        => path.StartsWith('/', StringComparison.Ordinal) && !path.Contains('\\', StringComparison.Ordinal);
 }

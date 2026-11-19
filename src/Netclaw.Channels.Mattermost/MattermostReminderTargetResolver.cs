@@ -57,7 +57,7 @@ public sealed class MattermostReminderTargetResolver : IReminderTargetResolver
                 ErrorMessage: "Invalid Mattermost channel ID. Use channel:<channelId>."));
         }
 
-        if (raw.StartsWith('@'))
+        if (raw.StartsWith('@', StringComparison.Ordinal))
         {
             var userId = raw[1..].Trim();
             if (MattermostIdentifierFormat.IsMattermostId(userId))

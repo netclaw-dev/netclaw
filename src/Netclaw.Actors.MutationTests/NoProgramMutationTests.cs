@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -89,11 +90,11 @@ public sealed class NoProgramMutationTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
 
-        var denied = Screen($": < {_outside}/notes.txt");
+        var denied = Assert.IsType<AuthorizationDecision.Denied>(Screen($": < {_outside}/notes.txt"));
 
-        Assert.Equal("shell_redirect_read_denied", denied?.DenyReason);
-        Assert.Contains($"{_outside}/notes.txt", denied!.DenyMessage, StringComparison.Ordinal);
-        Assert.Contains("file_read rules", denied.DenyMessage, StringComparison.Ordinal);
+        Assert.Equal("shell_redirect_read_denied", denied.Reason);
+        Assert.Contains($"{_outside}/notes.txt", denied.Message, StringComparison.Ordinal);
+        Assert.Contains("file_read rules", denied.Message, StringComparison.Ordinal);
     }
 
     // Positive controls: a read inside the read roots, and a write target,
@@ -128,7 +129,7 @@ public sealed class NoProgramMutationTests : IDisposable
 
         var denial = policy.ScreenShellTrustZone(analysis, _readRoot, CreateContext());
 
-        Assert.Equal("shell_path_outside_trusted_roots", denial?.DenyReason);
+        Assert.Equal("shell_path_outside_trusted_roots", Assert.IsType<AuthorizationDecision.Denied>(denial).Reason);
     }
 
     [Fact]
@@ -170,7 +171,7 @@ public sealed class NoProgramMutationTests : IDisposable
         Assert.Null(policy.ScreenShellTrustZone(input, _readRoot, context));
         Assert.Equal(
             "shell_path_protected",
-            policy.ScreenShellTrustZone(output, _readRoot, context)?.DenyReason);
+            Assert.IsType<AuthorizationDecision.Denied>(policy.ScreenShellTrustZone(output, _readRoot, context)).Reason);
     }
 
     [Fact]
@@ -292,10 +293,11 @@ public sealed class NoProgramMutationTests : IDisposable
             new ShellPolicyResolvedPathView(scope, [unresolved]),
             Intent: null);
 
-        var denied = CreatePolicy(null, ToolApprovalMode.Auto).ScreenNoProgramRedirects([(candidate, facts)], CreateContext());
+        var denied = Assert.IsType<AuthorizationDecision.Denied>(
+            CreatePolicy(null, ToolApprovalMode.Auto).ScreenNoProgramRedirects([(candidate, facts)], CreateContext()));
 
-        Assert.Equal("shell_redirect_unproved", denied?.DenyReason);
-        Assert.Contains("cannot prove the redirect target", denied!.DenyMessage, StringComparison.Ordinal);
+        Assert.Equal("shell_redirect_unproved", denied.Reason);
+        Assert.Contains("cannot prove the redirect target", denied.Message, StringComparison.Ordinal);
     }
 
     // SECURITY: the trust zone skips a fact that is not known, so this screen
@@ -319,10 +321,11 @@ public sealed class NoProgramMutationTests : IDisposable
             new ShellPolicyResolvedPathView(scope, [unresolved]),
             Intent: null);
 
-        var denied = CreatePolicy(null, ToolApprovalMode.Auto).ScreenNoProgramRedirects([(candidate, facts)], CreateContext());
+        var denied = Assert.IsType<AuthorizationDecision.Denied>(
+            CreatePolicy(null, ToolApprovalMode.Auto).ScreenNoProgramRedirects([(candidate, facts)], CreateContext()));
 
-        Assert.Equal("shell_redirect_unproved", denied?.DenyReason);
-        Assert.Contains("cannot prove the redirect target", denied!.DenyMessage, StringComparison.Ordinal);
+        Assert.Equal("shell_redirect_unproved", denied.Reason);
+        Assert.Contains("cannot prove the redirect target", denied.Message, StringComparison.Ordinal);
     }
 
     // A Deny mode of the file tool denies the redirect, as it denies the tool.
@@ -334,10 +337,11 @@ public sealed class NoProgramMutationTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
 
-        var denied = Screen(command.Replace("{R}", _readRoot, StringComparison.Ordinal), tool);
+        var denied = Assert.IsType<AuthorizationDecision.Denied>(
+            Screen(command.Replace("{R}", _readRoot, StringComparison.Ordinal), tool));
 
-        Assert.Equal("shell_redirect_file_tool_denied", denied?.DenyReason);
-        Assert.Contains(tool, denied!.DenyMessage, StringComparison.Ordinal);
+        Assert.Equal("shell_redirect_file_tool_denied", denied.Reason);
+        Assert.Contains(tool, denied.Message, StringComparison.Ordinal);
     }
 
     // The other file tool does not decide: a denied file_read leaves a write alone.
@@ -404,7 +408,7 @@ public sealed class NoProgramMutationTests : IDisposable
         var facts = ShellPolicyPathFacts.Create(candidates, ShellPathStyle.Posix);
         var denial = policy.ScreenNoProgramRedirects(
             candidates.Select((candidate, index) => (candidate, facts[index])), CreateContext());
-        Assert.Equal("shell_redirect_file_tool_denied", denial?.DenyReason);
+        Assert.Equal("shell_redirect_file_tool_denied", Assert.IsType<AuthorizationDecision.Denied>(denial).Reason);
     }
 
     [Theory]
@@ -436,8 +440,9 @@ public sealed class NoProgramMutationTests : IDisposable
                 analysis,
                 context,
                 new HashSet<FileToolCall>());
-            var prompt = policy.AuthorizeShellApproval(new ToolName(ShellTool.ToolName), context, arguments,
-                ToolApprovalMode.Approval, exact, WorkingDirectory).ApprovalContext!;
+            var prompt = Assert.IsType<AuthorizationDecision.NeedsConsent>(policy.AuthorizeShellApproval(
+                new ToolName(ShellTool.ToolName), context, arguments,
+                ToolApprovalMode.Approval, exact, WorkingDirectory)).Request;
             return ToolAccessPolicy.NarrowShellApprovalContext(prompt, exact.Candidates, [], ShellPathStyle.Posix);
         }
     }
@@ -448,7 +453,7 @@ public sealed class NoProgramMutationTests : IDisposable
             Directory.Delete(_paths.BasePath, recursive: true);
     }
 
-    private ToolAuthorizationDecision? Screen(string command, string? deniedTool = null)
+    private AuthorizationDecision? Screen(string command, string? deniedTool = null)
     {
         var policy = CreatePolicy(deniedTool, ToolApprovalMode.Deny);
         var analysis = policy.ShellCommandPolicy.Analyze(command, _readRoot);

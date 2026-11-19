@@ -78,7 +78,7 @@ policy_file="$repo_root/src/Netclaw.Actors/Tools/ToolAccessPolicy.cs"
 read -r screen_start screen_end screen_start_line screen_start_column screen_end_line screen_end_column < <(
   find_span \
     "$policy_file" \
-    "private ToolAuthorizationDecision? ScreenScopedSlices(" \
+    "private AuthorizationDecision? ScreenScopedSlices(" \
     "if (denial is not null)" \
     "return denial;"
 )

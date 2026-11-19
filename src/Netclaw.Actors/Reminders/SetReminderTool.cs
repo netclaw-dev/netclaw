@@ -348,7 +348,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         {
             ReminderTargetKind.Channel when resolvedId.StartsWith("channel:", StringComparison.OrdinalIgnoreCase)
                 => resolvedId[8..],
-            ReminderTargetKind.User when resolvedId.StartsWith('@')
+            ReminderTargetKind.User when resolvedId.StartsWith('@', StringComparison.Ordinal)
                 => resolvedId[1..],
             _ => resolvedId
         };

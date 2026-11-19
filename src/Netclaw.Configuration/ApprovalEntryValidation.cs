@@ -138,7 +138,7 @@ internal static class ApprovalEntryValidation
         var start = hasDriveRoot ? 3 : 2;
         var remainder = path[start..];
         if (remainder.Contains("\\\\", StringComparison.Ordinal) ||
-            remainder.EndsWith('\\'))
+            remainder.EndsWith('\\', StringComparison.Ordinal))
         {
             return false;
         }
@@ -165,7 +165,7 @@ internal static class ApprovalEntryValidation
             return true;
         }
 
-        if (path.EndsWith('/') || path.Contains("//", StringComparison.Ordinal))
+        if (path.EndsWith('/', StringComparison.Ordinal) || path.Contains("//", StringComparison.Ordinal))
         {
             return false;
         }

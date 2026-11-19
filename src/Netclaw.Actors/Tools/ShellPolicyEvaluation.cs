@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -21,17 +22,17 @@ internal abstract record ShellPolicyPreflightResult
     {
         /// <param name="decision">The screen denial, the automatic allow, or a consent request without analysis.</param>
         /// <param name="authorizedAnalysis">The analysis that the process may execute. Only an allowed decision carries one.</param>
-        internal Complete(ToolAuthorizationDecision decision, ShellCommandAnalysis? authorizedAnalysis)
+        internal Complete(AuthorizationDecision decision, ShellCommandAnalysis? authorizedAnalysis)
         {
             ArgumentNullException.ThrowIfNull(decision);
-            if (authorizedAnalysis is not null && decision.Outcome != ToolAuthorizationOutcome.Allowed)
+            if (authorizedAnalysis is not null && decision is not AuthorizationDecision.Allowed)
                 throw new ArgumentException("Only an allowed shell decision can carry analysis.", nameof(authorizedAnalysis));
 
             Decision = decision;
             AuthorizedAnalysis = authorizedAnalysis;
         }
 
-        internal ToolAuthorizationDecision Decision { get; }
+        internal AuthorizationDecision Decision { get; }
 
         internal ShellCommandAnalysis? AuthorizedAnalysis { get; }
     }
@@ -238,21 +239,19 @@ internal sealed class ShellPolicyEvaluation
         _trace.AddCoverage(state.Candidate, coverage);
     }
 
-    internal ToolAuthorizationDecision Complete(
-        ToolAuthorizationDecision decision,
+    internal AuthorizationDecision Complete(
+        AuthorizationDecision decision,
         bool allowsUncoveredOneTime = false)
     {
         ArgumentNullException.ThrowIfNull(decision);
 
-        var mayComplete = decision.Outcome switch
+        var mayComplete = decision switch
         {
-            ToolAuthorizationOutcome.Allowed => AllCovered
-                                                || allowsUncoveredOneTime
-                                                && decision.AllowReason == ToolAllowReason.OneTimeApproval,
-            ToolAuthorizationOutcome.RequiresApproval => Candidates.Count == 0 || !AllCovered,
-            ToolAuthorizationOutcome.RequiresAgentCorrection => Candidates.Count == 0 || !AllCovered,
-            ToolAuthorizationOutcome.Denied => true,
-            _ => false,
+            AuthorizationDecision.Allowed allowed => AllCovered
+                || allowsUncoveredOneTime && allowed.Reason == ToolAllowReason.OneTimeApproval,
+            AuthorizationDecision.NeedsConsent => Candidates.Count == 0 || !AllCovered,
+            AuthorizationDecision.CorrectionRequired => Candidates.Count == 0 || !AllCovered,
+            AuthorizationDecision.Denied => true
         };
         if (!mayComplete)
             throw new InvalidOperationException("Invalid shell terminal decision.");

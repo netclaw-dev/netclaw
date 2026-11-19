@@ -783,7 +783,7 @@ public sealed class ShellCommandPolicy
                     }
                 }
                 else if (fact.IsKnown
-                         && token.StartsWith('-')
+                         && token.StartsWith('-', StringComparison.Ordinal)
                          && !token.StartsWith("--", StringComparison.Ordinal))
                 {
                     if (token.Contains('r', StringComparison.Ordinal)
@@ -1063,7 +1063,7 @@ public sealed class ShellCommandPolicy
                     return false;
 
                 var token = tokens[i].Value;
-                if (token.StartsWith('-'))
+                if (token.StartsWith('-', StringComparison.Ordinal))
                     continue;
 
                 var normalized = NormalizePathToken(token);

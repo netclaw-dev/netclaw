@@ -24,10 +24,23 @@ internal enum ReminderLookupKind
 /// <summary>The answer of <see cref="DeliveryRetryHandler.ReminderOf"/>. <c>FireKey</c> has a value only for <c>Reminder</c>.</summary>
 internal readonly record struct ReminderLookup(ReminderLookupKind Kind, ReminderId? FireKey);
 
-/// <summary>
-/// Manages delivery retry state: eligibility tracking, retry counting,
-/// and static helper methods for building nudge messages.
-/// </summary>
+internal enum ReadyDeliveryDecision
+{
+    Stale,
+    RoutedSkill,
+    AddNudgeAndReport,
+    BudgetSpent,
+    Retry
+}
+
+internal enum BusyDeliveryDecision
+{
+    Drain,
+    CompactionDropsNudge,
+    AddNudge,
+    NoRetry
+}
+
 internal sealed class DeliveryRetryHandler
 {
     public const int MaxRetries = 2;
@@ -155,11 +168,36 @@ internal sealed class DeliveryRetryHandler
         _chainActive = false;
     }
 
-    /// <summary>
-    /// Check whether the given delivery failure is retryable.
-    /// </summary>
-    public static bool IsRetryable(DeliveryFailed msg)
-        => msg.FailureKind is DeliveryFailureKind.ContentRejected
+    internal static ReadyDeliveryDecision DecideReady(
+        TurnNumber turn, DeliveryFailureKind kind, TurnNumber? eligible, bool routedSkill, int retryCount)
+    {
+        if (eligible != turn)
+            return ReadyDeliveryDecision.Stale;
+
+        var retryable = IsRetryable(kind);
+        // A sub-agent owns a routed reply. The main model cannot recreate that reply.
+        // The durable routed mark preserves this rule after replay and snapshot restore.
+        if (retryable && routedSkill)
+            return ReadyDeliveryDecision.RoutedSkill;
+        if (!retryable)
+            return ReadyDeliveryDecision.AddNudgeAndReport;
+        if (retryCount >= MaxRetries)
+            return ReadyDeliveryDecision.BudgetSpent;
+        return ReadyDeliveryDecision.Retry;
+    }
+
+    internal static BusyDeliveryDecision DecideBusy(
+        DeliveryFailureKind kind, bool compacting, bool restartDrainRequested)
+    {
+        if (restartDrainRequested)
+            return BusyDeliveryDecision.Drain;
+        if (IsRetryable(kind))
+            return BusyDeliveryDecision.NoRetry;
+        return compacting ? BusyDeliveryDecision.CompactionDropsNudge : BusyDeliveryDecision.AddNudge;
+    }
+
+    private static bool IsRetryable(DeliveryFailureKind kind)
+        => kind is DeliveryFailureKind.ContentRejected
             or DeliveryFailureKind.MessageTooLarge
             or DeliveryFailureKind.UnsupportedContent;
 

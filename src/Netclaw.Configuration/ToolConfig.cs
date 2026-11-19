@@ -312,7 +312,7 @@ public sealed class ToolConfig
             // JSON [] and an empty variable give "" (the list stays empty). JSON null and {} give
             // a key with a null value, which only the parent lists. An absent key gets the default.
             var present = key.Value is not null
-                || tools.GetSection(Key[..Key.LastIndexOf(':')]).GetChildren()
+                || tools.GetSection(Key[..Key.LastIndexOf(':', StringComparison.Ordinal)]).GetChildren()
                     .Any(child => string.Equals(child.Key, key.Key, StringComparison.OrdinalIgnoreCase));
             if (!present)
                 Set(config, [.. Get(defaults)]);

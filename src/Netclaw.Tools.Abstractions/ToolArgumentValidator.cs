@@ -157,7 +157,7 @@ public static class ToolArgumentValidator
 
             // Meta keys (_-prefixed) are recognized via ResolveMetaField, not the
             // declared-param table, so they are not tracked here.
-            if (!name.StartsWith('_'))
+            if (!name.StartsWith('_', StringComparison.Ordinal))
                 normalizedDeclared[ToolArgumentHelper.NormalizeKey(name)] = name;
         }
 

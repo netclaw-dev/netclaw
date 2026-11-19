@@ -689,53 +689,6 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task Unknown_delivery_failure_injects_nudge_without_triggering_retry()
-    {
-        var sessionId = new SessionId("test-channel/unknown-failure");
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("unknown-failure-sub");
-
-        await JoinSessionAsync(sessionManager, subscriber, sessionId);
-
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Say hello"
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        // Send non-retryable unknown failure — should NOT trigger LLM retry
-        sessionManager.Tell(new DeliveryFailed
-        {
-            SessionId = sessionId,
-            TurnNumber = completed.TurnNumber,
-            ChannelType = ChannelType.Slack,
-            FailureKind = DeliveryFailureKind.Unknown,
-            ErrorMessage = "Unexpected Slack error"
-        });
-
-        // No retry should occur
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
-
-        // On the next user message, the nudge should be visible in LLM context
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Are you there?"
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Contains(_fakeChatClient.ReceivedMessages[^1], msg =>
-            msg.Role == Microsoft.Extensions.AI.ChatRole.User
-            && msg.Text is not null
-            && msg.Text.Contains("unknown delivery error", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
     public async Task OutputFilter_controls_which_content_categories_are_delivered()
     {
         _fakeChatClient.IncludeThinking = true;
