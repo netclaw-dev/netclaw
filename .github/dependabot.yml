@@ -35,7 +35,6 @@ updates:
     akka:
       patterns:
         - "Akka.*"
-        - "Aaron.Akka.*"
   ignore:
     - dependency-name: "Microsoft.CodeAnalysis.CSharp"
       versions: ["5.9.0"]

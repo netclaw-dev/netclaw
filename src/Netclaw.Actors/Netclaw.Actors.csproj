@@ -19,8 +19,8 @@
   <ItemGroup>
     <PackageReference Include="Akka.Cluster.Sharding" />
     <PackageReference Include="Akka.Persistence" />
-    <PackageReference Include="Aaron.Akka.Reminders" />
-    <PackageReference Include="Aaron.Akka.Reminders.Sqlite" />
+    <PackageReference Include="Akka.Reminders" />
+    <PackageReference Include="Akka.Reminders.Sqlite" />
     <PackageReference Include="Cronos" />
     <PackageReference Include="HtmlAgilityPack" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
