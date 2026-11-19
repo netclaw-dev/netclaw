@@ -112,11 +112,7 @@ public static class ToolArgumentHelper
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var canonical in ToolCallMeta.MetaFieldNames)
-            map[NormalizeKey(canonical)] = canonical;
-
-        map["timeout"] = "_timeout_seconds";
-        map["rational"] = "_rationale";
-        map["rationalle"] = "_rationale";
+            map[NormalizeKey(canonical)] = canonical;            
         return map;
     }
 
@@ -132,7 +128,15 @@ public static class ToolArgumentHelper
     public static string? ResolveMetaField(string? key)
         => string.IsNullOrWhiteSpace(key)
             ? null
-            : NormalizedMetaFields.TryGetValue(NormalizeKey(key), out var canonical) ? canonical : null;
+            : NormalizedMetaFields.TryGetValue(NormalizeKey(key), out var canonical)
+                ? canonical
+                : FuzzyMatchUnmatched(key);
+
+    private static string? FuzzyMatchUnmatched(string key)
+    {
+        const double threshold = 0.75;
+        return FuzzyMatcher.FindBestMatch(key, ToolCallMeta.MetaFieldNames, threshold);
+    }
 
     public static string? GetString(IDictionary<string, object?>? arguments, string key)
     {
