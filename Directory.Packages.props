@@ -5,7 +5,7 @@
     <!-- Nuget package versions -->
     <AkkaHostingVersion>1.5.75</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.73</AkkaPersistenceSqlHostingVersion>
-    <OpenTelemetryVersion>1.20.1</OpenTelemetryVersion>
+    <OpenTelemetryVersion>1.21.0</OpenTelemetryVersion>
     <SlackNetVersion>0.18.0</SlackNetVersion>
     <DiscordNetVersion>3.20.2</DiscordNetVersion>
     <MattermostNetVersion>5.0.12</MattermostNetVersion>
